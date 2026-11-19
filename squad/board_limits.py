@@ -1,9 +1,10 @@
 """The card limit of each board column: `columns.<column>.max_cards` in the project settings over the plugin defaults.
 
 A limit is a whole number from 1 to 100, or `none` for no limit (`squad/project_settings.py` holds the parse). The
-defaults follow the present machine limits, so the first release changes no behaviour: Todo none, Doing 6, Review 4,
-Landing none, Gating none. MACHINE names the machine cap that also bounds a column, and `effective` answers the lower of
-the two: a column limit never raises a machine cap.
+defaults follow the present machine limits, so the first release changes no behaviour: Todo none, Doing 6, Reviewing 4,
+Batching none, Testing none. MACHINE names the machine cap that also bounds a column, and `effective` answers the lower of
+the two: a column limit never raises a machine cap. A column renamed by #2315 still answers under its old name (OLD), in
+a query and in a settings file, so a caller or a file the rename has not reached keeps its limit.
 
 The frontier, the review pass, the Settings page and the Kanban header read this one module, so the limit of a column
 has one resolution.
@@ -16,15 +17,18 @@ from squad import defaults as D
 from squad import project_settings as P
 
 COLUMNS = P.COLUMN_CARDS
-DEFAULTS = {"Todo": None, "Doing": 6, "Review": 4, "Landing": None, "Gating": None}
+DEFAULTS = {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
 # The caps entry that also bounds a column: a review column never holds more reviews than the machine allows.
-MACHINE = {"Review": "reviews", "Gating": "gates"}
+MACHINE = {"Reviewing": "reviews", "Testing": "gates"}
+OLD = P.OLD_COLUMN_CARDS   # the name each renamed column carried before #2315
 
 
 def _applied(out, block):
     """`out` with each limit the block names: a limit the file leaves out keeps the value below it."""
     for name in COLUMNS:
         row = (block or {}).get(name)
+        if row is None:   # a file the rename has not reached names the old column (#2315)
+            row = (block or {}).get(OLD.get(name))
         if isinstance(row, dict) and "max_cards" in row:
             out[name] = row["max_cards"]
     return out
@@ -42,8 +46,9 @@ def limits(target="."):
 
 
 def limit(name, target="."):
-    """One column's limit, or None when it has none."""
-    return limits(target).get(name)
+    """One column's limit, or None when it has none. An old column name answers its new column's limit (#2315)."""
+    new = {old: new for new, old in OLD.items()}
+    return limits(target).get(new.get(name, name))
 
 
 def effective(column_limit, machine_cap):

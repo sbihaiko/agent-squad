@@ -121,7 +121,7 @@ def test_the_column_names_are_unchanged(hub):
     assert json.loads("{" + m.group(1) + "}") == {
         # the shipped columns (#247), then the one open-PR lane beside the axis (#440); each wears a chart role
         "Backlog": "var(--chart-series-8)", "Todo": "var(--chart-series-1)", "Doing": "var(--chart-wait)",
-        "Review": "var(--chart-series-5)", "Landing": "var(--chart-warn)", "Gating": "var(--chart-series-7)",
+        "Reviewing": "var(--chart-series-5)", "Batching": "var(--chart-warn)", "Testing": "var(--chart-series-7)",
         "Closed": "var(--chart-ok)", "Abandoned": "var(--chart-err)", "Open PRs": "var(--chart-bar)",
     }
 

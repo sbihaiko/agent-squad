@@ -1,1 +1,2 @@
 tests/test_gui_test_e2e.py merge=union
+tests/ci_shards.py merge=union

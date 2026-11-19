@@ -588,7 +588,7 @@ def failed_run_table(rows, window_s, now):
 # ---------------------------------------------------------------- the trip of one issue (#1769, #2152, #2199)
 # One stacked bar of the trip of an issue, folded into the board's delivery columns, in the definition's order. A column
 # holds the stages the loop spends its time in there: Todo holds the queue before the run and the wait for a dispatch, Doing
-# holds coding, the gap between two children and the run's own gates, and Review, Landing and Gating hold the review, the
+# holds coding, the gap between two children and the run's own gates, and Reviewing, Batching and Testing hold the review, the
 # landing and the wave's gate (#1894). A column answers its larger stage's median and p90, with the other stage beside it,
 # and its width is its time per issue over the issues standing in it at once (#2256). A delivery is a run whose
 # record holds both a passed land and a verdict; a run that landed nothing is no delivery and is not folded. The bars and
@@ -596,15 +596,15 @@ def failed_run_table(rows, window_s, now):
 # the trip table agree.
 #
 # The run's own gates and its merge into the wave run inside the run, while the card stands in Doing, so they fold there.
-# Landing is the card's own Landing stint from the board history: the move into Landing to the next forward move, for
-# the stint that went on to Closed, ended at the start of the first linked gate of its wave, because Gating holds that
-# gate. A stint that went back to Todo, Doing or Review is rework: it counts in no column,
-# and the payload carries it as one summary. Gating is the wave's own gate before the push (ADR-0170): the tip and
+# Batching is the card's own Batching stint from the board history: the move into Batching to the next forward move, for
+# the stint that went on to Closed, ended at the start of the first linked gate of its wave, because Testing holds that
+# gate. A stint that went back to Todo, Doing or Reviewing is rework: it counts in no column,
+# and the payload carries it as one summary. Testing is the wave's own gate before the push (ADR-0170): the tip and
 # landing rows of the gate history, slot wait plus run, for the wave that carried the issue; the promotion's complete
-# tier is no part of the trip. A record's gate is never a Gating time. Closed draws no column (#2199). A board column
+# tier is no part of the trip. A record's gate is never a Testing time. Closed draws no column (#2199). A board column
 # named here with None is a column a delivery never stands in.
 TRIP_COLUMN_STAGES = {"Backlog": None, "Todo": ("queue", "wait"), "Doing": ("coding", "between", "gates", "landing"),
-                      "Review": ("review",), "Landing": ("landing_stint",), "Gating": ("gate",), "Closed": None,
+                      "Reviewing": ("review",), "Batching": ("landing_stint",), "Testing": ("gate",), "Closed": None,
                       "Abandoned": None}
 
 
@@ -631,11 +631,11 @@ def trip_columns(text=None):
 TRIP_STAGES_LABELLED = (("queue", "Queued before the run"), ("wait", "Wait for a dispatch"), ("coding", "Coding"),
                         ("between", "Between two children"), ("review", "Review"), ("gates", "Gates in the run"),
                         ("landing", "Merge into the wave"))
-LANDING_STINT = "landing_stint"   # the card's Landing stint that went on to Closed, read from the board history
+LANDING_STINT = "landing_stint"   # the card's Batching stint that went on to Closed, read from the board history
 GATING_GATE = "gate"   # the wave's tip and landing gates, read from the gate history: slot wait plus run (ADR-0170)
-GATING_CALLERS = ("tip", "landing")   # the gate-history callers Gating reads; child, entry and other rows never count
-# The stages no record holds: the board history gives the Landing stint, the gate history the wave's gates.
-OUTSIDE_STAGES = ((LANDING_STINT, "Time in Landing"), (GATING_GATE, "Gates of the wave"))
+GATING_CALLERS = ("tip", "landing")   # the gate-history callers Testing reads; child, entry and other rows never count
+# The stages no record holds: the board history gives the Batching stint, the gate history the wave's gates.
+OUTSIDE_STAGES = ((LANDING_STINT, "Time in Batching"), (GATING_GATE, "Gates of the wave"))
 TRIP_STAGES = tuple(key for key, _ in TRIP_STAGES_LABELLED)
 TRIP_STAGE_LABELS = dict(TRIP_STAGES_LABELLED + OUTSIDE_STAGES)
 TRIP_FOLD_KEYS = TRIP_STAGES + tuple(key for key, _ in OUTSIDE_STAGES)   # every stage the fold reads
@@ -681,7 +681,7 @@ def trip_spans(events, card=None):
     - `landing`: the last child answer or review to the merge into the wave. It runs inside the run, so it folds into Doing.
     - `between`: the uncovered time between two child spans, the wait a wave entry or a gate slot takes inside the run.
     - `queue`: the card's Todo move to the run's start, when `card` names that move.
-    - `landing_stint`: the card's Landing stint that went on to Closed, as `card["landing"]` names it (see
+    - `landing_stint`: the card's Batching stint that went on to Closed, as `card["landing"]` names it (see
       `landing_stints`); None when the caller read no such stint. `landing_from` is that stint's start, so the fold can
       end the stint where the wave's gate starts.
     `card` is `{"todo": epoch, "closed": epoch, "landing": seconds, "landing_from": epoch}`, read from the board's transitions by the caller. A
@@ -745,17 +745,18 @@ def trip_spans(events, card=None):
             "end": end}
 
 
-LANDING_COLUMN = "Landing"
-GATING_COLUMN = "Gating"
+LANDING_COLUMN = "Batching"
+GATING_COLUMN = "Testing"
 CLOSED_COLUMN = "Closed"
-REWORK_COLUMNS = ("Todo", "Doing", "Review")   # a Landing stint that moves to one of these went back: it is rework
+REWORK_COLUMNS = ("Todo", "Doing", "Reviewing")   # a Batching stint that moves to one of these went back: it is rework
+REVIEW_KEY = _board_columns.REVIEWING.lower()   # the review column's key in the token lines: the review ledger lands on its runs (#2315)
 
 
 def landing_stints(runs):
-    """The card's Landing stints, read from its column runs in time order: one `{"start", "end", "to"}` a stint, `to` the
-    column of the next move that leaves Landing. Two runs in a row of one column are one stint (a label change splits a
-    run, never a stint). `delivered` is the seconds of the stint whose next forward move (Gating or Closed) went on to
-    Closed, `delivered_from` its start, and `closed` that Closed move; `rework` is the stints whose next move went back to Todo, Doing or Review.
+    """The card's Batching stints, read from its column runs in time order: one `{"start", "end", "to"}` a stint, `to` the
+    column of the next move that leaves Batching. Two runs in a row of one column are one stint (a label change splits a
+    run, never a stint). `delivered` is the seconds of the stint whose next forward move (Testing or Closed) went on to
+    Closed, `delivered_from` its start, and `closed` that Closed move; `rework` is the stints whose next move went back to Todo, Doing or Reviewing.
     A stint still open, or one that leaves the board, is neither. `runs` are `{"column", "start", "end"}`, `end` None
     for the open run."""
     merged = []
@@ -777,7 +778,7 @@ def landing_stints(runs):
         if to in REWORK_COLUMNS:
             rework.append({"start": r["start"], "end": r["end"], "seconds": r["end"] - r["start"], "to": to})
         elif to in (GATING_COLUMN, CLOSED_COLUMN) and delivered is None:
-            # Gating is a forward move, and the stint is a delivery only when the card goes on from there to Closed.
+            # Testing is a forward move, and the stint is a delivery only when the card goes on from there to Closed.
             j = i + 1
             while j < len(merged) and merged[j]["column"] == GATING_COLUMN:
                 j += 1
@@ -832,7 +833,7 @@ def gate_links(attempts):
 def gate_row_link(row, links):
     """One gate-history row's wave link: `{"waves", "card"}`, the waves its journal attempt names (and a batch tip
     gate's runs from its run id, `batch:<size>:<run>,<run>`) and the card a landing gate names. None when the link
-    cannot be read: such a row adds nothing to Gating, never a zero."""
+    cannot be read: such a row adds nothing to Testing, never a zero."""
     try:
         key = (str(row.get("sha") or ""), int(float(row.get("finish"))))
     except (TypeError, ValueError):
@@ -891,14 +892,14 @@ def wave_gate_rows(gates, wave, issues, end):
 
 
 def wave_gate(gates, wave, issues, end):
-    """The Gating seconds of one delivery: the sum of its `wave_gate_rows`. None when no row counts, never 0, because no
+    """The Testing seconds of one delivery: the sum of its `wave_gate_rows`. None when no row counts, never 0, because no
     reading is no time."""
     rows = wave_gate_rows(gates, wave, issues, end)
     return sum(sec for _, sec in rows) if rows else None
 
 
 def wave_gate_split(gates, wave, issues, end):
-    """The Gating seconds of one delivery, split where the gate held its slots (#2317): `slot_wait` is the seconds from
+    """The Testing seconds of one delivery, split where the gate held its slots (#2317): `slot_wait` is the seconds from
     the gate's own start to the instant it got its slots, its lock wait included, and `gate_run` the seconds from there
     to its finish. A row whose record states no `slot_got` reads its whole stint as gate run, and `no_slot` counts it,
     because a wait the record never stated is no reading. The two parts add to the delivery's `wave_gate`. None when no
@@ -921,8 +922,8 @@ def wave_gate_split(gates, wave, issues, end):
 
 
 def landing_until_gate(stint, stint_from, gates, wave, issues, end):
-    """The Landing seconds of one delivery: the card's Landing stint up to the start of the first linked gate of its
-    wave, its slot wait included, because Gating holds that gate (#2292: Landing is the card's time in the wave before
+    """The Batching seconds of one delivery: the card's Batching stint up to the start of the first linked gate of its
+    wave, its slot wait included, because Testing holds that gate (#2292: Batching is the card's time in the wave before
     its gate starts). A gate that starts before the stint leaves zero. With no linked gate inside the stint, or no
     stint start, the stint runs to its forward move. None when the stint is None."""
     if stint is None:
@@ -934,14 +935,14 @@ def landing_until_gate(stint, stint_from, gates, wave, issues, end):
 
 
 def trip_rework(rework, since):
-    """The rework summary under the trip table: the Landing stints of the window that went back to Todo, Doing or
-    Review. They count in no column. `rework` is one `{"end", "seconds"}` a stint; a stint that ended before `since`
+    """The rework summary under the trip table: the Batching stints of the window that went back to Todo, Doing or
+    Reviewing. They count in no column. `rework` is one `{"end", "seconds"}` a stint; a stint that ended before `since`
     is outside the window. The text names the count and the median in minutes, so the view words nothing itself."""
     xs = [r["seconds"] for r in rework or () if _num(r.get("end")) and r["end"] >= since and _num(r.get("seconds"))]
     med = percentile(xs, 50)
     minutes = round(med / 60.0, 1) if med is not None else None
-    text = ("No Landing stint of the window went back to work." if not xs else
-            f"Rework: {len(xs)} Landing stint{'' if len(xs) == 1 else 's'} went back to Todo, Doing or Review, "
+    text = ("No Batching stint of the window went back to work." if not xs else
+            f"Rework: {len(xs)} Batching stint{'' if len(xs) == 1 else 's'} went back to Todo, Doing or Reviewing, "
             f"median {minutes} min; rework counts in no column.")
     return {"count": len(xs), "median_min": minutes, "text": text}
 
@@ -1062,7 +1063,7 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
     `spans` is one `trip_spans` answer per run record; `cards[i]` is record i's column runs
     (`{"column", "start", "end"}`), `calls[i]` its `trip_calls` answer. A delivery is a record whose verdict is at or
     after `since`, the same rule the bar folds by, so the bar and the lines cover one set of deliveries. `review_calls`
-    is the review token ledger as `{at, tokens}` rows, each placed on the narrowest Review run that holds its time, so
+    is the review token ledger as `{at, tokens}` rows, each placed on the narrowest Reviewing run that holds its time, so
     one ledger line is never counted twice and two parallel reviews never lose the line to whichever run the fold met
     first. `loads` is one `load_row` answer per minute record line; None is a record the caller may not read, and then
     no minute is counted as silent. A minute record counts once in each column a delivery occupies at that minute, so
@@ -1112,14 +1113,14 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
             tok[k]["total"] += n
     for c in review_calls or ():
         t, n = c.get("at"), c.get("tokens")
-        if "review" not in tok or not (_num(t) and _num(n)):
+        if REVIEW_KEY not in tok or not (_num(t) and _num(n)):
             continue
-        # The ledger names no delivery, so the line goes to the narrowest Review run that holds it: two parallel reviews
+        # The ledger names no delivery, so the line goes to the narrowest Reviewing run that holds it: two parallel reviews
         # both hold the call's time, and the narrow one is the closest match. A tie keeps the earliest delivery met.
         best = None
         for runs in live:
             for r in runs or ():
-                if str(r.get("column") or "").lower() != "review":
+                if str(r.get("column") or "").lower() != REVIEW_KEY:
                     continue
                 a, b = r.get("start"), r.get("end")
                 if not (_num(a) and _num(b)) or b <= a or not (a <= t < b):
@@ -1132,9 +1133,9 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
         if best is None:
             continue
         j = best[1]
-        tok["review"]["bin"][j] += n
-        tok["review"]["n"][j] += 1
-        tok["review"]["total"] += n
+        tok[REVIEW_KEY]["bin"][j] += n
+        tok[REVIEW_KEY]["n"][j] += 1
+        tok[REVIEW_KEY]["total"] += n
     for row in loads or ():
         t = row.get("at")
         if not _num(t) or not (since <= t <= now):
@@ -1205,19 +1206,19 @@ def trip_consumption(spans, since, cards=None, calls=None, review_calls=None, lo
 def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=None, now=None,
          cores=None, mem_gb=None, waves=None, rework=None):
     """The trip of one issue as one stacked bar of the board's columns: each column's median and p85 over the deliveries
-    of a window, in the definition's order, `Todo`, `Doing`, `Review`, `Landing` and `Gating`. `Closed` draws no column
+    of a window, in the definition's order, `Todo`, `Doing`, `Reviewing`, `Batching` and `Testing`. `Closed` draws no column
     (#2199).
 
     `spans` is one `trip_spans` answer per run record, None for a record that is no delivery; a caller sets the answer
     of a run whose issue another run delivered to None (`trip_deliveries`). A delivery is a run whose verdict is at or
     after `since`. The run's own `gates` and its merge into the wave (`landing`) stand in Doing, where the card is while
-    it runs (#2199). Landing reads the card's own Landing stint that went on to Closed (`landing_stint`, see
-    `landing_stints`), ended at the start of the first linked gate of its wave (`landing_until_gate`), so Landing and
-    Gating never count one second twice. Gating reads `gates`, one dict per gate-history row of the window with `start`,
+    it runs (#2199). Batching reads the card's own Batching stint that went on to Closed (`landing_stint`, see
+    `landing_stints`), ended at the start of the first linked gate of its wave (`landing_until_gate`), so Batching and
+    Testing never count one second twice. Testing reads `gates`, one dict per gate-history row of the window with `start`,
     `finish`, `wait`, `caller` and its wave `link` (`gate_row_link`): for each delivery, the slot wait plus the run of
     the tip and landing rows of the wave that carried it (`wave_gate`). `waves` is one `{"wave", "issues"}` a span, the
-    run id the wave is named by and the issues the run names; with no `waves` and no link, Gating reads nothing. A
-    record's gate is never a Gating time, and every column counts deliveries.
+    run id the wave is named by and the issues the run names; with no `waves` and no link, Testing reads nothing. A
+    record's gate is never a Testing time, and every column counts deliveries.
     A column that holds two stages answers the larger of the two medians as its `median_s`, and its `min_s`, `p85_s` and
     `max_s` come from that same stage, never from the other one (#2280); the other stage stands beside it in `beside`,
     with its own caption and its own four readings. A stage with no reading leaves `beside` None, so a run that names no
@@ -1229,14 +1230,14 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     `p85_s` and `max_s` of the column's larger stage. The payload names p85 where the older wire named p90 and carries
     no `p90_s` and no `observations_note` (#2280), so a row's shape is the board-column row with one more reading at
     each end. The record's own per-stage rows live under `record_stages`, one row per entry of `TRIP_STAGES_LABELLED`
-    with its own four readings and share. `rework` is one `{"end", "seconds"}` per Landing stint that went back to work;
+    with its own four readings and share. `rework` is one `{"end", "seconds"}` per Batching stint that went back to work;
     it counts in no column, and the payload carries its summary (`trip_rework`). Fewer than `TRIP_MIN_DELIVERIES`
     deliveries answer `bar` False, and the page says so and draws no bar. Each column also carries what it consumes (see
     `trip_consumption`), and the payload the machine's peak load, core count, memory and minutes with no record.
     """
     per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0
-    gate_waits, gate_runs, gates_no_slot = [], [], 0   # the Gating split (#2317): one reading a delivery, and the gates with no slot record
+    gate_waits, gate_runs, gates_no_slot = [], [], 0   # the Testing split (#2317): one reading a delivery, and the gates with no slot record
     for i, s in enumerate(spans):
         if s is None or s["end"] < since:
             continue
@@ -1292,7 +1293,7 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
             beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": o["observations"],
                       "min_s": _rounded(o["min_s"]), "median_s": _rounded(o["median_s"]),
                       "p85_s": _rounded(o["p85_s"]), "max_s": _rounded(o["max_s"])}
-        # Only Gating is a gate, so only its row carries the split of the gate stint (#2317): the slot wait and the gate
+        # Only Testing is a gate, so only its row carries the split of the gate stint (#2317): the slot wait and the gate
         # run, each the median over the deliveries whose wave ran a linked gate, and the count of gates whose record
         # states no slot. Every other column answers a dash on the page, because it holds no such split.
         split_cells = {}

@@ -7,9 +7,10 @@ IN_DEV = ("behind", "identical")   # a compare standing: the branch tip is in th
 AHEAD = ("ahead", "diverged")     # a compare standing: the branch holds commits the landing branch lacks
 APPROVED = "VERDICT: APPROVE"
 # A child card in Todo or beyond, before done: the legacy board's columns (In Progress, Code Complete) and the shipped
-# board's (Doing, Review, Landing, Gating). Each vocabulary names its own columns, and no alias stands between them (#2190);
-# this module reads no host, so it holds the names as data.
-LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Complete", "Review", "Landing", "Gating")
+# board's (Doing, Reviewing, Batching, Testing). Each vocabulary names its own columns (#2190). The version 2 spellings
+# (Review, Landing, Gating) stay beside the new ones while a board or a cache still carries them (#2315); this module reads
+# no host, so it holds the names as data.
+LIVE_WORK = ("Todo", "In Progress", "Doing", "Code Complete", "Reviewing", "Batching", "Testing", "Review", "Landing", "Gating")
 
 
 def review_state(verdict_text, sha_text, tip):
@@ -33,7 +34,7 @@ def issue_facts(*, entered, standing, approved, dev_running, review_waits, run_l
 
 def spec_facts(children):
     """The `child_live` fact of a spec: true when at least one sub-issue card is in flight (Todo or beyond, before done:
-    Todo, Doing/In Progress, Review, Landing/Code Complete or Gating).
+    Todo, Doing/In Progress, Reviewing, Batching/Code Complete or Testing).
 
     `children` is the column each sub-issue's card reads, in the loop's own words; the sub-issue relation comes with the
     pass's one read. A spec is a document, never work (ADR-0142): the fact moves the spec's card, never a dispatch."""

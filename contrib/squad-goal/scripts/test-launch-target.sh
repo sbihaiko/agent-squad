@@ -142,10 +142,10 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt" "$T/argvnocut"; o=$(CAFF_ARGV="$T
 case "$o" in *"CUT FROM gui/404 names no branch"*) ok "the refusal names the missing stacked branch";; *) ko "the missing CUT FROM is silent: $o";; esac
 # (#2260 AC6) The record names the tip the child actually starts from: the head of the branch this checkout cuts, never the
 # sha another reader saw earlier. The request's STACK TIP line is rewritten to that head, so the record and the cut agree.
-printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/1490\nSTACK TIP: 0000000000000000000000000000000000000000 (#1490, a blocker in Landing)\n' > "$T/reqstacktip.txt"
+printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/1490\nSTACK TIP: 0000000000000000000000000000000000000000 (#1490, a blocker in Batching)\n' > "$T/reqstacktip.txt"
 rm -rf "$co/runs" "$wt/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqstacktip.txt")
 rf=$(ls -dt "$wt"/runs/run-* 2>/dev/null | head -1)
-[ -n "$rf" ] && /usr/bin/grep -qx "STACK TIP: $parent (#1490, a blocker in Landing)" "$rf/request.txt" && ok "the record names the tip the child's branch was cut from" || ko "the record names another tip: [$(/usr/bin/grep -h 'STACK\|CUT' "$rf"/request.txt 2>/dev/null | tr '\n' '|')] out='$o'"
+[ -n "$rf" ] && /usr/bin/grep -qx "STACK TIP: $parent (#1490, a blocker in Batching)" "$rf/request.txt" && ok "the record names the tip the child's branch was cut from" || ko "the record names another tip: [$(/usr/bin/grep -h 'STACK\|CUT' "$rf"/request.txt 2>/dev/null | tr '\n' '|')] out='$o'"
 # A run that cuts a wave keeps its landed children for the wave entry (#477, ADR-0106): the launch hands the squad the engine
 # option --keep-children, which the run records at its start, so the hold is the run's wave and never the target's shape. A
 # squad that has no such option would refuse the flag and the start with it, so the launch passes it only when the squad

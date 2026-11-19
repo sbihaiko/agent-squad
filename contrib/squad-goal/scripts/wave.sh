@@ -16,7 +16,7 @@
 # worktree, is rebased on the wave tip, and enters the branch by a fast-forward: git refuses a push that is not one, so no
 # merge commit can enter. A child that fails its gates, conflicts with the wave tip, or whose push is refused never enters:
 # its issue goes back to the queue (its dispatch marker is dropped and its card returns to the column the dispatch reads),
-# and `enter` says why on one `WAVE REQUEUE` line. A child that entered moves its card to Landing: Landing means
+# and `enter` says why on one `WAVE REQUEUE` line. A child that entered moves its card to Batching: Batching means
 # the child is in the wave branch, Closed means the wave is in `dev`. The wave branch is rebased on `dev` only before its own
 # final push (the wave's landing pass), never between entries: between them the tip moves only by a child that entered.
 # A child whose own commits and a sibling's commits in the wave change one file never enters (#1434): the entry reads the two
@@ -103,7 +103,7 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 # mark <run> <wave>: the run has a wave, and its completion has one to land. $SG_STATE/auto is the loop's marker directory;
 # `land` clears the marker when the wave is in $SG_BASE.
 # `waved-<run>` is the durable record that the run cut a wave: nothing clears it, so childcc.py still knows, after the landing
-# removed `wave-<run>`, that a child of this run never gets the direct Landing move.
+# removed `wave-<run>`, that a child of this run never gets the direct Batching move.
 mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
   && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; }; }
 
@@ -325,11 +325,11 @@ board_write() {   # <column> <issue>: a refused card write is named, so the card
   return 0
 }
 
-# gating <clone> <range> <run>...: before a wave's tip gate starts, the card of each child in the gate moves to Gating (ADR-0170).
+# gating <clone> <range> <run>...: before a wave's tip gate starts, the card of each child in the gate moves to Testing (ADR-0170).
 # A card moves when its child entered the wave of one of the runs (the ledger's entered fact) and the gated range carries
 # the child's commit. So a child the tip check dropped from the tree stays out of the column. board.py sends no write when the card
-# already carries Gating (ADR-0144), so a repeat pass after a red or unproven attempt moves nothing: the attempt is a marker.
-# The legacy vocabulary has no Gating column, so it writes nothing.
+# already carries Testing (ADR-0144), so a repeat pass after a red or unproven attempt moves nothing: the attempt is a marker.
+# The legacy vocabulary has no Testing column, so it writes nothing.
 gating() {
   [ "${SG_BOARD_VOCAB:-}" = shipped ] || return 0
   local gs=$1 range=$2 c n ent seen=" "; shift 2
@@ -338,7 +338,7 @@ gating() {
     n=$(child_of "$gs" "$c"); [ -n "$n" ] || continue
     case "$seen" in *" $n "*) continue;; esac
     case " $ent " in *" $n "*) ;; *) continue;; esac
-    seen="$seen$n "; board_write Gating "$n"
+    seen="$seen$n "; board_write Testing "$n"   # the new name: board.py sends the option the board carries for it (#2315)
   done < <($G -C "$gs" log --format=%H "$range" 2>/dev/null)
 }
 
@@ -644,7 +644,7 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   fi
   [ "${3:-}" = cap ] && [ -n "${SG_REQUEUE_RUN:-}" ] && { mkdir -p "$SG_STATE/auto" && : > "$SG_STATE/auto/empty-requeued-$SG_REQUEUE_RUN-$n"; }
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
-  SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Landing as a no-landing move (#1340)
+  SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Batching as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }
@@ -995,7 +995,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       of=$(mktemp "${TMPDIR:-/tmp}/wave-outcome.XXXXXX" 2>/dev/null) || of=
       [ -z "$of" ] || : > "$of"
       # SG_GATE_CARD names the card this gate answers for: its attempt is journaled and projected to Gate Tries (#1255).
-      # SG_GATE_WAVE names the wave the gate is for, so the wave's Gating fact reads it (#1257).
+      # SG_GATE_WAVE names the wave the gate is for, so the wave's Testing fact reads it (#1257).
       out=$(GATE_OUTCOME_READ_FILE="$of" SERIAL_TRY=1 SG_GATE_CALLER=entry SG_GATE_ENTRY_MODE=gated SG_GATE_KIND=fast SG_GATE_CARD="$iss" SG_GATE_WAVE="$run" bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
       oc= rs= ran= notran=
       [ -z "$of" ] || IFS=$'\t' read -r oc rs ran notran < "$of" 2>/dev/null
@@ -1065,9 +1065,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
     sha=$($G rev-parse HEAD)
     # The push's stderr is kept: it tells a rejection git names from a failure of the network, auth or server (#1348).
     if perr=$($G push -q origin "HEAD:refs/heads/$w" 2>&1); then
-      board_write "Landing" "$iss"   # a refused write is named, never dropped (#593); the definition's column name (#2155)
+      board_write "Batching" "$iss"   # a refused write is named, never dropped (#593); the definition's column name (#2155, #2315)
       proof_card "$iss" "$obl"   # an unproven entry carries its fact on the card until the settlement answers it (#1176)
-      # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Landing reads it, never the
+      # The run's entry record is the ledger's entered fact (#467, ADR-0149): the janitor's Batching reads it, never the
       # run's own land. An unproven entry carries its obligation there, so the job that settles it is attached to the run that
       # admitted the child (spec 1163, #1174). A pass carries none; gate.sh is the obligation's one writer.
       local cause="entered $w at $sha"
@@ -1289,7 +1289,7 @@ wave_check() {
     echo "WAVE CHECK RED $w: the tip's check was red twice on the same tree with the same failing tests ($(tr '\n' ' ' < "$mk.red.tests" 2>/dev/null)); held until the tip moves: no third check runs on this tree"
     return 7
   fi
-  gating "$S" "origin/$base..HEAD" "$run"   # the gate waits for a slot or runs from here, so its cards stand in Gating (ADR-0170)
+  gating "$S" "origin/$base..HEAD" "$run"   # the gate waits for a slot or runs from here, so its cards stand in Testing (ADR-0170)
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
@@ -1542,7 +1542,7 @@ stuck() {
   export SG_GH_PASS=wave
   for n in $refs; do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
-    SG_MOVE_REASON=no-landing SG_MOVE_EVENT="$run" SG_MOVE_SHA="$(reset_sha "$run")" board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Landing (#657, #1340); frozen:owner holds it out of the frontier
+    SG_MOVE_REASON=no-landing SG_MOVE_EVENT="$run" SG_MOVE_SHA="$(reset_sha "$run")" board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Batching (#657, #1340); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
@@ -2236,7 +2236,7 @@ land_batch() {
     if [ -n "$tipgate" ]; then
       of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
       clog="$SG_STATE/wave-check-batch.log"; touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
-      gating "$S" "$bstart..HEAD" "${rs[@]}"   # the cards of every wave in the batch stand in Gating while its gate waits or runs (ADR-0170)
+      gating "$S" "$bstart..HEAD" "${rs[@]}"   # the cards of every wave in the batch stand in Testing while its gate waits or runs (ADR-0170)
       (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
       # (#2330) A check that measured nothing makes the batch wait: a skip (73) that names a hold, or a bounded wait that ran out

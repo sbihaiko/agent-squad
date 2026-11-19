@@ -71,30 +71,30 @@ def test_every_shipped_column_is_reachable_on_the_board(table, hub):
 
 def test_gating_reaches_the_lane_order_the_legend_the_phone_and_the_cfd_bands(table, hub, monkeypatch):
     """Every surface takes its order from the definition (spec #1218): the lane, the flow legend, the phone's served board
-    and the cumulative flow bands all carry Gating between Landing and Closed, and no page names it itself."""
+    and the cumulative flow bands all carry Testing between Batching and Closed, and no page names it itself."""
     names = [c["name"] for c in table.view_columns()]
-    assert names.index("Landing") + 1 == names.index("Gating") == names.index("Closed") - 1, names
-    assert hub.ORDER == names, "the lane order leaves Gating out"
-    assert hub.FLOW_BANDS == names, "the CFD bands leave Gating out"
+    assert names.index("Batching") + 1 == names.index("Testing") == names.index("Closed") - 1, names
+    assert hub.ORDER == names, "the lane order leaves Testing out"
+    assert hub.FLOW_BANDS == names, "the CFD bands leave Testing out"
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
-    assert flow == names, "the flow legend leaves Gating out"
+    assert flow == names, "the flow legend leaves Testing out"
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "err": None, "errs": []})
-    assert [g["name"] for g in hub.board()["groups"]] == names, "the board the phone reads leaves Gating out"
-    assert '"Gating"' not in hub.MOBILE_PAGE and "'Gating'" not in hub.MOBILE_PAGE, "the phone page names a column itself"
+    assert [g["name"] for g in hub.board()["groups"]] == names, "the board the phone reads leaves Testing out"
+    assert '"Testing"' not in hub.MOBILE_PAGE and "'Testing'" not in hub.MOBILE_PAGE, "the phone page names a column itself"
 
 
 def test_a_card_that_reached_gating_leaves_it_only_forward(table):
-    """#1257: a red or unproven attempt is a marker, not a move (ADR-0170). Gating sits between Landing
-    and Closed on the shipped axis, so a write back to Landing is past and refused, and a card that left
-    Gating forward never re-enters it for the same wave."""
-    assert table.past("Gating", "Landing"), "a write back from Gating is not past"
-    assert table.refused_for_automated("Gating", "Landing")
-    assert not table.past("Gating", "Code Complete"), "an old spelling of Landing is no column now (#2190)"
-    assert not table.past("Gating", "Closed"), "the one forward move out of Gating reads as past"
-    assert table.past("Closed", "Gating"), "a re-entry into Gating after the wave landed is past"
-    # #2295: a requeue sends a card in Gating back to Todo as a no-landing move, as it does from Landing; no other reason may.
-    assert not table.refused_for_automated("Gating", "Todo", "no-landing"), "a requeue cannot leave Gating"
-    assert table.refused_for_automated("Gating", "Todo"), "a write back to Todo with no reason leaves Gating"
+    """#1257: a red or unproven attempt is a marker, not a move (ADR-0170). Testing sits between Batching
+    and Closed on the shipped axis, so a write back to Batching is past and refused, and a card that left
+    Testing forward never re-enters it for the same wave."""
+    assert table.past("Testing", "Batching"), "a write back from Testing is not past"
+    assert table.refused_for_automated("Testing", "Batching")
+    assert not table.past("Testing", "Code Complete"), "an old spelling of Batching is no column now (#2190)"
+    assert not table.past("Testing", "Closed"), "the one forward move out of Testing reads as past"
+    assert table.past("Closed", "Testing"), "a re-entry into Testing after the wave landed is past"
+    # #2295: a requeue sends a card in Testing back to Todo as a no-landing move, as it does from Batching; no other reason may.
+    assert not table.refused_for_automated("Testing", "Todo", "no-landing"), "a requeue cannot leave Testing"
+    assert table.refused_for_automated("Testing", "Todo"), "a write back to Todo with no reason leaves Testing"
 
 
 def test_the_hub_vocabulary_is_the_table(table, hub):
@@ -211,7 +211,7 @@ def test_a_reopened_issue_returns_its_card_from_closed_to_todo_only(table):
     """#1420 (ADR-0143 rule 2): the reopen is the door from Closed to Todo; every other reopened move is refused."""
     assert not table.refused_for_automated("Closed", "Todo", "reopened")
     assert table.refused_for_automated("Closed", "Doing", "reopened")
-    assert table.refused_for_automated("Landing", "Todo", "reopened")
+    assert table.refused_for_automated("Batching", "Todo", "reopened")
     assert table.refused_for_automated("Closed", "Todo")
 
 

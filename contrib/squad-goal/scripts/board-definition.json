@@ -1,5 +1,5 @@
 {
-  "definition_version": 2,
+  "definition_version": 3,
   "board": {
     "title": "Squad Board",
     "description": "The monotone board: eight columns for the issue, two terminals, the other entities beside the axis."
@@ -13,7 +13,7 @@
   },
   "rules": [
     "A card's column is the furthest its work reached, and it never moves back. What holds a card now is a marker, never a move.",
-    "An attempt is a marker, not a move: the card leaves Gating only forward.",
+    "An attempt is a marker, not a move: the card leaves Testing only forward.",
     "Closed means the wave is in dev.",
     "A freeze is not a state. A frozen card keeps its column.",
     "The columns are a view over kind and status, not a second axis.",
@@ -45,7 +45,7 @@
       "terminal": false
     },
     {
-      "name": "Review",
+      "name": "Reviewing",
       "color": "ORANGE",
       "fact": {"all": ["review_wait", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating", "wave_branch"]}}]},
       "description": "The child's code is done; its review or a fix round holds it",
@@ -53,7 +53,7 @@
       "terminal": false
     },
     {
-      "name": "Landing",
+      "name": "Batching",
       "color": "ORANGE",
       "fact": {"all": ["wave_branch", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}, "gating"]}}]},
       "description": "A child is in the wave branch",
@@ -61,7 +61,7 @@
       "terminal": false
     },
     {
-      "name": "Gating",
+      "name": "Testing",
       "color": "PINK",
       "fact": {"all": ["gating", {"not": {"any": ["abandoned", {"any": ["closed", "in_dev"]}]}}]},
       "description": "A gate or proof waits for a slot or runs for the wave; a red or unproven attempt is a marker, not a move",

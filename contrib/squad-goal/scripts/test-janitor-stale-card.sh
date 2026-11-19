@@ -91,7 +91,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 [ -e "$T/st/auto/disp-1006" ] && ! /usr/bin/grep -q ' 1006$' "$T/board.calls" 2>/dev/null && ok "F: an issue a work branch names keeps its card and marker" || ko "F #1006 touched: $(bc)"
 [ -e "$T/st/auto/disp-1008" ] && ! /usr/bin/grep -q ' 1008$' "$T/board.calls" 2>/dev/null && ok "G: a fresh marker stays" || ko "G #1008 touched: $(bc)"
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
-# The landing column is the definition's own: the status whose fact holds `wave_branch` directly (Landing in version 2).
+# The batching column is the definition's own: the status whose fact holds `wave_branch` directly (Batching in version 3).
 # The test reads that name from the pinned definition, so it checks the producer against the spec, not against itself.
 LC=$(python3 - "$T/s/board-definition.json" <<'PY'
 import json, sys

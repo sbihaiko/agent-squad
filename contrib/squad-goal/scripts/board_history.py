@@ -235,7 +235,7 @@ def lead_observation(runs, start=None, end=None, complete=True, now=None):
     parked time: it counts in neither. `start_lo`..`start_hi` is the interval the start is known in: one instant for a
     recorded move, two when a search set the boundary. `unknown_first` marks a card whose column was set before its add,
     or a timeline not yet read whole: its start is not in the store. `stretches` is the time the card spent in each
-    column inside the window, and `columns` sums it by column for the chart's stack; `gate` is the Gating share (#1256).
+    column inside the window, and `columns` sums it by column for the chart's stack; `gate` is the Testing share (#1256).
     Both the measure and the stack walk the same slice, `runs[k:]` from the first entry into `start`, clamped to
     `lo`..`hi`: the card's time before the start column and after the end transition is in neither, so the stack's
     total always equals `flowing` + `held`."""

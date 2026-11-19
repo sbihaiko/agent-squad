@@ -187,12 +187,12 @@ def test_the_summary_serves_the_furthest_column_the_tickets_reached(hub):
 
 def test_the_furthest_column_counts_the_tickets_that_reached_it(hub):
     drawn = [(1, "Todo", None, None, True),
-             (2, "Gating", 1, None, False),
-             (3, "Gating", 1, None, False),
+             (2, "Testing", 1, None, False),
+             (3, "Testing", 1, None, False),
              (4, "Code Review", 1, None, False),
              (5, "Abandoned", 1, None, False)]   # a given-up ticket did not reach past the work it left
     spec = hub.board_summary(drawn)["specs"][0]
-    assert (spec["far"], spec["far_n"]) == ("Gating", 2), spec
+    assert (spec["far"], spec["far_n"]) == ("Testing", 2), spec
 
 
 def test_a_spec_with_no_ticket_serves_no_furthest_column(hub):

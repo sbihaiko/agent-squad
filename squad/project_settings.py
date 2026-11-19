@@ -65,9 +65,14 @@ CATALOG = {
 }
 # The board columns a card limit may bound (#2287). `columns.<column>.max_cards` takes a whole number from 1 to 100, or
 # none for no limit; `squad/board_limits.py` resolves the value the frontier, the review pass and the hub read.
-COLUMN_CARDS = ("Todo", "Doing", "Review", "Landing", "Gating")
+COLUMN_CARDS = ("Todo", "Doing", "Reviewing", "Batching", "Testing")
+# The name each renamed column carried before #2315: a project file the rename has not reached still sets its limit, and
+# squad/board_limits.py reads it as the new column's.
+OLD_COLUMN_CARDS = {"Reviewing": "Review", "Batching": "Landing", "Testing": "Gating"}
 for _column in COLUMN_CARDS:
     CATALOG[f"columns.{_column}.max_cards"] = ("intnone", 1, 100, "cards", f"cards the {_column} column holds; none means no limit")
+for _column, _old in OLD_COLUMN_CARDS.items():
+    CATALOG[f"columns.{_old}.max_cards"] = ("intnone", 1, 100, "cards", f"the old name of the {_column} column's limit; set columns.{_column}.max_cards")
 # The keys the plugin defaults must hold; a missing one is a defect of that file. The rest are optional.
 REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "limits.max_budget_usd", "limits.max_output_tokens", "limits.context_tokens",
             "limits.deadline_seconds", "run.max_parallel", "run.spend_cap"}

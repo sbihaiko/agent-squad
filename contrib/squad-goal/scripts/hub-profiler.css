@@ -7,9 +7,9 @@
 #proftrip{margin:0 0 16px}#proftrip h3{margin:0 0 4px;font-size:var(--fs-body);font-weight:600}#proftrip .tpn{color:var(--mute);font-size:var(--fs-caption);margin:0 0 10px}#proftrip .tprw{color:var(--mute);font-size:var(--fs-caption);margin:6px 0 0}
 #proftrip .ptb{display:flex;gap:1px;width:100%;height:14px;margin:0 0 8px;border-radius:var(--radius-lg);overflow:hidden;background:var(--edge)}#proftrip i.ptb-seg{display:block;height:100%;min-width:4px}
 #proftrip .ptk{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:var(--radius-sm);vertical-align:-1px;background:currentColor}
-#proftrip .pts-todo{background:var(--s5)}#proftrip .pts-doing{background:var(--run)}#proftrip .pts-review{background:var(--acc)}#proftrip .pts-gating{background:var(--warn)}#proftrip .pts-landing{background:var(--ok)}
-#proftrip .ptc.pts-todo{color:var(--s5)}#proftrip .ptc.pts-doing{color:var(--run)}#proftrip .ptc.pts-review{color:var(--acc)}#proftrip .ptc.pts-gating{color:var(--warn)}#proftrip .ptc.pts-landing{color:var(--ok)}
-#proftrip .ptk-todo{color:var(--s5)}#proftrip .ptk-doing{color:var(--run)}#proftrip .ptk-review{color:var(--acc)}#proftrip .ptk-gating{color:var(--warn)}#proftrip .ptk-landing{color:var(--ok)}
+#proftrip .pts-todo{background:var(--s5)}#proftrip .pts-doing{background:var(--run)}#proftrip .pts-reviewing{background:var(--acc)}#proftrip .pts-testing{background:var(--warn)}#proftrip .pts-batching{background:var(--ok)}
+#proftrip .ptc.pts-todo{color:var(--s5)}#proftrip .ptc.pts-doing{color:var(--run)}#proftrip .ptc.pts-reviewing{color:var(--acc)}#proftrip .ptc.pts-testing{color:var(--warn)}#proftrip .ptc.pts-batching{color:var(--ok)}
+#proftrip .ptk-todo{color:var(--s5)}#proftrip .ptk-doing{color:var(--run)}#proftrip .ptk-reviewing{color:var(--acc)}#proftrip .ptk-testing{color:var(--warn)}#proftrip .ptk-batching{color:var(--ok)}
 /* The trip chart (#2228, #2253, #2255): two lanes over the trip's columns. A column's band carries its own colour, and
    the three lines keep colours of their own, so no line ever takes a band's colour: Tokens reads the foreground, CPU the
    magenta, and RAM the lavender, dashed. A column with no point draws no line there, and the stretch is marked instead.
@@ -34,8 +34,8 @@
 #proftrip .ptgap{fill:var(--bg)}#proftrip .ptfoot{color:var(--mute);font-size:var(--fs-caption);margin:8px 0 0}
 #proftrip .ptv{fill:var(--mute)}#proftrip .ptvc{fill:var(--s2)}#proftrip .ptvr{fill:var(--none)}
 #proftrip circle.ptph{fill:transparent;stroke:none;pointer-events:all}
-#proftrip text.ptlb.pts-todo{fill:var(--s5)}#proftrip text.ptlb.pts-doing{fill:var(--run)}#proftrip text.ptlb.pts-review{fill:var(--acc)}
-#proftrip text.ptlb.pts-gating{fill:var(--warn)}#proftrip text.ptlb.pts-landing{fill:var(--ok)}
+#proftrip text.ptlb.pts-todo{fill:var(--s5)}#proftrip text.ptlb.pts-doing{fill:var(--run)}#proftrip text.ptlb.pts-reviewing{fill:var(--acc)}
+#proftrip text.ptlb.pts-testing{fill:var(--warn)}#proftrip text.ptlb.pts-batching{fill:var(--ok)}
 #proftrip .ptlmt{fill:var(--fg)}#proftrip .ptlmc{fill:var(--s7)}#proftrip .ptlmr{fill:var(--none)}
 #proftrip .ptkey{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
 #proftrip .ptbbar{fill:var(--edge);opacity:.35}

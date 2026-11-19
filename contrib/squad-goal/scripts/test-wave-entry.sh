@@ -23,7 +23,7 @@ child 8 g8; r=$(en 8)
 [ "$($O log --format=%s $W | tr '\n' ' ')" = "work 8 (Refs #8) work 7 (Refs #7) init " ] && ok "B: the wave branch carries both children, in entry order" || ko "B: the wave log is '$($O log --format=%s $W | tr '\n' ' ')'"
 $O rev-list --merges $W | /usr/bin/grep -q . && ko "B: a merge commit entered the wave" || ok "B: the wave history has no merge commit"
 $O merge-base --is-ancestor dev $W && ok "B: the wave branch stays a fast-forward of dev" || ko "B: the wave is not a fast-forward of dev"
-/usr/bin/grep -qx 'o 3 Landing 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Landing 8' "$T/board.log" && ok "B: the card of a child that entered reads Landing" || ko "B: no Landing card: $(cat "$T/board.log" 2>/dev/null)"
+/usr/bin/grep -qx 'o 3 Batching 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Batching 8' "$T/board.log" && ok "B: the card of a child that entered reads Batching" || ko "B: no Batching card: $(cat "$T/board.log" 2>/dev/null)"
 # The entry leaves a durable record per issue (#467): the janitor reads Code Complete from it, never from the run's own land.
 [ "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" entered x/y | sort | tr '\t\n' ': ')" = "run-1:7 run-1:8 " ] && ok "B: each entry is an entered fact in its issue's ledger" || ko "B: entered facts: '$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" entered x/y)'"
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^entered-')" ] && ok "B: an entry writes no entered- marker (ADR-0149)" || ko "B: marker: $(/bin/ls "$T/st/auto")"

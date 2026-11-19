@@ -88,13 +88,17 @@ _Avoid_: delegation, handoff, task, subagent call
 The tree hash of one vendored skill, from `vendor/skills/VERSIONS.json`. It is the skill's version. A run records the hash of every skill it can load, and a resume refuses when one differs.
 _Avoid_: skill version, skill revision
 
-**Code Review**:
-The board column for an issue whose child's code is done while its review, or a fix round, holds it. It sits between Doing and Code Complete, and a card in it never goes back to Doing; a requeue sends it to Todo.
-_Avoid_: review wait (as a mark on Doing)
+**Reviewing**:
+The board column for an issue whose child's code is done while its review, or a fix round, holds it. It sits between Doing and Batching, and a card in it never goes back to Doing; a requeue sends it to Todo.
+_Avoid_: Review, Code Review (older names of the column), review wait (as a mark on Doing)
 
-**Gating**:
-The board column for a card whose gate or proof waits for a slot or runs for the wave. It sits between Code Complete and Closed, and a red or unproven attempt is a marker on the card, never a move out of the column. Its count of attempts is the card's Gate Tries number.
-_Avoid_: testing, pushing (both retired), gate wait (as a badge over Code Complete)
+**Batching**:
+The board column for a card whose child is in the wave branch: it waits for its siblings and for the run's end. It sits between Reviewing and Testing. Closed follows when the wave is in dev.
+_Avoid_: Landing, Code Complete (older names of the column)
+
+**Testing**:
+The board column for a card whose gate or proof waits for a slot or runs for the wave. It sits between Batching and Closed, and a red or unproven attempt is a marker on the card, never a move out of the column. Its count of attempts is the card's Gate Tries number.
+_Avoid_: Gating (the older name of the column), pushing (retired), gate wait (as a badge over Batching)
 
 **Landing**:
 Code merges a passing write child of a dispatch into the target, in request order, and logs a `land` event. A model never merges. A conflict fails that child with `merge_conflict`; the children that landed before it stay landed.
@@ -235,7 +239,7 @@ The one module (`squad/outcomes.py`) that records an outcome: the `outcome` even
 _Avoid_: outcome ledger
 
 **Verdict**:
-The single result of a run, owned by one module: completed, needs-human, conflict, failed, or stopped. A `dispatch` folds like `each`, and a dispatch entry with no accepted child is `fail`, reason `no_dispatch`. The module folds the run record and the target: a run truncated by `--stop-after` whose nodes all passed is stopped (exit 30), root pass is completed, root fail or deadline is failed, root needs-human is needs-human, and conflict comes from the target. No graph field sets it.
+The single result of a run, owned by one module: completed, needs-human, conflict, failed, stopped, or no-repro. A `dispatch` folds like `each`, and a dispatch entry with no accepted child is `fail`, reason `no_dispatch`. The module folds the run record and the target: a run truncated by `--stop-after` whose nodes all passed is stopped (exit 30), root pass is completed, root fail or deadline is failed, root needs-human is needs-human, and conflict comes from the target. No graph field sets it.
 _Avoid_: status, exit status, result
 
 **Work item**:

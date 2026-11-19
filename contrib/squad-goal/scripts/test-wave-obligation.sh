@@ -1,6 +1,6 @@
 #!/bin/bash
 # The entry and the tip under an unproven outcome (#682, #694, spec 1163, spec 1797, #2149): an obligation admits a
-# child, and an unproven wave tip never lands. A card stands in Gating while its wave's tip gate waits or runs (#2295).
+# child, and an unproven wave tip never lands. A card stands in Testing while its wave's tip gate waits or runs (#2295).
 # The last cases read the run's dispatch set (#775, #776, #1340).
 # mirrors: wave.sh wave-fixture.sh
 . "$(dirname "$0")/wave-fixture.sh"
@@ -72,7 +72,7 @@ r=$(cd "$T/c500" && SG_WAVE_GATES='printf "unproven\tsaturation: the battery cra
 [ $rc = 0 ] && $O cat-file -e wave/run-50:g500 2>/dev/null && ok "AA: an unproven entry gate admits the child" || ko "AA: entry exit $rc: '$r'"
 case "$(wfact 500 run-50)" in "entered "*unproven*obligation*) ok "AA: the entry fact carries the obligation in the run's record";; *) ko "AA: entry fact '$(wfact 500 run-50)'";; esac
 obf=$(obl_for "$($G -C "$T/c500" rev-parse HEAD)"); [ -n "$obf" ] && [ "$(cut -f4 "$obf")" = ruff ] && ok "AA: the obligation record names the check that did not run" || ko "AA: obligation '$(cat "$T/st/obligations"/* 2>/dev/null)'"
-/usr/bin/grep -qx 'o 3 Landing 500' "$T/board.log" && ok "AA: an unproven entry moves the card to Landing" || ko "AA: card: $(cat "$T/board.log" 2>/dev/null)"
+/usr/bin/grep -qx 'o 3 Batching 500' "$T/board.log" && ok "AA: an unproven entry moves the card to Batching" || ko "AA: card: $(cat "$T/board.log" 2>/dev/null)"
 # AD (#1176): the card carries the fact of the unproven entry while the obligation is open, and the entry records which
 # obligation the settlement answers.
 /usr/bin/grep -qx -- '--proof o 3 500 unproven' "$T/board.log" && ok "AD: the unproven entry puts the fact on the card" || ko "AD: no proof fact: $(cat "$T/board.log" 2>/dev/null)"
@@ -120,7 +120,7 @@ r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' bash '$T/unproven-tip.sh'" SG_WAVE_CH
 case "$r" in *"WAVE REQUEUE #530"*"age cap"*) ok "AG: the capped unproven wave puts its issue back in the queue";; \
   *) ko "AG: the issue of the capped unproven wave stayed claimed: '$r'";; esac
 
-# AH (#2295, ADR-0170): a card stands in Gating while its wave's tip gate waits or runs. The landing writes Gating for each
+# AH (#2295, ADR-0170): a card stands in Testing while its wave's tip gate waits or runs. The landing writes Testing for each
 # card of the wave before the gate starts. An unproven or red attempt writes no move. The landing then moves the card to Closed.
 # The tip stub writes GATE into the board log, so the log shows the order of the writes and the gate.
 printf '#!/bin/bash\necho GATE >> "%s/board.log"\nexit "$(cat "%s/ah-rc")"\n' "$T" "$T" > "$T/ah-tip.sh"
@@ -128,17 +128,17 @@ start2 run-55 >/dev/null; child 550 g550 "origin/wave/run-55"; en2 run-55 550 >/
 start2 run-56 >/dev/null; child 560 g560 "origin/wave/run-56"; en2 run-56 560 >/dev/null
 : > "$T/board.log"; echo 4 > "$T/ah-rc"
 r=$(SG_WAVE_TIP_GATES="bash '$T/ah-tip.sh'" SG_WAVE_CHILD_GATES=true land2 run-55 2>&1); rc=$?
-[ "$(cat "$T/board.log")" = "$(printf 'o 3 Gating 550\nGATE')" ] && ok "AH: the card moves to Gating before the tip gate starts" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
+[ "$(cat "$T/board.log")" = "$(printf 'o 3 Testing 550\nGATE')" ] && ok "AH: the card moves to Testing before the tip gate starts" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
 [ $rc != 0 ] && ! $O cat-file -e dev:g550 2>/dev/null && ok "AH: the unproven tip holds the wave" || ko "AH: exit $rc: '$r'"
 : > "$T/board.log"; echo 0 > "$T/ah-rc"
 r=$(SG_WAVE_TIP_GATES="bash '$T/ah-tip.sh'" SG_WAVE_CHILD_GATES=true land2 run-55 2>&1); rc=$?
 [ $rc = 0 ] && $O cat-file -e dev:g550 2>/dev/null && ok "AH: the wave lands on a green tip" || ko "AH: exit $rc: '$r'"
-[ "$(/usr/bin/grep -E '^(o 3 [A-Z][a-z]+ 550|GATE)$' "$T/board.log")" = "$(printf 'o 3 Gating 550\nGATE\no 3 Closed 550')" ] \
-  && ok "AH: the landing moves the card from Gating to Closed" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
+[ "$(/usr/bin/grep -E '^(o 3 [A-Z][a-z]+ 550|GATE)$' "$T/board.log")" = "$(printf 'o 3 Testing 550\nGATE\no 3 Closed 550')" ] \
+  && ok "AH: the landing moves the card from Testing to Closed" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
 : > "$T/board.log"; echo 1 > "$T/ah-rc"
 r=$(SG_WAVE_TIP_GATES="bash '$T/ah-tip.sh'" SG_WAVE_CHILD_GATES=true land2 run-56 2>&1); rc=$?
 [ $rc != 0 ] && ! $O cat-file -e dev:g560 2>/dev/null && ok "AH: a red tip does not land" || ko "AH: exit $rc: '$r'"
-[ "$(/usr/bin/grep -v '^GATE$' "$T/board.log")" = "o 3 Gating 560" ] && ok "AH: a red attempt writes no move after Gating" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
+[ "$(/usr/bin/grep -v '^GATE$' "$T/board.log")" = "o 3 Testing 560" ] && ok "AH: a red attempt writes no move after Testing" || ko "AH: board log '$(cat "$T/board.log")': '$r'"
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"

@@ -10,7 +10,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 SCRIPT = SCRIPTS / "board_migrate.py"
 MOVED = ("Blocked", "In Progress", "Done", "Open Specs", "Merging")
-RETIRED = ("Testing", "Pushing")   # the definition no longer names them, and no column replaces them
+RETIRED = ("Pushing",)   # the definition no longer names it, and no column replaces it; Testing is a column again (#2315)
 OLD = MOVED + RETIRED
 ITEMS = [
     {"n": 1, "st": "Open Specs", "s": "OPEN", "l": []},
@@ -22,7 +22,8 @@ ITEMS = [
     {"n": 7, "st": "Todo", "s": "OPEN", "l": []},
     {"n": 8, "st": "Doing", "s": "OPEN", "l": []},
     {"n": 9, "st": "Merging", "s": "OPEN", "l": []},
-    {"n": 10, "st": "Landing", "s": "OPEN", "l": []},
+    {"n": 10, "st": "Batching", "s": "OPEN", "l": []},
+    {"n": 13, "st": "Landing", "s": "OPEN", "l": []},   # the version 2 spelling: the rename keeps its option, so no plan moves it (#2315)
 ]
 
 
@@ -49,7 +50,7 @@ def test_an_open_spec_lands_in_backlog_with_the_spec_label(mig):
 def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 3) == {"card": 3, "old": "Blocked", "new": "Landing", "add_labels": ["frozen:owner"]}
+    assert _move(plan, 3) == {"card": 3, "old": "Blocked", "new": "Batching", "add_labels": ["frozen:owner"]}
     assert _move(plan, 4)["new"] == "Backlog"
 
 
@@ -67,11 +68,12 @@ def test_a_card_closed_as_not_planned_moves_to_abandoned(mig):
     assert _move(plan, 13)["new"] == "Abandoned"
 
 
-def test_merging_takes_the_shipped_landing_and_a_landing_card_is_never_moved(mig):
+def test_merging_takes_the_shipped_batching_and_a_batching_card_is_never_moved(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 9)["new"] == "Landing"
-    assert 10 not in {m["card"] for m in plan["moves"]}, "the legacy Landing card already holds the shipped column"
+    assert _move(plan, 9)["new"] == "Batching"
+    assert 10 not in {m["card"] for m in plan["moves"]}, "the Batching card already holds the shipped column"
+    assert 13 not in {m["card"] for m in plan["moves"]}, "a card on the version 2 spelling keeps its option through the rename"
 
 
 def test_a_card_on_a_shipped_column_is_never_moved(mig):
@@ -99,7 +101,8 @@ def test_removal_is_allowed_once_no_card_carries_an_old_option(mig):
 
 
 def test_a_retired_option_is_never_moved_and_its_removal_is_refused(mig):
-    """Testing and Pushing are retired: no column replaces them, so a card still on one blocks the removal by name."""
+    """Pushing is retired: no column replaces it, so a card still on it blocks the removal by name. Testing is the gate
+    column again (#2315), so a card on it is no old option."""
     items = [{"n": 30, "st": "Testing", "s": "OPEN", "l": []},
              {"n": 31, "st": "Pushing", "s": "OPEN", "l": []},
              {"n": 32, "st": "Todo", "s": "OPEN", "l": []}]
@@ -107,11 +110,11 @@ def test_a_retired_option_is_never_moved_and_its_removal_is_refused(mig):
     plan = mig.plan(items)
 
     assert plan["moves"] == [], "a card on a retired option is moved by the migration"
-    assert {r["option"]: r["remaining"] for r in plan["removals"]}["Testing"] == 1
+    assert "Testing" not in {r["option"] for r in plan["removals"]}
     assert {r["option"]: r["remaining"] for r in plan["removals"]}["Pushing"] == 1
     counts = mig.carried(items)
-    assert counts == {"Testing": 1, "Pushing": 1}
-    assert "Testing: 1" in mig.refusal(counts) and "Pushing: 1" in mig.refusal(counts)
+    assert counts == {"Pushing": 1}
+    assert "Pushing: 1" in mig.refusal(counts)
 
 
 def _run(tmp_path, *args, items=ITEMS):
@@ -128,12 +131,12 @@ def test_the_dry_run_prints_every_move_and_removal_and_writes_nothing(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "dry run: nothing is written" in out
     assert "MOVE #1 Open Specs -> Backlog +spec" in out
-    assert "MOVE #3 Blocked -> Landing +frozen:owner" in out
-    assert "MOVE #9 Merging -> Landing" in out
-    assert "MOVE #10" not in out, "a card on the shipped Landing column is never moved"
+    assert "MOVE #3 Blocked -> Batching +frozen:owner" in out
+    assert "MOVE #9 Merging -> Batching" in out
+    assert "MOVE #10" not in out and "MOVE #13" not in out, "a card on the shipped Batching column is never moved"
     assert out.count("MOVE #") == 7
     assert all(f"REMOVE option {o}" in out for o in OLD)
-    assert "REMOVE option Testing" in out and "REMOVE option Pushing" in out
+    assert "REMOVE option Testing" not in out and "REMOVE option Pushing" in out
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(before + ["items.json"])
 
 
@@ -149,7 +152,7 @@ def test_the_check_refuses_a_retired_option_with_its_count(tmp_path):
                                          {"n": 31, "st": "Pushing", "s": "OPEN", "l": []}])
 
     assert r.returncode == 3
-    assert "Testing: 1" in r.stderr and "Pushing: 1" in r.stderr
+    assert "Testing" not in r.stderr and "Pushing: 1" in r.stderr
 
 
 def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):
@@ -158,29 +161,39 @@ def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):
     assert r.returncode == 0
 
 
-def test_the_rename_carries_every_option_id_and_maps_the_two_old_names(mig):
+def test_the_rename_carries_every_option_id_and_maps_the_old_names(mig):
     """#2154: one field call carries every option with its own id, so each card keeps the column it stands in.
-    The two old names come from the version 1 map, never a second table (#2190)."""
+    The old names come from the version 1 map and the one alias map, never a second table (#2190, #2315)."""
     options = [{"id": "a", "name": "Todo", "color": "GRAY", "description": ""},
                {"id": "b", "name": "Code Review", "color": "ORANGE", "description": ""},
                {"id": "c", "name": "Code Complete", "color": "ORANGE", "description": ""}]
 
     out, changed = mig.renamed(options)
 
-    assert mig.RENAMES == {"Code Review": "Review", "Code Complete": "Landing"}
-    assert [(o["id"], o["name"]) for o in out] == [("a", "Todo"), ("b", "Review"), ("c", "Landing")]
+    assert mig.RENAMES == {"Code Review": "Reviewing", "Code Complete": "Batching", "Review": "Reviewing",
+                           "Landing": "Batching", "Gating": "Testing"}
+    assert [(o["id"], o["name"]) for o in out] == [("a", "Todo"), ("b", "Reviewing"), ("c", "Batching")]
     assert changed
 
 
 def test_the_rename_changes_nothing_on_a_board_that_already_holds_the_names(mig):
     """The second call sends the names the board already carries, so it changes nothing."""
-    options = [{"id": "b", "name": "Review", "color": "ORANGE", "description": ""},
-               {"id": "c", "name": "Landing", "color": "ORANGE", "description": ""}]
+    options = [{"id": "b", "name": "Reviewing", "color": "ORANGE", "description": ""},
+               {"id": "c", "name": "Batching", "color": "ORANGE", "description": ""},
+               {"id": "d", "name": "Testing", "color": "PINK", "description": ""}]
 
     out, changed = mig.renamed(options)
 
     assert changed is False
     assert out == options
+
+
+def test_a_rename_that_gives_two_options_one_name_is_named(mig):
+    """#2315: a board that still carries a stale Testing option beside Gating would hold the name twice after the rename."""
+    options = [{"id": "d", "name": "Gating"}, {"id": "e", "name": "Testing"}, {"id": "f", "name": "Closed"}]
+
+    assert mig.clashes(options) == ["Testing"]
+    assert mig.clashes([{"id": "d", "name": "Gating"}, {"id": "f", "name": "Closed"}]) == []
 
 
 def test_a_card_on_a_terminal_column_stays_and_a_closed_old_card_lands_in_closed(mig):

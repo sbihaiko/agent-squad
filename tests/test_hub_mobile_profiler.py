@@ -154,11 +154,11 @@ TRIP = {"label": "The trip of an issue", "window_s": 3600, "deliveries": 4, "bar
              "tokens": {"points": [[0.1875, 120.0], [0.8125, 240.0]], "mean": 120.0}, "tokens_per_issue": 2400.0,
              "cpu": {"points": [[0.1875, 0.3], [0.8125, 0.6]], "mean": 0.3},
              "ram": {"points": [[0.1875, 0.2], [0.8125, 0.3]], "mean": 0.25}, "beside": None},
-            {"column": "review", "label": "Review", "min_s": 300.0, "median_s": 300.0, "p85_s": 420.0, "max_s": 420.0, "observations": 2, "parallelism": 1.0, "effective_s": 300.0, "share": 0.3,
+            {"column": "reviewing", "label": "Reviewing", "min_s": 300.0, "median_s": 300.0, "p85_s": 420.0, "max_s": 420.0, "observations": 2, "parallelism": 1.0, "effective_s": 300.0, "share": 0.3,
              "tokens": {"points": [[0.5, 80.0]], "mean": 80.0}, "tokens_per_issue": 300.0,
              "cpu": {"points": [[0.5, 0.2]], "mean": 0.2}, "ram": {"points": [[0.5, 0.1]], "mean": 0.1},
              "beside": None},
-            {"column": "gating", "label": "Gating", "min_s": 30.0, "median_s": 30.0, "p85_s": 40.0, "max_s": 40.0, "observations": 1, "parallelism": 1.0, "effective_s": 30.0, "share": 0.1,
+            {"column": "testing", "label": "Testing", "min_s": 30.0, "median_s": 30.0, "p85_s": 40.0, "max_s": 40.0, "observations": 1, "parallelism": 1.0, "effective_s": 30.0, "share": 0.1,
              "tokens": {"points": [], "mean": None}, "tokens_per_issue": 0.0,
              "cpu": {"points": [], "mean": None}, "ram": {"points": [], "mean": None}, "beside": None}]}
 LOAD = {"label": "Machine load", "start": 0, "end": 3600, "peak": 4.2, "cores": 8, "gap_s": 0,
@@ -192,8 +192,8 @@ def test_the_phone_draws_the_tokens_lane_and_the_machine_lane_from_the_payload()
 def test_the_phone_labels_each_column_with_its_name_and_median_time():
     html = phone_trip_html()
     labels = html[html.index("ptlabels"):]
-    for name, time in (("Todo", "1.0 min · ×1.0"), ("Doing", "5.0 min · ×2.0"), ("Review", "5.0 min · ×1.0"),
-                       ("Gating", "30.0 s · ×1.0")):
+    for name, time in (("Todo", "1.0 min · ×1.0"), ("Doing", "5.0 min · ×2.0"), ("Reviewing", "5.0 min · ×1.0"),
+                       ("Testing", "30.0 s · ×1.0")):
         assert name in labels and time in labels, f"{name} keeps its name, its effective time and its parallelism"
 
 
@@ -206,8 +206,8 @@ def test_the_phone_table_shows_tokens_per_issue_mean_cpu_and_mean_ram():
         assert head in table, f"the table names {head}"
     assert re.search(r"<td>600</td>", table) and re.search(r"<td>50%</td>", table) and re.search(r"<td>40%</td>", table), \
         "the Todo row carries the payload's tokens per issue and its mean CPU and RAM"
-    gating = html[html.index('data-p="trip/gating"'):]
-    assert "&#8212;" in gating, "a column with no reading prints a dash, never a zero"
+    testing = html[html.index('data-p="trip/testing"'):]
+    assert "&#8212;" in testing, "a column with no reading prints a dash, never a zero"
 
 
 TRIP_EGO = """

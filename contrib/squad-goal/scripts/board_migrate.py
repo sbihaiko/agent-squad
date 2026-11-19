@@ -4,8 +4,9 @@
 usage: board_migrate.py --plan  <items.json>   a dry run: every card move and every option removal; nothing is written
        board_migrate.py --check <items.json>   exit 3, with the counts, while a card carries an old option
 
-A moved option has a shipped column that takes its cards. A retired option (Testing, Pushing) has none: its cards are never
-moved, and a card still on one refuses the removal by name, so no card loses the value it carries.
+A moved option has a shipped column that takes its cards. A retired option (Pushing) has none: its cards are never moved,
+and a card still on one refuses the removal by name, so no card loses the value it carries. A renamed option (RENAMES)
+is neither: board_define.py --rename renames it in place with its own id, so its cards keep their column (#2154, #2315).
 
 The items are the list the board cache holds: n (issue), st (Status option), s (state), l (labels), cr (the close reason), and optionally facts
 (what board_columns.column_for reads, to place a Blocked card where its work reached). The target of every move comes from
@@ -14,15 +15,22 @@ board_columns, never from a table here. This script has no write mode: the appli
 import json
 import sys
 
-from board_columns import V1_NAMES, FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, column_for, view_column
+from board_columns import ALIAS_COLUMNS, V1_NAMES, FREEZE_LABEL, SHIPPED_NAME, SPEC_LABEL, canonical, column_for, view_column
 
 MOVED_OPTIONS = tuple(SHIPPED_NAME)   # an old option with a shipped column to take its cards
-RETIRED_OPTIONS = ("Testing", "Pushing")   # the definition no longer names them, and no column takes their cards
+RETIRED_OPTIONS = ("Pushing",)   # the definition no longer names it, and no column takes its cards; Testing is a column again (#2315)
 OLD_OPTIONS = MOVED_OPTIONS + RETIRED_OPTIONS
 REFUSED = 3
-# The options the shipped definition renames in place (#2154): the version 1 name and the canonical one. The map is read
-# from the version 1 table, never written a second time (#2190).
-RENAMES = dict(V1_NAMES)
+# The options the shipped definition renames in place (#2154, #2315): each old name, version 1 or version 2, and the
+# canonical one. The map is read from the version 1 table and the one alias map, never written a second time (#2190).
+RENAMES = {**{old: canonical(new) for old, new in V1_NAMES.items()},
+           **{old: entry["name"] for entry in ALIAS_COLUMNS for old in entry["old"]}}
+
+
+def clashes(options):
+    """The canonical names a rename would give two options: the field would carry one name twice, so the rename refuses."""
+    names = [RENAMES.get(o["name"], o["name"]) for o in options]
+    return sorted({n for n in names if names.count(n) > 1})
 
 
 def renamed(options):

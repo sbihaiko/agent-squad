@@ -313,12 +313,12 @@ while [ $i -lt ${#cands[@]} ]; do
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=; stk=
   case "$d" in READY*) g=base; nt="work in the worktree the run gives you";; *) why_card "$n" blocked "${d:-no stack line}"; continue;; esac
-  # (#2260) stack.sh names the approved tip of a blocker that sits in Landing: the child's branch starts on it, so the two
+  # (#2260) stack.sh names the approved tip of a blocker that sits in Batching: the child's branch starts on it, so the two
   # lines of work are one line of commits and the landing pass rebases the child onto the base once the blocker lands. The
   # tip and the branch go into the request, which is the record of what the child started from; a child of more than one
   # issue names no cut, as with every other cut (one worktree, one branch).
   stk=$(printf '%s\n' "$stack_out" | sed -n 's/^STACK TIP \([0-9a-fA-F]\{7,64\}\) \([^ ]\{1,\}\) #\([0-9][0-9]*\)$/\1 \2 \3/p' | head -1)
-  [ -n "$stk" ] && nt="$nt; your branch starts on the approved tip ${stk%% *} of blocker #${stk##* }, whose card is in Landing: build on those commits, and the landing pass rebases onto ${SG_BASE:-the base} once the blocker lands"
+  [ -n "$stk" ] && nt="$nt; your branch starts on the approved tip ${stk%% *} of blocker #${stk##* }, whose card is in Batching: build on those commits, and the landing pass rebases onto ${SG_BASE:-the base} once the blocker lands"
   # A run never holds conflicting siblings (ADR-0150, #703): a ticket of a spec that a picked issue already builds, as a child
   # of its own, waits for a later run. Deterministic (siblings.py: the spec link and the bodies, no model); issues that name
   # one file are one child (cluster.py), never siblings. A filter that cannot run filters nothing: landing still checks.
@@ -383,7 +383,7 @@ rm -f "$A/frontier-why"   # this pass dispatched: the next idle pass explains it
 rm -f "$SG_STATE/frontier-idle"   # this pass started work: the idle streak is over, and the next one starts the clock again (#744)
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 cutof() { local i=0 x; for x in ${cutp[@]+"${cutp[@]}"}; do [ "$x" = "$1" ] && { echo "${cutb[$i]}"; return; }; i=$((i+1)); done; }   # the branch the issue is stacked on, if it is
-stkof() { local i=0 x; for x in ${stkp[@]+"${stkp[@]}"}; do [ "$x" = "$1" ] && { echo "${stkv[$i]}"; return; }; i=$((i+1)); done; }   # "<tip> <branch>" of a blocker in Landing (#2260)
+stkof() { local i=0 x; for x in ${stkp[@]+"${stkp[@]}"}; do [ "$x" = "$1" ] && { echo "${stkv[$i]}"; return; }; i=$((i+1)); done; }   # "<tip> <branch>" of a blocker in Batching (#2260)
 all=(); while read -r c; do [ -n "$c" ] && all+=("$c"); done < <(cluster_of "${ready[@]}")
 # One run per free slot, never more runs than children (#728). The children are dealt over the runs in turn, so no run takes
 # more than per: the pass took at most free * per of them. Every run of the pass came out of one walk, so the sibling filter
@@ -405,7 +405,7 @@ child_block() { local c=$1 n f cb stk tp br; set -- $c; f=$(last_fail "$1"); cb=
   # (#2260) The blocker's approved tip is the cut when no file conflict named another one: the child starts on it, and the
   # request records the tip in full, so the record names what the child's branch was cut from.
   [ $# -eq 1 ] && [ -z "$cb" ] && [ -n "$stk" ] && echo "CUT FROM: $br"
-  [ $# -eq 1 ] && [ -n "$stk" ] && echo "STACK TIP: $tp (#${stk##* }, a blocker in Landing)"
+  [ $# -eq 1 ] && [ -n "$stk" ] && echo "STACK TIP: $tp (#${stk##* }, a blocker in Batching)"
   for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; jq -r --argjson n "$n" '.[]|select(.number==$n)|"\"" + .title + "\"\n" + (.body // "")' "$F/issues.json"
     python3 "$here/reopen-note.py" "$SG_REPO" "$n" 2>/dev/null; done; }   # a reopened issue carries the reason it was reopened (#817)
 build_body() { local c fg

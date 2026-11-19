@@ -17,9 +17,9 @@ DEFINITION = SCRIPTS / "board-definition.json"
 TODAYS = [
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
-    ({"review_wait": True}, "Review", None),
-    ({"wave_branch": True}, "Landing", None),
-    ({"gating": True}, "Gating", None),
+    ({"review_wait": True}, "Reviewing", None),
+    ({"wave_branch": True}, "Batching", None),
+    ({"gating": True}, "Testing", None),
     ({"closed": True}, "Closed", None),
     ({"in_dev": True}, "Closed", None),
     ({"abandoned": True}, "Abandoned", None),
@@ -29,8 +29,8 @@ TODAYS = [
     ({"spec": True, "child_live": True}, "Todo", None),
     ({"abandoned": True, "gating": True}, "Abandoned", None),
     ({"in_dev": True, "gating": True}, "Closed", None),
-    ({"review_wait": True, "wave_branch": True}, "Landing", None),
-    ({"run_live": True, "review_wait": True}, "Review", None),
+    ({"review_wait": True, "wave_branch": True}, "Batching", None),
+    ({"run_live": True, "review_wait": True}, "Reviewing", None),
     ({"owner": True, "run_live": True}, "Doing", "frozen:owner"),
 ]
 
@@ -54,7 +54,7 @@ def _data():
 def test_the_shipped_definition_names_its_version_and_each_column_an_expression(table):
     data = _data()
 
-    assert data["definition_version"] == table.CURRENT_DEFINITION_VERSION == 2
+    assert data["definition_version"] == table.CURRENT_DEFINITION_VERSION == 3
     for status in data["statuses"]:
         table.parse_expression(status["fact"])
         assert isinstance(status["description"], str) and status["description"], status["name"]
@@ -75,26 +75,26 @@ def test_the_hub_read_and_the_writer_reach_the_same_column(table):
 
 
 def test_a_version_the_reader_does_not_know_keeps_the_last_written_column(table):
-    text = DEFINITION.read_text().replace('"definition_version": 2', '"definition_version": 3', 1)
-    column, freeze, unknown = table.resolve_column({"run_live": True}, written="Review", text=text)
+    text = DEFINITION.read_text().replace('"definition_version": 3', '"definition_version": 4', 1)
+    column, freeze, unknown = table.resolve_column({"run_live": True}, written="Reviewing", text=text)
 
-    assert (column, freeze) == ("Review", None), "the reader guesses a column it does not know"
-    assert unknown and "3" in unknown
-    assert table.column_for({"run_live": True}, written="Review", text=text) == ("Review", None)
+    assert (column, freeze) == ("Reviewing", None), "the reader guesses a column it does not know"
+    assert unknown and "4" in unknown
+    assert table.column_for({"run_live": True}, written="Reviewing", text=text) == ("Reviewing", None)
     assert table.view_column("Doing", False, text=text) == ("Doing", None)
 
 
 def test_an_expression_outside_the_grammar_is_unknown_and_the_written_column_stands(table):
     data = _data()
     for status in data["statuses"]:
-        if status["name"] == "Gating":
+        if status["name"] == "Testing":
             status["fact"] = {"sometimes": "gating"}
     text = json.dumps(data)
-    column, _, unknown = table.resolve_column({"gating": True}, written="Landing", text=text)
+    column, _, unknown = table.resolve_column({"gating": True}, written="Batching", text=text)
 
-    assert column == "Landing" and unknown and "Gating" in unknown
-    assert table.column_for({"gating": True}, written="Landing", text=text) == ("Landing", None)
-    assert table.view_column("Review", False, text=text) == ("Review", None)
+    assert column == "Batching" and unknown and "Testing" in unknown
+    assert table.column_for({"gating": True}, written="Batching", text=text) == ("Batching", None)
+    assert table.view_column("Reviewing", False, text=text) == ("Reviewing", None)
 
 
 def test_a_definition_with_no_version_reads_as_the_current_version(table):
@@ -106,15 +106,15 @@ def test_a_definition_with_no_version_reads_as_the_current_version(table):
         assert table.column_for(facts, text=text) == (column, freeze), facts
 
 
-def test_a_version_1_definition_reads_its_old_names_as_review_and_landing(table):
+def test_a_version_1_definition_reads_its_old_names_as_reviewing_and_batching(table):
     """#2190: version 1 named the columns `Code Review` and `Code Complete`; only the version 1 path renames them."""
     data = _data()
     data["definition_version"] = 1
     for status in data["statuses"]:
-        status["name"] = {"Review": "Code Review", "Landing": "Code Complete"}.get(status["name"], status["name"])
+        status["name"] = {"Reviewing": "Code Review", "Batching": "Code Complete"}.get(status["name"], status["name"])
     names = [c["name"] for c in table.shipped_columns(json.dumps(data))]
 
-    assert "Review" in names and "Landing" in names, names
+    assert "Reviewing" in names and "Batching" in names, names
     assert "Code Review" not in names and "Code Complete" not in names, names
     for facts, column, freeze in TODAYS:
         assert table.resolve_column(facts, text=json.dumps(data))[:2] == (column, freeze), facts

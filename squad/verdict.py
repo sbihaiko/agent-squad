@@ -6,7 +6,10 @@ The fold reads the record and the observation, never the graph.
 import shlex
 from dataclasses import dataclass, field
 
-EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
+EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30, "no-repro": 40}
+# A run whose bug did not reproduce failed nothing: the code is sound and the premise of its issue is wrong, so it is its
+# own verdict, never a failure, and its card returns to the owner (ADR-0029).
+NO_REPRO = "does-not-reproduce"
 # The join order of `each` and `dispatch`: an unfinished proof is worse than a pass and better than a hold, because
 # delivery outranks the proof (ADR-0164).
 WORST = ("fail", "deadline", "needs-human", "unproven", "pass")
@@ -153,9 +156,12 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     unproven = _unproven(failing, kept, root) if failing and (kept or only_unproven) else None
 
     def make(v, rs, rem=True):
+        end = _end_class(failing) if v == "failed" else None
+        if v == "failed" and _no_repro(events, end):
+            v = "no-repro"
         rem_list = remains if v != "completed" and rem else []
         msg = _message(v, rs, rem_list, _resume_ref(run_folder, run_id), opts)
-        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg, _end_class(failing) if v == "failed" else None)
+        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg, end if v in ("failed", "no-repro") else None)
 
     if pre.get("status") == "failed":
         return make("failed", [pre["reason"]])
@@ -192,6 +198,12 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     if conflict:
         return make("conflict", conflict)
     return make(base or "failed", rs)
+
+
+def _no_repro(events, klass):
+    """True when a run's one end class is does-not-reproduce and its record holds no committed workspace: a run that found no
+    bug made no wrong work, so its end is its own verdict (ADR-0029). A commit is work it produced, so that end stays failed."""
+    return klass == NO_REPRO and not any(e["event"] == "workspace_commit" and e.get("status") == "committed" for e in events)
 
 
 def _end_class(failing):

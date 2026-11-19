@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""The real-project check of a card's Gating path (SPEC 1218, #1258).
+"""The real-project check of a card's Testing path (SPEC 1218, #1258).
 
-One disposable card is taken through Todo -> Doing -> Landing -> Gating -> Closed. This reader proves that path
+One disposable card is taken through Todo -> Doing -> Batching -> Testing -> Closed. This reader proves that path
 from the stores the live loop keeps, never from a fixture:
 
   path                 the card's column intervals run forward through the five columns, in the board's own axis order;
-  gating_live          a Gating stretch is closed by a later column, and it overlaps a gate the card's wave ran;
+  gating_live          a Testing stretch is closed by a later column, and it overlaps a gate the card's wave ran;
   gate_tries           the card's live Gate Tries number equals the distinct attempts its journal holds;
-  timing               the Gating entry and exit instants agree with the gate's own log (gate-history): the card entered
-                       Gating no later than the first attempt's start plus the board's settle bound, and it left no
+  timing               the Testing entry and exit instants agree with the gate's own log (gate-history): the card entered
+                       Testing no later than the first attempt's start plus the board's settle bound, and it left no
                        earlier than the last verdict and no later than that verdict plus the settle bound; the
-                       lead-time reader's `gate time` equals the history's Gating hours;
+                       lead-time reader's `gate time` equals the history's Testing hours;
   ended_closed         the live board carries the card closed in Closed;
   no_backward_movement no proved move of any card since the card entered Todo went back along the axis.
 
@@ -32,7 +32,7 @@ Exit: 0 pass, 1 a check failed, 2 an input could not be read (including no path 
 two stores, and a history store that holds no record for the named card).
 
 `--record-guard` is the owner's guard (#1430): it compares the attempt journal with the history store and exits 1 naming
-every attempt whose card never read Gating. It runs beside the board checks and reads those two stores only, so it
+every attempt whose card never read Testing. It runs beside the board checks and reads those two stores only, so it
 answers the same after a restart and on a re-read; a failure is a defect, never a warning.
 """
 import argparse
@@ -51,7 +51,7 @@ import gate_attempts
 GATING = board_columns.ROLE["gating"]
 TODO = board_columns.ROLE["issue_todo"]
 CLOSED = board_columns.ROLE["issue_closed"]
-PATH_COLUMNS = (TODO, board_columns.DOING, board_columns.LANDING, GATING, CLOSED)   # the definition's names (#2155, #2190)
+PATH_COLUMNS = (TODO, board_columns.DOING, board_columns.BATCHING, GATING, CLOSED)   # the definition's names (#2155, #2190)
 SETTLE_SECONDS = 900   # how late a board poll may record a Status change against the gate's own instant
 MATCH_SECONDS = 120    # how close an attempt's finish and a gate-history line's finish are one gate run
 HOUR = 3600.0
@@ -113,7 +113,7 @@ def item_of(board, repo, issue):
 
 
 def gating_stretches(runs):
-    """Every contiguous stretch one card spends in Gating, with its instants and hours. A freeze or a spec change ends
+    """Every contiguous stretch one card spends in Testing, with its instants and hours. A freeze or a spec change ends
     an interval without changing the column, so contiguous runs of the same column merge (SPEC 1218)."""
     out, joined = [], False
     for run in runs:
@@ -158,7 +158,7 @@ def gate_windows(attempts, log):
 
 
 def _covers_gating(run, at, settle):
-    """True when one history interval is a Gating stretch that covers the attempt's instant: the interval holds it, its
+    """True when one history interval is a Testing stretch that covers the attempt's instant: the interval holds it, its
     entry was recorded no later than the settle bound after it, and it was left no earlier than the settle bound before
     it. The poll may record either end late or early, so the same bound widens both ends."""
     if not run["on_board"] or run["column"] != GATING: return False
@@ -194,11 +194,11 @@ def _wave_cards(journal):
 def gating_recorded(journal, store, since=None):
     """The journal-versus-history guard (#1430): (ok, problems).
 
-    Every gate attempt the journal holds, whose card is ahead of dev, leaves a Gating stretch on the board. The attempt
+    Every gate attempt the journal holds, whose card is ahead of dev, leaves a Testing stretch on the board. The attempt
     record carries one instant, the moment it drew its verdict; the card's stretch covers it when the history store's
-    Gating interval holds that instant. The board's poll may record either end of the interval late or early, so an
+    Testing interval holds that instant. The board's poll may record either end of the interval late or early, so an
     interval within SETTLE_SECONDS of the attempt still covers it. A card is in dev when a Closed interval opened at least
-    SETTLE_SECONDS before the attempt and still held it: the gate re-ran on landed work, and no Gating stretch is expected.
+    SETTLE_SECONDS before the attempt and still held it: the gate re-ran on landed work, and no Testing stretch is expected.
     A wave-level attempt (card 0)
     is read on the cards the journal names for its wave, so a real wave is never waived. The guard reads the journal and
     the store only, so it answers the same after a restart and on a re-read."""
@@ -256,7 +256,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
     add("path", path_ok,
         f"columns {' -> '.join(seq) or 'none'}; the five columns present: {'yes' if present else 'no'}; in axis order: {'yes' if ordered else 'no'}; forward only: {'yes' if forward else 'no'}")
 
-    # 2. gating_live: a closed Gating stretch that overlaps a gate the card's wave ran.
+    # 2. gating_live: a closed Testing stretch that overlaps a gate the card's wave ran.
     stretches = gating_stretches(runs)
     closed_stretches = [s for s in stretches if s["to_t"] is not None and s["hours"] is not None]
     all_attempts = gate_attempts.attempts(journal) if journal else []
@@ -270,7 +270,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
                and s["to_t"] >= datetime.fromtimestamp(min(w["start"] for w in windows), UTC)]
     gating_ok = bool(overlap) and bool(windows)
     add("gating_live", gating_ok,
-        f"Gating stretches {len(closed_stretches)} of {len(stretches)}; gate runs read {len(windows)}; a stretch overlaps a run: {'yes' if overlap else 'no'}")
+        f"Testing stretches {len(closed_stretches)} of {len(stretches)}; gate runs read {len(windows)}; a stretch overlaps a run: {'yes' if overlap else 'no'}")
 
     # 3. gate_tries: the live field is the journal's projection.
     try: tries = int(item.get("gt") or 0) if item else 0
@@ -281,12 +281,12 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
 
     # 4. timing: entry and exit against the gate's own log, and gate time against the lead-time reader.
     if not stretches:
-        add("timing", False, "the card never reads Gating in the history store")
+        add("timing", False, "the card never reads Testing in the history store")
     elif not windows:
         detail = "the gate's own log answers no attempt" + (f": {unmatched}" if unmatched else "")
         add("timing", False, detail)
     elif not closed_stretches:
-        add("timing", False, "the Gating stretch is still open: the card has not left Gating")
+        add("timing", False, "the Testing stretch is still open: the card has not left Testing")
     else:
         entry, exit_at = closed_stretches[0]["from_t"], closed_stretches[-1]["to_t"]
         first_start = datetime.fromtimestamp(min(w["start"] for w in windows), UTC)
@@ -303,7 +303,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
         chart_ok = chart is not None and obs is not None and abs(chart - hours) <= 1e-6
         ok = entry_ok and exit_ok and chart_ok
         add("timing", ok,
-            f"Gating entry {_stamp(entry)} from a gate start {_stamp(first_start)} (+{SETTLE_SECONDS}s bound): {'ok' if entry_ok else 'late'}; "
+            f"Testing entry {_stamp(entry)} from a gate start {_stamp(first_start)} (+{SETTLE_SECONDS}s bound): {'ok' if entry_ok else 'late'}; "
             f"exit {_stamp(exit_at)} from the verdict {_stamp(last_finish)} (+{SETTLE_SECONDS}s bound): {'ok' if exit_ok else 'out of bounds'}; "
             f"gate time {hours:.4f}h from the history and {chart if chart is not None else '?'}h from the lead-time chart")
 
@@ -333,7 +333,7 @@ def check(board, store, journal, log, transitions, repo, issue, wave=None, since
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="The real-project check of a card's Gating path (SPEC 1218, #1258).")
+    ap = argparse.ArgumentParser(description="The real-project check of a card's Testing path (SPEC 1218, #1258).")
     ap.add_argument("--issue", type=int)
     ap.add_argument("--repo")
     ap.add_argument("--wave")
@@ -345,7 +345,7 @@ def main(argv=None):
     ap.add_argument("--transitions")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--record-guard", action="store_true",
-                    help="compare the whole attempt journal with the history store: exit 1 naming every attempt whose card never read Gating")
+                    help="compare the whole attempt journal with the history store: exit 1 naming every attempt whose card never read Testing")
     a = ap.parse_args(argv)
     state = pathlib.Path(os.environ.get("SG_STATE") or "/tmp/sg-state")
     board_path = a.board or os.environ.get("SG_BOARD_CACHE")

@@ -29,15 +29,15 @@ column its work never reached.
    the loop undoes its own work; the move names that reason, `SG_MOVE_REASON=no-landing`, and the
    exception reaches Todo and no other column. A card the loop set itself is a correction of its own
    write, which is why it never weakens the rule for any other writer.
-   The move covers a partial landing: a `(#N)` commit in `dev` is Code Complete only while no
+   The move covers a partial landing: a `(#N)` commit in `dev` is Batching only while no
    no-landing requeue or run end is newer than it, so an older part of the fix never writes over the
-   requeue's Todo. It also covers a stranded card: a card in Code Review or Code Complete with no live
+   requeue's Todo. It also covers a stranded card: a card in Reviewing or Batching with no live
    run, no wave or kept marker, no remote branch ahead of `dev`, no freeze and no landing goes back to
    Todo with the same reason, because the frontier reads Todo only.
    A spec card is derived, not delivered: the fold over its sub-issues is its only writer, and no
    work rule names it. The fold lifts the card to Todo while any ticket is in flight and keeps it in
-   the column the owner gave it otherwise; it never follows a ticket into Doing, Code Review or Code
-   Complete, because the spec is not work. A spec is kept out of the count of work a live run holds
+   the column the owner gave it otherwise; it never follows a ticket into Doing, Reviewing or
+   Batching, because the spec is not work. A spec is kept out of the count of work a live run holds
    by its `spec` label, never by its column: a spec card in a work column is still not work.
 2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays while its
    issue is closed. An issue open again returns its card to Todo and to no other column; the move names
@@ -56,6 +56,12 @@ column its work never reached.
    refused, and the refusal names the count per option. A plan lists a removal only for an option
    its moves empty.
 6. **A card on a shipped column is never moved by the plan.** Only a card on an old option moves.
+7. **A renamed column keeps its option, so no card moves.** The definition names the new name, and the
+   alias map holds the old one beside it. Every reader resolves either name to the new column, and a
+   writer sends the option id the board carries for the column. So the published code works on a board
+   that carries the old option and on one that carries the new option. The live rename then sends every
+   option with its own id in one field call, and one items read proves that each card kept its column.
+   A rename that would give two options one name is refused.
 
 ## Consequences
 
@@ -67,7 +73,8 @@ column its work never reached.
 
 ## Guard
 
-`contrib/squad-goal/scripts/test-board-migrate.sh` and `tests/test_board_migrate.py`.
+`contrib/squad-goal/scripts/test-board-migrate.sh` and `tests/test_board_migrate.py`. `tests/test_board_column_rename.py` guards
+a renamed column (rule 7).
 `contrib/squad-goal/scripts/test-janitor-floor-startable.sh` and `tests/test_spec_fold.py` guard the
 floor and the fold. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh` guards a spec's
 tickets that follow the owner's move of its card to Todo. `contrib/squad-goal/scripts/test-janitor-terminal-comment.sh`

@@ -35,7 +35,7 @@ COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD
 BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
 DOING = _columns_module.DOING   # the one name of the claimed column: the hub names no column of its own
 BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
-BOARD_REVIEW_JSON = json.dumps(_columns_module.CODE_REVIEW)
+BOARD_REVIEW_JSON = json.dumps(_columns_module.REVIEWING)
 BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
 COLUMN_COLORS = {c["name"]: f"var({BOARD_CHART_ROLES.get(c['color'], '--chart-series-fallback')})" for c in BOARD_COLUMNS}   # one fill per column (#1604)
 BOARD_COLORS_JSON = json.dumps({**COLUMN_COLORS, **{lane["name"]: f"var({BOARD_CHART_ROLES.get(lane['color'], '--chart-series-fallback')})" for lane in BOARD_LANES}}, separators=(",", ":"))
@@ -1183,7 +1183,7 @@ def load_tick(sample=None, now=None, load=None):
 #   throughput (runs/hour, median, tks/s)     -> nowhere: `last progress` answers "is it moving?" without a rate that
 #                                                changes too fast to read
 #   per-column board counts                   -> the column headers directly above the footer
-#   the age of the oldest card in a column    -> the column header (`Review (3) · 2h`), one number per column
+#   the age of the oldest card in a column    -> the column header (`Reviewing (3) · 2h`), one number per column
 #   fork-ahead / branches waiting / last      -> a left-pane accordion; `fork-parked` already reaches the footer
 #   base-test duration                           through `health`, and the three reserved here take the fourth accordion
 #                                                when they arrive: the numbering here and the page's `ACC` are one list
@@ -2762,7 +2762,7 @@ def trip_events(path):
 
 def card_waits(store, numbers):
     """issue number -> `{"todo", "closed", "landing", "rework"}` from the board's transitions (#1894, #2292): the epoch of
-    the card's first entry into Todo, the card's Landing stint that went on to Closed in seconds (`landing`) with its
+    the card's first entry into Todo, the card's Batching stint that went on to Closed in seconds (`landing`) with its
     start (`landing_from`) and that Closed move (`closed`), and the stints that went back to work (`rework`). A card with no delivered stint answers its
     first Closed move. Only the issues a run of the window names are folded: the store holds every card of the board. A
     card the record never saw in a column answers None for it."""
@@ -2819,7 +2819,7 @@ def trip_issues(path):
 
 def trip_stages(path, card=None):
     """The rule layer's stages of one record, or None when it is no delivery, cached by the file's own signature and the
-    card's moves and Landing stint: a transition alone changes the answer, so it is part of the key."""
+    card's moves and Batching stint: a transition alone changes the answer, so it is part of the key."""
     try: st = path.stat()
     except OSError: return None
     key = str(path)
@@ -3143,6 +3143,37 @@ def profiler_view(a, w=None, sw=None, ww=None):
     with the switch off. The strip, the slots and the load are folded from one `now`, so a column of the page is the same
     instant in each. All of them are null for a caller the hub refused, as the records are not read for one; the cap is
     read once, so the chart's ceiling and the rest of the page name the same value."""
+PROF_ON_SECS = 1.0    # with the switch on the sampler reads the tree once a second, so the view is kept no longer than that
+PROF_OFF_SECS = 30.0  # the file views' cadence with the switch off (`profFileDue`), so one build serves every page in a window
+_PROF_KEPT = {}   # (w, sw, ww, on, tailnet) -> (at, answer): the loaded module's own, so one profile never serves another's
+_PROF_LOCK = threading.Lock()
+
+def prof_kept_clear():
+    """Clear the kept Loop view. A switch write is the page's own change, so the read after it shows the write and never
+    a view built before it."""
+    with _PROF_LOCK: _PROF_KEPT.clear()
+
+def profiler_served(a, w=None, sw=None, ww=None, now=None):
+    """The Loop view, built at most once per the page's own poll window (#2440).
+
+    The build reads the process table, the trip fold, the run table and the machine load, and it cost 0.8 to 1.8 seconds
+    of CPU on a request that the page makes every two seconds while it samples and every thirty with the switch off. The
+    window follows the switch: the sampler's own second, or the file views' own thirty. A caller the hub refused is built
+    for and never kept, so a refusal is never served from a kept view; the tailnet flag is part of the key, since it
+    decides the write the answer names."""
+    if not a.allowed or a.tailnet: return profiler_view(a, w, sw, ww)   # a refusal is never kept, and a tailnet caller's
+    on = profiler_on()                                                  # write follows a grant that can move inside a window
+    window = PROF_ON_SECS if on else PROF_OFF_SECS
+    key = (w, sw, ww, on)
+    now = POLL_CLOCK() if now is None else now
+    with _PROF_LOCK:
+        at, answer = _PROF_KEPT.get(key, (None, None))
+        if at is not None and now - at < window: return answer
+        answer = profiler_view(a, w, sw, ww)
+        _PROF_KEPT[key] = (now, answer)
+        return answer
+
+def profiler_view(a, w=None, sw=None, ww=None):
     write = a.allowed and (not a.tailnet or tailnet_block().get("profiler_write") is True)
     window_s = hub_profiler.run_window(w)
     now = time.time()
@@ -3175,6 +3206,7 @@ def profiler_switch(a, body, origin_ok):
     if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
     ended = profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
+    prof_kept_clear()   # the page reads its own switch at once, never a view built before the write (#2440)
     out = {"ok": True, "on": body["on"], "sampler": "ended" if ended else "running"}   # a word a page tests, not prose
     if not ended: out["sampler_text"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
     return 200, out
@@ -3708,7 +3740,9 @@ def runs():
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
-RUN_WATCH_SECS = 0.2
+RUN_WATCH_SECS = 1.0   # one tick a second, so a changed record reads within the second. Measured at a fifth of a second:
+                       # the roots are the checkout plus one per run and child worktree, 482 records in 16.6 ms a tick, 0.08
+                       # core with no page open; a second a tick is under 0.02 core (#2440)
 RUN_POLL_SECS = 3.0
 RUN_LIST = []
 RUN_LIST_AT = 0.0
@@ -3963,6 +3997,30 @@ def stats(period, src="both"):
     for k in ("cost_today", "cost_month", "cost_all"): opt[k] = round(opt[k], 4)
     pace = spend_pace(allr, calls, time.time(), src)   # the token guard's readings: the loop sources only (#1756)
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models, "operator": opt}
+
+POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
+                              # moves the view's own timestamps and leaves the age right. A test injects its own clock.
+STATS_POLL_SECS = 30.0   # the page's own spend poll (`pollStats` reads /api/stats every 30 s), so one window serves every page
+_STATS_KEPT = {}   # (period, src) -> (at, answer). The key carries no profile because the module is one per profile:
+                   # hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
+_STATS_LOCK = threading.Lock()
+
+def stats_served(period, src="both", now=None):
+    """The Spend answer, built at most once per the page's own poll window (#2440).
+
+    The build reads every run's record, the review ledger and the operator fold, and it cost 2.5 seconds of CPU. Every
+    open page and every client asks the same question for the same profile, so the answer is kept for the page's own
+    poll interval: any number of pages inside one window share one build, and the answer a page reads is never older
+    than the poll that would have refreshed it anyway. The key is the period and the billing source, so one pair's answer
+    never serves another pair. A build that raises keeps nothing, so the next read tries again."""
+    now = POLL_CLOCK() if now is None else now
+    key = (period, src)
+    with _STATS_LOCK:
+        at, answer = _STATS_KEPT.get(key, (None, None))
+        if at is not None and now - at < STATS_POLL_SECS: return answer
+        answer = stats(period, src)
+        _STATS_KEPT[key] = (now, answer)
+        return answer
 
 def spend_today(now=None):
     """Today's spend for the status tab, read without the history `stats` parses: a run's bucket is its start, and a run
@@ -5411,7 +5469,7 @@ def lead_rows(a=None, b=None, now=None):
     the chosen start column never saw, because that choice is never silently replaced (#1248). No `a` is Created, the
     card's first time on the board; an empty `a` is that same selection, never a column named empty. Each read card
     carries its observation `obs` for the survival reading: an open card is observed to `now`, censored (#1250). A
-    delivered row also carries `columns`, the hours it spent in each column, and `gate`, its Gating hours, for the
+    delivered row also carries `columns`, the hours it spent in each column, and `gate`, its Testing hours, for the
     chart's stack (#1256). The row's bar keys filter it (#904)."""
     a, b = a or None, b or None   # a selection cleared to empty is the default, Created or closed, never a column name
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
@@ -5732,7 +5790,7 @@ def predicted_draw(pred, read_column, read_at, window, closed, labels, cr):
     `read_at` is the instant the read that observed the card began; for a card the cache lacks it is the pass's own
     instant, because the whole read is what failed to carry it. The bound is `window`, the setting's own seconds, measured
     on the read's clock as the proved moves' window is, so a cache that stopped updating never expires a prediction."""
-    recorded = _columns_module.SHIPPED_NAME.get(pred["column"], pred["column"])
+    recorded = _columns_module.canonical(_columns_module.SHIPPED_NAME.get(pred["column"], pred["column"]))   # any spelling reads as its column (#2315)
     if recorded not in ORDER: return None   # a column this board does not ship is never drawn
     at = pred.get("instant")
     carried = isinstance(at, (int, float)) and read_at is not None and at < read_at
@@ -5781,7 +5839,7 @@ def drawn_column(i, moves, window):
     entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
     if not (isinstance(entry, dict) and entry.get("column")):
         return {"st": st, "fz": fz, "state": "read", "recorded": None, "entry": None}
-    recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
+    recorded = _columns_module.canonical(_columns_module.SHIPPED_NAME.get(entry["column"], entry["column"]))   # an old Status name reads as its shipped column (#2315)
     if recorded not in ORDER:   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
         return {"st": st, "fz": fz, "state": "read", "recorded": recorded, "entry": entry}
     at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
@@ -5875,7 +5933,7 @@ def board(moves=None):
         if why is not None and why[2] == board_cache.get("t"): row["prr"] = why[1]   # a refusal lasts until the board is read again
         if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
             row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
-            row["gchip"] = f"Gating · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
+            row["gchip"] = f"{_columns_module.TESTING} · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
         ho, hs = holder_fact(i)                  # the run that holds the card, read from the seam (#241); `hs` says whether its process lives (#1661)
@@ -7408,7 +7466,7 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  });
 /* Settings > Board (#2287): the card limit of each board column. The page renders and asks; the hub validates, shows the
    diff and writes the project settings file on confirm (ADR-0137). A blank field is no limit. The frontier reads Doing,
-   the review pass reads Review, and the Kanban header shows the count against the limit. */
+   the review pass reads Reviewing, and the Kanban header shows the count against the limit. */
 // BRD{ the Board theme's pure rules (#2287): its values, its dirty test and its render. Run in node by tests.
 let brdS=null,brdDraft=null,brdMsg="";
 const brdClone=o=>JSON.parse(JSON.stringify(o));
@@ -7581,9 +7639,10 @@ async function pollStats(){try{pollSubs();
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){console.warn("stats panel:",e)}}
-pollStats();setInterval(pollStats,30000);
-poll();setInterval(poll,3000);
-loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
+const pollIfVisible=fn=>()=>{if(!document.hidden)fn()};   // a hidden tab asks nothing (#2440); every hub read goes through it
+pollStats();setInterval(pollIfVisible(pollStats),30000);
+poll();setInterval(pollIfVisible(poll),3000);
+loadPoll();setInterval(pollIfVisible(loadPoll),LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;try{localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})}catch(e){}};
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
@@ -7790,7 +7849,7 @@ const flowCFD=c=>{const names=c.bands.map(b=>b.name),kept=CF.hidden.filter(h=>na
   return sel+`<svg viewBox="0 0 ${flowW} ${flowH}">${shown.map(polys).join("")}${shown.map(heldPolys).join("")}${cfdAxis(c)}${hover}</svg>`+legend+`<p class=fnote>${notes}</p>`;};   // the legend, then one line of notes (#1149)
 const ltEx=(exc,cards,total,words,reasons)=>{const R=reasons||{},named=exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`+((cards||{})[e.reason]?.length?": "+cards[e.reason].map(n=>"#"+n).join(", "):"")).join("; "),said=words||exc.map(e=>`${e.count} ${R[e.reason]||e.reason}`).join("; ");return `<em class=ltex${named?` title="${esc(named)}"`:""}>excluded ${total}${said?`: ${esc(said)}`:""}</em>`};   // the one exclusion total with its reason beside its count (#1145, #1248, #1354); its wording is the payload's, one source in Python; its hover names the cards
 const ltExOf=c=>ltEx(Object.entries(c.excluded||{}).map(([r,n])=>({reason:r,count:n})),c.excluded_cards,c.excluded_total,c.excluded_text,c.excluded_reasons);
-const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Gating column's palette role (#1256)
+const ltGateRole=()=>COLORS[COLNAME.gating]||"var(--chart-series-other)";   // gate time keeps the Testing column's palette role (#1256)
 const LT_TYPES=[["spec","Specs"],["task","Tasks"],["bug","Bugs"]],LT_START="/*LT_START*/";   // the start the hub's payload measures from (#1247)
 let LT={tf:"12h",ty:"bug",pick:null,zc:null,last:null,tried:false,err:null,fitted:false,fitH:0,cardH:0,reqH:null,defer:false,rr:0,zr:null,rng:null,tok:0,noclick:false,a:LT_START,b:"",cols:[],band:true,md:true,p85:true,win:"full"};   // a refused first read holds its own error; the fit flag keeps one redraw per paint, the measured box its height and reqH the height the last read asked for (#2171); a fresh page opens on the past 12 hours (#2029), Bugs and Todo; the chart's Start and End restore from their own key when the lead chart opens (#1275), while the timeframe and the Type stay the visit's choice (#1247); the y axis is always log (#1355); the cluster listed under the chart, and a drag zoom: the hub's chart over zr=[from,to] (#900, #985); the deviation band shows at first and the display may hide it, the choice held in this state across a redraw (#1332, #1353); the average, the median and p85 all show at first, and each is a toggle (#1332)
 const ltSpan=(r,a,b)=>{const t0=Date.parse(r.start),t1=Date.parse(r.end),at=f=>new Date(t0+f*(t1-t0)).toISOString();return [at(a<0?0:a),at(b>1?1:b)]};   // plot fractions to the dates they name (#900)
@@ -7928,7 +7987,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>{const age=Math.round(Date.now()/1000-s.at),old=age>s.max;return `<div class="gstrip${old?" old":""}" title="${esc(old?`these facts are ${age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`};
-const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr",tt=String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Gating · ${x.gt}</span>`:""}${loopBugLabel(x)?`<span class="bugc loop">${esc(loopBugLabel(x))}</span>`:(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pr?`<span class="prio ${x.pr.tone}${pr?"":" pbtn"}" data-level="${x.pr.level}" title="${esc(x.pr.label)}${pr?"":" — set the Priority"}" aria-label="${esc(x.pr.label)}" ${pr?"role=img":"role=button tabindex=0 aria-haspopup=listbox aria-expanded=false"}>${({"double-chevron-up":"⇈","arrow-up":"↑","bar":"▬","arrow-down":"↓"})[x.pr.icon]}</span>${x.pr.inherit?`<span class=pinh title="${x.pr.inherit==="pending"?"inheritance pending":"inherited priority"}">${x.pr.inherit==="pending"?"pending":"inherited"}</span>`:""}${x.prp?`<span class=prp title="a Priority write the board read has not carried yet">pending</span>`:""}${x.prr?`<div class="prr pwr">${esc(x.prr)}</div>`:""}`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt title="${esc(tt).replace(/"/g,"&quot;")}">${esc(tt)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${pr?"":`<button class=syncb data-n="${x.n}" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>`}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
+const cards=(g,it,shown)=>{const GHI='<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';return shown.map(x=>{const pr=x.kind==="pr",tt=String(x.t).replace(/^\s*\[SPEC(?:\s*#?\d+)?\]\s*/i,"");return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} data-col="${encodeURIComponent(g.name==null?"":String(g.name))}" data-pm="${x.pm&&!pr?1:""}" data-b="${encodeURIComponent(JSON.stringify(x.b||[]))}" data-bl="${encodeURIComponent(JSON.stringify(x.bl||[]))}" data-ho="${encodeURIComponent(x.ho==null?"":String(x.ho))}" data-hr="${encodeURIComponent(x.hr==null?"":String(x.hr))}" data-prf="${encodeURIComponent(JSON.stringify(x.prf||[]))}" style="--cc:${colOf(g.name,CN)};--lc:${cardColor(SLOTS,x)}${tint(x)}"><a class="id ghl" target=_blank rel=noopener title="open ${pr?"pull request":"issue"} #${x.n} on GitHub" aria-label="open ${pr?"pull request":"issue"} #${x.n} on GitHub" href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">#${x.n} ${GHI}</a>${x.kind!=="pr"&&x.pa!=null&&!x.sp?`<span class=lchip data-k=spec title="spec #${x.pa}">Spec ${x.pa}</span>`:""}${x.gt?`<span class=lchip data-k=gate title="gate attempts: the card's Gate Tries">Testing · ${x.gt}</span>`:""}${loopBugLabel(x)?`<span class="bugc loop">${esc(loopBugLabel(x))}</span>`:(x.l||[]).includes("bug")?'<span class="bugc">bug</span>':""}${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pr?`<span class="prio ${x.pr.tone}${pr?"":" pbtn"}" data-level="${x.pr.level}" title="${esc(x.pr.label)}${pr?"":" — set the Priority"}" aria-label="${esc(x.pr.label)}" ${pr?"role=img":"role=button tabindex=0 aria-haspopup=listbox aria-expanded=false"}>${({"double-chevron-up":"⇈","arrow-up":"↑","bar":"▬","arrow-down":"↓"})[x.pr.icon]}</span>${x.pr.inherit?`<span class=pinh title="${x.pr.inherit==="pending"?"inheritance pending":"inherited priority"}">${x.pr.inherit==="pending"?"pending":"inherited"}</span>`:""}${x.prp?`<span class=prp title="a Priority write the board read has not carried yet">pending</span>`:""}${x.prr?`<div class="prr pwr">${esc(x.prr)}</div>`:""}`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column${x.ho?"; a run is live on it, so the freeze holds the column and not the run":""}">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the move is not proved yet, because the writer has not answered, or no board read has carried a move the hub did not see proved">pending</span>`:""}${x.mr?`<div class=perr title="the writer refused this move">${esc(x.mr)}</div>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt title="${esc(tt).replace(/"/g,"&quot;")}">${esc(tt)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to ${esc(x.pmt)}: the owner's go signal (ADR-0142)">→ ${esc(x.pmt)}</button>`:""}${pr?"":`<button class=syncb data-n="${x.n}" title="re-read only this card from GitHub now: its column, labels, holder, blockers and sub-issue count">Sync</button>`}${x.sb?`<button class=spb data-n="${x.n}" title="plan this spec's batch: the hub names the count and the cards first, and nothing moves until you confirm">Start this spec</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}">${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<span class=hld title="${esc(x.ho)}">${esc(x.hc||(x.hs==="running"?"Squad · running":"Squad"))}</span>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"")};
 // Every column the user leaves visible is a lane of every group, even one holding no card at all (#1994): the lane
 // keeps its minimum width, its tint and its label with a zero, so a group reads as the board's columns and an empty
 // one reads as empty, never as missing. The visible set is derived on every render -- from the user's hidden set,
@@ -8125,8 +8184,8 @@ document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop
  const d=$("#ldg");$("#ldgb").innerHTML=loopConfirmHtml(loopV);d.showModal()});
 $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
-setInterval(loopPoll,5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
-setInterval(accPoll,5000);accPoll();
+setInterval(pollIfVisible(loopPoll),5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
+setInterval(pollIfVisible(accPoll),5000);accPoll();
 /*PROFILER_JS*/
 profMount("desktop");
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
@@ -8226,18 +8285,21 @@ document.addEventListener("click",async e=>{const g=e.target.closest("#spdlg .sp
  }catch(x){dlg.innerHTML="<div class=perr>the hub did not answer</div><button class=spx type=button>Close</button>"}});
 document.addEventListener("click",e=>{if(e.target.closest("#spdlg .spx"))$("#spdlg").remove()});
 
-pollBoard();setInterval(pollBoard,5000);
+pollBoard();setInterval(pollIfVisible(pollBoard),5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
-setInterval(squadChartTick,5000);
+setInterval(pollIfVisible(squadChartTick),5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
-endedPoll();setInterval(endedPoll,30000);
+endedPoll();setInterval(pollIfVisible(endedPoll),30000);
 const themeHash=(location.hash.match(/^#set-(lop|lim|sub|mdl|slk|acc)$/)||[])[1];if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286)
 setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
 function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
-setInterval(async()=>{try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
+setInterval(async()=>{if(document.hidden)return;try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
+// A page back in front reads the two fastest polls at once and the rest on their own timers, so a return never bursts the
+// hub with one read per endpoint (#2440). A Loop view that is due reads with them.
+addEventListener("visibilitychange",()=>{if(document.hidden)return;poll();pollBoard();if(profDue(TAB,document.hidden,profV))profPoll()});
 addEventListener("pageshow",e=>{if(e.persisted)location.reload()});
 </script>"""
 PROFILER_JS = (pathlib.Path(__file__).resolve().parent / "hub-profiler.js").read_text()   # the Loop view, shared with the phone (#1754)
@@ -10023,7 +10085,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
         elif self.path.startswith("/api/live"): body, ct = json.dumps(live_served()).encode(), "application/json"   # one compute per poll window, whatever asks (#1933)
-        elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
+        elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats_served((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
@@ -10055,7 +10117,7 @@ class H(BaseHTTPRequestHandler):
             q = re.search(r"[?&]w=(\d{1,9})\b", self.path)
             sw = re.search(r"[?&]sw=(\d{1,9})\b", self.path)
             ww = re.search(r"[?&]ww=(\d{1,9})\b", self.path)
-            body, ct = json.dumps(profiler_view(a, q[1] if q else None, sw[1] if sw else None, ww[1] if ww else None)).encode(), "application/json"
+            body, ct = json.dumps(profiler_served(a, q[1] if q else None, sw[1] if sw else None, ww[1] if ww else None)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
         elif self.path.split("?", 1)[0] == "/api/sessions/project": body, ct = json.dumps(project_payload(a)).encode(), "application/json"
         elif self.path.startswith("/api/sessions/clip"):   # the answer's one Kore clip (#1603)

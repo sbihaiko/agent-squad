@@ -28,6 +28,26 @@ def test_a_failed_child_with_an_owner_only_class_puts_it_in_the_verdict_record()
     assert v.event_fields()["end_class"] == "owner-only"
 
 
+def test_a_does_not_reproduce_run_with_no_commit_ends_no_repro_not_failed():
+    """A run that found no bug made no wrong work, so its end is its own verdict, never failed (ADR-0029)."""
+    evs = events(dict(out("a", "fail", ["the defect does not reproduce"]), end_class="does-not-reproduce"),
+                 out("main", "fail", ["the defect does not reproduce"]))
+    v = V.fold(evs)
+    assert (v.verdict, v.exit_code) == ("no-repro", V.EXIT["no-repro"])
+    assert v.end_class == "does-not-reproduce"
+    assert v.event_fields()["end_class"] == "does-not-reproduce"
+
+
+def test_a_does_not_reproduce_run_that_committed_stays_failed():
+    """A committed workspace is work the run produced, so the end keeps the failure."""
+    evs = events({"event": "workspace_commit", "node": "a", "status": "committed", "workspace": "w", "head": "abc"},
+                 dict(out("a", "fail", ["the defect does not reproduce"]), end_class="does-not-reproduce"),
+                 out("main", "fail", ["the defect does not reproduce"]))
+    v = V.fold(evs)
+    assert (v.verdict, v.exit_code) == ("failed", 1)
+    assert v.end_class == "does-not-reproduce"
+
+
 def test_a_gate_failure_carries_no_end_class_in_the_verdict_record():
     evs = events(out("a", "fail", ["ac-verify:no_ac_commands"]), out("main", "fail", ["ac-verify:no_ac_commands"]))
     v = V.fold(evs)

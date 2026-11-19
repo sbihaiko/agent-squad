@@ -1298,7 +1298,7 @@ def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(h
     """#1331: the tooltip names the card or the cluster and shows the lead time, the closed dates and each dot's column
     stack; the cluster carries its count, cards, date range and lead-time range in the payload."""
     gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
-             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Testing"},
              {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
              {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
     item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
@@ -1312,7 +1312,7 @@ def test_the_dot_tooltip_names_the_mark_its_lead_its_dates_and_the_stage_strip(h
     title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
     assert title.startswith("2 issues: #1, #2 · lead "), title
     assert "closed Oct 2" in title
-    assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip names each dot's column hours"
+    assert "Testing 18h" in title and "Todo 6h" in title, "the stage strip names each dot's column hours"
 
 
 def test_the_zoom_recomputes_the_clusters_from_the_same_rule(hub, board):
@@ -2205,7 +2205,7 @@ def test_the_lead_chart_states_its_coverage_and_marks_approximate_and_unknown_st
 # SPEC 1218 #1256: the lead chart breaks each card's life into its columns, and reports gate time.
 def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
     gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
-             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Testing"},
              {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
              {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
     item = _card(1, st="Closed", s="CLOSED", c="2026-10-02T09:00:00Z")
@@ -2215,16 +2215,16 @@ def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
     row = next(s for s in lead["series"] if s["n"] == 1)
     plain = next(s for s in lead["series"] if s["n"] == 2)
 
-    assert {band["column"]: band["hours"] for band in row["stack"]} == {"Todo": 6.0, "Gating": 18.0}
+    assert {band["column"]: band["hours"] for band in row["stack"]} == {"Todo": 6.0, "Testing": 18.0}
     assert sum(band["hours"] for band in row["stack"]) == pytest.approx(row["hours"]), \
         "the stack disagrees with the measure beside it"
     assert row["gate_hours"] == pytest.approx(18.0)
-    assert "Gating" not in [band["column"] for band in plain["stack"]], "a card that never gated draws no band"
+    assert "Testing" not in [band["column"] for band in plain["stack"]], "a card that never gated draws no band"
     assert plain["gate_hours"] == 0.0
 
     chart = lead["control"]["all"]
-    assert sum(band["hours"] for dot in chart["dots"] for band in dot["stack"] if band["column"] == "Gating") == \
-        pytest.approx(chart["gate"]["hours"]), "gate time is not the Gating band's total"
+    assert sum(band["hours"] for dot in chart["dots"] for band in dot["stack"] if band["column"] == "Testing") == \
+        pytest.approx(chart["gate"]["hours"]), "gate time is not the Testing band's total"
     assert chart["gate"]["hours"] == pytest.approx(18.0)
     assert chart["gate"]["text"] == "18h"
 
@@ -2233,7 +2233,7 @@ def test_the_lead_chart_gives_a_gating_interval_its_own_band(hub, board):
 def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hub, tmp_path):
     """Re-anchored (#1331): the plot draws no stacked bar; each dot's column stack is its tooltip's stage strip."""
     gated = [{"t": OPENED, "type": "added"}, {"t": OPENED, "type": "status", "status": "Todo"},
-             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Gating"},
+             {"t": "2026-10-01T15:00:00Z", "type": "status", "status": "Testing"},
              {"t": "2026-10-02T09:00:00Z", "type": "status", "status": "Closed"},
              {"t": "2026-10-02T09:00:00Z", "type": "closed"}]
     board_path = hub._hist.history_path(hub.BOARD, hub.REPO)
@@ -2257,7 +2257,7 @@ def test_the_stack_lives_in_the_dot_tooltip_and_gate_time_stays_a_text_metric(hu
     plot = re.search(r"<svg [^>]*data-lt[^>]*>(.*?)</svg>", out, re.S).group(1)
     assert "<rect" not in plot, "the plot still draws a stacked bar"
     title = re.search(r"<circle[^>]*><title>([^<]*)</title>", out).group(1)
-    assert "Gating 18h" in title and "Todo 6h" in title, "the stage strip does not name each column's hours"
+    assert "Testing 18h" in title and "Todo 6h" in title, "the stage strip does not name each column's hours"
     assert "Gate time" not in "".join(re.findall(r'<p class="flg ltlg">(.*?)</p>', out)), \
         "gate time is not a legend entry: zero has no counterpart on a log axis (#1304)"
     note = re.search(r'<p class="fnote ltkm">(.*?)</p>', out).group(1)

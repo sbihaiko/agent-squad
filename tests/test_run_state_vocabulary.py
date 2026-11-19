@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # The verdict values a record can carry, plus the two the surfaces add: the hub's `starting`/`verified`/`unverified`, the dashboard's no-verdict.
 RECORD_VERDICTS = ["completed", "failed", "needs-human"]
-PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d"}
+PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d", "mute": "#8a93a3"}
 # The four marks of the one state table: a filled dot, a hollow dot, a bar, or none. A texture is not a mark:
 # dotted against dashed reads as one texture, so a border style never names a difference (#1137).
 MARKS = ("filled", "hollow", "bar", "none")
@@ -170,6 +170,14 @@ def test_the_phone_run_row_draws_the_shared_state_word_and_mark(hub):
     assert 'className = "run-state b " + String(r.state || "").replace(/ /g, "-")' in mobile
     assert "state.textContent = r.badge" in mobile
     assert "dataset.tone" not in mobile and "dataset.mk" not in mobile, "the phone keeps a second paint table of its own"
+
+
+def test_a_no_repro_run_is_painted_neutral_not_failure_red(hub):
+    """The Runs page paints a run that found no bug in a neutral tone, apart from the failure red (ADR-0029)."""
+    rows = {r["state"]: r for r in hub.RUN_STATES}
+    assert "no-repro" in rows
+    assert rows["no-repro"]["color"] == "none" and rows["no-repro"]["color"] != rows["failed"]["color"]
+    assert hub.state_of({"verdict": "no-repro", "reasons": [], "land": False}, 0) == "no-repro"
 
 
 def test_the_dashboard_chip_draws_its_row_mark_and_reads_the_class_from_the_table(hub):

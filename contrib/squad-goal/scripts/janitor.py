@@ -28,9 +28,9 @@
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
  V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, and a folder a live process works, stay.
- W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Landing without a landing: the blocker's card reads a column before Landing and no work branch of its stands in the landing branch, so the child's commits sit on a branch the base may never hold.
-    The one column set is the board definition's, read through `board_columns.from_landing`, so this rule and stack.sh never disagree. The landing is proven by remote ancestry (`git merge-base --is-ancestor`), and an unread compare holds the run: no run is stopped on a fact nobody read.
-    The pass stops the run, writes the killed verdict `stack_base_left_landing:#<blocker>`, drops the dispatch markers of its issues and writes the reoffer marker of each, so the frontier builds them again once the blocker is startable. A blocker still in Landing or Gating, a blocker whose work reached the landing branch, and a run cut from the base keep the run.
+ W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Batching without a landing: the blocker's card reads a column before Batching and no work branch of its stands in the landing branch, so the child's commits sit on a branch the base may never hold.
+    The one column set is the board definition's, read through `board_columns.from_batching`, so this rule and stack.sh never disagree. The landing is proven by remote ancestry (`git merge-base --is-ancestor`), and an unread compare holds the run: no run is stopped on a fact nobody read.
+    The pass stops the run, writes the killed verdict `stack_base_left_landing:#<blocker>`, drops the dispatch markers of its issues and writes the reoffer marker of each, so the frontier builds them again once the blocker is startable. A blocker still in Batching or Testing, a blocker whose work reached the landing branch, and a run cut from the base keep the run.
  X  an auto/disp-<n> or auto/bug-<n> marker whose issue reads closed is dropped (#2142): the loop dispatched the issue,
     the issue closed, and the marker stayed, so sg_dispatch_claimed read a reopened issue as already claimed and the
     frontier skipped it with no line. A marker of an open issue stays. A live run that works the issue, a taken-over
@@ -65,8 +65,8 @@
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci (reported facts, no column), and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Landing, Review, Doing).
-    A child of an ended run whose code is done and that has not entered the run's open wave is in Review, and no live run or
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci (reported facts, no column), and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Batching, Reviewing, Doing).
+    A child of an ended run whose code is done and that has not entered the run's open wave is in Reviewing, and no live run or
     review moves a card back from a later column (#603, ADR-0143). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
  M  the live skill copy ($SG_LIVE_DIR, else ~/.claude/skills/squad-goal): a file whose mtime changed, or that came or went, since the last pass while no
     publish ran raises LIVE-MTIME (#659). live-guard.sh stamps $SG_STATE/live-publish.stamp when it publishes, and every publish writes the live PUBLISHED file
@@ -1058,7 +1058,7 @@ def dev_ci_running():   # a check on the landing branch tip has not ended: one r
         ok, out = door_read(f"repos/{repo0}/commits/{os.environ.get('SG_LAND_BRANCH') or 'dev'}/check-runs", '[.check_runs[]|select(.status!="completed")]|length')
         _devci = ok and out not in ("", "0")
     return _devci
-_TIP_LINE = re.compile(r"^STACK TIP: ([0-9a-fA-F]{7,64}) \(#(\d+), a blocker in Landing\)[ \t]*$", re.M)
+_TIP_LINE = re.compile(r"^STACK TIP: ([0-9a-fA-F]{7,64}) \(#(\d+), a blocker in (?:Batching|Landing)\)[ \t]*$", re.M)   # Landing: a request written before #2315
 import board_columns
 def work_landed(blk):   # True, False, or None when no fact answers: one work branch of the blocker stands in the landing branch
     """The blocker's work is in the landing branch, from the one fact that proves it: the remote ancestry of the branch tip.
@@ -1077,11 +1077,11 @@ def work_landed(blk):   # True, False, or None when no fact answers: one work br
     if any(v is True for v in seen): return True
     if seen and all(v is False for v in seen): return False
     return None
-# W (#2260) STACK-BASE-LEFT-LANDING: a run whose child started on a blocker's approved tip. A blocker that leaves Landing
+# W (#2260) STACK-BASE-LEFT-LANDING: a run whose child started on a blocker's approved tip. A blocker that leaves Batching
 # without landing (its review asked for changes, an owner rearm, a failed gate) is no base: the child's commits sit on a
 # branch the base may never hold, and the landing would carry them into $SG_BASE with none of the blocker's approvals. The
 # run is stopped, one killed verdict says why, its dispatch markers are dropped and its issues get the card's way back, so
-# the frontier builds them again once the blocker is startable. A blocker whose card still reads Landing or Gating, and one
+# the frontier builds them again once the blocker is startable. A blocker whose card still reads Batching or Testing, and one
 # whose branch tip already stands in the landing branch, keep the run: its work landed, and only the card lags.
 for n, i in live.items():
     f = livef.get(n)
@@ -1091,12 +1091,12 @@ for n, i in live.items():
     try: req = (f / "request.txt").read_text()
     except OSError: continue
     m = _TIP_LINE.search(req)
-    if not m: continue   # a child cut from the base, or one stacked by a file conflict: rule W owns only the Landing stack
+    if not m: continue   # a child cut from the base, or one stacked by a file conflict: rule W owns only the Batching stack
     blk = m.group(2)
     ok, cols, _h = board_read(proj)
     if not ok: continue   # a board that did not answer moves nothing and stops nothing
     col = cols.get(str(blk), "")
-    if not col or board_columns.from_landing(col): continue   # the one column set, shared with stack.sh (#2260)
+    if not col or board_columns.from_batching(col): continue   # the one column set, shared with stack.sh (#2260)
     if work_landed(blk) is not False: continue   # landed, or no readable fact: a run is never stopped on what nobody read
     say(f"STACK-BASE-LEFT-LANDING {n}: blocker #{blk} sits in {col} without a landing, so the branch of {n} is stacked on "
         + f"commits the base may never hold; stopping the run and freeing its issues")
@@ -1108,7 +1108,7 @@ for n, i in live.items():
         for p in (st / "auto").glob(f"disp-{x}"):
             if owns(f, i, p): p.unlink(missing_ok=True)
     for q in inside(f):
-        if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} is stacked on blocker #{blk}, which left Landing")
+        if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} is stacked on blocker #{blk}, which left Batching")
     if i["pid"] and same_process(i["pid"], i["started_at"]): kill(i["pid"], f"last call of run {n}")
 def wave_facts(n, runs):   # the board facts of issue n whose child entered the wave of one of `runs` (the folder name or the record's run id)
     import board_facts
@@ -1306,12 +1306,12 @@ def reconcile_board():
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
     # The terminal column is one function for every vocabulary: the reconciler reads the same one, so the two passes cannot
     # disagree about where a closed issue's card belongs (spec #132, #1932).
-    from board_columns import terminal_column, ROLE, canonical, CODE_REVIEW, landing_column   # a column's spellings resolve before a compare (#2151)
+    from board_columns import terminal_column, ROLE, canonical, REVIEWING, TESTING, batching_column   # a column's spellings resolve before a compare (#2151)
     if shipped:
         from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past
     doing = "Doing" if shipped else "In Progress"
-    landing = landing_column(shipped)   # Landing on the shipped board, the legacy board's own column otherwise (#2190)
-    GATING = "Gating"   # the shipped column between Landing and Closed; board_columns.ROLE names the same word (ADR-0170)
+    landing = batching_column(shipped)   # Batching on the shipped board, the legacy board's own column otherwise (#2190, #2315)
+    GATING = TESTING   # the shipped column between Batching and Closed; board_columns.ROLE names the same word (ADR-0170)
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
     def unfrozen(n, f, i):   # the owner's rearm lifted the freeze (#1562): the line is written once per (issue, run verdict), so an
@@ -1349,7 +1349,7 @@ def reconcile_board():
             parked.setdefault(n, (status, why)); return
         expected[n] = (rank, status, why, run_id, run_ts)
         if status == "Todo" and "nothing landed" in why: no_landing.add(n)
-    def wave_column(n, f, i):   # a card whose wave is in dev is Closed; a gate that holds the wave is Gating; the push, the approval and the dev CI are reported facts, never a column (ADR-0145, ADR-0170)
+    def wave_column(n, f, i):   # a card whose wave is in dev is Closed; a gate that holds the wave is Testing; the push, the approval and the dev CI are reported facts, never a column (ADR-0145, ADR-0170)
         if not shipped: return
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
         if col == "Closed":
@@ -1366,9 +1366,9 @@ def reconcile_board():
             if mt is not None and mt <= i["spawn_ts"]:
                 say(f"UNHELD #{n}: run {i['run_id']} gave it no child; {m.name} dropped")
                 if not dry: m.unlink(missing_ok=True)
-    def code_complete(n, f, i, why):   # a landing is Landing only once the wave, when the run cut one, holds the issue (#467)
+    def code_complete(n, f, i, why):   # a landing is Batching only once the wave, when the run cut one, holds the issue (#467)
         e = wave_entry(n, f, i)
-        if e == "open" and shipped: set_expected(n, CODE_REVIEW, f"{why}; its child's code is done and its review holds it out of the open wave of run {i['run_id']}", i["run_id"], i["run_ts"], 35)   # #603
+        if e == "open" and shipped: set_expected(n, REVIEWING, f"{why}; its child's code is done and its review holds it out of the open wave of run {i['run_id']}", i["run_id"], i["run_ts"], 35)   # #603
         elif e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
         elif e == "out": set_expected(n, os.environ.get("SG_TODO", "Todo"), f"{why}, but the wave of run {i['run_id']} landed without its child", i["run_id"], i["run_ts"], 20)
         else:
@@ -1433,6 +1433,11 @@ def reconcile_board():
                 else:
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} " + ("" if lf else f"{oc or 'stopped'} ") + f"with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
+            elif i["name"] == "no-repro":   # the bug did not reproduce, so the owner decides it: the card keeps its column under the owner freeze (ADR-0029)
+                stopped.add(n)
+                why = "; ".join(i["reasons"]) or "no reason recorded"
+                if rearmed_after(n, i): unfrozen(n, f, i)
+                else: set_expected(n, "Blocked", f"run {i['run_id']} found the bug does not reproduce with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             elif i["failed"]:
                 stopped.add(n)
                 why = "; ".join(i["reasons"]) or "nothing landed"
@@ -1563,13 +1568,13 @@ def reconcile_board():
                     if not mk.exists():
                         say(f"DOING-NO-RUN #{n}: a card sits in Doing with no live run and no marker; the janitor leaves it and the owner moves it")
                         if not dry: mk.touch()
-            # The #1034 recovery, widened (#1958): a card in Review or Landing that nothing holds and nothing delivered
+            # The #1034 recovery, widened (#1958): a card in Reviewing or Batching that nothing holds and nothing delivered
             # is stranded, since the frontier reads Todo only. No live run or open wave, no dispatch or kept marker, no remote
             # branch ahead of the landing branch or in it, no freeze, no landing fact and no `(#N)` landing: the card goes back
             # to Todo by the one backward move (ADR-0143), named no-landing, with one STRANDED line. A rule that ranked the card
             # this pass decides it instead.
             have_n = have_cards.get(n, "")
-            if (not is_spec and canonical(have_n) in ({canonical(landing)} | ({canonical(CODE_REVIEW)} if shipped else set())) and n not in expected
+            if (not is_spec and canonical(have_n) in ({canonical(landing)} | ({canonical(REVIEWING)} if shipped else set())) and n not in expected
                     and not holding(n) and not any((st / "auto" / f"{k}-{n}").exists() for k in ("disp", "bug"))
                     and not kept_marker(n) and branch_ahead_count(n) == "0" and branch_in_dev_count(n) == "0"
                     and not owner_frozen(n) and n not in held_owner and not (olabels[n] & STRAND_HOLDS)
@@ -1597,14 +1602,14 @@ def reconcile_board():
     # card moves through the same loop below, and the record goes when the card carries the column. No marker, no hold and no
     # release: this block writes nothing. The format and the reader are squad/handhold.py's.
     HH = _handhold_module()
-    hand_columns = {canonical(doing), canonical(landing)} | ({canonical(CODE_REVIEW), canonical(GATING)} if shipped else set())
+    hand_columns = {canonical(doing), canonical(landing)} | ({canonical(REVIEWING), canonical(GATING)} if shipped else set())
     released = {}
     for n, col in HH.releases(state=st).items():
         if issue_info(n)[0] == "closed":   # the closed-issue rule already names the card column (ADR-0143 rule 2), so a release has no move to make: the record goes, never a write the board refuses every pass (#1869)
             if not dry: HH.clear_release(n, state=st)
             say(f"HAND-RELEASE-DROPPED #{n}: the issue is closed, so the release to {col} writes nothing and its record is removed")
             continue
-        want = col if shipped else {"Closed": "Done", "Landing": landing}.get(col, col)   # a release names the shipped column; the legacy board reads its own (#2190)
+        want = canonical(col) if shipped else {"Closed": "Done", "Batching": landing}.get(canonical(col), col)   # a release names the shipped column; the legacy board reads its own (#2190)
         set_expected(n, want, f"a hand hold was released to {col}", rank=120)
         released[n] = want
     for r in HH.holds(state=st, closed=[n for n in HH.holders(state=st) if issue_info(n)[0] == "closed"]):   # a stale hold on a closed issue is released here, once (#2220)
@@ -1652,19 +1657,19 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
-        if shipped and canonical(want) in {canonical(x) for x in (doing, CODE_REVIEW, landing, GATING)} and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Gating leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
+        if shipped and canonical(want) in {canonical(x) for x in (doing, REVIEWING, landing, GATING)} and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603, #1430): a live run, a review or a gate never moves it back, and a card in Testing leaves it only for Closed (ADR-0170). A spec card carries no delivery of its own, so the fold corrects it (#665)
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
             if note: queue_terminal(n, want, note)
-        elif canonical(have) != canonical(want) and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None, run_id):   # either spelling of a column is that column (ADR-0170): a card the legacy board spells Code Complete never reads as a move to Landing
+        elif canonical(have) != canonical(want) and board_write([owner, str(proj), want, str(n)], n, why, "no-landing" if n in no_landing else None, run_id):   # either spelling of a column is that column (ADR-0170): a card the legacy board spells Code Complete never reads as a move to Batching
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:
             held = (holders(proj) or {}).get(str(n))
             if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
                 if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
-        elif canonical(have) in {canonical(x) for x in ("In Progress", "Doing", CODE_REVIEW)} and canonical(have) != canonical(want):
+        elif canonical(have) in {canonical(x) for x in ("In Progress", "Doing", REVIEWING)} and canonical(have) != canonical(want):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n, want in sorted(released.items(), key=lambda kv: int(kv[0])):   # a release applies once: its record goes when the card carries the column
         if cards(proj)[1].get(str(n)) == want and not dry:
@@ -1744,6 +1749,9 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # unfinished proofs and rule O would count nothing. The trigger is the passing land plus the no-change verdict, read
     # per (child, issue) in kid_nc, so a sibling child's review never marks an issue it does not name. That run counts
     # once, and wave.sh fail stops the issue for the owner at that one run, so a second empty wave starts no new run.
+    if i["name"] == "no-repro":   # no work is wrong, the premise is: the issue is the owner's, never a failed dispatch (ADR-0029)
+        say(f"NO-REPRO #{n}: run {f.name} found the bug does not reproduce, so the issue is the owner's, not a failed dispatch")
+        return True
     nochange = any(n in iss and i["kid_nc"].get(k) for k, iss in i["kid_issue"].items())
     if proof_unfinished(i["reasons"]) and not nochange:
         say(f"UNPROVEN #{n}: run {f.name} ended with its proof unfinished, so it is no failed dispatch ({'; '.join(i['reasons'])})")
@@ -1896,7 +1904,9 @@ if owner and proj and repo0:
             kept = unpushed(f)   # #771: the loop pushes no work (#361), so the release names a child's unpushed commits for salvage
             salv = f"; its child left commits on no remote branch, kept for salvage: {', '.join(kept)}" if kept else ""
             stop = stop_of(n)   # the count above may have just stopped the issue (WAVE STOP): the line names the stop, never a dispatch that will not come (#1958)
+            nr = i["name"] == "no-repro"   # the bug did not reproduce: the evidence is this comment and the owner decides the issue (ADR-0029)
             nxt = (f"; its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo" if park
+                   else "; the bug did not reproduce, so the issue is the owner's under frozen:owner" if nr
                    else f"; the issue is stopped ({stop}), so no pass dispatches it until the owner rearms it" if stop else " so it dispatches again")
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped{nxt}{salv}")
             if not dry:
@@ -1905,7 +1915,7 @@ if owner and proj and repo0:
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (". Its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo." if park else f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") +(f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (". Its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo." if park else ". The bug did not reproduce, so no work is wrong: the issue is the owner's under frozen:owner, and no pass dispatches it until the owner rearms it." if nr else f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") +(f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O (#888): a probe's refutation that failed for a transient cause leaves auto/probe-retry-<n>. Rule O above never reads a
     # child that entered its wave, so this sweep sends it again: once a pass, for an open probe frozen for the owner, read from
@@ -1987,8 +1997,8 @@ if left:
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
-    from board_columns import canonical, CODE_REVIEW, landing_column   # rule P resolves a column's spellings before a compare (#2151)
-    landing = landing_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
+    from board_columns import canonical, REVIEWING, batching_column   # rule P resolves a column's spellings before a compare (#2151)
+    landing = batching_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     for l in sh("git", "-C", fd, "log", "-n", "200", "--format=%h %ct %s", fb).splitlines():
         h, ct, subj = (l.split(None, 2) + ["", ""])[:3]
@@ -2018,7 +2028,7 @@ if fd and fb:
             if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
-            if canonical(card_status(proj, n)) not in {canonical(x) for x in ("In Progress", "Doing", CODE_REVIEW, landing)}: continue   # only what the landing set: a card another step moved past it is never downgraded
+            if canonical(card_status(proj, n)) not in {canonical(x) for x in ("In Progress", "Doing", REVIEWING, landing)}: continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -2039,8 +2049,8 @@ hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-b
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
     import ghthrottle
-    from board_columns import canonical, CODE_REVIEW, landing_column   # the comment pass resolves a column's spellings before a compare (#2151)
-    landing = landing_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
+    from board_columns import canonical, REVIEWING, batching_column   # the comment pass resolves a column's spellings before a compare (#2151)
+    landing = batching_column(os.environ.get("SG_BOARD_VOCAB") == "shipped")   # the vocabulary's own column, never an alias (#2190)
     floor = int(os.environ.get("SG_GH_FLOOR") or 300)
     low = next(((pool, left) for pool in ("core", "graphql") if (left := ghthrottle.pool_below(pool, floor)) is not None), None)   # GraphQL has a quota of its own (#1648)
     if low is not None:
@@ -2060,7 +2070,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
                     if not dry: mk.touch()
             continue
-        if not (op and canonical(stt) in {canonical(x) for x in ("Todo", "Blocked", "In Progress", "Doing", CODE_REVIEW, landing)}): continue
+        if not (op and canonical(stt) in {canonical(x) for x in ("Todo", "Blocked", "In Progress", "Doing", REVIEWING, landing)}): continue
         os.environ["SG_GH_PASS"] = "janitor"
         r, comments = door("gh_pages", f"repos/{repo}/issues/{n}/comments?per_page=100", "-q", r'.[]|[.created_at,(.body|gsub("\\n";" "))]|join("\t")')
         cm = [x.split("\t", 1) for x in comments.splitlines() if "\t" in x] if r == 0 else []

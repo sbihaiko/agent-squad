@@ -153,14 +153,14 @@
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:var(--radius-sm); padding:0 8px; font-size:var(--fs-caption); font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
-  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
+  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); } .chip-sw.v-nr { border-color:var(--none); color:var(--none); }
   /* The run-state pill the legend draws: one rule per state of the hub's table (contrib/squad-goal/scripts/hub.py RUN_STATES), colour and border alike, so a
      legend row cannot drift from the sidebar pill. A test holds these rules to the hub's table. */
   .b { display:inline-block; padding:0 6px; border-radius:var(--radius-lg); font-size:var(--fs-caption); border:1px solid; }
   .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
-  .b.failed { color:var(--err); } .b.taken-over { color:var(--warn); } .b.retired-age-cap { color:var(--none); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
+  .b.failed { color:var(--err); } .b.no-repro { color:var(--none); } .b.taken-over { color:var(--warn); } .b.retired-age-cap { color:var(--none); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
   .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.unreadable { color:var(--warn); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
-  .b.no-verdict-yet { color:var(--none); }
+  .b.no-verdict-yet { color:var(--mute); }
   .card:focus { outline:var(--focus-w) solid var(--focus); } .card:focus-visible > rect { stroke:var(--highlight); stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:var(--inset); stroke:var(--edge-rest); stroke-width:1.2; }
@@ -224,8 +224,9 @@
   #vchip[hidden] { display:none; }
   #vchip.v-ok { border-color:var(--ok); color:var(--ok); }
   #vchip.v-bad { border-color:var(--err); color:var(--err); }
+  #vchip.v-nr { border-color:var(--none); color:var(--none); }
   #vchip.v-wait { border-color:var(--wait); color:var(--wait); }
-  #vchip.v-none { border-color:var(--none); color:var(--none); }
+  #vchip.v-none { border-color:var(--mute); color:var(--mute); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
   #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #vchip[data-mk=filled]::before{content:"● "} #vchip[data-mk=hollow]::before{content:"○ "} #vchip[data-mk=bar]::before{content:"▌ "}

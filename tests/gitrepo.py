@@ -7,6 +7,11 @@ def sh(cwd, *args):
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
 
+def sh_result(cwd, *args):
+    """Run a command and answer the finished process, so a caller reads the return code of one it expects to fail."""
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+
+
 _TEMPLATE = None
 
 

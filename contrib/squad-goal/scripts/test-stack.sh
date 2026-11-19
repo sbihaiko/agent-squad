@@ -4,7 +4,7 @@
 # The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,deadlock.py,revformat.py,board_columns.py,board-definition.json} "$T/s/"   # stack.sh reads the native relation through the GitHub door, the review of a blocker's tip through revformat.py, and the Landing columns from the board definition (#2260)
+mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,deadlock.py,revformat.py,board_columns.py,board-definition.json} "$T/s/"   # stack.sh reads the native relation through the GitHub door, the review of a blocker's tip through revformat.py, and the Batching columns from the board definition (#2260)
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main SG_STATE=%s/st\n' "$T/co" "$T/co/runs/.hub" "$T" > "$T/s/env.sh"
 echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no work branch landed
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.
@@ -30,7 +30,7 @@ case "$*" in
   *"issues/1796 -q .state"*) echo open;;
   *"issues/1791 -q .state"*) echo closed;;
   *"issues/1797 -q .state"*|*"issues/1798 -q .state"*) echo open;;
-  # #2260: a dependent whose blocker sits in Landing with an approved tip starts; the blocker's tip is read by branch.
+  # #2260: a dependent whose blocker sits in Batching with an approved tip starts; the blocker's tip is read by branch.
   *"i1820: issue(number: 1820)"*) echo '{"data":{"repository":{"i1820":{"number":1820,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1821,"state":"OPEN"}]}}}}}';;
   *"i1822: issue(number: 1822)"*) echo '{"data":{"repository":{"i1822":{"number":1822,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1823,"state":"OPEN"}]}}}}}';;
   *"i1824: issue(number: 1824)"*) echo '{"data":{"repository":{"i1824":{"number":1824,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1825,"state":"OPEN"}]}}}}}';;
@@ -74,24 +74,25 @@ r=$(run 1805)
 case "$r" in *WAIT*"#1799"*) ok "#1805: a blocker whose state cannot be read gates dispatch";; *) ko "#1805 did not WAIT on #1799: '$r'";; esac
 r=$(run 1806)
 case "$r" in *WAIT*"#1796"*) ok "#1806: a Code Complete blocker with no open PR gates dispatch";; *) ko "#1806 did not WAIT on #1796: '$r'";; esac
-# #2260: a blocker in Landing holds dispatch no longer once its tip is approved: its work is pushed and reviewed, and only
+# #2260: a blocker in Batching holds dispatch no longer once its tip is approved: its work is pushed and reviewed, and only
 # the landing gate is left. The answer names the tip the child starts from, so the caller cuts the child's branch there.
+# #2315: the Landing rows are a board the live rename has not reached yet; they read as Batching.
 mkdir -p "$T/st"
-printf '1821\tLanding\n1823\tDoing\n1825\tReview\n1827\tLanding\n1829\tLanding\n1831\tLanding\n1833\tLanding\n' > "$T/board"
+printf '1821\tLanding\n1823\tDoing\n1825\tReviewing\n1827\tLanding\n1829\tLanding\n1831\tLanding\n1833\tLanding\n' > "$T/board"
 printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_1821.md"; printf 'aaaa1111bbbb2222cccc3333dddd4444eeee5555\n' > "$T/st/review-gui_1821.sha"
 printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_1831.md"; printf 'ffff6666aaaa7777bbbb8888cccc9999dddd0000\n' > "$T/st/review-gui_1831.sha"
 printf 'VERDICT: CHANGES\n\n## Blocking\n\n- a.py:1 — x — y — z\n' > "$T/st/review-gui_1827.md"; printf 'dddd4444eeee5555ffff6666aaaa7777bbbb8888\n' > "$T/st/review-gui_1827.sha"
 r=$(SG_STACK_BOARD="$T/board" run 1820)
-case "$r" in READY*) ok "#2260: a blocker in Landing with an approved tip does not hold dispatch";; *) ko "#2260 #1820 did not read READY: '$r'";; esac
+case "$r" in READY*) ok "#2260: a blocker in Batching with an approved tip does not hold dispatch";; *) ko "#2260 #1820 did not read READY: '$r'";; esac
 case "$r" in *"STACK TIP aaaa1111bbbb2222cccc3333dddd4444eeee5555 gui/1821 #1821"*) ok "#2260: the answer names the approved tip and its branch";; *) ko "#2260 #1820 named no stack tip: '$r'";; esac
 r=$(SG_STACK_BOARD="$T/board" run 1822)
 case "$r" in *WAIT*Doing*) ok "#2260: a blocker in Doing still holds dispatch, named by its column";; *) ko "#2260 #1822 did not WAIT on Doing: '$r'";; esac
 r=$(SG_STACK_BOARD="$T/board" run 1824)
-case "$r" in *WAIT*Review*) ok "#2260: a blocker in Review still holds dispatch, named by its column";; *) ko "#2260 #1824 did not WAIT on Review: '$r'";; esac
+case "$r" in *WAIT*Reviewing*) ok "#2260: a blocker in Reviewing still holds dispatch, named by its column";; *) ko "#2260 #1824 did not WAIT on Reviewing: '$r'";; esac
 r=$(SG_STACK_BOARD="$T/board" run 1826)
-case "$r" in *WAIT*"#1827"*"no approved tip"*) ok "#2260: a Landing blocker whose review asked for changes holds dispatch";; *) ko "#2260 #1826 did not WAIT on the unapproved tip: '$r'";; esac
+case "$r" in *WAIT*"#1827"*"no approved tip"*) ok "#2260: a Batching blocker whose review asked for changes holds dispatch";; *) ko "#2260 #1826 did not WAIT on the unapproved tip: '$r'";; esac
 r=$(SG_STACK_BOARD="$T/board" run 1828)
-case "$r" in *WAIT*"#1829"*"no approved tip"*) ok "#2260: a Landing blocker with no review holds dispatch";; *) ko "#2260 #1828 did not WAIT on the unreviewed tip: '$r'";; esac
+case "$r" in *WAIT*"#1829"*"no approved tip"*) ok "#2260: a Batching blocker with no review holds dispatch";; *) ko "#2260 #1828 did not WAIT on the unreviewed tip: '$r'";; esac
 r=$(SG_STACK_BOARD="$T/missing" run 1830)
 case "$r" in *WAIT*"#1831"*) ok "#2260: a blocker whose column is not readable holds dispatch, whatever its review says";; *) ko "#2260 #1830 read an unread column as landing: '$r'";; esac
 # The approved tip already in the base needs no stacking: the work is where the child builds.
@@ -99,7 +100,7 @@ git -C "$T/co" init -q 2>/dev/null; git -C "$T/co" -c user.email=a@b -c user.nam
 TIP1833=$(git -C "$T/co" rev-parse HEAD); git -C "$T/co" update-ref refs/remotes/origin/main "$TIP1833"; export TIP1833
 printf 'VERDICT: APPROVE\n' > "$T/st/review-gui_1833.md"; printf '%s\n' "$TIP1833" > "$T/st/review-gui_1833.sha"
 r=$(SG_STACK_BOARD="$T/board" run 1832)
-case "$r" in READY*) ok "#2260: a Landing blocker whose tip is already in the base is satisfied";; *) ko "#2260 #1832 did not read READY: '$r'";; esac
+case "$r" in READY*) ok "#2260: a Batching blocker whose tip is already in the base is satisfied";; *) ko "#2260 #1832 did not read READY: '$r'";; esac
 case "$r" in *"STACK TIP"*) ko "#2260 #1832 named a stacked tip for work already in the base: '$r'";; *) ok "#2260: no stack tip is named for work already in the base";; esac
 # #383: the frontier hands over the issue's entry of its open-issue list. The blocker's state beside the edge decides
 # (#1797 reads open alone, closed in the entry), and no GitHub request is sent.

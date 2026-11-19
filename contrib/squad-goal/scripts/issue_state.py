@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One seam reads and writes the state an issue carries (#236, ADR-0141 clause 4).
 
-A **state** is one name of the flow's vocabulary -- `Todo`, `Doing`, `Landing` -- and never a
+A **state** is one name of the flow's vocabulary -- `Todo`, `Doing`, `Batching` -- and never a
 storage detail. A **binding** is the carrier a repository works that vocabulary in. Today this repository
 binds it to a GitHub Project (v2) Status field, and `BoardBinding` here is that carrier's one client: it
 holds every reach the board API takes for state, so no caller needs one of its own.
@@ -12,7 +12,7 @@ The seam answers two questions and only these:
     state = board_state()               # the binding this repository is configured with (SG_OWNER, SG_PROJECT, SG_REPO)
     state.read(236)                     # the state issue 236 carries, "" when it carries none
     state.read_all()                    # every card, one read: {236: "Todo", ...}
-    state.write(236, "Review")              # proven by the read that follows; returns the state the issue then carries
+    state.write(236, "Reviewing")           # proven by the read that follows; returns the state the issue then carries
     state.holder(236)                   # the run that holds issue 236: {"run": id, "started": time}, None when none does
     state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
     state.board()                       # every state and holder, one read: ({236: "Todo"}, {"236": {"run": ..., "started": ...}})
@@ -48,6 +48,19 @@ A **kind** is the repository's own normalized name for what an item is, and neve
 caller names `bug`, and only the binding knows which field and option carry it (#243).
 """
 import json, os, pathlib, re, subprocess, sys, time, urllib.parse
+
+def _canonical(name):
+    """The canonical column one spelling names, through board_columns' one alias map (#2315): a board the live migration
+    has not renamed yet answers `Landing`, and every reader sees `Batching`. A name the map does not hold comes back as
+    written; a reader with no board_columns beside it reads the name as written too."""
+    try:
+        here = str(pathlib.Path(__file__).resolve().parent)
+        if here not in sys.path: sys.path.insert(0, here)
+        from board_columns import canonical
+    except ImportError:
+        return name
+    return canonical(name)
+
 
 _VALUE_FLAGS = {"-X", "--method", "-f", "-F", "--raw-field", "--field", "--input", "--jq", "-q", "-H", "--header"}
 def _is_write(args):
@@ -278,7 +291,7 @@ class State:
             refused = str(e)   # the refusal is kept, not raised: the read then confirms it or disproves it
             self.binding.item_hints.pop(str(issue), None)   # an id the hub named and the write refused is not trusted again (#1300)
         carried = self.read_one(issue)
-        if carried != wanted:
+        if _canonical(carried) != _canonical(wanted):   # one column in two spellings is one column: a field cache a day old names the old option (#2315)
             raise NotCarried(issue, wanted, carried, refused)
         return carried
 
@@ -886,7 +899,7 @@ class BoardBinding:
         the name answers itself, and an option the field no longer declares is named as it came."""
         if not carried: return ""
         opt = self.status_field().get("opt") or {}
-        return next((name for name, oid in opt.items() if oid == carried), carried)
+        return _canonical(next((name for name, oid in opt.items() if oid == carried), carried))   # the canonical column, either spelling (#2315)
 
     def read(self, issue):
         """The state one issue carries, "" when the carrier carries no card for it or no Status on it."""
@@ -1187,7 +1200,7 @@ def _states_of(nodes, repo):
         c = n.get("content") or {}
         if n.get("isArchived") or c.get("number") is None: continue
         if repo and (c.get("repository") or {}).get("nameWithOwner") != repo: continue
-        m[str(c["number"])] = (n.get("fieldValueByName") or {}).get("name") or ""
+        m[str(c["number"])] = _canonical((n.get("fieldValueByName") or {}).get("name") or "")
     return m
 
 

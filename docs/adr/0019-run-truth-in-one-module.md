@@ -12,8 +12,8 @@ Wrappers hide more. A model call can exit zero and still not do the work. The mo
 
 ## Decision
 
-1. **One module owns run truth.** In code, that module is a script, not prose in a document. Its verdict answers one question: continue, needs a human, or failed. Both non-continue verdicts carry a **list** of reasons, never one collapsed reason.
-2. **The wrapper's exit code is a pure function of that verdict.** Use zero for continue. Use one dedicated code for needs-human. Use one for failed. No step invents its own code. No step discards the code of the step it called.
+1. **One module owns run truth.** In code, that module is a script, not prose in a document. Its verdict answers one question: continue, needs a human, failed, or the bug did not reproduce. Every non-continue verdict carries a **list** of reasons, never one collapsed reason. A run that reports the end class `does-not-reproduce` and made no commit is its own verdict, never a failure: the code is sound and the premise of its issue is wrong (ADR-0029).
+2. **The wrapper's exit code is a pure function of that verdict.** Use zero for continue. Use one dedicated code for needs-human, one for failed, and one for no-repro. No step invents its own code. No step discards the code of the step it called.
 3. **A zero exit from a model call is not success.** The wrapper reads the artifact the run had to produce, such as the output file, the commit, or the report. It derives the verdict from that artifact.
 4. **State the precedence once.** The artifact is authoritative. The exit code is diagnostic. It is the fallback only for a step that wrote nothing. The agent's own prose is never evidence. An agent saying "done" is a claim to check, not a record.
 5. **Healing takes machine evidence only, within the same lineage.** A stale failure is healed when a later record of the same project, request, and retry lineage is clean. A success from a different request never erases an earlier failure.

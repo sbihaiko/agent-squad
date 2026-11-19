@@ -1,5 +1,5 @@
 #!/bin/bash
-# The real-project check of a card's Gating path (SPEC 1218, #1258): board_gate_check.py reads the live board cache, the
+# The real-project check of a card's Testing path (SPEC 1218, #1258): board_gate_check.py reads the live board cache, the
 # history store, the attempt journal, the gate's own log and the proved moves, and answers one line per rule.
 # Fixtures shaped like those stores, a temp dir, no gh and no network: the check is proven here, and its live run is the
 # same read against the profile's own files. A fixture that breaks one rule must fail exactly that rule.
@@ -24,11 +24,11 @@ sha1, sha2 = "a" * 40, "b" * 40
 events = [{"t": at(0), "type": "added"}, {"t": at(0), "type": "status", "status": "Todo"},
           {"t": at(10), "type": "status", "status": "Doing"},
           {"t": at(20), "type": "status", "status": "Code Complete"}]
-if scenario not in ("nogating", "reopen"): events.append({"t": at(75), "type": "status", "status": "Gating"})
-done = 130 if scenario == "lateexit" else 100   # the card's last column change, and so its Gating exit
+if scenario not in ("nogating", "reopen"): events.append({"t": at(75), "type": "status", "status": "Testing"})
+done = 130 if scenario == "lateexit" else 100   # the card's last column change, and so its Testing exit
 if scenario == "open":
-    events += [{"t": at(90), "type": "status", "status": "Gating"}]
-elif scenario == "reopen":   # the card landed, the issue was reopened, and its second gate wrote no Gating stretch
+    events += [{"t": at(90), "type": "status", "status": "Testing"}]
+elif scenario == "reopen":   # the card landed, the issue was reopened, and its second gate wrote no Testing stretch
     events += [{"t": at(40), "type": "status", "status": "Closed"}, {"t": at(50), "type": "status", "status": "Todo"},
                {"t": at(60), "type": "status", "status": "Code Complete"}]
 else:
@@ -38,7 +38,7 @@ rec = {"k": "issue", "n": n, "events": events, "complete": True, "issue_updated"
 open(out + "/hist.jsonl", "w").write(json.dumps(rec) + "\n")
 item = {"n": n, "r": "o/r", "st": "Closed", "s": "closed", "cr": "completed", "l": [],
         "gt": 1 if scenario == "tries" else 2, "c": at(done), "o": at(0), "t": "disposable card"}
-if scenario == "open": item.update(st="Gating", s="open", c=None)
+if scenario == "open": item.update(st="Testing", s="open", c=None)
 board = {"t": ep(100), "items": [] if scenario == "absent" else [item]}
 json.dump(board, open(out + "/board.json", "w"))
 rows = [{"k": "gate_attempt", "n": n, "tip": sha1, "ord": 1, "aid": "gate-1", "v": "fail", "t": ep(80), "w": "wave-9"},
@@ -51,8 +51,8 @@ log_sha1, log_sha2 = ("c" * 40, "d" * 40) if scenario == "nomatch" else (sha1, s
 open(out + "/gate-history", "w").write(
     f"{ep(80)}\tfast\tfail\t{log_sha1}\t{ep(70)}\t\t\tfail\t-\t-\t-\t2\t-\n"
     f"{ep(95)}\tfast\tpass\t{log_sha2}\t{ep(85)}\t\t\tpass\t-\t-\t-\t2\t-\n")
-moves = [{"issue": n, "item": "I1", "from": "Code Complete", "to": "Gating", "at": at(75), "repo": "o/r"},
-         {"issue": n, "item": "I1", "from": "Gating", "to": "Closed", "at": at(done), "repo": "o/r"}]
+moves = [{"issue": n, "item": "I1", "from": "Code Complete", "to": "Testing", "at": at(75), "repo": "o/r"},
+         {"issue": n, "item": "I1", "from": "Testing", "to": "Closed", "at": at(done), "repo": "o/r"}]
 if scenario == "backward":
     moves.append({"issue": 8888, "item": "I9", "from": "Closed", "to": "Doing", "at": at(101), "repo": "o/r"})
 open(out + "/transitions.jsonl", "w").write("\n".join(json.dumps(m) for m in moves) + "\n")
@@ -64,7 +64,7 @@ run() { "$py" "$src" --board "$T/st/board.json" --history "$T/st/hist.jsonl" --j
 
 # --- the whole path passes, and the reader prints the six rules ---
 fixture "$T/st" good; o=$(run); rc=$?
-[ "$rc" = 0 ] && ok "a card through Todo, Doing, Code Complete, Gating and Closed passes" || ko "good run exit $rc: $o"
+[ "$rc" = 0 ] && ok "a card through Todo, Doing, Code Complete, Testing and Closed passes" || ko "good run exit $rc: $o"
 for rule in path gating_live gate_tries timing ended_closed no_backward_movement; do
   printf '%s\n' "$o" | /usr/bin/grep -q "^ok   $rule" || ko "the reader does not report $rule: $o"
 done
@@ -76,11 +76,11 @@ printf '%s\n' "$o" | /usr/bin/grep -q 'gate time 0.4167h' && ok "the reader repo
 fixture "$T/st" tries; o=$(run); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL gate_tries' && ok "a live count that is not the journal's count fails" || ko "tries exit $rc: $o"
 
-# --- no Gating interval: the path never reached Gating ---
+# --- no Testing interval: the path never reached Testing ---
 fixture "$T/st" nogating; o=$(run); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL path' && ok "a path with no Gating stretch fails" || ko "nogating exit $rc: $o"
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL path' && ok "a path with no Testing stretch fails" || ko "nogating exit $rc: $o"
 
-# --- the card left Gating after the settle bound past the verdict ---
+# --- the card left Testing after the settle bound past the verdict ---
 fixture "$T/st" lateexit; o=$(run); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL timing' && ok "an exit instant outside the gate's own log fails" || ko "lateexit exit $rc: $o"
 
@@ -90,7 +90,7 @@ fixture "$T/st" nomatch; o=$(run); rc=$?
 
 # --- the card did not end Closed ---
 fixture "$T/st" open; o=$(run); rc=$?
-[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL ended_closed' && ok "a card still in Gating fails ended_closed" || ko "open exit $rc: $o"
+[ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q '^FAIL ended_closed' && ok "a card still in Testing fails ended_closed" || ko "open exit $rc: $o"
 
 # --- a proved backward move on any card fails the run ---
 fixture "$T/st" backward; o=$(run); rc=$?
@@ -115,13 +115,13 @@ fixture "$T/st" good; o=$(run --json); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$o" | "$py" -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["ok"] and len(d["checks"])==6 else 1)' \
   && ok "the JSON form reports six green checks" || ko "json: $o"
 
-# --- the record guard (#1430): every attempt ahead of dev must leave a Gating stretch, read from the journal and the store ---
+# --- the record guard (#1430): every attempt ahead of dev must leave a Testing stretch, read from the journal and the store ---
 guard() { "$py" "$src" --record-guard --history "$T/st/hist.jsonl" --journal "$T/st/journal.jsonl" "$@" 2>&1; }
 fixture "$T/st" good; o=$(guard); rc=$?
-[ "$rc" = 0 ] && ok "the record guard passes when every attempt's card read Gating" || ko "record guard exit $rc: $o"
+[ "$rc" = 0 ] && ok "the record guard passes when every attempt's card read Testing" || ko "record guard exit $rc: $o"
 fixture "$T/st" nogating; o=$(guard); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$o" | /usr/bin/grep -q "^FAIL gating_recorded: #$case" \
-  && ok "the record guard names an attempt whose card never read Gating" || ko "record guard nogating exit $rc: $o"
+  && ok "the record guard names an attempt whose card never read Testing" || ko "record guard nogating exit $rc: $o"
 fixture "$T/st" nogating; o2=$(guard); [ "$o" = "$o2" ] && ok "the record guard answers the same on a re-read" || ko "record guard reread: $o vs $o2"
 # A wave-level attempt (the tip gate, card 0) is read on the cards the journal names for its wave, never waived.
 fixture "$T/st" wave0; o=$(guard); rc=$?
