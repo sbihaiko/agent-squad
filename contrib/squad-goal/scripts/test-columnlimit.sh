@@ -37,6 +37,20 @@ got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
 got=$(sg_column_cards Todo "$T/board" "$T/issues.json")
 [ "$got" = 1 ] && ok "another column counts its rows only" || ko "the Todo count answered '$got', not 1"
 
+# 2c) The publish rule (#2436): the column a publish adds its card to, and the refusal at a full column.
+printf 'columns:\n  Backlog:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
+got=$(sg_column_publish_column spec); rc=$?
+[ "$rc" = 0 ] && [ "$got" = Backlog ] && ok "a spec publish adds its card to Backlog" || ko "the spec column was '$got' rc=$rc"
+got=$(sg_column_publish_column bug)
+[ "$got" = Todo ] && ok "a bug publish adds its card to Todo" || ko "the bug column was '$got'"
+out=$(sg_column_publish_refusal spec 2 "$T/co"); rc=$?
+[ "$rc" = 3 ] && case "$out" in *"2 of 2"*Backlog*) true;; *) false;; esac \
+  && ok "a full Backlog refuses a spec publish and names the limit" || ko "the refusal gave rc=$rc out='$out'"
+out=$(sg_column_publish_refusal ticket 1 "$T/co"); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && ok "a Backlog under its limit passes a ticket publish" || ko "the under-limit refusal gave rc=$rc out='$out'"
+out=$(sg_column_publish_refusal bug 99 "$T/co"); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && ok "the Backlog limit never holds a bug" || ko "a bug was held: rc=$rc out='$out'"
+
 # 3) A column with no limit answers nothing and rc 0.
 limits null
 got=$(sg_column_limit Doing "$T/co"); rc=$?

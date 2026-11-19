@@ -3194,7 +3194,8 @@ def profiler_view(a, w=None, sw=None, ww=None):
     profiler_ensure()
     with PROFILER_LOCK:
         w = PROFILER["window"]
-        out.update(since=w.since, window_s=round(w.window_s(time.time()), 1), tree=w.tree(), context=w.context(), **w.stats())
+        out.update(since=w.since, window_s=round(w.window_s(time.time()), 1), tree=hub_profiler.trim(w.tree()),
+                   context=w.context(), **w.stats())
     return out
 
 def profiler_switch(a, body, origin_ok):

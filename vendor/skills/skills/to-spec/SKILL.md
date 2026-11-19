@@ -111,6 +111,11 @@ Edit the patch file, never the vendored copy: a rebuild writes it again.
 door, `board.sh --priority <owner> <project> <n> low`, which writes only a changed value and reads it back. Release the
 publish hold only after the Status and the Priority both read back.
 
+**A full Backlog refuses the publish.** A Backlog card limit holds new work out of a full Backlog. Before you add the
+spec's card, run `bash contrib/squad-goal/scripts/backlog-gate.sh spec`. Exit 0 means the card may be added. Exit 3
+prints the refusal: add no card, and report that line unchanged as the reason the publish stopped. Any other exit means
+the board did not answer: add no card, and report its line too.
+
 **Publishing ends at the kanban.** Creating the issue is half the publish. Before you report the spec published,
 its card stands on the Squad Board in **Backlog**, and one read of the issue names both the label and the column:
 `gh issue view <n> --json labels,projectItems`. A card a later read does not carry is read again — a new card reads

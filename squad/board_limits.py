@@ -14,6 +14,7 @@ has one resolution.
 Guard: `tests/test_board_limits.py`, `tests/test_hub_board_column_limits.py`.
 """
 import argparse
+import sys
 
 from squad import defaults as D
 from squad import project_settings as P
@@ -53,7 +54,8 @@ def limit(name, target="."):
 
 # What a column's card limit stops, in the words of the pass that reads it (#2432). A column no pass reads yet says so,
 # so every field the Settings screen draws states its effect.
-COLUMN_STOP = {"Doing": "the dispatch pass (autofrontier) claims no card past this",
+COLUMN_STOP = {"Backlog": "the spec and ticket publish adds no card past this",
+               "Doing": "the dispatch pass (autofrontier) claims no card past this",
                "Reviewing": "the branch review pass starts no review past this"}
 NO_STOP = "no pass reads it yet"
 
@@ -63,13 +65,57 @@ def column_stop(name):
     return COLUMN_STOP.get(name) or NO_STOP
 
 
+# The column a publish adds its card to: a spec and its tickets are born in Backlog (ADR-0142), and a bug is born in Todo
+# (ADR-0148). A bug is startable by design, so no card limit ever holds it.
+PUBLISH_COLUMN = {"spec": "Backlog", "ticket": "Backlog", "bug": "Todo"}
+
+
+def publish_column(kind):
+    """The column a publish of `kind` adds its card to."""
+    return PUBLISH_COLUMN[kind]
+
+
+def publish_refusal(kind, cards, target="."):
+    """The refusal a publish reports when its column is at its limit, or None when the card may be added (#2436).
+
+    A bug answers None whatever the limits: it is born in Todo and startable at once (ADR-0148). A column with no limit
+    answers None. `cards` is what the column holds now, from the publisher's one board read.
+    """
+    if kind == "bug":
+        return None
+    col = publish_column(kind)
+    lim = limit(col, target)
+    if lim is None or cards < lim:
+        return None
+    return (f"column {col} full: {cards} of {lim} card(s) in {col}; the {kind} publish adds no card past this limit")
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["refuse"]:   # the publisher's door (#2436): the refusal and exit 3, or exit 0 and no line
+        ap = argparse.ArgumentParser(prog="board_limits refuse", description="Refuse a publish into a full column.")
+        ap.add_argument("kind", choices=sorted(PUBLISH_COLUMN))
+        ap.add_argument("cards", type=int)
+        ap.add_argument("--target", default=".")
+        a = ap.parse_args(argv[1:])
+        why = publish_refusal(a.kind, a.cards, a.target)
+        if why is None:
+            return 0
+        print(why)
+        raise SystemExit(3)
+    if argv[:1] == ["column"]:   # the column a publish adds its card to (#2436)
+        ap = argparse.ArgumentParser(prog="board_limits column", description="Print the column a publish adds to.")
+        ap.add_argument("kind", choices=sorted(PUBLISH_COLUMN))
+        a = ap.parse_args(argv[1:])
+        print(publish_column(a.kind))
+        return 0
     ap = argparse.ArgumentParser(description="Print one board column's card limit.")
     ap.add_argument("column")
     ap.add_argument("--target", default=".")
     a = ap.parse_args(argv)
     value = limit(a.column, a.target)
     print("none" if value is None else value)
+    return 0
 
 
 if __name__ == "__main__":

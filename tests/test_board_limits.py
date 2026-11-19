@@ -77,7 +77,7 @@ def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
     assert "branch review pass" in B.column_stop("Reviewing")
 
 
-@pytest.mark.parametrize("name", ["Backlog", "Todo", "Batching", "Testing"])
+@pytest.mark.parametrize("name", ["Todo", "Batching", "Testing"])
 def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
     assert B.column_stop(name) == "no pass reads it yet"
 
@@ -113,4 +113,54 @@ def test_the_command_answers_a_card_limit_and_takes_no_machine_cap(tmp_path, cap
     assert capsys.readouterr().out.strip() == "6"
     with pytest.raises(SystemExit):
         B.main(["Doing", "--target", str(tmp_path), "--machine-cap", "2"])
+
+
+# --- what a full Backlog stops (#2436)
+
+def test_a_full_backlog_refuses_a_spec_publish(tmp_path):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 2\n")
+    why = B.publish_refusal("spec", 2, tmp_path)
+    assert why and "Backlog" in why and "2 of 2" in why and "spec" in why
+
+
+def test_a_full_backlog_refuses_a_ticket_publish(tmp_path):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 2\n")
+    why = B.publish_refusal("ticket", 3, tmp_path)
+    assert why and "Backlog" in why and "3 of 2" in why and "ticket" in why
+
+
+def test_a_backlog_under_its_limit_takes_the_card(tmp_path):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 2\n")
+    assert B.publish_refusal("spec", 1, tmp_path) is None
+    assert B.publish_refusal("ticket", 1, tmp_path) is None
+
+
+def test_a_backlog_with_no_limit_takes_the_card(tmp_path):
+    # The plugin default for Backlog is no limit, so a publish adds its card whatever the column holds.
+    assert B.publish_refusal("spec", 95, tmp_path) is None
+    assert B.publish_refusal("ticket", 95, tmp_path) is None
+
+
+def test_a_bug_is_born_in_todo_so_the_backlog_limit_never_holds_it(tmp_path):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 1\n  Todo:\n    max_cards: 1\n")
+    assert B.publish_column("bug") == "Todo"
+    assert B.publish_refusal("bug", 99, tmp_path) is None
+
+
+def test_backlog_names_the_publish_that_stops_at_its_limit():
+    assert "publish" in B.column_stop("Backlog")
+
+
+def test_the_command_refuses_a_publish_into_a_full_backlog(tmp_path, capsys):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 1\n")
+    with pytest.raises(SystemExit) as e:
+        B.main(["refuse", "ticket", "1", "--target", str(tmp_path)])
+    assert e.value.code == 3
+    assert "1 of 1" in capsys.readouterr().out
+
+
+def test_the_command_lets_a_publish_into_a_backlog_with_room(tmp_path, capsys):
+    _project(tmp_path, "columns:\n  Backlog:\n    max_cards: 2\n")
+    assert B.main(["refuse", "spec", "1", "--target", str(tmp_path)]) == 0
+    assert capsys.readouterr().out == ""
 

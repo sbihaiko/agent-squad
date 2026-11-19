@@ -114,6 +114,20 @@ def test_the_to_spec_patch_births_a_spec_low_in_backlog():
     assert "Priority low" in text and "Backlog" in text and "publish hold" in text
 
 
+@pytest.mark.parametrize("patch,kind", [("to-spec.md", "spec"), ("to-tickets.md", "ticket")])
+def test_each_publish_patch_gates_the_card_on_the_backlog_limit(patch, kind):
+    # #2436: a full Backlog holds the card out, so the publisher runs the gate and reports its refusal.
+    text = (PATCHES / patch).read_text()
+    gate = text.split("**A full Backlog refuses the publish.**", 1)[1].split("\n\n", 1)[0]
+    assert f"backlog-gate.sh {kind}" in gate and "add no card" in gate
+
+
+@pytest.mark.parametrize("skill,kind", [("to-spec", "spec"), ("to-tickets", "ticket")])
+def test_the_vendored_copy_carries_the_backlog_gate(skill, kind):
+    text = (ROOT / "vendor" / "skills" / "skills" / skill / "SKILL.md").read_text()
+    assert f"backlog-gate.sh {kind}" in text
+
+
 @pytest.mark.parametrize("skill", ["to-spec", "to-tickets"])
 def test_the_vendored_copy_carries_the_birth_rule(skill):
     text = (ROOT / "vendor" / "skills" / "skills" / skill / "SKILL.md").read_text()
