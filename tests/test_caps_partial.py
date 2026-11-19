@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from squad import caps
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -240,5 +242,35 @@ def test_a_priority_check_takes_the_whole_count_or_none(tmp_path):
         c.release_many(kids[2])
         tip = c.try_take_many("gates", "gate-tip", 3, pid=pid, priority="tip")
         assert tip is not None and len(tip) == 3 and c.waiting() == []
+    finally:
+        holder.kill()
+
+
+@pytest.mark.heavy   # a bounded wait of 0.6 s plus two interpreter starts: the runner's load can push it over 1 s
+def test_a_priority_wait_keeps_the_freed_slots_and_clears_its_marker_when_it_expires(tmp_path):
+    """(#2330) A tip check waits for its whole count in one bounded take. While it waits, its marker keeps the free slots from a
+    child gate. When the bound runs out, it exits 75 with the waited-out line, holds no slot, and leaves no marker."""
+    holder, pid = live_pid()
+    try:
+        c = caps.Ceiling(THREE, tmp_path / "leases")
+        assert c.try_take_many("gates", "child-gate-1", 1, pid=pid)
+        e = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "PYTHONPATH": str(ROOT), "SQUAD_CAPS_POLL": "0.05"}
+        proj = tmp_path / "proj" / "docs" / "squad"
+        proj.mkdir(parents=True)
+        (proj / "defaults.yaml").write_text("caps:\n  gates: 3\n")
+        base = [sys.executable, "-m", "squad.caps", "take", "gates"]
+        where = ["--pid", str(pid), "--target", str(tmp_path / "proj")]
+        tip = subprocess.Popen([*base, "gate-tip", "--count", "3", "--wait", "0.6", "--priority", "tip", *where],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=e)
+        for _ in range(200):
+            if c.waiting():
+                break
+            subprocess.run(["sleep", "0.01"])
+        assert c.waiting() == [{"ceiling": "caps.gates", "holder": "gate-tip", "next": "tip"}]
+        assert c.try_take_many("gates", "child-gate-2", 1, pid=pid) is None   # the marker keeps the free slots
+        out, err = tip.communicate(timeout=30)
+        assert tip.returncode == 75, err
+        assert "gate-tip waited 0.6s for caps.gates" in err and "skipped, not queued" not in err, err
+        assert c.waiting() == [] and c.occupancy()["gates"] == 1
     finally:
         holder.kill()

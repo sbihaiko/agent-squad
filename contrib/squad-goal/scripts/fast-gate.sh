@@ -162,6 +162,8 @@ case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;;
      # instead of losing it to a budget another gate held.
      # (#1715) The line carries what the child does next: a line that said the gate does not pass read as a failed run, and
      # the loop started a new run that repeated the work.
+     # (#2330) A 75 is a tip or landing check whose bounded slot wait ran out, and gate.sh named it on the budget's line. It
+     # passes through unchanged: the landing reads it as a wait and keeps its queue, where a 4 would land each run alone.
      [ "$fgrc" = 73 ] && { echo "fast-gate: inconclusive: the machine's gate budget is full, so no battery ran and nothing is red; unproven (exit 4): commit and report done, the entry gate and the landing own the proof (ADR-0164)"; exit 4; }
      exit "$fgrc";; esac
 # The base the gate read the tree against goes out beside the scope (GATE_BASE_FILE), so an unproven entry's obligation

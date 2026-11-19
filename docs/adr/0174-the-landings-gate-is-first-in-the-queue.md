@@ -68,5 +68,13 @@ first: only a tip check or a landing check keeps the freed slots for itself. The
 (ADR-0166), because the gate's clock starts in `--run`, once the slots are held. Every other gate keeps the one-try take
 and the 73 it answers.
 
+The wait is one bounded `caps take --wait`, and its end answers 75, the waited-out code, never 73. A 73 says the gate took
+no slot at once and measured nothing; a waited-out wait reported as a skip leaves the landing unable to tell a wait from a
+check that failed ([ADR-0164](0164-delivery-outranks-the-proof.md)). The fast gate passes the 75 through. A landing whose
+tip check answers 75 with the waited-out line, or 73 with a line that names a hold, waits for a later pass and keeps its
+queue: it never lands its runs each alone on a check that ran nothing.
+
 Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a delta child, an `all` child and an entry gate through a stub
-`gate.sh`, and reads the count and the slot-wait flag that reached the lock.
+`gate.sh`, and reads the count and the slot-wait flag that reached the lock, and the 75 a tip check passes through.
+`contrib/squad-goal/scripts/test-gate-lock.sh` reads the tip check's answer at its bound, `test-wave-batch.sh` a batch
+that meets a skipped or waited-out tip check, and `test-wave-tipcheck.sh` the holder of each skip line.

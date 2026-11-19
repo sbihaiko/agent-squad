@@ -144,6 +144,20 @@ RERUN_CAP="echo 'caps: caps.gates is full (6 slots), held by gate-1: gate-2 skip
 reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_CAP" CHECKS='{"check_runs":[]}' bl)
 ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ok "a red whose rerun met a full budget keeps its fix round" || ko "a rerun that never ran cleared the red: '$r'"
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*failed*) ok "the line still names the red, never the budget";; *) ko "the red's line: '$r'";; esac
+# (#2330) A landing gate whose slot wait ran out answers 75 with the budget's waited-out line. It read the tree not at all, as a
+# full budget: no rerun, no fix round, no wait marker, and one wait line that says the gate did not run. A 75 with no such line
+# is the gate's own hold deadline and keeps the failed path.
+GATE_WAIT="echo gate >> $T/gate.log; echo 'caps: gate-2 waited 960s for caps.gates, held by child-gate-1 (lease pid 1, live)'; exit 75"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_WAIT" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/rerun.log" ] && ok "2330 a waited-out slot wait: nothing lands and no rerun runs" || ko "2330 waited-out gate: rerun '$(cat "$T/rerun.log" 2>&1)': '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x: the local gate did not run"*) ok "2330 a waited-out slot wait says the gate did not run";; *) ko "2330 waited-out line: '$r'";; esac
+ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ko "2330 a gate that waited out its slots opened a fix round" || ok "2330 a gate that waited out its slots opens no fix round"
+/usr/bin/grep -qh "failed at" "$T/st/cq/"x__y#7-status~* 2>/dev/null && ko "2330 the status comment calls the waited-out gate failed: $(cat "$T/st/cq/"* 2>&1)" || ok "2330 the status comment never calls the waited-out gate failed"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_WAIT" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_WAIT" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "2330 a waited-out slot wait writes no wait marker: the next pass gates again" || ko "2330 the branch waited on a marker: '$(cat "$T/gate.log" 2>&1)'"
+GATE_HOLD="echo gate >> $T/gate.log; echo 'serial: holder past its deadline'; exit 75"
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_HOLD" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ -e "$T/rerun.log" ] && ok "2330 a 75 with no waited-out line keeps the failed path and its rerun" || ko "2330 a bare 75 read as a wait: '$r'"
 # The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and at the
 # project's own line: the parallel pass lifts no cap, so it records every unmarked call at or over 2 s and only those run
 # again, serially (#1726).
