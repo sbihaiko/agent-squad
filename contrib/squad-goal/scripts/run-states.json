@@ -12,5 +12,5 @@
   {"state":"starting","cls":null,"text":"starting","label":"Run starting","color":"run","css":"border-style:dotted","mark":"hollow","hub_only":true,"tone":"run","word":"starting"},
   {"state":"unreadable","cls":null,"text":"unreadable","label":"Record could not be read on the last poll","color":"warn","css":"border-style:dotted","mark":"hollow","hub_only":true,"tone":"warn","word":"unreadable"},
   {"state":"stalled","cls":"v-wait","text":"stalled","label":"Run stalled","color":"wait","css":"border-style:dashed","mark":"filled","tone":"wait","word":"stalled"},
-  {"state":"no verdict yet","cls":"v-none","text":"no verdict yet","label":"No verdict yet","color":"none","css":"","mark":"none","tone":"none","word":"no verdict yet"}
+  {"state":"no verdict yet","cls":"v-none","text":"no verdict yet","label":"No verdict yet","color":"mute","css":"","mark":"none","tone":"mute","word":"no verdict yet"}
 ]

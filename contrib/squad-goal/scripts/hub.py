@@ -3148,9 +3148,10 @@ PROF_OFF_SECS = 30.0  # the file views' cadence with the switch off (`profFileDu
 _PROF_KEPT = {}   # (w, sw, ww, on, tailnet) -> (at, answer): the loaded module's own, so one profile never serves another's
 _PROF_LOCK = threading.Lock()
 
-def prof_kept_clear():
+def clear_prof_cache():
     """Clear the kept Loop view. A switch write is the page's own change, so the read after it shows the write and never
-    a view built before it."""
+    a view built before it. Also the seam a test uses: the kept answer is module state, and a module-scoped server would
+    hand one case's view to the next."""
     with _PROF_LOCK: _PROF_KEPT.clear()
 
 def profiler_served(a, w=None, sw=None, ww=None, now=None):
@@ -3206,7 +3207,7 @@ def profiler_switch(a, body, origin_ok):
     if not isinstance(body, dict) or not isinstance(body.get("on"), bool): return 400, {"err": "bad request"}
     client = body.get("client") if body.get("client") in LOOP_CLIENTS else None
     ended = profiler_set(body["on"], a.login or "owner", "tailnet" if a.tailnet else "loopback", client=client)
-    prof_kept_clear()   # the page reads its own switch at once, never a view built before the write (#2440)
+    clear_prof_cache()   # the page reads its own switch at once, never a view built before the write (#2440)
     out = {"ok": True, "on": body["on"], "sampler": "ended" if ended else "running"}   # a word a page tests, not prose
     if not ended: out["sampler_text"] = PROFILER_STILL_RUNNING   # the off answer tells the truth about the sampler it left
     return 200, out
@@ -4000,7 +4001,7 @@ def stats(period, src="both"):
 
 POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
                               # moves the view's own timestamps and leaves the age right. A test injects its own clock.
-STATS_POLL_SECS = 30.0   # the page's own spend poll (`pollStats` reads /api/stats every 30 s), so one window serves every page
+STATS_POLL_SECS = 20.0   # the page's spend poll is every 30 s; the kept answer is never older than 20 s (#2440), so a read at each poll builds
 _STATS_KEPT = {}   # (period, src) -> (at, answer). The key carries no profile because the module is one per profile:
                    # hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
 _STATS_LOCK = threading.Lock()
