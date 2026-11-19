@@ -74,10 +74,11 @@ def test_the_resolved_limits_are_the_table_with_no_project_file(tmp_path):
 
 def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
     assert "autofrontier" in B.column_stop("Doing")
+    assert "Backlog for Todo" in B.column_stop("Todo")
     assert "branch review pass" in B.column_stop("Reviewing")
 
 
-@pytest.mark.parametrize("name", ["Todo", "Batching", "Testing"])
+@pytest.mark.parametrize("name", ["Batching", "Testing"])
 def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
     assert B.column_stop(name) == "no pass reads it yet"
 

@@ -55,6 +55,7 @@ def limit(name, target="."):
 # What a column's card limit stops, in the words of the pass that reads it (#2432). A column no pass reads yet says so,
 # so every field the Settings screen draws states its effect.
 COLUMN_STOP = {"Backlog": "the spec and ticket publish adds no card past this",
+               "Todo": "the board write refuses a card that leaves Backlog for Todo past this",
                "Doing": "the dispatch pass (autofrontier) claims no card past this",
                "Reviewing": "the branch review pass starts no review past this"}
 NO_STOP = "no pass reads it yet"
