@@ -7,6 +7,10 @@
 # case B: the issue's text names a code path. The landing closes nothing, queues one comment that names the code the wave
 #         does not change, and leaves the issue's dispatch marker in place, so the frontier does not dispatch it again in
 #         the same cycle (sg_dispatch_claimed is the frontier's own read).
+# case D: a batch landing takes the decision for each of its runs, in its own loop and over its own range.
+# case E: one classification reads every path once; a path with whitespace stays whole.
+# case F: a text that names two code paths gets one comment that names both, comma-joined, from a list built outside any pipe.
+# case G: a Refs token that is no issue number reads no issue.
 # usage: bash test-wave-testonly.sh [scripts dir]
 # mirrors: wave.sh
 unset REV REV_BASE REV_SHA SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
@@ -129,6 +133,42 @@ c=$(comments 25)
 case "$c" in *"squad/wave.py"*) ok "D: the batch records on the test-only issue the code it does not change";; *) ko "D: the comment on #25: '$c'";; esac
 [ "$(SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" read "x/y#25" wave 2>/dev/null | jq -r '.rn1.cause // ""' 2>/dev/null)" != "" ] \
   && ok "D: the ledger carries the cause of the batch's test-only run" || ko "D: no ledger cause for run rn1"
+# The books of a claimed run run inside the batch's own loop, never in a single landing after it: the batch prefixes the
+# lines of every run it lands, the last one included.
+case "$r" in *"BATCH rn1: WAVE wave/rn1 "*) ok "D: the test-only run took its books in the batch loop";;
+  *) ko "D: the books of rn1 are not in the batch loop: '$r'";; esac
+
+# E: the test-only decision reads a path as one path, never as the shell's words. One classification feeds both decisions,
+# and a path with whitespace stays whole, in the code list and in the boolean alike.
+e=$( ( . "$T/s/wave.sh"
+  paths_of() { printf '%s\n' "docs/a note.MD" "squad/with space.py"; }
+  echo "cls=$(paths_classified body | tr '\n' '|')"
+  echo "notest=$(paths_nontest body | tr '\n' '|')"
+  echo "nonote=$(paths_nonnote body | tr '\n' '|')" ) 2>/dev/null )
+case "$e" in *"cls=C squad/with space.py|"*) ok "E: a path with whitespace is one code path";; *) ko "E: the classification: '$e'";; esac
+case "$e" in *"nonote=squad/with space.py|"*) ok "E: the whitespace path survives the non-note read";; *) ko "E: the non-note read: '$e'";; esac
+case "$e" in *"notest=squad/with space.py|"*) ok "E: the whitespace path reads as code whole";; *) ko "E: the code read: '$e'";; esac
+
+# F: an issue whose text names two code paths gets one comment that names both, each intact and joined by a comma. The list
+# is built once, outside any pipe, so no element is lost.
+issuedoc 26 "The wave note drops two files" "The fix goes in \`squad/a.py\` and \`squad/b.py\`."
+mkwave rn3 26 "TDD RED: the wave note test twice (Refs #26)" "tests/test_wave_note2.py"; : > "$T/gh.log"
+r=$(land rn3); rc=$?
+[ $rc = 0 ] && ok "F: the landing exits 0" || ko "F: exit $rc: '$r'"
+case "$(comments 26)" in *"squad/a.py, squad/b.py"*) ok "F: the comment names both code paths, comma-joined";;
+  *) ko "F: the comment on #26: '$(comments 26)'";; esac
+
+# G: the one Refs token is read as an issue number or not at all. A token that is no number reads no issue, so a malformed
+# Refs line never turns into a read of some other issue.
+g=$( ( . "$T/s/wave.sh"
+  issue_text() { echo CALLED >> "$T/g.log"; echo "a test at tests/x.py"; }
+  : > "$T/g.log"
+  issues=""; amb=""; nontest=""; rfs="x"; testonly_read a b
+  echo "miss=[$testmiss]"
+  issues=""; amb=""; nontest=""; rfs="26"; w=wave/x; testonly_read a b
+  echo "calls=$(wc -l < "$T/g.log" | tr -d ' ')" ) 2>/dev/null )
+case "$g" in *"miss=[]"*) ok "G: a token that is no issue number takes no decision";; *) ko "G: the token was read: '$g'";; esac
+case "$g" in *"calls=1"*) ok "G: the one numeric token is the only one read";; *) ko "G: the read count: '$g'";; esac
 
 [ $fail = 0 ] && echo "PASS test-wave-testonly" || echo "FAIL test-wave-testonly"
 exit $fail
