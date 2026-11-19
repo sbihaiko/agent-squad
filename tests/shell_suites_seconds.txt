@@ -259,6 +259,7 @@ test-wave-requeue-caller-checkout.sh 24.48
 test-wave-requeue-cap.sh 4.35
 test-wave-retire.sh 12.00
 test-wave-retry.sh 29.55
+test-wave-testonly.sh 4.65
 test-wave-tipcheck.sh 55.24
 test-wavepause.sh 0.65
 test-wtclean-run-tree.sh 1.70

@@ -1444,6 +1444,32 @@ red_test_only() {
   return 0
 }
 
+# PATHS_RE: the shape of a repository path an issue's text names: a token with a directory part and a file extension, as
+# acpaths.py reads one. paths_of <text> prints each such path once, relative to the repository.
+PATHS_RE='[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]+'
+paths_of() { printf '%s\n' "$1" | /usr/bin/grep -oE "$PATHS_RE" | sed 's#^\./##' | sort -u; }
+
+# issue_text <n>: the title and the body of the issue, through the door, on one text. Exit 1 when the read names no issue,
+# so a read the API refused is never read as an issue that asks for nothing.
+issue_text() {
+  local o
+  o=$(gh_api "repos/$SG_REPO/issues/$1" 2>/dev/null) || return 1
+  printf '%s' "$o" | jq -er 'select((.number|type) == "number") | [(.title // ""), (.body // "")] | join("\n")' 2>/dev/null
+}
+
+# asks_test_only <text> (#2418): 0 when the text names at least one repository path, and every path it names is a test path
+# or a `.md` note. Such an issue asks for a test change, and a wave of tests alone answers it. A text that names a code path
+# asks for more than a test, and a text that names no path cannot be shown to ask for a test alone: both keep the issue open.
+asks_test_only() {
+  local p n=0
+  for p in $(paths_of "$1"); do
+    case "$p" in *.md) continue;; esac
+    is_test_path "$p" || return 1
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ]
+}
+
 # commit_refs <clone> <range> (#869, #1474): one line per commit of the range that names an issue. `D <sha> <n>`: the commit
 # names exactly one issue (each `Refs #N` counted once), so it delivers that issue. `A <sha> <n> ...`: it names several, and a
 # cluster child that wrote one commit for its block did not say which issue the commit fixed, so it delivers none of them.
@@ -1830,7 +1856,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
   # `dropped`: the issues whose child the tip check removed from the tree this landing pushes (#1416). Only this pass sets it,
   # so a refusal an earlier pass wrote never excludes an issue. wave_check adds to it; a repeat after a refused push keeps it.
-  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest="" br note
+  local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest="" br note testmiss="" testpaths=""
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
@@ -2006,6 +2032,27 @@ land_read() {
     # wave that names two issues (#869).
     rfs=$(refs_of "$S" "$1..$2")
     nontest=$(sc diff --name-only "$1" "$2" 2>/dev/null | while IFS= read -r f; do is_code_path "$f" && { echo "$f"; break; }; done)
+    # (#2418) A wave that changes test files only delivers the one issue its Refs name when that issue asks for a test
+    # change: its text names test paths and no code path. A wave of tests alone then answers the issue (#533 held that it
+    # delivers nothing when the issue asks for more). The issue whose text asks for code, or names no path, keeps open:
+    # `testmiss` names it and `testpaths` the code it asks for, and land_books records why on it.
+    testmiss=""; testpaths=""
+    local only txt
+    if [ -z "$issues" ] && [ -z "$amb" ] && [ -z "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
+      only=$(printf '%s' "$rfs" | tr -d ' ')
+      txt=$(issue_text "$only" 2>/dev/null) || txt=""
+      if [ -n "$txt" ] && asks_test_only "$txt"; then
+        issues=$only
+        echo "WAVE-NOTE $w: the wave changes test files only, and issue #$only asks for a test change (its text names test paths and no code path); the landing closes #$only"
+      else
+        testmiss=$only
+        for f in $(paths_of "$txt"); do
+          case "$f" in *.md) continue;; esac
+          is_test_path "$f" && continue
+          testpaths="${testpaths:+$testpaths, }$f"
+        done
+      fi
+    fi
     if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
       issues=$(printf '%s' "$rfs" | tr -d ' ')
       echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
@@ -2095,12 +2142,29 @@ land_books() {
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and no issue of run $run has an entered child it did not requeue, so the landing closes nothing"
     fi
   fi
+  # (#2418) A test-only wave whose issue asks for more than a test change keeps the issue open, and the landing records why
+  # on the issue: one comment names the code the wave does not change, and the issue's ledger carries the cause (ADR-0149).
+  # Its dispatch marker stays, so the frontier's own claim read takes the issue in no later pass of this cycle. The landing
+  # itself requeues nothing: the issue's next run comes from a later decision, never from a lost cause.
+  if [ -n "$testmiss" ]; then
+    local tmc
+    if [ -n "$testpaths" ]; then
+      tmc="the wave $w changes test files only, and issue #$testmiss asks for $testpaths, which this landing does not change: the issue stays open, and a later run must change $testpaths"
+    else
+      tmc="the wave $w changes test files only, and the text of issue #$testmiss names no test path, so the landing cannot read it as a request for a test change: the issue stays open, and a later run must make the change its text asks for"
+    fi
+    wave_fact "$run" "$testmiss" refused "$tmc"
+    f=$(sg_cq_file "$testmiss-testonly$$.md" 2>/dev/null) && printf '%s\n' "$tmc" > "$f" \
+      || echo "WAVE-NOTE #$testmiss: the comment naming the missing part could not be queued"
+    echo "WAVE-NOTE $w: the test-only wave does not deliver #$testmiss; it stays open and the landing records why on it"
+  fi
   # (#1474) A wave whose commits name an issue and that closes none says why, in place of "no Refs": the Refs of a test-only RED
   # commit deliver nothing (#533), a commit that names several issues closes none of them (#869), and the rest are Refs outside
   # the dispatch set or dropped by the tip check.
   local reason=""
   if [ -z "$issues" ] && [ "${anyref:-0}" -gt 0 ]; then
     if [ -n "$amb" ]; then reason="a commit names several issues, so it closes none of them"
+    elif [ -n "$testmiss" ]; then reason="the wave changes test files only, and issue #$testmiss asks for more than a test change; it stays open with the missing part recorded"
     elif [ -z "$nontest" ]; then reason="the wave changes test files only, so its Refs deliver nothing (#533)"
     else reason="the Refs of the wave name no issue it delivers"; fi
   fi
@@ -2179,7 +2243,7 @@ land_queue() {
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 early=0 dropped="" tipobl="" brc=0 self0 selfrd er erd hid why
-  local rows issues anyref rfs nontest SG_REQUEUE_RUN
+  local rows issues anyref rfs nontest testmiss testpaths SG_REQUEUE_RUN
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
     rs+=("$1"); rds+=("$rd")
