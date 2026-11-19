@@ -120,6 +120,7 @@ def test_the_settings_page_carries_a_board_theme(hub):
     assert re.search(r'<details id=brd class=sp data-sp=brd>.*?id=brdb', page, re.S), "the Board panel has no body"
 
 
+@pytest.mark.heavy
 def test_the_board_theme_draws_one_row_per_column_with_its_limit(hub):
     mod, _ = hub
     got = _node(mod, "brdS={file:'/p',columns:[{name:'Todo',max_cards:null},{name:'Doing',max_cards:6}]};brdDraft=brdClone(brdS.columns);"
@@ -129,6 +130,11 @@ def test_the_board_theme_draws_one_row_per_column_with_its_limit(hub):
     assert rows == ["Todo", "Doing"], rows
     assert 'data-col="Todo"' in b and 'data-col="Doing"' in b
     assert 'value=""' in b and 'value="6"' in b
+
+
+def test_the_node_spawning_board_theme_test_is_marked_heavy():
+    fn = globals()["test_the_board_theme_draws_one_row_per_column_with_its_limit"]
+    assert any(m.name == "heavy" for m in getattr(fn, "pytestmark", [])), "a call that starts node carries no heavy mark"
 
 
 # --- the Kanban header
