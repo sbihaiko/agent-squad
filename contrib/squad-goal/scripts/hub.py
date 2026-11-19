@@ -7428,7 +7428,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
- ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
+ ],`Profile: <code title="${esc(s.profile||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path on hover (#2434); the last change stays data, never a fifth fact
  +setSettings("lim",[
   setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>`),
   setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"> <small class=kstop>Accepts 6M, 250M, 1T.</small>`),

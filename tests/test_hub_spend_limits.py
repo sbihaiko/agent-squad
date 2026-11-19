@@ -315,16 +315,16 @@ def test_the_now_block_holds_four_fact_tiles_and_no_input(ctx):
            '<div class=setblk data-blk=now data-theme="lim"><h3 class=blkh>Now</h3><div class=now></div>', tiles
     for ctl in ("<input", "<select", "<textarea", "<button"):
         assert ctl not in now, f"the Spend & limits Now block carries {ctl}"
-    # The note row carries the profile path and no other fact: the last change is data, never a fifth line.
+    # The note row names the profile file and no other fact: the last change is data, never a fifth line.
     assert "Last change" not in now, "a fifth fact sits in the Now block, outside its four tiles"
-    assert re.fullmatch(rf"Profile file: <code>{re.escape(LIM['profile'])}</code></p></div>", note), note
+    assert re.fullmatch(r'Profile: <code title="[^"]+">t\.sh</code></p></div>', note), note
 
 
-def test_the_profile_path_is_visible_text_in_now_not_a_tooltip(ctx):
+def test_the_profile_shows_by_file_name_with_its_path_on_hover(ctx):
     now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
-    assert "Profile file" in now and LIM["profile"] in now, now
     visible = re.sub(r'\btitle="[^"]*"', "", now)   # what a reader sees, with every hover removed
-    assert LIM["profile"] in visible, "the profile path is readable only on a hover"
+    assert "t.sh" in visible and LIM["profile"] not in visible, "the row shows the whole path, not the file name"
+    assert f'title="{LIM["profile"]}"' in now, "the full path is not on the hover"
 
 
 def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
