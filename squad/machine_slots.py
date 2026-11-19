@@ -25,6 +25,9 @@ from squad import slot_holders as SH
 
 DEFAULT_GATE_WORKERS = 6      # env.sh `SG_GATE_WORKERS:=6`: the worker count one loop gate asks for
 GATE_KIND = "gates"
+# The holder name a loop gate writes (`gate.sh`: `gate-$$`). A child gate (`child-gate-$$`) and a day suite
+# (`daysuites-$$`) take gate worker slots under their own names, so only this prefix counts as a loop gate running.
+LOOP_GATE = re.compile(r"^gate-")
 
 
 def gate_workers(value=None):
@@ -46,29 +49,19 @@ def gates_at_once(cap, per_gate):
 
 def _issues(checkout, name):
     """The issue numbers the run's claim line names, in the order the line gives them, or []: the one line a dispatch
-    writes (`slot_holders.CLAIM`), so a number the request cites in its prose never reads as a claimed issue."""
+    writes (`slot_holders.claim_issues`), so a number the request cites in its prose never reads as a claimed issue."""
     folder = Path(name) if os.path.isabs(name) else Path(checkout) / "runs" / name
     try:
         text = (folder / "request.txt").read_text(errors="replace")
     except OSError:
         return []
-    return [int(n) for m in SH.CLAIM.finditer(text) for n in re.findall(r"\d+", m.group(1))]
+    return SH.claim_issues(text)
 
 
-def _gate_leases(folder):
-    """The live gate leases, one dict per slot, read without reaping: the holders are asked about in one call for all of
-    them (`caps.started_at`), and a lease whose holder is gone counts nowhere and stays for the next count."""
-    path = Path(folder) / GATE_KIND
-    leases = []
-    for p in sorted(path.glob("*.json")) if path.is_dir() else []:
-        try:
-            lease = json.loads(p.read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(lease, dict):
-            leases.append(lease)
-    started = C.started_at([lease.get("pid", -1) for lease in leases])
-    return [lease for lease in leases if C.alive(lease.get("pid", -1), lease.get("since"), started)]
+def _gate_leases(c):
+    """The live gate leases, one dict per slot, through the one ceiling reader without reaping: a lease that names a
+    run's page server counts nowhere here as it counts nowhere in the engine's admission (ADR-0162)."""
+    return list(c.live_leases(GATE_KIND, reap=False))
 
 
 def read(target=".", active_runs=None, folder=None, defaults_path=None, workers=None):
@@ -80,15 +73,17 @@ def read(target=".", active_runs=None, folder=None, defaults_path=None, workers=
     c = C.ceiling(target, defaults_path, folder)
     runs = c.run_holders(active_runs or Path(target) / "active-runs.txt", root=target, reap=False)
     run_holders = [{"name": n, "issues": _issues(target, n)} for n in runs]
-    gate_leases = _gate_leases(c.folder)
+    gate_leases = _gate_leases(c)
+    gate_holders = [lease.get("holder", "?") for lease in gate_leases]
     per_gate = gate_workers(workers)
     cap = c.caps[GATE_KIND]
     return {"file": str(P.path_for(target)),
             "caps": {k: c.caps[k] for k in C.KINDS},
+            "ceiling": plugin(defaults_path),
             "runs": {"cap": c.caps["runs"], "in_use": len(run_holders), "holders": run_holders},
-            "gates": {"cap": cap, "in_use": len(gate_leases), "holders": [lease.get("holder", "?") for lease in gate_leases],
+            "gates": {"cap": cap, "in_use": len(gate_leases), "holders": gate_holders,
                       "workers": per_gate, "gates_at_once": gates_at_once(cap, per_gate),
-                      "running": len({lease.get("holder", "?") for lease in gate_leases})},
+                      "gates_running": len({h for h in gate_holders if LOOP_GATE.match(h)})},
             "children": c.caps["children"], "reviews": c.caps["reviews"]}
 
 
