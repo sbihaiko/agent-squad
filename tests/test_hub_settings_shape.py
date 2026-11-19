@@ -397,7 +397,7 @@ def _set_bar(hub):
     src = page[page.index("const STH="):page.index("function setTheme(")]
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;const kanDirty=()=>false;'
-            'const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null;'
+            'const slotDirty=()=>false;const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null,slotS=null,slotDraft=null;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
     body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent}}'
@@ -555,8 +555,8 @@ const document={querySelectorAll:s=>s==="#tab-set details.sp"?DETAILS:s===".snav
 const RO=false,RO_WHY="";
 let mdln=0,limn=0,slkn=0;
 function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}
-const mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false;
-let mdl=null,limS=null,slS=null,slDraft=null;
+const mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,slotDirty=()=>false;
+let mdl=null,limS=null,slS=null,slDraft=null,slotS=null,slotDraft=null;
 const ls=__STORED__,save=()=>{};
 """
     tail = """
