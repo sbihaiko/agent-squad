@@ -54,7 +54,7 @@ case "$a" in
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     for n in 2002 2003 2005 2006 2009 2022 2023 2055 2083 2084 2085 2086 2087 2088 2089 2098 2099 2110; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2098 and #2099: the children of run-land-fail (#2015); #2055 and #2083 to #2089: the children of the retried, aborted and human runs (#2015); #2110: a Move a rule refuses (#2122)
     for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    for n in 2004 2010 2011 2032 2050; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
+    for n in 2004 2010 2011 2032 2050; do printf '%s\tLanding\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
     printf '2051\tIn Progress\thttps://api.github.com/repos/x/y\n2052\tClosed\thttps://api.github.com/repos/x/y\n2053\tBacklog\thttps://api.github.com/repos/x/y\n2054\tBacklog\thttps://api.github.com/repos/x/y\n'   # #2050's children, and spec #2053 with its queued child
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
@@ -63,10 +63,10 @@ case "$a" in
     printf '2046\tBacklog\thttps://api.github.com/repos/x/y\n2047\tBacklog\thttps://api.github.com/repos/x/y\n'   # spec #2046 still sits in Backlog
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n'   # stale Blocked card with no current blocking cause
     printf '2070\tBacklog\thttps://api.github.com/repos/x/y\n2071\tDoing\thttps://api.github.com/repos/x/y\n2072\tBacklog\thttps://api.github.com/repos/x/y\n2073\tTodo\thttps://api.github.com/repos/x/y\n2075\tDoing\thttps://api.github.com/repos/x/y\n2076\tBacklog\thttps://api.github.com/repos/x/y\n2077\tDone\thttps://api.github.com/repos/x/y\n'   # #942: parents that are not specs, and their children
-    printf '2080\tTodo\thttps://api.github.com/repos/x/y\n2081\tIn Progress\thttps://api.github.com/repos/x/y\n2082\tBacklog\thttps://api.github.com/repos/x/y\n2090\tBacklog\thttps://api.github.com/repos/x/y\n2091\tTodo\thttps://api.github.com/repos/x/y\n2092\tBacklog\thttps://api.github.com/repos/x/y\n2093\tBacklog\thttps://api.github.com/repos/x/y\n2094\tIn Progress\thttps://api.github.com/repos/x/y\n2095\tCode Complete\thttps://api.github.com/repos/x/y\n';;   # #1131: a spec reads Todo while a ticket is in flight, and never a work column
+    printf '2080\tTodo\thttps://api.github.com/repos/x/y\n2081\tIn Progress\thttps://api.github.com/repos/x/y\n2082\tBacklog\thttps://api.github.com/repos/x/y\n2090\tBacklog\thttps://api.github.com/repos/x/y\n2091\tTodo\thttps://api.github.com/repos/x/y\n2092\tBacklog\thttps://api.github.com/repos/x/y\n2093\tBacklog\thttps://api.github.com/repos/x/y\n2094\tIn Progress\thttps://api.github.com/repos/x/y\n2095\tLanding\thttps://api.github.com/repos/x/y\n';;   # #1131: a spec reads Todo while a ticket is in flight, and never a work column
   *projectItems*)   # the fallback read for an issue the REST items route omits (#1463): #2096's card sits on project 4
     case "$a" in     # in Doing, read back through GraphQL; every other omitted issue carries no card at all
-      *number=2096*) printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"databaseId":2096,"project":{"number":4},"fieldValueByName":{"name":"Code Complete"}}]}}}}}' ;;
+      *number=2096*) printf '%s\n' '{"data":{"repository":{"issue":{"projectItems":{"nodes":[{"databaseId":2096,"project":{"number":4},"fieldValueByName":{"name":"Landing"}}]}}}}}' ;;
       *) printf '%s\n' '{"data":{"repository":{"issue":null}}}' ;;
     esac;;
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
@@ -96,7 +96,7 @@ case "$a" in
         2042) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":3,"completed":0}'; kids='[{"number":2043},{"number":2044},{"number":2045}]';;
         2046) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2047}]';;
         # A spec is never work (#665): its children's commits name it, but the fold alone sets its card. #2050's card was
-        # wrongly at Code Complete while one child is still in flight; #2053 is still queued.
+        # wrongly at Landing while one child is still in flight; #2053 is still queued.
         2050) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2051},{"number":2052}]';;
         2053) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2054}]';;
         # #942: a parent that is not a spec folds its children's columns too. #2070 has a child at Doing; #2072's child is still
@@ -151,7 +151,7 @@ mk run-failed 2006
 rec run-failed '{"event":"run_start","run_id":"run-failed","ts":"2026-10-13T08:03:00Z"}
 {"event":"verdict","verdict":"failed","reasons":["red gate"],"exit_code":1}'
 # An OLDER run landed #2006 before run-failed requeued it (#619): the card follows the newest run that holds the issue,
-# so the old run's Code Complete never beats the newest run's Todo.
+# so the old run's Landing never beats the newest run's Todo.
 mk run-old-landed 2006
 rec run-old-landed '{"event":"run_start","run_id":"run-old-landed","ts":"2026-10-13T07:00:00Z"}
 {"event":"land","outcome":"pass"}
@@ -167,7 +167,7 @@ rec run-write-fails '{"event":"run_start","run_id":"run-write-fails","ts":"2026-
 mk run-closed 2010
 rec run-closed '{"event":"run_start","run_id":"run-closed","ts":"2026-10-13T08:07:00Z"}'
 # #2011 carries a landed-branch marker and nothing else: the marker is not a merged PR into the base, so it does not
-# make the card Done (#239). The card keeps Code Complete: the floor never moves a card back (#550).
+# make the card Done (#239). The card keeps Landing: the floor never moves a card back (#550).
 touch "$T/st/auto/fork-2011-abcdef123"
 mk run-ratify 2012
 rec run-ratify '{"event":"run_start","run_id":"run-ratify","ts":"2026-10-13T08:09:00Z"}'
@@ -179,7 +179,7 @@ mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the pa
 rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
 # #1463: the REST items route omits #2096, but its card is on the board (GraphQL projectItems carries it in
-# Code Complete), so the read falls back once and the pass moves the found card -- it is never added again,
+# Landing), so the read falls back once and the pass moves the found card -- it is never added again,
 # never named absent. #2097 is omitted by both reads: the fallback answers no card, the omission stands,
 # and the floor adds it.
 mk run-omitted-card 2096
@@ -198,7 +198,7 @@ rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:
 {"event":"outcome","node":"route.router.2","entry":1,"outcome":"fail","reasons":["red gate"]}
 {"event":"verdict","verdict":"failed","reasons":["child route.router.2 failed"],"exit_code":1}'
 # #2032 was fixed by hand in the landing branch (#519): no run and no work branch, but a commit in origin/dev names it. The
-# work reached dev, so the card keeps Code Complete; the floor never moves it back (ADR-0143).
+# work reached dev, so the card keeps Landing; the floor never moves it back (ADR-0143).
 # #2015: the run landed through route.router.1, and route.router.2 PASSED its own entries while its own engine landing
 # failed with merge_conflict. Its outcome word is `pass`, but its work never reached the target, so the note must name the
 # landing failure and never call it a pass.
@@ -284,22 +284,22 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
 /usr/bin/grep -q '^RUN o 4 2001 run-dispatch ' "$T/board.calls" 2>/dev/null && ok "dispatch marker: Run fields are written" || ko "#2001 Run fields missing: $(bc)"
 /usr/bin/grep -q '^RUN o 4 2002 run-accepted 2026-10-13T08:00:00Z$' "$T/board.calls" 2>/dev/null && ok "accepted child: Run fields carry run id and start time" || ko "#2002 Run fields wrong: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2003$' "$T/board.calls" 2>/dev/null && ok "local land event: card moves to Code Complete" || ko "#2003 not Code Complete: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Landing 2003$' "$T/board.calls" 2>/dev/null && ok "local land event: card moves to Landing" || ko "#2003 not Landing: $(bc)"
 ! /usr/bin/grep -q 'Done 2003' "$T/board.calls" 2>/dev/null && ok "local land event does not move the card to Done" || ko "#2003 read Done from a local landing: $(bc)"
 # #382 replaced #307's rule: no pull request is read, and a work branch whose tip is in the landing branch is the delivery. #2004's
-# card reached Code Complete and its branch is in dev, so the card goes to Done, as test-janitor-branch-state.sh pins for the shipped board.
-/usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "a work branch in dev moves a Code Complete card to Done" || ko "#2004 not Done: $(bc)"
+# card reached Landing and its branch is in dev, so the card goes to Done, as test-janitor-branch-state.sh pins for the shipped board.
+/usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "a work branch in dev moves a Landing card to Done" || ko "#2004 not Done: $(bc)"
 ! /usr/bin/grep -q '^STATUS o 4 Closed 2004$' "$T/board.calls" 2>/dev/null && ok "a merged pull request moves no card to Closed" || ko "#2004 moved to Closed over a pull request"
 # #127: a PR that names the issue but was merged into its parent branch carries the work nowhere, so the card stops at
-# Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
-/usr/bin/grep -q '^ADD o 4 Code Complete 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Code Complete" || ko "#2018 left the dispatch column: $(bc)"
+# Landing -- Done over a merge the base never took is the false delivery #125 showed.
+/usr/bin/grep -q '^ADD o 4 Landing 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Landing" || ko "#2018 left the dispatch column: $(bc)"
 ! /usr/bin/grep -q 'Done 2018' "$T/board.calls" 2>/dev/null && ok "a merge the base never carried is not Done" || ko "#2018 read Done over work main does not carry: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Todo 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card goes back to the queue, never Code Complete" || ko "#2005 not Todo: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card goes back to the queue, never Landing" || ko "#2005 not Todo: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2006$' "$T/board.calls" 2>/dev/null && ok "failed unlanded run: card moves to Todo" || ko "#2006 not Todo: $(bc)"
 # A card a run left behind moves back to Todo with the reason named, so board.py's one backward move (#1059) admits it.
 /usr/bin/grep -q '^REASON 2005 no-landing$' "$T/board.calls" 2>/dev/null && ok "the move back to Todo names the reason a run that landed nothing gives (#1059)" || ko "#2005 moved without the reason: $(bc)"
 [ "$(/usr/bin/grep -c '^REASON ' "$T/board.calls" 2>/dev/null)" = "$(/usr/bin/grep 'nothing landed' "$T/st/cycle.log" 2>/dev/null | /usr/bin/grep -vc '#2110')" ] && ok "only a move back to Todo carries the reason" || ko "reasons: $(/usr/bin/grep '^REASON ' "$T/board.calls") vs landed-nothing moves in cycle.log"
-! /usr/bin/grep -q 'Code Complete 2006' "$T/board.calls" 2>/dev/null && ok "an older run's column never overrides the newest run's (#619)" || ko "#2006 took an older run's Code Complete: $(bc)"
+! /usr/bin/grep -q 'Landing 2006' "$T/board.calls" 2>/dev/null && ok "an older run's column never overrides the newest run's (#619)" || ko "#2006 took an older run's Landing: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2007$' "$T/board.calls" 2>/dev/null && ok "owner label: card moves to Blocked" || ko "#2007 not Blocked: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2012$' "$T/board.calls" 2>/dev/null && ok "ratification label: card moves to Blocked" || ko "#2012 not Blocked: $(bc)"
 /usr/bin/grep -q 'BOARD-RECONCILE #2006: card -> Todo (run run-failed failed with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the pass names the reason for the move" || ko "reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
@@ -332,19 +332,19 @@ case "$fact" in *'"state": "pending"'*) ko "a rule refusal left its board event 
 /usr/bin/grep -q '^STATUS o 4 Done 2010$' "$T/board.calls" 2>/dev/null && ok "closed issue: card moves to Done" || ko "#2010 not Done: $(bc)"
 # #271: a run that asked for children credits a landing to the child that made it, never to every issue it held.
 # #2022's child landed its own work, so that card leaves Todo; #2023's child failed and committed nothing, so it has
-# no branch and no PR and never reads Code Complete.
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2022$' "$T/board.calls" 2>/dev/null && ok "the child that landed moves its own card to Code Complete" || ko "#2022 not Code Complete: $(bc) $o"
-# #666: the run's verdict is not the child's. A child that landed its own work reads Code Complete even when the run
+# no branch and no PR and never reads Landing.
+/usr/bin/grep -q '^STATUS o 4 Landing 2022$' "$T/board.calls" 2>/dev/null && ok "the child that landed moves its own card to Landing" || ko "#2022 not Landing: $(bc) $o"
+# #666: the run's verdict is not the child's. A child that landed its own work reads Landing even when the run
 # failed over a sibling: the sibling's failure does not unland commits that are in the branch.
-/usr/bin/grep -q 'BOARD-RECONCILE #2022: card -> Code Complete (run run-mixed landed work locally)' "$T/st/cycle.log" 2>/dev/null && ok "a landing inside a failed run is still the child's delivery" || ko "#2022 landing lost to the run's verdict: $(/usr/bin/grep '2022' "$T/st/cycle.log" 2>/dev/null)"
-! /usr/bin/grep -q 'Code Complete 2023' "$T/board.calls" 2>/dev/null && ok "a child that landed nothing is never credited the run's landing" || ko "#2023 read Code Complete over its sibling's landing: $(bc)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2022: card -> Landing (run run-mixed landed work locally)' "$T/st/cycle.log" 2>/dev/null && ok "a landing inside a failed run is still the child's delivery" || ko "#2022 landing lost to the run's verdict: $(/usr/bin/grep '2022' "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'Landing 2023' "$T/board.calls" 2>/dev/null && ok "a child that landed nothing is never credited the run's landing" || ko "#2023 read Landing over its sibling's landing: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2023$' "$T/board.calls" 2>/dev/null && ok "a failed child with no branch and no PR stays in the loop's queue" || ko "#2023 did not stay in Todo: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 # #2015: a child whose own landing failed names that failure, never its `pass` outcome word.
 /usr/bin/grep -q 'BOARD-RECONCILE #2098: card -> Todo (run run-land-fail child route.router.2 with nothing landed (its landing failed: merge_conflict))' "$T/st/cycle.log" 2>/dev/null && ok "a child whose landing failed names the landing failure" || ko "landing failure not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q 'run run-land-fail child route.router.2 pass with nothing landed' "$T/st/cycle.log" 2>/dev/null && ok "the note never calls a child whose work did not land a pass" || ko "the note says pass for a child that landed nothing: $(cat "$T/st/cycle.log" 2>/dev/null)"
 # #2015: the last landing a node made decides. A failure its retry stood is no failure, so the card leaves the loop.
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2084$' "$T/board.calls" 2>/dev/null && ok "a child whose land failure was retried and stood still stays out of the loop" || ko "#2084 did not leave the loop: $(bc) $o"
+/usr/bin/grep -q '^STATUS o 4 Landing 2084$' "$T/board.calls" 2>/dev/null && ok "a child whose land failure was retried and stood still stays out of the loop" || ko "#2084 did not leave the loop: $(bc) $o"
 ! /usr/bin/grep -qE 'run run-retry .*its landing failed' "$T/st/cycle.log" 2>/dev/null && ok "a retried landing that stood names no landing failure" || ko "retried landing named a failure: $(/usr/bin/grep 'run-retry' "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q 'merge_land unavailable' "$T/st/cycle.log" 2>/dev/null && ok "a failed landing of the run's own stage is no child's failure" || ko "the run's own landing failure reached a child's note: $(/usr/bin/grep 'merge_land unavailable' "$T/st/cycle.log")"
 # #2015: an aborted landing is not a failed one, and the note keeps the child's own outcome word.
@@ -354,8 +354,8 @@ case "$fact" in *'"state": "pending"'*) ko "a rule refusal left its board event 
 /usr/bin/grep -q 'BOARD-RECONCILE #2088: card -> Todo (run run-nomove child route.router.2 pass with nothing landed (tests green))' "$T/st/cycle.log" 2>/dev/null && ok "a retried landing names its final state, never the earlier failure" || ko "#2088 note: $(/usr/bin/grep '2088' "$T/st/cycle.log" 2>/dev/null)"
 # #2015: a child that needs a human and whose landing failed names the landing failure and the human need apart.
 /usr/bin/grep -q 'BOARD-RECONCILE #2089: card -> Blocked (run run-human child route.router.2 its landing failed: merge_conflict and needs a human)' "$T/st/cycle.log" 2>/dev/null && ok "a needs-human child names its landing failure and the human need" || ko "#2089 note: $(/usr/bin/grep '2089' "$T/st/cycle.log" 2>/dev/null)"
-! /usr/bin/grep -q ' 2032$' "$T/board.calls" 2>/dev/null && ok "a card whose fix is a commit in dev keeps Code Complete" || ko "#2032 moved: $(/usr/bin/grep ' 2032$' "$T/board.calls")"
-! /usr/bin/grep -q ' 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone leaves the card in Code Complete" || ko "#2011 moved: $(bc)"
+! /usr/bin/grep -q ' 2032$' "$T/board.calls" 2>/dev/null && ok "a card whose fix is a commit in dev keeps Landing" || ko "#2032 moved: $(/usr/bin/grep ' 2032$' "$T/board.calls")"
+! /usr/bin/grep -q ' 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone leaves the card in Landing" || ko "#2011 moved: $(bc)"
 ! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"
 /usr/bin/grep -q '^ADD o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the item is created with its expected status in one write" || ko "#2013 not added: $(bc) $o"
 ! /usr/bin/grep -q '^STATUS o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the status is not written a second time" || ko "#2013 written twice: $(bc)"
@@ -377,7 +377,7 @@ case "$fact" in *'"state": "pending"'*) ko "a rule refusal left its board event 
 ! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
 /usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Backlog (open issue with no card)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Backlog 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Backlog" || ko "#2019 not added Backlog: $(bc) $o"
-! /usr/bin/grep -q 'Code Complete 2019' "$T/board.calls" 2>/dev/null && ok "an upstream commit before the fork point names no issue of this repository" || ko "#2019 read Code Complete over an upstream subject: $(bc)"
+! /usr/bin/grep -q 'Landing 2019' "$T/board.calls" 2>/dev/null && ok "an upstream commit before the fork point names no issue of this repository" || ko "#2019 read Landing over an upstream subject: $(bc)"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
 # cards the pass already holds: the floor opens a new spec in Backlog, and a spec never takes Doing from its children (ADR-0142,
@@ -413,7 +413,7 @@ done
 ! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
 # A spec is never work (#665): a commit subject that names it is its children's, so no work rule writes its card, and the
 # fold alone sets it -- including the correction of a card a work rule moved forward while its children were in flight.
-/usr/bin/grep -q '^STATUS o 4 Todo 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved to Code Complete goes back to the owner's column (ADR-0143, #1034)" || ko "#2050 not returned to Todo: $(bc) $o"
+/usr/bin/grep -q '^STATUS o 4 Todo 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved to Landing goes back to the owner's column (ADR-0143, #1034)" || ko "#2050 not returned to Todo: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2050: card -> Todo (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the return is named in cycle.log" || ko "#2050 return not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2053$' "$T/board.calls" 2>/dev/null && ok "a commit that names a spec never moves its card forward" || ko "#2053 moved: $(/usr/bin/grep ' 2053$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2054$' "$T/board.calls" 2>/dev/null && ok "the correction leaves its queued child's card alone" || ko "#2054 moved: $(/usr/bin/grep ' 2054$' "$T/board.calls")"
@@ -425,7 +425,7 @@ done
 [ "$(/usr/bin/grep -c 'SPEC-HELD-IN-BACKLOG #2090' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "the hold is named once in cycle.log" || ko "#2090 hold not named once: $(/usr/bin/grep 2090 "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2092$' "$T/board.calls" 2>/dev/null && ok "a spec with no ticket in flight keeps the column the owner gave it" || ko "#2092 moved: $(/usr/bin/grep ' 2092$' "$T/board.calls")"
 /usr/bin/grep -q '^STATUS o 4 Todo 2094$' "$T/board.calls" 2>/dev/null && ok "a spec in a work column returns to Todo" || ko "#2094 not returned to Todo: $(bc) $o"
-# #1463: the REST items read omits #2096; the fallback GraphQL read carries its card in Code Complete, so the
+# #1463: the REST items read omits #2096; the fallback GraphQL read carries its card in Landing, so the
 # pass sees the card, moves it to its expected column, and never reports a write failure or an absence.
 /usr/bin/grep -q '^STATUS o 4 In Progress 2096$' "$T/board.calls" 2>/dev/null && ok "a card the REST read omits but GraphQL carries is moved, not added" || ko "#2096 not moved: $(bc) $o"
 ! /usr/bin/grep -q 'ADD .* 2096$' "$T/board.calls" 2>/dev/null && ok "a card the fallback found is never added again" || ko "#2096 added: $(bc)"
