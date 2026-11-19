@@ -6,7 +6,7 @@
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 3
+  runs: 4
   children: 12
   gates: 3                          # one loop gate of three workers at a time on this 8-core machine (owner): at six slots
                                     # three gates ran at once and the load average passed 140; at two a gate ran slow (#1716)
