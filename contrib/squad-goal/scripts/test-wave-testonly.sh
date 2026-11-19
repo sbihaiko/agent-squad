@@ -8,6 +8,7 @@
 #         does not change, and leaves the issue's dispatch marker in place, so the frontier does not dispatch it again in
 #         the same cycle (sg_dispatch_claimed is the frontier's own read).
 # usage: bash test-wave-testonly.sh [scripts dir]
+# mirrors: wave.sh
 unset REV REV_BASE REV_SHA SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
@@ -20,7 +21,8 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-# The gh stub: the one-issue read is the door's GraphQL query, answered from the fixture written for that number, and every
+# The gh stub: the door's one-issue read answers from the fixture written for that number, in the GraphQL shape the door asks
+# and in the REST shape the route names, so the case proves the landing's own code whichever route the door takes. Every
 # close answers `{}`. Every argv goes to gh.log, so a case reads the closes the landing made from it.
 cat > "$T/answer.py" <<'PY'
 import json, sys
@@ -39,6 +41,8 @@ case "\$*" in
   *"graphql"*"issue(number:"*) n=\$(printf '%s' "\$*" | sed -n 's/.*issue(number: \([0-9][0-9]*\)).*/\1/p')
     f="$T/issue-\$n.json"; if [ -f "\$f" ]; then python3 "$T/answer.py" "\$f"; else echo '{"data":{"repository":{}}}'; fi;;
   "-X PATCH repos/x/y/issues/"*) echo "{}";;
+  *"repos/x/y/issues/"*) n=\$(printf '%s' "\$*" | sed -n 's#.*repos/x/y/issues/\([0-9][0-9]*\).*#\1#p' | head -1)
+    f="$T/issue-\$n.json"; if [ -f "\$f" ]; then jq -c '{number,title,body,state:"open"}' "\$f"; else echo "{}"; fi;;
   *) echo "{}";;
 esac
 GH
@@ -94,6 +98,37 @@ case "$(wave_line "$r")" in *"no issue closed"*"test files only"*) ok "B: the WA
 [ "$(SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" read "x/y#22" wave 2>/dev/null | jq -r '.rb.cause // ""' 2>/dev/null)" != "" ] \
   && ok "B: the ledger carries the cause for the run" || ko "B: no ledger cause for run rb"
 claimed 22 && ok "B: the dispatch marker stays, so the frontier does not redispatch it in the same cycle" || ko "B: the dispatch marker is gone, so the frontier dispatches it again"
+
+# C: the issue's text names a test path in a pattern the cases above do not carry, and a note whose extension is written in
+# capitals. The one read that decides "asks for a test change" and the one that names the missing code both classify those
+# two paths the same way: the note is no code, the test path is a test, so the landing closes the issue.
+issuedoc 23 "Cover the empty wave end to end" "Add the case to \`tests/test_c.py\`; keep the note in \`docs/NOTES.MD\`."
+mkwave rnn 23 "TDD RED: the empty wave test again (Refs #23)" "tests/test_c.py"; : > "$T/gh.log"
+r=$(land rnn); rc=$?
+[ $rc = 0 ] && ok "C: the landing exits 0" || ko "C: exit $rc: '$r'"
+[ "$(closes)" = "23 " ] && ok "C: a new test-file pattern and a capitals note make the issue ask for a test change" \
+  || ko "C: closes '$(closes)': '$r'"
+case "$(comments 23)" in *"NOTES.MD"*) ko "C: a comment names the note as missing code: '$(comments 23)'";;
+  *) ok "C: the capitals note is no missing code, so no comment names it";; esac
+
+# D: a batch landing sees the test-only decision of each of its runs. Two waves land in one batch: one changes code, and one
+# changes a test file only while its issue asks for code. The batch closes the code issue, and records on the test-only issue
+# why it stays open, as the one-run landing does.
+issuedoc 24 "The parser drops the last line" "Fix it in \`squad/parser.py\`."
+issuedoc 25 "The wave note drops the issue" "The suite has the case in \`tests/test_wave_note.py\`; the fix goes in \`squad/wave.py\`."
+mkwave rn1 25 "TDD RED: the wave note test (Refs #25)" "tests/test_wave_note.py"
+mkwave rn2 24 "work 24 (Refs #24)" "squad/parser.py"; : > "$T/gh.log"
+printf '%s\n' "$T/co/runs/rn1" > "$T/st/auto/wland-rn1.queued"
+r=$(cd "$T/co" && SG_LAND_QUEUE=1 bash "$T/s/wave.sh" land rn2 "$T/co/runs/rn2" 2>&1); rc=$?
+[ $rc = 0 ] && ok "D: the batch landing exits 0" || ko "D: exit $rc: '$r'"
+case "$r" in *"WAVE BATCH"*) ok "D: the landing is a batch of two waves";; *) ko "D: no batch line: '$r'";; esac
+[ "$(closes)" = "24 " ] && ok "D: the batch closes the issue of the wave that changed code" || ko "D: closes '$(closes)': '$r'"
+case "$(comments 24)" in *"does not change"*) ko "D: a comment names a missing path on the code issue: '$(comments 24)'";;
+  *) ok "D: no comment names a missing path on the code issue";; esac
+c=$(comments 25)
+case "$c" in *"squad/wave.py"*) ok "D: the batch records on the test-only issue the code it does not change";; *) ko "D: the comment on #25: '$c'";; esac
+[ "$(SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" read "x/y#25" wave 2>/dev/null | jq -r '.rn1.cause // ""' 2>/dev/null)" != "" ] \
+  && ok "D: the ledger carries the cause of the batch's test-only run" || ko "D: no ledger cause for run rn1"
 
 [ $fail = 0 ] && echo "PASS test-wave-testonly" || echo "FAIL test-wave-testonly"
 exit $fail
