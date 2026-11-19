@@ -1582,6 +1582,26 @@ def _positive_int(v):
     except (TypeError, ValueError): return None
     return n if n > 0 and str(v).strip() == str(n) else None
 
+CAP_UNITS = {"K": 1000, "M": 1000000, "B": 1000000000, "T": 1000000000000}
+
+def _cap_value(v):
+    """A daily cap: a positive whole number, or that number with a K, M, B or T unit (6M, 1.5M, 250M, 1T). The hub counts
+    in whole integers and stores the plain integer the guard reads, whatever the owner typed: a fraction of a unit is
+    multiplied to the exact digit, never through a float that would round it to a different number (#2434)."""
+    n = _positive_int(v)
+    if n is not None: return n
+    if isinstance(v, bool): return None
+    m = re.fullmatch(r"(\d+)(?:\.(\d+))?\s*([KMBT])", str(v).strip(), re.IGNORECASE)
+    if not m: return None
+    unit = CAP_UNITS[m.group(3).upper()]
+    n = int(m.group(1)) * unit
+    frac = m.group(2)
+    if frac:
+        scaled, scale = int(frac) * unit, 10 ** len(frac)
+        if scaled % scale: return None   # that fraction of the unit denotes no whole number of tokens
+        n += scaled // scale
+    return n if n > 0 else None
+
 def _positive_num(v):
     """A pause factor: a positive number, whole or fractional. A bool is not one."""
     if isinstance(v, bool): return None
@@ -1702,8 +1722,9 @@ def limits_set(body):
     path = profile_file()
     if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
     cur = limits_settings(path)
-    cap = _positive_int(body.get("cap", cur["cap"]))
-    if cap is None: return {"err": "token cap must be a positive whole number"}
+    cap = _cap_value(body.get("cap", cur["cap"]))
+    if cap is None: return {"err": "token cap must be a positive whole number, as 1500000, or one with a K, M, B or T "
+                                     "unit, as 6M, 1.5M, 250M or 1T"}
     factor = _positive_num(body.get("factor", cur["factor"]))
     if factor is None: return {"err": "pause factor must be a positive number"}
     guard = _guard_value(body.get("guard", cur["guard"]))
@@ -6966,7 +6987,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .tile{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:6px 8px;min-width:0;font-size:var(--fs-caption)}
 #tab-set .tile .tk{display:block;color:var(--mute);font-weight:600}
 #tab-set .tile .tv{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-#tab-set .tile.ok .tv{color:var(--ok)}#tab-set .tile.warn .tv{color:var(--warn)}#tab-set .tile.err .tv{color:var(--err)}#tab-set .tile.neutral .tv{color:var(--fg)}
+#tab-set .tile.ok .tv{color:var(--ok)}#tab-set .tile.warn .tv{color:var(--warn)}#tab-set .tile.err .tv{color:var(--err)}#tab-set .tile.neutral .tv{color:var(--fg)}#tab-set .tile.muted{opacity:.45}#tab-set .tile.muted .tv{color:var(--mute)}
 #tab-set .setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
 #tab-set .setrow .sl{min-width:0;font-size:var(--fs-body);color:var(--fg)}
 #tab-set .setrow .sc{justify-self:end;min-width:0;max-width:100%}
@@ -7398,19 +7419,28 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
   +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")}
 // }KAN
 const limN=v=>v==null?"—":tk(v);
-const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
+const LIM_UNITS=[["T",1e12],["B",1e9],["M",1e6],["K",1e3]],LIM_SCALE={K:1e3,M:1e6,B:1e9,T:1e12};
+const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))return String(n??"");   // a cap reads 1.5M, 250M or 1T, never a row of zeros (#2434)
+ for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
+const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s*([KMBT])$/i);   // the field takes the same units back (#2434)
+ const x=m?+m[1]*LIM_SCALE[m[2].toUpperCase()]:/^\d+$/.test(t)?+t:NaN;return Number.isInteger(x)&&x>0?x:null};
+const limLine=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
+ return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
+const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
+const limVals=()=>limPend||{guard:limG(),cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s;setChip("lim",s.guard==="off"?"off":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282)
+ const s=limS,v=limPend||s,off=s.guard==="off";
+ setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
-  setTile("Pauses over",limN(s.pause_line)+" tokens/h","neutral"),
- ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
+  setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
+ ],`Profile: <code title="${esc(s.profile||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path on hover (#2434); the last change stays data, never a fifth fact
  +setSettings("lim",[
-  setRow("token guard",`<select id=limg aria-label="token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
-  setRow("daily token cap",`<input id=limc type=number min=1 step=1 inputmode=numeric value="${v.cap}" aria-label="daily token cap">`),
-  setRow("pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
+  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>`),
+  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"> <small class=kstop>Accepts 6M, 250M, 1T.</small>`),
+  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor"> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limLine(v.cap,v.factor,s.window_h)))} tokens/h.</small>`),
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
@@ -7418,8 +7448,9 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  limRender()}
-async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
- try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
+async function limPost(confirm){const vals=limVals(),cap=limCapParse(vals.cap),send={...vals,cap:cap==null?vals.cap:cap};   // the hub stores a plain integer whatever unit was typed (#2434)
+ if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
+ try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...send,confirm})}),d=await r.json();
  if(d.err){limDiff=null;limMsg="!"+d.err}
  else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
@@ -7500,7 +7531,7 @@ const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & cha
 const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
-const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
+const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(limCapParse(v.cap)??v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
 const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
@@ -8105,7 +8136,7 @@ let loopV=null,loopErr="";
 // SETT{ the Settings tab's one shape (#1278). Every theme draws a Now block of tiles and a Settings block of rows through
 // these writers, and the whole tab writes a moment and a span one way. Both read the value the hub gives: an epoch second or
 // the hub's own date text for a moment, a count of seconds for a span. Run in node by tests.
-const SETT_TONES=["ok","warn","err","neutral"];   // the tones the hub names: FOOT_TONES plus the neutral one
+const SETT_TONES=["ok","warn","err","neutral","muted"];   // the tones the hub names: FOOT_TONES plus the neutral one and the greyed one
 function moment(t){const s=String(t??"").replace(" ","T"),m=s.match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);if(m)return m[1]+" "+m[2];
  if(typeof t==="number"||/^\d+(\.\d+)?$/.test(s)){const n=typeof t==="number"?t:+s,d=new Date(n*1000),p=x=>String(x).padStart(2,"0");if(isNaN(d))return "?";return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
  return s?String(t):"?"}   // a value the hub hands in another shape is shown as it came, never replaced by "?"

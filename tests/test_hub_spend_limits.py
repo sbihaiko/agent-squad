@@ -160,6 +160,25 @@ def test_a_cap_that_is_not_a_positive_whole_number_is_refused(ctx, bad):
     assert profile_text(ctx) == before
 
 
+@pytest.mark.parametrize("typed,stored", [("6M", 6000000), ("250M", 250000000), ("1T", 1000000000000)])
+def test_a_cap_typed_with_a_unit_suffix_stores_a_plain_integer(ctx, typed, stored):
+    out = save(ctx, cap=typed, factor="2", guard="on", confirm=True)
+    assert not out.get("err"), out
+    assert out["state"]["cap"] == stored, out
+    assert sourced(ctx, "SG_TOKEN_BURN_CAP") == str(stored)
+
+
+@pytest.mark.parametrize("typed,stored", [("1.000001M", 1000001), ("999999999.1T", 999999999100000000000),
+                                          ("2.5K", 2500), ("1.5M", 1500000)])
+def test_a_fractional_cap_stores_the_exact_integer_it_denotes(ctx, typed, stored):
+    """A cap typed as a fraction of a unit stores the integer the owner typed, to the last digit: the hub counts in whole
+    integers, never in a float that rounds the value to a different number."""
+    out = save(ctx, cap=typed, factor="2", guard="on", confirm=True)
+    assert not out.get("err"), out
+    assert out["state"]["cap"] == stored, out
+    assert sourced(ctx, "SG_TOKEN_BURN_CAP") == str(stored)
+
+
 @pytest.mark.parametrize("bad", ["0", "-1", "abc", "", True])
 def test_a_pause_factor_that_is_not_a_positive_number_is_refused(ctx, bad):
     before = profile_text(ctx)
@@ -255,8 +274,8 @@ LIM = {"profile": "/p/profiles/t.sh", "file": "/p/profiles/t.sh", "guard": "on",
        "last_change": {"at": "2026-11-04 09:12:00", "text": "Spend & limits · token cap: 1000 -> 2000"}}
 
 
-def lim_draw(hub, view):
-    """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
+def lim_eval(hub, script):
+    """The theme's own helpers in node, over a fake turn of the page: the script runs last and prints one JSON line."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
     page = hub.PAGE
@@ -275,14 +294,18 @@ const STORE={};
 const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:""});
 const setBar=()=>{};
 """
-    body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim,
-                      f"limS={json.dumps(view)};limRender();",
-                      'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
-                      'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
-                      'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))'])
+    body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim, script])
     p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
+
+
+def lim_draw(hub, view):
+    """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
+    return lim_eval(hub, f"limS={json.dumps(view)};limRender();"
+                         'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
+                         'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
+                         'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))')
 
 
 def lim_blocks(out):
@@ -303,25 +326,66 @@ def test_the_now_block_holds_four_fact_tiles_and_no_input(ctx):
            '<div class=setblk data-blk=now data-theme="lim"><h3 class=blkh>Now</h3><div class=now></div>', tiles
     for ctl in ("<input", "<select", "<textarea", "<button"):
         assert ctl not in now, f"the Spend & limits Now block carries {ctl}"
-    # The note row carries the profile path and no other fact: the last change is data, never a fifth line.
+    # The note row names the profile file and no other fact: the last change is data, never a fifth line.
     assert "Last change" not in now, "a fifth fact sits in the Now block, outside its four tiles"
-    assert re.fullmatch(rf"Profile file: <code>{re.escape(LIM['profile'])}</code></p></div>", note), note
+    assert re.fullmatch(r'Profile: <code title="[^"]+">t\.sh</code></p></div>', note), note
 
 
-def test_the_profile_path_is_visible_text_in_now_not_a_tooltip(ctx):
+def test_the_profile_shows_by_file_name_with_its_path_on_hover(ctx):
     now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
-    assert "Profile file" in now and LIM["profile"] in now, now
     visible = re.sub(r'\btitle="[^"]*"', "", now)   # what a reader sees, with every hover removed
-    assert LIM["profile"] in visible, "the profile path is readable only on a hover"
+    assert "t.sh" in visible and LIM["profile"] not in visible, "the row shows the whole path, not the file name"
+    assert f'title="{LIM["profile"]}"' in now, "the full path is not on the hover"
 
 
 def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
     _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
     assert settings.count("class=setrow") == 3, settings
     assert re.findall(r"<span class=sl>(.*?)</span>", settings) == \
-           ["token guard", "daily token cap", "pause factor"], settings
+           ["Token guard", "Daily token cap", "Pause factor"], settings
     for fact in ("class=\"tile", "class=tile", "<span class=tk>", "Last hour", "Pauses over", "Profile file"):
         assert fact not in settings, f"the Settings block carries the fact {fact!r}"
+
+
+def test_the_guard_is_a_switch_that_shows_its_state(ctx):
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "select id=limg" not in settings and "id=limg type=checkbox" in settings, settings
+    assert re.search(r"<input id=limg type=checkbox role=switch[^>]* checked", settings), "a guard on does not read as on"
+    assert "Off: dispatch never pauses on token burn." in settings, settings
+    off = lim_blocks(lim_draw(ctx["hub"], dict(LIM, guard="off")))[1]
+    assert re.search(r"<input id=limg type=checkbox role=switch[^>]*>", off) and \
+           not re.search(r"<input id=limg[^>]* checked", off), "a guard off reads checked"
+
+
+def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limVals().guard))') == "on"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limVals().guard))') == "off"
+
+
+def test_the_cap_reads_with_a_unit_suffix_and_its_field_takes_text(ctx):
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    field = re.search(r"<input id=limc ([^>]*)>", settings)
+    assert field, settings
+    assert 'value="1.5M"' in field.group(0), field.group(0)
+    assert "type=number" not in field.group(0), "a number input refuses a unit suffix"
+    got = lim_eval(ctx["hub"], 'console.log(JSON.stringify([1500000,6000000,250000000,1000000000000,999,8000000000]'
+                                ".map(limCapFmt)))")
+    assert got == ["1.5M", "6M", "250M", "1T", "999", "8B"], got
+
+
+def test_the_cap_field_accepts_a_k_m_b_or_t_suffix(ctx):
+    got = lim_eval(ctx["hub"], 'console.log(JSON.stringify(["6M","250M","1T","1500000","2.5K","1.5M","1.5","abc","0M",'
+                                '"-3M",""].map(limCapParse)))')
+    assert got == [6000000, 250000000, 1000000000000, 1500000, 2500, 1500000, None, None, None, None, None], got
+
+
+def test_the_pause_factor_row_shows_the_hourly_burn_it_pauses_at(ctx):
+    """The row states the arithmetic behind the pause line, so the number is never read as a bare multiple (#2434)."""
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "3 × (cap ÷ 24) = 188K tokens/h" in settings, settings
+    other = dict(LIM, cap=1000000000000, factor=2, pause_line=83333333332)
+    _, settings = lim_blocks(lim_draw(ctx["hub"], other))
+    assert "2 × (cap ÷ 24) = 83.33B tokens/h" in settings, settings
 
 
 def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
@@ -333,6 +397,25 @@ def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
 
 
 def test_the_summary_chip_reports_the_same_dispatch_state_as_the_nav_line(ctx):
-    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"), (dict(LIM, guard="off"), "off")):
+    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"),
+                       (dict(LIM, guard="off"), "guard off · never pauses")):
         out = lim_draw(ctx["hub"], view)
         assert out["sr"] == out["nav"] == want, out
+
+
+def test_a_guard_off_names_itself_and_shows_no_pause_line(ctx):
+    """With the guard off dispatch never pauses on token burn, so the tile is greyed and the chip says so (#2434)."""
+    out = lim_draw(ctx["hub"], dict(LIM, guard="off"))
+    now, _ = lim_blocks(out)
+    pause = re.search(r'<div class="tile ([a-z]+)"><span class=tk>Pauses over</span><span class=tv>(.*?)</span></div>', now)
+    assert pause, now
+    assert pause.group(1) == "muted", pause.group(0)
+    assert not re.search(r"\d", pause.group(2)), f"the tile still shows a pause line: {pause.group(2)!r}"
+    assert out["sr"] == "guard off · never pauses" and out["navcls"].split() == [], out
+
+
+def test_a_guard_on_keeps_the_pause_line_its_tone_and_its_number(ctx):
+    now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
+    pause = re.search(r'<div class="tile ([a-z]+)"><span class=tk>Pauses over</span><span class=tv>(.*?)</span></div>', now)
+    assert pause and pause.group(1) == "neutral", now
+    assert pause.group(2) == "188K tokens/h", pause.group(2)
