@@ -15,8 +15,10 @@ call that only waited for a CPU is not named while a call that sleeps past the l
 a call already over a line, so a passing suite pays nothing.
 
 A CPU spin sees only work that waits for a CPU. A process blocked on a disk waits just as long and spins for none of it,
-so `pressure_factor` reads the load average against the CPU count, which counts a disk-blocked process too. The shell
-suite runner multiplies its bound by it (#1885); a spin measure alone called a green suite on a busy machine its own cost.
+so `pressure_factor` reads the load average against the CPU count, which counts a disk-blocked process too. The cap
+divides by it as well as by the spin, and the shell suite runner multiplies its bound by it (#1885); a spin measure
+alone called a green suite on a busy machine its own cost. The heavy line keeps the spin alone, because it only
+classifies a call for the fast battery.
 
 The 1 s line is a timing-only finding, and xdist load still turns a 0.4 s suite into 2.2 s past what the factor excuses
 (#629). So the mode decides how it is read. Under xdist (pytest-xdist's own worker state: the call runs in a worker, whose
@@ -146,12 +148,18 @@ def pytest_runtest_makereport(item, call):
     if duration > min(cap, heavy_cap):
         duration /= contention_factor()
     if duration > cap and _slow_reason(item) is None:
-        report.outcome = "failed"
-        report.longrepr = (
-            f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap. "
-            "Investigate the cause; do not tune the test to sit under the cap."
-        )
-        return
+        # A call that waits on a subprocess or on the disk spends wall time and spins for none of it, so the spin measure
+        # reads 1.0 while the machine's load per CPU reads 4.0. The cap reads the same measured load as the shell suite
+        # runner's bound (#1885): a call the load explains is not named, and one past the bounded widening still is.
+        if report.duration / pressure_factor() <= cap:
+            duration = cap
+        else:
+            report.outcome = "failed"
+            report.longrepr = (
+                f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap. "
+                "Investigate the cause; do not tune the test to sit under the cap."
+            )
+            return
     if duration >= heavy_cap and item.get_closest_marker("heavy") is None:
         if _under_xdist(item.config):
             report.user_properties.append((DEFERRED_KEY, f"{item.nodeid} took {report.duration:.1f} s"))

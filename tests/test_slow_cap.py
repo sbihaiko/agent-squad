@@ -144,6 +144,33 @@ def test_a_test_far_past_the_line_fails_even_under_contention():
     assert r.returncode == 1 and "test_inner.py::test_contended took" in r.stdout, r.stdout + r.stderr
 
 
+PRESSURED = (
+    "import time\nimport tests.slowcap as slowcap\n"
+    "def test_pressured(monkeypatch):\n"
+    "    monkeypatch.setattr(slowcap, 'contention_factor', lambda: 1.0, raising=False)\n"
+    "    monkeypatch.setattr(slowcap, 'pressure_factor', lambda *a, **k: 4.0, raising=False)\n"
+    "    time.sleep(0.5)\n"
+)
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_wall_time_that_only_the_machine_s_load_explains_does_not_fail_the_cap():
+    """A call that waits on the disk or on a subprocess spins for none of it, so a CPU spin reads 1.0 while the machine's
+    load average per CPU reads 4.0 (#1885). The cap reads the same measured load as the shell suite runner's own bound, so
+    a real script suite is not named for the runner's wait. Its own excess past the bound still fails below."""
+    r = run_inner(PRESSURED)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_a_test_far_past_the_line_fails_even_under_the_machine_s_load():
+    body = PRESSURED.replace("time.sleep(0.5)", "time.sleep(2.0)")
+    r = run_inner(body)
+    assert r.returncode == 1 and "test_inner.py::test_pressured took" in r.stdout, r.stdout + r.stderr
+
+
 def test_the_contention_factor_is_measured_and_bounded():
     import tests.slowcap as slowcap
 
@@ -237,6 +264,8 @@ NESTED_CHECKS = (
     test_wall_time_that_only_contention_grew_does_not_fail_the_cap,
     test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line,
     test_a_test_far_past_the_line_fails_even_under_contention,
+    test_wall_time_that_only_the_machine_s_load_explains_does_not_fail_the_cap,
+    test_a_test_far_past_the_line_fails_even_under_the_machine_s_load,
     test_under_xdist_an_unmarked_call_at_the_heavy_line_is_reported_not_failed,
     test_in_a_serial_run_an_unmarked_call_at_the_heavy_line_fails,
     test_a_call_over_the_cap_fails_in_both_modes,
@@ -300,6 +329,8 @@ def test_nested_pytest_checks_explain_their_slow_marker():
         "test_wall_time_that_only_contention_grew_does_not_fail_the_cap": "starts a nested pytest subprocess",
         "test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line": "starts a nested pytest subprocess",
         "test_a_test_far_past_the_line_fails_even_under_contention": "starts a nested pytest subprocess",
+        "test_wall_time_that_only_the_machine_s_load_explains_does_not_fail_the_cap": "starts a nested pytest subprocess",
+        "test_a_test_far_past_the_line_fails_even_under_the_machine_s_load": "starts a nested pytest subprocess",
         "test_under_xdist_an_unmarked_call_at_the_heavy_line_is_reported_not_failed": "starts a nested pytest subprocess",
         "test_in_a_serial_run_an_unmarked_call_at_the_heavy_line_fails": "starts a nested pytest subprocess",
         "test_a_call_over_the_cap_fails_in_both_modes": "starts a nested pytest subprocess",
