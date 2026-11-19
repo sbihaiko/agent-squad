@@ -7,7 +7,7 @@ unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this sui
 unset SG_BOARD_VOCAB   # the loop's shipped vocabulary (Closed, not Done) is ambient in a live shell; this suite expects the default
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/drainpolicy.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$d/autohunt.sh" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/landstatus.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/drainpolicy.py" "$d/ghcall.sh" "$d/basecheck.sh" "$d/wave.sh" "$d/columnlimit.sh" "$d/wavepause.py" "$d/child_issues.py" "$d/autohunt.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"

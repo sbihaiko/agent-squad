@@ -113,7 +113,8 @@ class Wave:
         # The landing reads the run's own record through child_issues.py, writes its facts through issue_ledger.py, reads the
         # base's check through basecheck.sh and the issue's state through ghread.py, so the fixture carries each of them.
         for name in ("wave.sh", "address.sh", "ghcall.sh", "ghread.py", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
-                     "basecheck.sh", "child_issues.py", "issue_ledger.py"):
+                     "basecheck.sh", "child_issues.py", "issue_ledger.py",
+                     "columnlimit.sh", "issue_state.py"):   # the Testing card limit and its board read (#2439)
             shutil.copy(SCRIPTS / name, self.scripts / name)
         self.origin = root / "origin.git"
         self.co = root / "co"

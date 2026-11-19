@@ -40,6 +40,7 @@ WAVE_SUITES = (
     "test-wave-obligation.sh",
     "test-wave-issue.sh",
     "test-wave-tipcheck.sh",
+    "test-wave-testing.sh",
     "test-wave-conflict.sh",
     "test-wave-eviction.sh",
 )

@@ -54,7 +54,8 @@ def limit(name, target="."):
 # What a column's card limit stops, in the words of the pass that reads it (#2432). A column no pass reads yet says so,
 # so every field the Settings screen draws states its effect.
 COLUMN_STOP = {"Doing": "the dispatch pass (autofrontier) claims no card past this",
-               "Reviewing": "the branch review pass starts no review past this"}
+               "Reviewing": "the branch review pass starts no review past this",
+               "Testing": "no new wave enters its gate past this"}
 NO_STOP = "no pass reads it yet"
 
 
