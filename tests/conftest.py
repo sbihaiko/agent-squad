@@ -146,9 +146,11 @@ def _real_git_first_on_path():
 
 def drop_git_location():
     """A git hook or a gate exports GIT_DIR, and every test inherits it: a fixture that runs `git init --bare` or `git config`
-    in its own folder then writes the checkout that runs the suite, and set core.bare = true there (#2306)."""
-    from tests.shell_suites import GIT_LOCATION
-    for name in GIT_LOCATION:
+    in its own folder then writes the checkout that runs the suite, and set core.bare = true there (#2306).
+    This process drops the three names the criteria list. A spawned shell suite starts with all five cleared, in
+    tests/shell_suites._run."""
+    from tests.shell_suites import GIT_HOOK_LOCATION
+    for name in GIT_HOOK_LOCATION:
         os.environ.pop(name, None)
 
 

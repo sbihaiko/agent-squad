@@ -91,7 +91,10 @@ def end_group(pgid):
 
 # (#2306) A git hook or a gate exports these, and a fixture's `git init --bare` or `git config` in its own folder then writes
 # the caller's checkout instead. caps.sh (sg_git_env_scrub) keeps the same list for the shell gates.
-GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
+# GIT_HOOK_LOCATION is the three names the criteria list: the pytest process drops those at import, and a spawned suite starts
+# with all five cleared.
+GIT_HOOK_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+GIT_LOCATION = GIT_HOOK_LOCATION + ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
 
 
 def _run(suite, timeout=None, extra_env=None):
