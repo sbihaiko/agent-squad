@@ -200,6 +200,17 @@ def test_a_held_card_whose_run_is_dead_reads_held_and_ended(hub, monkeypatch, tm
 
 def test_a_held_card_whose_run_is_live_reads_running(hub, monkeypatch, tmp_path):
     runs = _run_folder(tmp_path, RUN, os.getpid(), NOW, NOW)
+    # The chip's own rule is under test, not the host's process table: `run_live` answers live on a Linux runner and dead on
+    # a macOS one for the same fixture, because it compares the pid's real start with the record's. The stub fixes the fact,
+    # and `tests/test_reap.py` proves the predicate it stands for.
+    real = hub.reaper()
+
+    class _Live:
+        NO_PID_IDLE_S = real.NO_PID_IDLE_S
+
+        def run_live(self, folder, now=None):
+            return True
+    monkeypatch.setattr(hub, "reaper", lambda: _Live())
     monkeypatch.setattr(hub, "own_roots", lambda: {runs})
     items = [card(241, st="In Progress", h={"run": RUN, "started": "2026-11-13T08:00:00Z"})]
     _cache(hub, monkeypatch, items)

@@ -53,6 +53,7 @@ caps:                               # machine-wide, across every repository and 
   reviews: 4                        # live reviews on this machine, branch and child alike: a childcc review that finds none skips this pass, a branch review waits
 
 columns:                            # the card limit of each board column (#2287), a whole number from 1 to 100 or none; a project may change one in docs/squad/defaults.yaml
+  Backlog: {max_cards: null}        # an unplanned card holds no machine
   Todo: {max_cards: null}           # a waiting card holds no machine
   Doing: {max_cards: 6}             # six cards may be in flight at once
   Reviewing: {max_cards: 4}         # caps.reviews 4

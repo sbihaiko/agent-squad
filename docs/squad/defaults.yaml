@@ -6,11 +6,12 @@
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 4
+  runs: 6                           # owner 2026-11-19: the Doing card count carries cards the loop never dispatches, so two
+                                    # idle cards cost half the dispatch at four runs.
   children: 12
-  gates: 4                          # owner 2026-11-19: the loop's gate asks two slots and a run's command asks two, so a
-                                    # landing and a child gate run together. At three the landing took the whole budget and
-                                    # 18 runs waited in one day. At six three gates ran at once and the load average passed
-                                    # 140; at two a gate ran slow (#1716).
+  gates: 5                          # owner 2026-11-19: the loop's gate asks two slots and a run's command asks two, so a
+                                    # landing, a run command and one child gate fit together. At three the landing took the
+                                    # whole budget and 18 runs waited in one day. At six three gates ran at once and the load
+                                    # average passed 140; at two a gate ran slow (#1716).
 limits:
   max_budget_usd: 30

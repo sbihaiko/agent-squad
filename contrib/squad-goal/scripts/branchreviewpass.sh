@@ -68,19 +68,26 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
     { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; chain_summary; } > "$(sg_cq_status "$i" "mchain")" \
       || { echo "BRANCHREVIEW CHAINHEALTH $br: chainhealth.py failed (the model resolver is missing or unreadable)" >&2; : > "$A/chainhealth-failed"; }; }
 }
-# A card limit on the Reviewing column (#2287): the pass starts no review while the column holds its maximum. The bound is
-# the lower of the column limit and caps.reviews, the machine cap that also bounds Reviewing. The count is this pass's single
-# board read, through the same seam every dispatcher uses. An unread limit falls back to caps.reviews with one alert;
-# only with no machine cap either is it a defect that starts no review.
-reviews_cap=$(sg_caps value reviews --target "$SG_CHECKOUT" 2>/dev/null)
-review_max=$(sg_board_limit_effective Reviewing "$reviews_cap"); cm_rc=$?
+# A card limit on the Reviewing column (#2287): the pass holds a review only when that review could add a card to a full
+# column (#2431). A review of a card before Reviewing writes review_wait when it does not approve its tip, and the janitor
+# then moves the card into Reviewing, so such a review adds one. A review of a card already in Reviewing, or past it, is
+# what drains the column and it starts. The bound is the Reviewing card limit alone (#2430): the review slots are another
+# unit, and each job takes one through sg_caps below. The count is this pass's single board read, through the same seam
+# every dispatcher uses.
+review_max=$(sg_column_limit Reviewing); cm_rc=$?
 [ "$cm_rc" -eq 0 ] || { echo "BRANCHREVIEW the Reviewing column limit is unreadable; a defect, not no limit: no review starts this pass"; exit 0; }
+review_full= rows=
 case "$review_max" in ''|*[!0-9]*) ;; *)
   if rows=$(sg_board_rows 2>/dev/null); then
     review_n=$(printf '%s\n' "$rows" | awk -F '\t' '$2=="Reviewing"||$2=="Review"||$2=="Code Review"{n++} END{print n+0}')
-    [ "$review_n" -lt "$review_max" ] || { echo "BRANCHREVIEW column Reviewing full: $review_n of $review_max card(s) in Reviewing; no review starts this pass"; exit 0; }
+    [ "$review_n" -lt "$review_max" ] || review_full="$review_n of $review_max card(s) in Reviewing"
   fi ;;
 esac
+# review_drains <column>: true when the card of a listed branch reads Reviewing or a column past it, so its review is what
+# moves it out of the column. A card in a column before Reviewing, with no column, or with no row for its issue could gain
+# a card from its review, and the pass holds it while the column is full. One column name in each rename generation
+# answers, as the count above does (#2315).
+review_drains() { case "$1" in Reviewing|Review|"Code Review"|Batching|Landing|"Code Complete"|Testing|Gating|Closed|Done) return 0;; esac; return 1; }
 done=0; now=$(date +%s); jobs_list=
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue
@@ -90,6 +97,12 @@ while read -r sha br i; do
   c="$A/branchreview-tries-$key-${sha:0:9}"; s="$A/branchreview-stop-$key-${sha:0:9}"
   [ -e "$s" ] && [ $(( now - $(mtime "$s") )) -ge "$ttl" ] && rm -f "$c" "$s"
   n=$(cat "$c" 2>/dev/null || echo 0); [ "$n" -ge "$tries" ] && continue
+  # A full Reviewing column holds a review that could add a card to it, never one that drains it (#2431). The held branch
+  # takes no place in the pass's bound and no review slot: the next pass reads the card's column again.
+  if [ -n "$review_full" ]; then
+    col=$(printf '%s\n' "$rows" | awk -F '\t' -v n="$i" '$1==n{print $2; exit}')
+    review_drains "$col" || { echo "BRANCHREVIEW column Reviewing full: $review_full; holds $br #$i: its card is not in Reviewing, and its review could add one"; continue; }
+  fi
   find "$A" -maxdepth 1 -name "branchreview-*-$key-*" ! -name "*-${sha:0:9}" -delete 2>/dev/null
   while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$par" ]; do sleep 0.2; done
   res=$(mktemp "$A/branchreview-out-$key.XXXXXX"); jobs_list+="$res "; done=$((done+1))

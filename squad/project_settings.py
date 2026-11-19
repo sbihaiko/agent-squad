@@ -65,7 +65,7 @@ CATALOG = {
 }
 # The board columns a card limit may bound (#2287). `columns.<column>.max_cards` takes a whole number from 1 to 100, or
 # none for no limit; `squad/board_limits.py` resolves the value the frontier, the review pass and the hub read.
-COLUMN_CARDS = ("Todo", "Doing", "Reviewing", "Batching", "Testing")
+COLUMN_CARDS = ("Backlog", "Todo", "Doing", "Reviewing", "Batching", "Testing")
 # The name each renamed column carried before #2315: a project file the rename has not reached still sets its limit, and
 # squad/board_limits.py reads it as the new column's.
 OLD_COLUMN_CARDS = {"Reviewing": "Review", "Batching": "Landing", "Testing": "Gating"}

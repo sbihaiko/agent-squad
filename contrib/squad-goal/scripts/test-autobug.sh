@@ -90,6 +90,42 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "2b the bug is dispatched once its blocker closed (stack.sh read its aggregate entry)";; *) ko "2b the bug stayed held after its blocker closed: '$r'";; esac
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 
+# 2c0 (#2430) The Doing card limit and the run slots are two units, and the bug lane checks each in its own unit. A Doing
+#      column at its card limit stops the pass, and the line names the cards unit; two free run slots never lift it.
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 1\n' > "$T/co/docs/squad/defaults.yaml"
+{ printf '1228\tTodo\n'; printf '900\tDoing\n'; } > "$T/cards.tsv"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG column Doing full: 1 of 1 card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass"*) ok "2c0 a full Doing column stops the bug lane, and the line names the cards unit";; *) ko "2c0 no column-full line from the bug lane: '$r'";; esac
+case "$r" in *"AUTOBUG would dispatch"*) ko "2c0 a bug was dispatched with Doing at its card limit: '$r'";; *) ok "2c0 no bug is dispatched with Doing at its card limit";; esac
+
+# 2c1 (#2430) Doing under its limit and a free run slot: the bug lane dispatches, as before.
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$T/co/docs/squad/defaults.yaml"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[1228]"*) ok "2c1 Doing under its card limit and a free slot dispatches the bug";; *) ko "2c1 nothing dispatched with cards and a slot free: '$r'";; esac
+
+# 2c2 (#2430) No free run slot stops the bug lane, and the line names the run slots unit whatever the card count.
+printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$T/co/docs/squad/defaults.yaml"
+mkdir -p "$T/co/runs/run-live"; printf '{"event":"run_start"}\n' > "$T/co/runs/run-live/record.jsonl"; printf 'run-live\n' > "$T/st/active-runs.txt"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG the run slots are full: 0 of 1 run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass"*) ok "2c2 no free run slot stops the bug lane, and the line names the run slots unit";; *) ko "2c2 no run-slot line from the bug lane: '$r'";; esac
+case "$r" in *"AUTOBUG column Doing full"*) ko "2c2 the bug lane refused on cards while the run slot stopped it: '$r'";; *) ok "2c2 an idle Doing column is never called full";; esac
+: > "$T/st/active-runs.txt"; rm -rf "$T/co/runs/run-live"
+
+# 2c3 (#2430) A hand hold counts in Doing: a held card with no Doing row fills the column, and a startable bug waits.
+python3 - "$T/issues.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d.append({"number": 1300, "title": "Held by hand", "body": "b", "created_at": "2026-10-10T18:00:00Z", "labels": ["bug", "ready-for-agent", "ready-for-human"]})
+json.dump(d, open(p, "w"))
+PY
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 1\n' > "$T/co/docs/squad/defaults.yaml"
+todo 1228 1300
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG column Doing full: 1 of 1 card(s) in Doing; the cards unit stopped the pass"*) ok "2c3 a hand hold counts in Doing";; *) ko "2c3 the hand hold did not count in Doing: '$r'";; esac
+case "$r" in *"[1228]"*) ko "2c3 a bug was dispatched while a held card filled Doing: '$r'";; *) ok "2c3 a held card keeps the whole lane inside the card limit";; esac
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1300], open(p,"w"))' "$T/issues.json"
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; todo 1228 1229 1400 1401 60 61 62 70 71 72 73
+
 # 2b2 (#1620, ADR-0142 rule 6): a bug that is a ticket of a spec is not dispatched while the spec's card sits in Backlog,
 # whatever the bug's own card reads. The board's automation puts a linked sub-issue in Todo by itself, so the ticket's own
 # column proves nothing about the spec's, and the owner starts a spec before its tickets. The wait names the parent spec.
@@ -432,7 +468,7 @@ done
 # pass files no new bug, because one defect has one owner. The cause is the fingerprint the naming helper builds, and the
 # issue that names it comes from the open-issue list this pass already holds -- no second read.
 rm -rf "$T/st/auto" "$T/st/state"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq"
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/autohunt.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/columnlimit.sh" "$d/autohunt.sh" "$T/s/"
 # Two slots: the owner's card in Doing fills one, and the pass needs the other free card to meet the red and reach the owner
 # check (#2423, ADR-0148 decision 2). One slot made the column bound stop the pass before any write, so case 8d never read
 # the owner and proved nothing.
@@ -1356,7 +1392,7 @@ pl_run() { PATH="$PL/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$PL/s/board.sh" bash
 pl_fresh; printf '{"pid":%s,"holder":"passline-slot"}\n' "$$" > "$T/caps/runs/p-full.json"
 r=$(pl_run); rc=$?
 [ "$rc" = 0 ] && ok "34a a full-cap pass exits 0" || ko "34a the pass exited $rc: '$r'"
-$G -qxF 'AUTOBUG pass 1: none (no slot)' "$PL/st/cycle.log" && ok "34a a full-cap pass writes 'none (no slot)'" \
+$G -qxF 'AUTOBUG pass 1: none (the run slots unit)' "$PL/st/cycle.log" && ok "34a a full-cap pass names the unit that stopped it: the run slots" \
   || ko "34a cycle.log: '$(cat "$PL/st/cycle.log")'"
 [ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34a the pass writes one line, never one per issue" \
   || ko "34a the line repeats: '$(cat "$PL/st/cycle.log")'"

@@ -7060,14 +7060,13 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=brd>Board<small id=brdnav>&#8212;</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=brd>Board</option><option value=acc>Access</option></select></label>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
 <details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
 <details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
-<details id=brd class=sp data-sp=brd><summary>Board<span class=sr id=brdsr>&#8212;</span></summary><div class=sb id=brdb></div></details>
 <details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile";document.getElementById("mobile-link").onclick=()=>localStorage.removeItem("squad-view")</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
@@ -7377,6 +7376,26 @@ $("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
    it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
    the profile and records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
 let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed settings while the diff asks for a confirm
+
+/* Settings > Spend & limits · Kanban (#2432): the card limit of each active board column, inside one theme with the token
+   guard. The page renders and asks; the hub validates, shows the diff and writes the project settings file on confirm
+   (ADR-0137). A blank field is unlimited. The frontier reads Doing, the branch review pass reads Reviewing, and the
+   Kanban header shows the count against the limit. */
+// KAN{ the Kanban sub-group's pure rules (#2432): its values, its dirty test, its chip and its html. Run in node by tests.
+let kanS=null,kanDraft=null,kanMsg="";
+const kanClone=o=>JSON.parse(JSON.stringify(o));
+const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
+const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
+const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify(kanS.columns);
+const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
+const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
+const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>`);
+function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
+ return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
+  +kanCols().map(kanRow).join("")
+  +`<p class=note>Project file: <code>${esc(kanS.file||"none")}</code>. The count comes from the loop's board cache, and an empty field means unlimited.</p></div>`
+  +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")}
+// }KAN
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
@@ -7393,15 +7412,19 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
   setRow("pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
+ h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
-async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg="";limRender()}catch(e){limMsg="!load failed";limRender()}}
+async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
+ try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
+ limRender()}
 async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
  try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
  if(d.err){limDiff=null;limMsg="!"+d.err}
  else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
  limRender()}
-$("#lbody").addEventListener("input",()=>{limMsg="";setBar()});
+$("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan;   // a Kanban row stages its value until Save (#2432)
+ if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg=""}setBar()});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7464,42 +7487,22 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  });
-/* Settings > Board (#2287): the card limit of each board column. The page renders and asks; the hub validates, shows the
-   diff and writes the project settings file on confirm (ADR-0137). A blank field is no limit. The frontier reads Doing,
-   the review pass reads Reviewing, and the Kanban header shows the count against the limit. */
-// BRD{ the Board theme's pure rules (#2287): its values, its dirty test and its render. Run in node by tests.
-let brdS=null,brdDraft=null,brdMsg="";
-const brdClone=o=>JSON.parse(JSON.stringify(o));
-const brdVals=()=>brdDraft||(brdS&&brdS.columns)||[];
-const brdLimits=()=>Object.fromEntries(brdVals().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
-const brdDirty=()=>!!brdS&&!!brdDraft&&JSON.stringify(brdDraft)!==JSON.stringify(brdS.columns);
-function brdRender(){const b=$("#brdb");if(!b)return;if(!brdS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const cols=brdVals();
- setChip("brd",cols.some(c=>c.max_cards!=null)?"limited":"no limit");
- let h=setNow("brd",[setTile("Columns",String(cols.length),"neutral")],`Project file: <code>${esc(brdS.file||"none")}</code>`)
-  +setSettings("brd",cols.map(c=>setRow(c.name,`<input data-col="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder="no limit" aria-label="${esc(c.name)} maximum cards">`,"the most cards this column holds; empty means no limit")));
- if(brdMsg)h+=`<div class="mx${brdMsg.startsWith("!")?" err":""}" role=status>${esc(brdMsg.replace(/^!/,""))}</div>`;
- b.innerHTML=h;if(typeof setBar==="function")setBar()}
-// }BRD
-async function brdLoad(){try{brdS=await (await fetch("/api/columns")).json();brdDraft=brdClone(brdS.columns||[]);brdMsg=brdS.err?"!"+brdS.err:"";brdRender()}catch(e){brdMsg="!load failed";brdRender()}}
-async function brdPost(confirm){try{const r=await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:brdLimits(),confirm})})),d=await r.json();
- if(d.err){brdMsg="!"+d.err}
- else if(confirm){brdS=d.state||brdS;brdDraft=brdClone(brdS.columns||[]);brdMsg=(d.diff||[]).length?"saved · the frontier and the review pass read it on their next pass":"nothing changed"}
- else brdMsg=(d.diff||[]).length?"":(brdDraft=brdClone(brdS.columns||[]),"nothing changed")}catch(x){brdMsg="!save failed"}
- brdRender()}
-$("#brdb").addEventListener("input",e=>{const n=e.target.dataset.col;if(!n||!brdDraft)return;const c=brdDraft.find(x=>x.name===n);
- if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);brdMsg="";if(typeof setBar==="function")setBar()});
+async function kanPost(confirm){try{const r=await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:kanLimits(),confirm})}),d=await r.json();
+ if(d.err){kanMsg="!"+d.err}
+ else if(confirm){kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanMsg=(d.diff||[]).length?"saved · the dispatch and the review pass read it on their next pass":"nothing changed"}
+ else kanMsg=(d.diff||[]).length?"":(kanDraft=kanClone(kanS.columns||[]),"nothing changed")}catch(x){kanMsg="!save failed"}
+ limRender()}
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
    Access have no Save: the bar hides there. */
-const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",brd:"Board",acc:"Access"};
-const SET_SAVE=["lim","mdl","slk","sub","brd"];   // the themes the one Save writes; Loop and Access stage no file here
+const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
+const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
-const limDirty=()=>{if(!limS||!$("#limc"))return false;const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)};
+const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
-const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()],["brd",brdDirty()]].filter(x=>x[1]).map(x=>x[0]);
+const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
    never a bar that disappears and leaves the reader guessing whether anything was lost. */
 function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme);bar.hidden=false;
@@ -7519,20 +7522,19 @@ const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,
 /* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */
 $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
- if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"))}
+ if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"));
+  if(kanDirty())groups.push(await setAskOne("/api/columns",{columns:kanLimits()},"Kanban",(kanS&&kanS.file)||"(the project settings file)"))}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
- if(d.includes("brd"))groups.push(await setAskOne("/api/columns",{columns:brdLimits()},"Board",(brdS&&brdS.file)||"(the project settings file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
 $("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
 $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
- if(d.includes("lim"))await limPost(true);
+ if(d.includes("lim")){await limPost(true);if(kanDirty())await kanPost(true)}
  if(d.includes("slk"))await slPost(true);
  if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
- if(d.includes("brd"))await brdPost(true);
- setBar();barSay([mdlMsg,limMsg,slMsg,subMsg,brdMsg])};
+ setBar();barSay([mdlMsg,kanMsg,slMsg,subMsg])};
 // The verdict of a save belongs where the Save button is: the panel's own line sits at the end of a long scrolling
 // column, so a refusal read there as "nothing happened" (owner, 2026-11-01).
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
@@ -7540,19 +7542,20 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(brdS){brdDraft=brdClone(brdS.columns||[]);brdMsg="";brdRender()}setBar()};
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["stats","mdl","lim","slk","brd"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
+const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
 ACC.forEach(i=>{const e=$("#"+i);if(!e)return;e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();
- if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}else if(i==="brd"&&e.open){brdLoad()}});
+ if(i==="mdl"&&e.open){mdlLoad()}else if(i==="lim"&&e.open){limLoad()}else if(i==="slk"&&e.open){slLoad()}});
  if(openAcc.has(i))e.open=true});   // a panel stored open loads through its own toggle, once (#1278)
 /* A refused write gets every control disabled and the reason stated (#1278); the observer keeps a render from re-enabling
    what it drew after the first pass. The loop switch is the hub's to gate: it follows the `write` field, never this flag. */
 if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($("#tab-set"))}
 setTheme(sTheme);
 if(!$("#mdl").open)mdlLoad();   // the models panel answers on boot while it is closed; an open panel already loaded (#1278)
+if(!$("#lim").open)limLoad();   // Spend & limits answers on boot too, so its chip and its Kanban sub-group never read a dash (#2432)
 const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const TOP=3;
 function pie(ms){
@@ -9725,13 +9728,14 @@ def tailnet_block(checkout=None):
     not load, so the seam refuses every tailnet request."""
     return tailnet_source(checkout)[0]
 
-# --- The card limit of each board column (#2287). One resolution (squad/board_limits.py): the plugin defaults, then the
-# project settings file under the profile's checkout. The Settings page reads and writes it, and the Kanban header shows it.
+# --- The card limit of each board column (#2432). One resolution (squad/board_limits.py): the plugin defaults, then the
+# project settings file under the profile's checkout. The Spend & limits theme reads and writes it, and the Kanban header
+# shows it.
 _BOARD_LIMITS = {}
 
 
 def _board_limit_parts():
-    """The two `squad` modules the Board theme reads, loaded by the same rule as the tailnet block."""
+    """The two `squad` modules the Kanban sub-group reads, loaded by the same rule as the tailnet block."""
     if "mods" not in _BOARD_LIMITS:
         _BOARD_LIMITS["mods"] = load_squad(tailnet_roots(), ("board_limits", "project_settings"))
     return _BOARD_LIMITS["mods"]
@@ -9747,15 +9751,33 @@ def board_column_limits():
         return {}
 
 
+def board_column_counts(names):
+    """The cards now in each column, from the loop's board cache: no GitHub read, and a card in a finished column counts
+    nowhere. A cache row the vocabulary cannot place counts in no column, so the screen never invents one."""
+    counts = {n: 0 for n in names}
+    for i in board_cache.get("items") or []:
+        if not isinstance(i, dict): continue
+        closed = str(i.get("s") or "").lower() == "closed"
+        try:
+            col = _columns_module.view_column(i.get("st"), closed, i.get("l"), i.get("cr"))[0]
+        except Exception:
+            continue
+        if col in counts: counts[col] += 1
+    return counts
+
+
 def columns_read():
-    """The Settings Board theme's data: one row per board column with its limit, and the file a Save writes."""
+    """The Kanban sub-group's data: one row per active column with its limit, the cards now and what its limit stops, and
+    the file a Save writes."""
     try:
         bl, _ = _board_limit_parts()
     except Exception as e:
         return {"columns": [], "file": "", "err": f"the settings reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
     lim = bl.limits(CHECKOUT or ".")
+    counts = board_column_counts(bl.COLUMNS)
     return {"file": str(pathlib.Path(CHECKOUT or ".") / "docs" / "squad" / "defaults.yaml"),
-            "columns": [{"name": n, "max_cards": lim.get(n)} for n in bl.COLUMNS]}
+            "columns": [{"name": n, "max_cards": lim.get(n), "count": counts.get(n, 0),
+                         "stops": bl.column_stop(n)} for n in bl.COLUMNS]}
 
 
 def _limit_text(raw):
@@ -9791,7 +9813,7 @@ def columns_set(body):
         if value is None and text not in ("", "none"):
             return {"err": f"{name}: the limit is an integer from 1 to 100, or none"}
         new[name] = value
-    diff = [f"Board · {n}: {cur.get(n) if cur.get(n) is not None else 'none'} -> {v if v is not None else 'none'}"
+    diff = [f"Kanban · {n}: {cur.get(n) if cur.get(n) is not None else 'none'} -> {v if v is not None else 'none'}"
             for n, v in new.items() if v != cur.get(n)]
     if body.get("confirm") is not True: return {"diff": diff}
     changes = [(f"columns.{n}.max_cards", "none" if v is None else str(v)) for n, v in new.items() if v != cur.get(n)]
@@ -10102,7 +10124,7 @@ class H(BaseHTTPRequestHandler):
                                                                     "gauges": subs_gauges(), "file": str(PLANS)}).encode(), "application/json"   # the theme draws the sidebar card's own rows, and names its file (#1281)
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
-        elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Board (#2287)
+        elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
@@ -10374,7 +10396,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/promote" and isinstance(body, dict) and body.get("batch") is True: out = promote_batch(body, a.login or "owner")   # the owner's batch move (#1098)
                 elif self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
-                elif self.path == "/api/columns": out = columns_set(body)   # Settings > Board (#2287)
+                elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}

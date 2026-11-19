@@ -107,4 +107,4 @@ def test_the_seam_proves_a_write_across_the_two_spellings():
 def test_a_column_limit_reads_under_either_name():
     from squad import board_limits
     assert board_limits.limit("Review") == board_limits.limit("Reviewing") == 4
-    assert set(board_limits.DEFAULTS) == {"Todo", "Doing", "Reviewing", "Batching", "Testing"}
+    assert set(board_limits.DEFAULTS) == {"Backlog", "Todo", "Doing", "Reviewing", "Batching", "Testing"}   # Backlog joined the store (#2432)

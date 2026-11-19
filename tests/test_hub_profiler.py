@@ -1007,6 +1007,7 @@ VIEW = {"on": True, "since": 1.0, "window_s": 125, "write": True, "reason": "",
                      leaf("orphan watch.sh (temp folder)", 2.0, kind="orphan")]}}
 
 
+@pytest.mark.heavy   # starts node: 3.2 s on a CI runner
 def test_the_poll_rule_is_false_off_the_tab_or_with_the_switch_off():
     out = json.loads(run_js('JSON.stringify([profDue("prof",false,{on:true}),profDue("flow",false,{on:true}),'
                             'profDue("prof",true,{on:true}),profDue("prof",false,{on:false}),profDue("prof",false,null)])'))

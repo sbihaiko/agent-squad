@@ -5,7 +5,7 @@
 # (slicecut.py holds, the frontier's own issue-to-file map, ADR-0150), none of $SG_BUG_SKIP_LABELS
 # (the holder and hold floor) and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
-# runs) and within the free cards of the Doing column (columns.Doing.max_cards, never above caps.runs; #2423). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
+# runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
@@ -284,13 +284,15 @@ try:
     ceil = C.ceiling(".")
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"])   # caps.runs, the machine cap the Doing column also obeys (#2423)
+print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"])   # the free run slots, and caps.runs for the refusal line (#2430)
 PY
 
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 [ -n "${free:-}" ] || { AB_REASON="no slot"; echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
-[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
+# No free run slot stops the lane, and the line names the run slots (#2430): a card count is another unit, so the two
+# numbers never become one.
+[ "$free" -gt 0 ] || { AB_REASON="the run slots unit"; echo "AUTOBUG the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass" >&2; exit 0; }
 # bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
 # gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
 gather() {
@@ -349,16 +351,6 @@ printf '%s\n' "$board" | awk -F '\t' '$1 ~ /^[0-9]+$/' > "$F/board"
 export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from this pass's one board read (#1620)
 export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a bug whose dependency component is invalid or unknown (#1984)
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "
-# A card limit on the Doing column (#2423), as the frontier reads it (#2287): the bug lane starts no card while the column
-# holds its maximum. The bound is the lower of the column limit and caps.runs, the machine cap that also bounds Doing, and
-# it is read once here, from this pass's board read. Each card counts once, whatever holds it: two cards of one run count
-# two, and a card a person holds counts one. An unread limit falls back to caps.runs with one alert; only with no machine
-# cap either is it a defect that dispatches nothing.
-doing_max=$(sg_board_limit_effective Doing "$runs_cap"); cm_rc=$?
-[ "$cm_rc" -eq 0 ] || { AB_REASON="the Doing column limit is unreadable"; echo "AUTOBUG the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass" >&2; exit 0; }
-doing_n=0; doing_room=""
-case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2=="In Progress"{n++} END{print n+0}' "$F/board")
-  doing_room=$((doing_max - doing_n)) ;; esac
 # (ADR-0150 across runs, #2016) The frontier's issue-to-file map, read here across the live runs too: a bug whose body names a
 # file a live run holds waits for a later pass, and the line names the holding run. The map is slicecut.py's (cluster.paths),
 # never a second copy, so both dispatchers answer the same file set. A check that cannot run filters nothing, as in the
@@ -386,12 +378,15 @@ ab_check_open() {
   done
 }
 [ -n "${AB_DRY:-}" ] || ab_resume
-[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
-# A full Doing column starts no new bug (#2423): the pass says so once, and a pending card event is still written above.
-[ -z "$doing_room" ] || [ "$doing_room" -gt 0 ] || {
-  AB_REASON="column Doing full: $doing_n of $doing_max card(s) in Doing"
-  echo "AUTOBUG column Doing full: $doing_n of $doing_max card(s) in Doing; nothing dispatched this pass" >&2
-  exit 0; }
+[ "$free" -gt 0 ] || { AB_REASON="the run slots unit"; echo "AUTOBUG the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass" >&2; exit 0; }
+# A card limit on the Doing column (#2287, #2430): the lane starts no bug while the column holds its maximum, and says so
+# once. The bound is the Doing card limit alone; the free run slots are the separate check above. The count is this pass's
+# own board read, plus each hand hold whose issue has no card there, so the owner's hand work takes its share. An unread
+# limit is a defect, never "no limit": the lane stops and names it.
+doing_max=$(sg_column_limit Doing); cm_rc=$?
+[ "$cm_rc" -eq 0 ] || { AB_REASON="the Doing card limit is unreadable"; echo "AUTOBUG the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass" >&2; exit 0; }
+case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(sg_column_cards Doing "$F/board" "$F/issues.json")
+  [ "$doing_n" -lt "$doing_max" ] || { AB_REASON="column Doing full: $doing_n of $doing_max card(s) in Doing"; echo "AUTOBUG column Doing full: $doing_n of $doing_max card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass" >&2; exit 0; } ;; esac
 pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 case "$pendset" in *[0-9]*) AB_PENDING=1;; esac   # a pending card event (ADR-0165): the pass writes before it picks anything new
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
@@ -453,21 +448,8 @@ if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.p
 # children one run can fund (fundroom.py; "-" when the graph does not say).
 lim=$free; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$lim" ] && lim=$fr;; esac
-[ -z "$doing_room" ] || [ "$doing_room" -ge "$lim" ] || lim=$doing_room   # the cards the column still holds bound the batch (#2423)
 [ "$lim" -gt 0 ] || { AB_REASON="one run funds no child"; echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
-# A cluster is one child but as many cards as issues: the batch takes no cluster that would push the Doing column past its
-# free cards (#2423), and the walk ends there as it does at the child bound.
-clusters=(); cards_taken=0
-while read -r c; do
-  [ -n "$c" ] || continue
-  if [ -n "$doing_room" ]; then
-    nc=0; for p in $c; do nc=$((nc + 1)); done
-    [ $((cards_taken + nc)) -le "$doing_room" ] || break
-    cards_taken=$((cards_taken + nc))
-  fi
-  clusters+=("$c")
-  [ ${#clusters[@]} -ge "$lim" ] && break
-done <<<"$cl"
+clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$lim" ] && break; done <<<"$cl"
 # a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
 # and a cluster whose numbers are not all valid is dropped (#1855).
 pick=()

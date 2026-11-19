@@ -190,17 +190,27 @@ printf '7\tReview\n8\tReview\n' > "$T/rows.txt"; export BOARD_ROWS=$T/rows.txt B
 mkdir -p "$T/co/docs/squad"; printf 'columns:\n  Reviewing:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
 push gui/51-c; : > "$T/review.log"
 r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
-case "$r" in *"BRANCHREVIEW column Reviewing full: 2 of 2 card(s) in Reviewing; no review starts this pass"*) ok "a full Reviewing column holds every review";; *) ko "no column-full line: '$r'";; esac
+case "$r" in *"BRANCHREVIEW column Reviewing full: 2 of 2 card(s) in Reviewing; holds gui/51-c #51:"*) ok "a full Reviewing column holds the review of a card before it";; *) ko "no column-full hold line: '$r'";; esac
 [ "$(n gui/51-c)" = 0 ] && ok "no review ran while the Reviewing column was full" || ko "a review ran while Reviewing was full: '$(cat "$T/review.log")'"
 [ "$(wc -l < "$T/reads.log" | tr -d ' ')" = 1 ] && ok "a full Reviewing column costs the pass one board read" || ko "a full Reviewing column read the board $(wc -l < "$T/reads.log" | tr -d ' ') times"
 printf '7\tReview\n8\tTodo\n' > "$T/rows.txt"
 r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
 [ "$(n gui/51-c)" = 1 ] && ok "a Reviewing column under its limit reviews its branch as before" || ko "no review ran under the limit: '$r'"
-# caps.reviews lowers the Reviewing bound (#2287): two cards under a column limit of 9 is not full on the column alone, but
-# caps.reviews 1 makes the effective bound 1, so the pass refuses. This proves the lower of the two applies.
+# caps.reviews never lowers the Reviewing card limit (#2430): two cards under a column limit of 9 is not full on the
+# column, and the review slots are another unit that every job takes through sg_caps.
 printf '7\tReview\n8\tReview\n' > "$T/rows.txt"
 printf 'caps:\n  reviews: 1\ncolumns:\n  Reviewing:\n    max_cards: 9\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
-case "$r" in *"BRANCHREVIEW column Reviewing full: 2 of 1 card(s) in Reviewing"*) ok "caps.reviews lowers the Reviewing column limit";; *) ko "caps.reviews did not lower the Reviewing limit: '$r'";; esac
+case "$r" in *"BRANCHREVIEW column Reviewing full"*) ko "caps.reviews lowered the Reviewing card limit: '$r'";; *) ok "caps.reviews never lowers the Reviewing card limit";; esac
+# 14b) the Reviewing limit never holds the review that drains the column (#2431): a review is what moves a card out of
+# Reviewing, so a card already in Reviewing is reviewed while the column is full. A card before Reviewing waits, because
+# a verdict that does not approve its tip adds its card to Reviewing (the janitor's review_wait fact).
+printf '7\tReview\n8\tReview\n51\tTodo\n61\tReview\n' > "$T/rows.txt"
+printf 'columns:\n  Reviewing:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
+push gui/51-c; push gui/61-r; : > "$T/review.log"
+r=$(OPEN="51 61" SG_REVIEW_PASS_MAX=1 rp)
+[ "$(n gui/61-r)" = 1 ] && ok "a review of a card already in Reviewing starts while the column is full" || ko "the drain of Reviewing was held: '$r' $(cat "$T/review.log" 2>/dev/null)"
+[ "$(n gui/51-c)" = 0 ] && ok "a review of a card before Reviewing waits while the column is full" || ko "a card before Reviewing was reviewed into a full column: '$r'"
+case "$r" in *"holds gui/51-c #51:"*) ok "the held review names its branch and its issue";; *) ko "no hold line for gui/51-c: '$r'";; esac
 rm -f "$T/co/docs/squad/defaults.yaml"; unset BOARD_ROWS BOARDREADLOG
 exit $fail
