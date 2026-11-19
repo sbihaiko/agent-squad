@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# seconds: 0.03
 set -euo pipefail
 
 d="$(cd "$(dirname "$0")" && pwd)"

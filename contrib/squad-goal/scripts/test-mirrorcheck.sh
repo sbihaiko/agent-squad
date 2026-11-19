@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.37
 # Regression test for mirrorcheck.py (#2357): a suite's `# mirrors:` line names the tree its live copy carries, and the
 # check holds it against the modules the suite's own fixture commands load. A load the line does not carry fails, and so
 # does a name the line carries that this repository does not. A list and its loads that agree pass with one line.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.18
 # The fast read of the open cards (SPEC 968): host-free (no hub, no GitHub client), over recorded answers only.
 # Fixtures and a temp dir only: never the network, never the live hub state.
 # usage: bash test-board-fast.sh [board_fast.py]

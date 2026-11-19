@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 141.70
 # Regression test for health.sh: a down watchd alerts once, a live one clears it, a silent cycle.log is reported. Stubbed env.sh/gh/notifier. usage: bash test-health.sh [health.sh]
 src=${1:-$(dirname "$0")/health.sh}; T=$(mktemp -d); . "$(dirname "$0")/driver-tree.sh"; trap 'driver_tree_kill "$T"; rm -rf "$T" "$P"' EXIT; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # hermetic: a fork gate (or any shell) exports SG_FORK_*; health.sh would then scan the real fork repo and add a fork-parked cause

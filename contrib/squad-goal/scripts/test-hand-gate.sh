@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.86
 # Regression test for hand-gate.sh (#1169): a hand gate declares its worker count and its reason where it starts, and a
 # delta of at most two files takes at most two workers. A throwaway repository and a stub python that logs its argv: no
 # battery runs and no machine budget is taken for real.

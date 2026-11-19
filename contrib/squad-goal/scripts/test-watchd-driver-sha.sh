@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.30
 # `watchd.sh start` records the sha the drivers start on (#700): the first field of PUBLISHED in the skill the drivers run
 # from goes to $SG_STATE/driver.sha, so live-guard.sh can name a publish to another sha as a restart the owner makes.
 # Offline: a temp skill with a stub env.sh and stub lanes; the test stops the supervisor it started.

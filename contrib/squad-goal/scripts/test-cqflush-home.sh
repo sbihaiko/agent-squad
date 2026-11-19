@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.15
 # A queued loop comment never names the home directory: cqflush.sh writes $HOME as ~ before it posts (#1791).
 # Offline: fixture profile, stub gh that keeps the comments of one issue and logs every write.
 # usage: bash test-cqflush-home.sh [scripts dir]

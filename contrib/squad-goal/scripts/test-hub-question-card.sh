@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.08
 # Guard for #1089: a question card is data with a fixed schema, and one pure module maps it to what the page draws. The
 # schema refuses an unknown key, an option count outside two to four, and two recommended options on one question. Text
 # stays text. Tabs appear only for more than one question. Arrow, Tab, Enter and Escape act through the same names the

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 31.33
 # The wave's age cap and the conditions around an empty wave (#378, #377, #474, #533, #822, #591, #593, #620, #575):
 # a capped wave lands what it holds, a red tip names the child that broke it, and a held gate lock never blocks a pass.
 # mirrors: wave.sh wave-fixture.sh

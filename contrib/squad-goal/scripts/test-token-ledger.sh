@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 12.98
 # review.sh appends one ledger line per model call to $SG_STATE/token-usage.tsv (stubbed gh and claude, offline).
 # 1) a claude call that reports usage: one line  ts, review:fix_1-x, model, in, out, cache_read (6 fields); the verdict text still parses.
 # 2) a second call on the same branch is review:fix_1-x#2. 3) review-times.tsv keeps its 5 columns.

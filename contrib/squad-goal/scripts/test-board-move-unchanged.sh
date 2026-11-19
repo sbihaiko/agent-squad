@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.72
 # A card move is sent only when its value changes: `board.py <owner> <project> "<Status>" <issue#>...` (and `--add`) reads the card,
 # and a card that already carries the Status is not written -- no PATCH, no proving read, exit 0 (#327). The card's own read is its
 # one-item REST route when an id is known, and the whole-board read only when it is not (#1300, #1303). A hinted move to the column

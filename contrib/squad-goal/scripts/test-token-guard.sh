@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.43
 # The token guard (token-guard.sh): a burn over the cap is a report line and one alert, never a stop. Dispatch pauses only
 # while the burn over the last hour stays over 3x the cap's hourly share, and it resumes by itself once that burn falls under the cap.
 # The off switch (#926): the profile the guard reads names SG_TOKEN_GUARD=off, and the pass writes nothing and pauses

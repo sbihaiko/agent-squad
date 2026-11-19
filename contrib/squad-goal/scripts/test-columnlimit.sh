@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.43
 # Regression test for columnlimit.sh (#2287): the one bash seam over squad/board_limits.py. A working module answers a
 # column's limit and the lower of that limit and a machine cap. A module that is missing or fails is a defect, never "no
 # limit": the read prints nothing, returns 2, and names the failure on stderr once per pass. Offline and hermetic: temp

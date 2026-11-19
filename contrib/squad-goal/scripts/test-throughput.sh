@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.04
 # Regression test for throughput.sh: the loop's throughput over a time window, read from local records only (#564).
 # usage: bash test-throughput.sh [path/to/throughput.sh]
 # Hermetic: every inherited SG_* is dropped, and the fixture is a throwaway checkout, state folder and run list. A `gh`

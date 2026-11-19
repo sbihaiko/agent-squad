@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 16.06
 # Regression test for single.sh and fastloop.sh. usage: bash test-single.sh
 d=$(dirname "$0"); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_STATE=$T/st; mkdir -p "$SG_STATE"

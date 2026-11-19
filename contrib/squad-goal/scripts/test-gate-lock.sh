@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 19.80
 # Regression test for gate.sh (#392): one command runs a hand gate under the machine-wide `gate` lock, the lock serial.sh owns.
 # Two gates started at once run one after the other and never together; the second waits and then runs, and its wait shows on one
 # log line; a gate whose holder died takes the lock; the exit code passes through. Offline, a throwaway SG_STATE.

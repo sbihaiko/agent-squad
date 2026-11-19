@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.18
 # The comment flusher exits by itself once its supervisor is gone (#959): an orphaned flusher posts nothing and stays no longer
 # than one interval, so the loop never keeps a second flusher beside the one a new supervisor starts.
 # Offline: the real cqflush.sh, an empty queue and an empty profile directory, so no network is reached.

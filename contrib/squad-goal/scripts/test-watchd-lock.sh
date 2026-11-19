@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.15
 # One supervisor per state directory (#932). `watchd.sh run` wrote its own pid to watchd.pid with no lock, so two `run`
 # calls whose `alive` checks both ran before either wrote the file both started a lane, and a supervisor that removed the
 # file on its way out let a later `start` add a third beside the two still running. Three cycles, three fast lanes, three

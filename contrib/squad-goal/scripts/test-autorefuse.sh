@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.79
 # One defect, one issue: the fingerprint is the cause, never the occurrence (#139).
 #
 # `autorefuse.sh` files ONE bug for one refused-write CAUSE, never one per occurrence. The fingerprint is the

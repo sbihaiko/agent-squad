@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 19.44
 # Regression test for #1441: a gate that passes, fails, is skipped (exit 73), is stopped past its deadline or is stopped from
 # outside leaves no watchdog sleep behind. Each gate's watchdog sleeps its bound plus 5 (gate.sh) and its bound plus 300 (the
 # serial hold); every pid under the gate is sampled while it runs, so only a sleep this gate started can count as its leak.

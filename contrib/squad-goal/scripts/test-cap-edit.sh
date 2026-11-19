@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.95
 # Regression test for cap-edit.sh: the one procedure every cap edit goes through. Stop and start are stubs, the settings
 # file is a real project file in a throw-away checkout, and the settings check is the real `config check` unless a case stubs it.
 # usage: bash test-cap-edit.sh

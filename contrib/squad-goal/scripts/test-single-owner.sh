@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.70
 # A holder whose lock another process took over leaves that lock alone at its exit (#531): else a third pass starts beside
 # the second, as two childcc passes did. usage: bash test-single-owner.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

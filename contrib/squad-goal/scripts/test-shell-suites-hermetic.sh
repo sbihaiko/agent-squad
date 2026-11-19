@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.05
 # Regression test for #1410 cause 2: shell-suites.sh clears every inherited SG_* variable before each suite, so the live loop's env cannot reach an assertion. usage: bash test-shell-suites-hermetic.sh [path/to/shell-suites.sh]
 src=${1:-$(dirname "$0")/shell-suites.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s"; cp "$src" "$T/s/shell-suites.sh"; cp "$(dirname "$src")/caps.sh" "$T/s/caps.sh"   # the scrub it sources (#2306)

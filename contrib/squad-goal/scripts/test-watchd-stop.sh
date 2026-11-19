@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.70
 # Guard for #1662: `watchd.sh stop` drains by default. Under a live run it marks the drain and hands off to the detached
 # waiter, so the run finishes; with no live work it stops at once. `stop --force` is the hard stop: it does not wait for the
 # live run, and it snapshots every live run's trees (refs/wip) before it kills. A drained stop writes no WIP line.

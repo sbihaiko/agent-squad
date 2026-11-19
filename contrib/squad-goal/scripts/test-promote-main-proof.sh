@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 5.90
 # promote-main.sh <sha> reads the complete tier before it pushes (#2039, ADR-0173). The sha form is the stg-to-main pass's
 # call, and the script used to trust its caller: a sha with no complete-tier run moved main. Now the script reads the sha's
 # complete-tier check runs through the same reader the pass uses (mainproof.sh), refuses a sha whose tier is not green, and

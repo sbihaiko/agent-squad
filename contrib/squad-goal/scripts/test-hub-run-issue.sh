@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.33
 # Regression test for #22: the hub labels a run by the issue its own request names (runs/<run>/request.txt), for any digit count, and says why when it knows none (no network, no server). usage: bash test-hub-run-issue.sh [path/to/hub.py]
 src=$(cd "$(dirname "${1:-$0}")" && pwd)/$(basename "${1:-hub.py}"); [ -n "$1" ] || src=$(cd "$(dirname "$0")" && pwd)/hub.py; export HUB_SRC=$src; T=$(mktemp -d); fail=0
 export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T" SG_HUB_DIR="$T/hub" SG_STATE="$T/st" T

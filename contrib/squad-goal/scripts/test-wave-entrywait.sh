@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 11.54
 # A wave closes early when its oldest entry waited past a limit (#2316, ADR-0145 rule 16): it lands with the children that
 # entered it, the children of the run that did not enter it keep their card and their dispatch, and a later entry cuts the
 # run's next wave from the moved base. A wave with no entered child never closes early, and the 7200 s age cap stays the

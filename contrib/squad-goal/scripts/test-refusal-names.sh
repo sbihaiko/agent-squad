@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.10
 # Every refusal has ONE shape: the refusal names are a closed set in code, readable in one place (#142).
 #
 # A writer names its refusal through the helper that owns the set, so a new refusal is a deliberate act in one place,

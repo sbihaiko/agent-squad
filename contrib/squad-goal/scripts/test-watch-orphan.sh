@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.59
 # The cycle lane exits by itself once its supervisor is gone (#959): an orphaned watch.sh runs no further step and leaves its
 # lock, so an orphaned loop never keeps dispatching beside a supervisor that started another one.
 # Offline: a copy of the real watch.sh in a temp scripts dir, every step stubbed to log its name, and a `gh` that answers nothing.

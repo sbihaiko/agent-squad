@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.17
 # Guard: the Monitor source reads the loop's log and never starts the loop. SKILL.md arms the Monitor with watchtail.sh "only to
 # read that log", and only the owner starts the loop (watchd.sh start). watchtail.sh ran `watchd.sh start` first, so a session
 # that re-armed its Monitor restarted a loop the owner had stopped, three times in one evening. With watchd down it says so in

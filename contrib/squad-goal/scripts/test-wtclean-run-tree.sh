@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.70
 # Regression test for wtclean.sh's run-worktree rule (throwaway repos, no network). usage: bash test-wtclean-run-tree.sh [path/to/wtclean.sh]
 # A launch makes worktrees/run/<key> on squad/run/<key> (#580). Once every run folder inside it has ended for good and its wave
 # landed, the tree and the branch go; a live, paused or resumable run, a held wave, a dirty tree or unlanded commits keep both.

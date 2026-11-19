@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 28.13
 # The beside-script janitor suites read no caller state (#393). shell-suites.sh clears every inherited SG_* for the gate, so a
 # suite that only worked there went red on a hand run: the loop's own shell exports SG_BOARD_VOCAB=shipped, SG_FORK_DIR and the
 # rest, the janitor took the shipped path -- which imports board_columns.py, a module a suite's copy does not make -- and the

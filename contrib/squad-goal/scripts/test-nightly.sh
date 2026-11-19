@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 27.75
 # Regression test for nightly.sh (#704): the full suite in both modes, heavy included, once a day, in its own clone under its
 # own serial lock, never under the landing (gate) lock; one atomic result record the hub reads, one alert on red, and a red
 # record that holds dispatch until one green run. usage: bash test-nightly.sh [path/to/nightly.sh]

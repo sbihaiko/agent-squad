@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.15
 # The migration planner: a dry run lists every card move and every option removal and writes nothing; the check refuses an old
 # option while a card carries it, with the counts; Open Specs lands in Backlog with the spec label (ADR-0143).
 # Fixtures only: the planner reads a JSON list and never reaches the network or a board.

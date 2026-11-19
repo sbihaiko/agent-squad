@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.78
 # Rule W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs, so the janitor raises WATCHD-ORPHAN
 # in alerts.log, once for the state. A live supervisor, or no lane, raises nothing.
 # Stubbed gh and board; a temp state dir and a temp scripts dir holding the janitor and stub lanes. usage: bash test-janitor-watchd-orphan.sh [janitor.py]

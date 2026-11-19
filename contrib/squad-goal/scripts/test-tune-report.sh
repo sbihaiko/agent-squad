@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.81
 # Regression test for tune-report.sh: each column of the tuning table, read from a fake state directory (throw-away, no network).
 # usage: bash test-tune-report.sh
 # The expected values are worked out by hand from the fixtures below, never by the reader's own arithmetic.

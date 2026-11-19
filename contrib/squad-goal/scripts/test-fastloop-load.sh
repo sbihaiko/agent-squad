@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.11
 # The fast lane appends one load sample per cycle to $SG_STATE/load.log: the UTC time, then the 1-, 5- and 15-minute averages.
 # Offline: stub steps beside a copy of fastloop.sh, one iteration per run (SG_FASTLOOP_ONCE=1).
 # usage: bash test-fastloop-load.sh [scripts dir]

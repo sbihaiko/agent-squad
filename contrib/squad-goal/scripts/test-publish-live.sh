@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.50
 # Regression test for publish-live.sh: the live skill follows the repository as an explicit FILE LIST, never a mirror,
 # and the fork-only route the repository retired is dropped from the live copy by name (#134).
 # usage: bash test-publish-live.sh [path/to/publish-live.sh]

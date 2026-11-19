@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.58
 # Regression test for ffland.sh's landing branch (ADR-0145, #1846). usage: bash test-ffland.sh
 # Offline: SG_LAND_REMOTE names a path that holds no repository, so no case reaches a network. The report is buffered so the
 # first line says TDD RED while a fix is missing, TDD GREEN once it is in.

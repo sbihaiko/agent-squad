@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 8.33
 # The fast lane beats every SG_FAST_INTERVAL seconds: 120 unless the profile sets it (#329). The slow cycle keeps its own beat.
 # fastloop.sh --interval prints the resolved value and exits, so no test sleeps. Offline: fixture profiles, a gh that always fails,
 # and an alarm so a script that ignores --interval cannot loop on.

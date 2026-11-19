@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.71
 # Board reconciliation: the janitor derives the expected card status from run truth and evidence, then writes only mismatches.
 # A card the board does not carry is created with its expected status in the same write (--add); a board that does not
 # answer at all (the items read fails) is told apart from one that answers "no such card": nothing is written, nothing is

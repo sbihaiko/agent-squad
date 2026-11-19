@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 8.84
 # usage: test-hubstream.sh   The hub page's push stream (SPEC 1085): versioned events, the mux pass-through and the origin rule, over a real socket.
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../../.." && pwd)"

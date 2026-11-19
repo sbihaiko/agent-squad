@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.28
 # Guard for #815: the owner's arrow adds the card it moves. `board_pass` draws an open issue that never reached the board as a
 # Backlog row (`st` null, no item id), and `board.sh` answers a move for that row `#<n> not on the board` and writes nothing,
 # so the arrow failed on every card filed outside the board. The door now asks the seam for `--add` exactly when the row holds no

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 53.00
 # #1417: the grok-limited marker expires after SG_GROK_LIMIT_TTL; one review probes grok under a kernel lock (fd 8).
 # usage: bash test-review-grok-probe.sh [path/to/review.sh]
 src=${1:-$(dirname "$0")/review.sh}; D=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

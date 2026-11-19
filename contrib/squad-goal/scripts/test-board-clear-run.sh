@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.65
 # Clearing a card's Run fields is a write GitHub accepts (#101). The REST update endpoint takes a value to set a field and
 # null to clear it -- "To clear the field, set this to null" (REST, Update an item in a project) -- and an empty string is a
 # value the field refuses, answered "Invalid field values" (HTTP 400). A card that leaves In Progress is therefore written

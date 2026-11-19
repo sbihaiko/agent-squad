@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.53
 # The promotion push reads a credential this process can reach (#2126). Offline: a loopback server serves the bare remote over
 # the dumb protocol, so reads succeed, and answers 401 to the receive-pack advertisement, so the push must ask a helper.
 # Every helper here answers nothing, so the push exits 3 and names the helpers it asked. The owner's ~/.gitconfig holds a

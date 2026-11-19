@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 5.14
 # Guard: issue #1660. A serial holder's watchdog sleeps out the whole hold, so a holder that dies without running its traps
 # (SIGKILL, a killed worker, a killed run tree) leaves the watchdog behind, orphaned to pid 1. The machine carried 29 such
 # roots and 60 processes, each holding a `sleep` for the rest of its hold. The watchdog belongs to the holder: when the

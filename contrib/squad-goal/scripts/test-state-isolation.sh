@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.45
 # State isolation: every profile has its own state directory, <SG_STATE_BASE>/<profile>, so three repositories that
 # carry the same issue number never see each other's markers, live-run list or queued comments; and cqflush.sh posts each
 # queued comment to the repository its address names (the state directory it sits in, plus its number), never to the

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 26.45
 # Guard for #816: the review prompt is bounded, and a profile can leave generated paths out of the diff.
 # A child diff held a 33 MB `graphify-out/graph.json` that a git hook regenerated, and every review model refused the prompt
 # the same way ("Input exceeds the maximum length"), so the review ended "every review model failed" and the wave landed empty.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.00
 # A card that a reset returns to Todo says so on its own issue: one comment, one label from the closed set, the label created
 # when absent. The resets are no-landing, launch-refused and reopened (SG_MOVE_REASON). A repeat of the same event at the same
 # sha writes no comment and no label. A forward move drops the reset label. A card that does not move gets neither.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.13
 # env.sh names the board vocabulary when the profile does not (#760): a board made by board_define.py carries the shipped
 # vocabulary, so the default is `shipped`; a profile that names another value keeps it. Offline: a throwaway profile.
 # usage: bash test-env-board-vocab.sh
