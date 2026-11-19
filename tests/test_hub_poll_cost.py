@@ -100,6 +100,14 @@ def test_the_spend_answer_is_kept_per_period_and_source(served):
     assert stats_calls == [("day", "both"), ("hour", "both"), ("day", "sub")], stats_calls
 
 
+def test_the_spend_answer_is_per_profile(hub, monkeypatch):
+    """The key carries no profile because the module is one per profile: hubmux loads `hub_<slug>`, so two profiles load two
+    modules and each keeps its own answer."""
+    other = importlib.util.module_from_spec(importlib.util.spec_from_file_location("hub_poll_cost_other", HUB_PY))
+    other.__spec__.loader.exec_module(other)
+    assert other._STATS_KEPT is not hub._STATS_KEPT, "two loaded profiles share one kept spend answer"
+
+
 def test_the_profiler_file_view_is_built_once_per_off_window(served):
     """With the sampling switch off the page reads the file views every 30 s: one build per window, shared by pages."""
     port, _, prof_calls, clock = served
@@ -121,34 +129,41 @@ def test_the_switch_write_clears_the_kept_profiler_view(hub, served):
     assert len(prof_calls) == 2, "the view kept before the write served the read after it"
 
 
-def test_the_watch_tick_leaves_the_fallback_poll_its_own_work(hub):
-    """The watcher's tick is a second at most: it beats the 3 s fallback poll, and it does not read five times a second."""
-    assert 0.5 <= hub.RUN_WATCH_SECS <= hub.RUN_POLL_SECS / 2, (
-        f"RUN_WATCH_SECS is {hub.RUN_WATCH_SECS}: the watcher must be under half the fallback poll {hub.RUN_POLL_SECS} "
-        "and no faster than two ticks a second")
+def test_the_watch_tick_reads_a_change_within_two_seconds(hub):
+    """The watcher's tick reads a changed record within 2 s, beats the fallback poll, and does not read five times a second."""
+    assert 0.5 <= hub.RUN_WATCH_SECS <= 2.0, (
+        f"RUN_WATCH_SECS is {hub.RUN_WATCH_SECS}: the watcher must read a change within 2 s and no faster than two ticks a second")
+    assert hub.RUN_WATCH_SECS <= hub.RUN_POLL_SECS / 2, (
+        f"RUN_WATCH_SECS is {hub.RUN_WATCH_SECS}: the watcher must be under half the fallback poll {hub.RUN_POLL_SECS}, "
+        "else the fallback does its work")
 
 
 POLLS = ("poll", "pollStats", "loadPoll", "loopPoll", "accPoll", "pollBoard", "squadChartTick", "endedPoll", "profPoll")
 POLLER = re.compile(r"setInterval\((.*?),(\d+|LOAD_MS)\)")
-RETURNED = "visibilitychange"
+HELPER = "pollIfVisible"
 
 
-def test_every_desktop_poller_yields_on_a_hidden_page(hub):
+def test_every_desktop_poller_reads_through_the_one_visible_gate(hub):
     """A tab in the background asks nothing, as the phone page and the profiler already do: a hidden page costs no CPU.
 
-    Only the timers that read the hub are asserted. A timer that rewrites text already on the page opens no request, and
-    it costs nothing to leave it running."""
+    Every hub read goes through one gate, so a poller added later cannot regress the rule by naming no hidden check. A
+    timer that only rewrites text already on the page opens no request, and it is not asserted."""
     page = hub.served_page("")
-    unguarded = [body.strip()[:70] for body, _ in POLLER.findall(page)
-                 if any(re.search(rf"\b{p}\b", body) for p in POLLS) and "document.hidden" not in body]
-    assert not unguarded, "these pollers read the hub while the page is hidden: " + " | ".join(unguarded)
+    assert f"const {HELPER}=" in page, "the page defines no visible gate for its polls"
+    # The Loop timers decide through `profDue`/`profFileDue`, which read document.hidden themselves: either gate passes.
+    loose = [body.strip()[:70] for body, _ in POLLER.findall(page)
+             if any(re.search(rf"\b{p}\b", body) for p in POLLS)
+             and f"{HELPER}(" not in body and "document.hidden" not in body]
+    assert not loose, "these pollers read the hub without the visible gate: " + " | ".join(loose)
 
 
-def test_a_page_back_in_front_reads_everything_once(hub):
-    """A hidden page reads nothing, so its return reads the slowest interval's endpoints at once instead of waiting them out."""
+def test_a_page_back_in_front_reads_the_fast_polls_without_a_burst(hub):
+    """A hidden page reads nothing, so its return reads the two fastest polls at once. The slow ones wait their timer: nine
+    reads at once against a hub that just idled is the burst the hidden page removed."""
     page = hub.served_page("")
-    assert RETURNED in page, "the page names no visibility change, so a returning tab waits out its slowest poll"
-    handler = page[page.index(RETURNED):]
+    handler = page[page.index("visibilitychange"):]
     handler = handler[:handler.index("});") + 3]
-    missing = [p for p in ("pollStats", "pollBoard", "loopPoll", "accPoll", "endedPoll") if p not in handler]
+    missing = [p for p in ("poll", "pollBoard", "profPoll") if p not in handler]
     assert not missing, "a returning page reads nothing of " + ", ".join(missing)
+    burst = [p for p in ("pollStats", "endedPoll", "loadPoll", "accPoll", "loopPoll") if p + "()" in handler]
+    assert not burst, "a returning page bursts the hub with " + ", ".join(burst)

@@ -3161,10 +3161,10 @@ def profiler_served(a, w=None, sw=None, ww=None, now=None):
     window follows the switch: the sampler's own second, or the file views' own thirty. A caller the hub refused is built
     for and never kept, so a refusal is never served from a kept view; the tailnet flag is part of the key, since it
     decides the write the answer names."""
-    if not a.allowed: return profiler_view(a, w, sw, ww)
-    on = profiler_on()
+    if not a.allowed or a.tailnet: return profiler_view(a, w, sw, ww)   # a refusal is never kept, and a tailnet caller's
+    on = profiler_on()                                                  # write follows a grant that can move inside a window
     window = PROF_ON_SECS if on else PROF_OFF_SECS
-    key = (w, sw, ww, on, a.tailnet)
+    key = (w, sw, ww, on)
     now = POLL_CLOCK() if now is None else now
     with _PROF_LOCK:
         at, answer = _PROF_KEPT.get(key, (None, None))
@@ -3740,8 +3740,9 @@ def runs():
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
-RUN_WATCH_SECS = 1.0   # one tick a second: a profile's run roots are its checkout plus one per run and child worktree, so a
-                       # fifth of a second stat every record of them five times over and cost a tenth of a core (#2440)
+RUN_WATCH_SECS = 1.0   # one tick a second, so a changed record reads within the second. Measured at a fifth of a second:
+                       # the roots are the checkout plus one per run and child worktree, 482 records in 16.6 ms a tick, 0.08
+                       # core with no page open; a second a tick is under 0.02 core (#2440)
 RUN_POLL_SECS = 3.0
 RUN_LIST = []
 RUN_LIST_AT = 0.0
@@ -3997,9 +3998,11 @@ def stats(period, src="both"):
     pace = spend_pace(allr, calls, time.time(), src)   # the token guard's readings: the loop sources only (#1756)
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models, "operator": opt}
 
-POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers; a test injects its own, so freshness is never a sleep
+POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
+                              # moves the view's own timestamps and leaves the age right. A test injects its own clock.
 STATS_POLL_SECS = 30.0   # the page's own spend poll (`pollStats` reads /api/stats every 30 s), so one window serves every page
-_STATS_KEPT = {}   # (period, src) -> (at, answer): the loaded module's own, so one profile never serves another's
+_STATS_KEPT = {}   # (period, src) -> (at, answer). The key carries no profile because the module is one per profile:
+                   # hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
 _STATS_LOCK = threading.Lock()
 
 def stats_served(period, src="both", now=None):
@@ -7636,9 +7639,10 @@ async function pollStats(){try{pollSubs();
   // The Speed block and the open-branches list left the panel (owner, 2026-11-01): the panel leads with the throughput, the
   // subscription gauges, the spend chart and the token ring. The PR speed figures stay on the hub's own reading, not here.
 }catch(e){console.warn("stats panel:",e)}}
-pollStats();setInterval(()=>{if(!document.hidden)pollStats()},30000);   // a hidden tab asks nothing (#2440)
-poll();setInterval(()=>{if(!document.hidden)poll()},3000);
-loadPoll();setInterval(()=>{if(!document.hidden)loadPoll()},LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
+const pollIfVisible=fn=>()=>{if(!document.hidden)fn()};   // a hidden tab asks nothing (#2440); every hub read goes through it
+pollStats();setInterval(pollIfVisible(pollStats),30000);
+poll();setInterval(pollIfVisible(poll),3000);
+loadPoll();setInterval(pollIfVisible(loadPoll),LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick; the countdown ticks in place between readings, and its node is aria-live=off, so no tick is announced
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;try{localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})}catch(e){}};
 bo.dock="bottom";   // the board always docks at the bottom
 dropRemoved(bo);   // a saved state from a control the board no longer has is dropped (#899)
@@ -8180,8 +8184,8 @@ document.addEventListener("click",e=>{const b=e.target.closest("button[data-loop
  const d=$("#ldg");$("#ldgb").innerHTML=loopConfirmHtml(loopV);d.showModal()});
 $("#ldg").addEventListener("close",()=>{const d=$("#ldg");if(d.returnValue!=="ok")return;const m=(d.querySelector('input[name="lm"]:checked')||{}).value;
  if(m==="drain")loopPost({action:"drain"});else if(m==="stop-now")loopPost({action:"stop-now",confirm:true})});
-setInterval(()=>{if(!document.hidden)loopPoll()},5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
-setInterval(()=>{if(!document.hidden)accPoll()},5000);accPoll();
+setInterval(pollIfVisible(loopPoll),5000);loopPoll();livePoll();   // the live work is read on load, beside the loop's own state (#1697)
+setInterval(pollIfVisible(accPoll),5000);accPoll();
 /*PROFILER_JS*/
 profMount("desktop");
 setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
@@ -8281,20 +8285,21 @@ document.addEventListener("click",async e=>{const g=e.target.closest("#spdlg .sp
  }catch(x){dlg.innerHTML="<div class=perr>the hub did not answer</div><button class=spx type=button>Close</button>"}});
 document.addEventListener("click",e=>{if(e.target.closest("#spdlg .spx"))$("#spdlg").remove()});
 
-pollBoard();setInterval(()=>{if(!document.hidden)pollBoard()},5000);
+pollBoard();setInterval(pollIfVisible(pollBoard),5000);
 function squadChartTick(){if(!window.squadStreamLive&&FLOWK&&!$("#flowov").hidden)flowOpen(FLOWK)}   // with no live stream the open chart is re-read on the board tick
-setInterval(()=>{if(!document.hidden)squadChartTick()},5000);
+setInterval(pollIfVisible(squadChartTick),5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
-endedPoll();setInterval(()=>{if(!document.hidden)endedPoll()},30000);
+endedPoll();setInterval(pollIfVisible(endedPoll),30000);
 const themeHash=(location.hash.match(/^#set-(lop|lim|sub|mdl|slk|acc)$/)||[])[1];if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286)
 setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
 function hubStale(msg){if(!msg){if(hubNote)hubNote.remove();hubNote=null;return}if(!hubNote){hubNote=document.createElement("div");hubNote.className="perr";document.body.append(hubNote)}hubNote.textContent=msg}
 setInterval(async()=>{if(document.hidden)return;try{const r=await fetch("/api/version");if(!r.ok)throw new Error(String(r.status));const v=(await r.json()).v;hubStale("");if(v!==SERVED_BUILD)location.reload()}catch(e){hubStale("the hub did not answer: this page may be out of date")}},3000);
-// A page that comes back to the front reads everything once, instead of waiting out the slowest interval (#2440)
-addEventListener("visibilitychange",()=>{if(document.hidden)return;pollStats();poll();loadPoll();loopPoll();livePoll();accPoll();pollBoard();squadChartTick();endedPoll()});
+// A page back in front reads the two fastest polls at once and the rest on their own timers, so a return never bursts the
+// hub with one read per endpoint (#2440). A Loop view that is due reads with them.
+addEventListener("visibilitychange",()=>{if(document.hidden)return;poll();pollBoard();if(profDue(TAB,document.hidden,profV))profPoll()});
 addEventListener("pageshow",e=>{if(e.persisted)location.reload()});
 </script>"""
 PROFILER_JS = (pathlib.Path(__file__).resolve().parent / "hub-profiler.js").read_text()   # the Loop view, shared with the phone (#1754)
