@@ -94,8 +94,10 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #proftrip .ptlab{display:inline-flex;align-items:center;max-width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:var(--fs-caption)}
 #profb #proftt{table-layout:fixed;width:100%}
 #profb #proftt th,#profb #proftt td{white-space:normal;overflow-wrap:anywhere;padding-left:1px;padding-right:1px}
-/* Ten columns share 390 px (#2280): nine readings take 2.5em each and the stage keeps the rest of the width. */
-#profb #proftt th:not(:first-child),#profb #proftt td:not(:first-child){width:2.5em}
+/* The trip table shares the phone's width: the stage keeps a fixed 4.5em and the readings share the rest evenly, so a
+   reading column added to the table never squeezes the stage label out of its own cell (#2441). */
+#profb #proftt th:first-child,#profb #proftt td:first-child{width:4.5em}
+#profb #proftt th:not(:first-child),#profb #proftt td:not(:first-child){width:auto}
 
 #prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
