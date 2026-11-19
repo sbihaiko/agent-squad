@@ -230,6 +230,20 @@ def _handhold_module():
     if root not in sys.path: sys.path.insert(0, root)
     from squad import handhold
     return handhold
+def checkout_bare():   # bare checkout (#2306): git reads the profile's checkout as bare, so every git command in its work tree fails; one alert per episode
+    # It runs first in the pass, so the pass deadline never skips it. rev-parse answers for the work tree, so a linked worktree of a
+    # bare repository reads false; only a read of `false` ends the episode, and a call that fails or times out keeps the marker.
+    mk = st / "checkout-bare-alert"
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")}
+    rc, out = _run(["git", "-C", str(co), "rev-parse", "--is-bare-repository"], env=env)
+    out = out.strip()
+    if rc == 0 and out == "false":
+        if not dry: mk.unlink(missing_ok=True)
+        return
+    if rc != 0 or out != "true" or dry or mk.exists(): return
+    alert(f"CHECKOUT-BARE {co}: git reads the checkout as a bare repository (core.bare = true), so every git command in the work tree fails; run `git -C {co} config core.bare false` (NEEDS OWNER)")
+    mk.write_text(f"{now}\n")
+checkout_bare()
 try: _table = PR.snapshot()
 except PR.ReadError: _table = {}   # no read: no process is judged gone or alive on it
 procs = {pid: (p.ppid, p.command) for pid, p in _table.items()}
@@ -2157,15 +2171,6 @@ def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lan
     if dry or mk.exists(): return
     alert(f"WATCHD-ORPHAN: watchd.pid names no live supervisor (pid {sup or 'none'}), and {', '.join(lanes)} still runs (NEEDS OWNER)")
     mk.write_text(f"{now}\n")
-def checkout_bare():   # bare checkout (#2306): core.bare = true on the profile's checkout fails every git command in its work tree; one alert per episode
-    mk = st / "checkout-bare-alert"
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")}
-    if _run(["git", "-C", str(co), "config", "--bool", "--get", "core.bare"], env=env)[1].strip() != "true":
-        if not dry: mk.unlink(missing_ok=True)
-        return
-    if dry or mk.exists(): return
-    alert(f"CHECKOUT-BARE {co}: core.bare = true, so every git command in the work tree fails; run `git -C {co} config core.bare false` (NEEDS OWNER)")
-    mk.write_text(f"{now}\n")
 def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
     parts = rel.split("/")
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
@@ -2194,7 +2199,6 @@ frontier_idle()
 spec_stall()
 deadlock_audit()
 watchd_orphan()
-checkout_bare()
 live_mtime()
 if acts and not dry:
     kinds = {}

@@ -1,5 +1,5 @@
 #!/bin/bash
-# mirrors: caps.sh fast-gate.sh gate.sh child-gate.sh shell-suites.sh
+# mirrors: caps.sh fast-gate.sh gate.sh child-gate.sh shell-suites.sh daysuites.sh
 # Regression test for #2306: a git hook or a gate exports GIT_DIR, and a suite under it re-initializes that repository. Each
 # gate entry point clears the git location variables before it runs a suite, so the probe's bare repository lands at its own
 # path and the checkout keeps core.bare unset. A throwaway repository, a throwaway state dir and slot budget, a probe in
@@ -47,6 +47,22 @@ mkdir -p "$T/s"; cp "$d/shell-suites.sh" "$T/s/shell-suites.sh"; cp "$T/probe.sh
 cp "$d/caps.sh" "$T/s/caps.sh"
 (cd "$R" && GIT_DIR="$R/.git" bash "$T/s/shell-suites.sh") >/dev/null 2>&1
 check '' "shell-suites.sh under GIT_DIR"
+
+# daysuites.sh runs one suite per call under one slot of the throwaway budget.
+(cd "$R" && GIT_DIR="$R/.git" bash "$d/daysuites.sh" --suite "$T/probe.sh") >/dev/null 2>&1
+check '' "daysuites.sh --suite under GIT_DIR"
+
+# A gate entry whose caps.sh has no scrub refuses the run and says so, never runs the suite under the caller's GIT_DIR.
+mkdir -p "$T/n"; cp "$d/gate.sh" "$d/serial.sh" "$T/n/"; /usr/bin/grep -v '^sg_git_env_scrub()' "$d/caps.sh" > "$T/n/caps.sh"
+cp "$d/shell-suites.sh" "$T/n/shell-suites.sh"; cp "$T/probe.sh" "$T/n/test-probe.sh"
+o=$(cd "$R" && GIT_DIR="$R/.git" bash "$T/n/gate.sh" bash "$T/probe.sh" nogate 2>&1); rc=$?
+[ "$rc" = 2 ] && [ ! -e "$T/bare-nogate" ] && [ "$(bare)" = false ] && printf '%s' "$o" | /usr/bin/grep -q 'sg_git_env_scrub' \
+  && ok "gate.sh with no scrub refuses with a reason and runs nothing" || ko "gate.sh with no scrub: rc $rc, core.bare $(bare): $o"
+reset
+o=$(cd "$R" && GIT_DIR="$R/.git" bash "$T/n/shell-suites.sh" 2>&1); rc=$?
+[ "$rc" = 2 ] && [ ! -e "$T/bare-" ] && [ "$(bare)" = false ] && printf '%s' "$o" | /usr/bin/grep -q 'sg_git_env_scrub' \
+  && ok "shell-suites.sh with no scrub refuses with a reason and runs nothing" || ko "shell-suites.sh with no scrub: rc $rc, core.bare $(bare): $o"
+reset
 
 # The shape the issue names: `git init --bare <path>` under GIT_DIR makes its own repository, and the scrub keeps it there.
 (cd "$R" && GIT_DIR="$R/.git" bash "$d/gate.sh" bash "$T/pathprobe.sh" path) >/dev/null 2>&1

@@ -21,7 +21,7 @@ sg_battery_workers() {
 
 # sg_git_env_scrub (#2306): a git hook exports GIT_DIR, and a gate it starts hands it to every suite. A fixture that runs
 # `git init --bare` or `git config` in a folder of its own then writes GIT_DIR instead, and that set core.bare = true on the
-# checkout that ran the gate. Each gate entry (gate.sh, fast-gate.sh, child-gate.sh, shell-suites.sh) calls this before any
+# checkout that ran the gate. Each suite runner (gate.sh, fast-gate.sh, child-gate.sh, shell-suites.sh, daysuites.sh) calls this before any
 # suite runs. Git then finds the repository from the working directory, which is the checkout a hook names.
 # The work is one test of the three names the criteria list; GIT_COMMON_DIR and GIT_OBJECT_DIRECTORY redirect git just the
 # same way, so they go with them, and a gate entry with no hook variable does nothing.

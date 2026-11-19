@@ -4,10 +4,13 @@ A git hook or a gate exports GIT_DIR. A fixture that runs `git init --bare` in i
 writes GIT_DIR instead, and sets `core.bare = true` on the checkout that runs the tests.
 """
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from tests import shell_suites
 
@@ -62,10 +65,29 @@ def _caps_names():
 def _janitor_names():
     text = (SCRIPTS / "janitor.py").read_text()
     block = text[text.index("def checkout_bare():"):]
-    return set(re.findall(r'"(GIT_[A-Z_]+)"', block[:block.index("def live_noise(")]))
+    return set(re.findall(r'"(GIT_[A-Z_]+)"', block[:block.index("\ncheckout_bare()\n")]))
 
 
 def test_the_three_git_location_lists_agree():
     """One set of names on every side: the shell scrub, the janitor's own git call, and the pytest runner's clear."""
     assert _caps_names() == set(GIT_LOCATION)
     assert _janitor_names() == set(GIT_LOCATION)
+
+
+def test_the_hook_variables_are_absent_in_this_session():
+    """The probe the pytest run below selects: under any caller, a test reads none of the three hook variables."""
+    assert [name for name in shell_suites.GIT_HOOK_LOCATION if name in os.environ] == []
+
+
+@pytest.mark.heavy
+def test_a_pytest_run_under_git_dir_drops_it_before_any_test(tmp_path):
+    """A pytest process started the way a git hook starts it, with GIT_DIR and its siblings exported, runs its tests with
+    none of the three: conftest drops them at import, before any module or fixture starts git."""
+    live = str(tmp_path / "live")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    env.update({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "GIT_DIR": live, "GIT_WORK_TREE": live, "GIT_INDEX_FILE": f"{live}/index"})
+    probe = "tests/test_git_env_scrub.py::test_the_hook_variables_are_absent_in_this_session"
+    out = subprocess.run([sys.executable, "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", probe],
+                         cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-2000:]
+    assert "1 passed" in out.stdout, out.stdout[-2000:]
