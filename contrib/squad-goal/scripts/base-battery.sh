@@ -87,16 +87,28 @@ sg_base_battery() {
 }
 
 # sg_shell_suites <top> <merge-base>: the shell suite names (`test-<n>.sh`, without prefix or suffix) a tree changes against
-# <merge-base>: every .sh or .py script under contrib/squad-goal/scripts the tree changes, and every fixture suite whose
-# `# mirrors:` line names a changed file. One definition, so the fast gate and the promotion's tip gate read one selection.
+# <merge-base>: every .sh or .py script under contrib/squad-goal/scripts the tree changes, every fixture suite whose
+# `# mirrors:` line names a changed file, and every fixture suite whose own text copies or sources a changed script (#2373).
+# One definition, so the fast gate and the promotion's tip gate read one selection.
 sg_shell_suites() {
-  local top=$1 mb=$2 changed suites t f
+  local top=$1 mb=$2 changed suites t f n re
   changed=$(/usr/bin/git -C "$top" diff --name-only --diff-filter=d "$mb" HEAD 2>/dev/null) || { printf '\n'; return 0; }
   suites=$(printf '%s\n' "$changed" | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' \
     | /usr/bin/grep -v / | sed 's|^test-||')
   for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
     for f in $(sed -n 's/^# mirrors: //p' "$t" | head -n 1); do
       printf '%s\n' "$changed" | /usr/bin/grep -qxF "contrib/squad-goal/scripts/$f" \
+        && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }
+    done
+    # (#2373) A fixture suite that copies or sources a changed script names that script in its own text, so the selection
+    # reads the text and no missing `# mirrors:` line hides the suite. The copy forms in use name the script after a variable
+    # or command expansion that ends in `/` ("$d/<script>", $(dirname "$src")/<script>), or as a member of a brace list
+    # ({a.sh,b.sh}); a bare name in prose is no copy and selects nothing.
+    for f in $changed; do
+      case $f in contrib/squad-goal/scripts/*) ;; *) continue;; esac
+      n=${f##*/}; n=${n//./\\.}
+      re="\\\$\\([^)]*\\)[^[:space:]]*/$n([^A-Za-z0-9_.-]|\$)|\\\$[A-Za-z_][A-Za-z0-9_]*[^[:space:]]*/$n([^A-Za-z0-9_.-]|\$)|[{,]$n[,}]"
+      /usr/bin/grep -qE "$re" "$t" \
         && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }
     done
   done
