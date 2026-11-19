@@ -215,5 +215,59 @@ r=$(run)
 case "$r" in *"FRONTIER column Doing full"*) ko "a hold on a Doing card was counted twice: '$r'";; *) ok "a hold on a card already in Doing counts once";; esac
 unset GH_BOARD
 
+# 12) (#2438) A full Batching column holds dispatch: the cards that wait for their landing already fill the column, so the
+#     pass starts no run and names the count, the limit and the cards unit. One Todo card is startable and stays waiting.
+scene batchfull
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+{ printf '41\tTodo\n'; for n in 51 52 53; do printf '%s\tBatching\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 10\ncolumns:\n  Batching:\n    max_cards: 3\n' > "$d/co/docs/squad/defaults.yaml"
+# The launch stub the base fixture writes is not valid Python (`%%s` prints a bare `%s`), so a launch always refused and wrote
+# no LAUNCHLOG. The Batching cases observe a real start, so they install a stub that records one; every earlier case keeps the
+# base stub, and its behaviour, unchanged.
+cat > "$T/scripts/launch.py" <<'PY'
+import os
+open(os.environ["LAUNCHLOG"], "a").write("launch\n")
+PY
+r=$(run)
+case "$r" in *"FRONTIER column Batching full: 3 of 3 card(s) in Batching; the cards unit stopped the pass; nothing dispatched this pass"*) ok "a full Batching column refuses the pass, naming the count, the limit and the cards unit";; *) ko "no Batching-full line: '$r'";; esac
+[ "$(printf '%s' "$r" | $G -c 'FRONTIER column Batching full')" = 1 ] && ok "the Batching refusal is said once a pass" || ko "the Batching refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Batching full') times"
+[ ! -s "$MKLOG" ] && ok "no request is built while Batching is full" || ko "a request was built while Batching was full"
+[ ! -s "$LAUNCHLOG" ] && ok "no run starts while Batching is full" || ko "a run started while Batching was full"
+unset GH_BOARD
+
+# 13) (#2438) The same scene under a limit of 4 leaves the column under its limit: the startable Todo card dispatches as it
+#     always did. A fresh scene shows the start on its own, with no marker to clear by hand.
+scene batchunder
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+{ printf '41\tTodo\n'; for n in 51 52 53; do printf '%s\tBatching\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 10\ncolumns:\n  Batching:\n    max_cards: 4\n' > "$d/co/docs/squad/defaults.yaml"
+cat > "$T/scripts/launch.py" <<'PY'
+import os
+open(os.environ["LAUNCHLOG"], "a").write("launch\n")
+PY
+r=$(run)
+case "$r" in *"FRONTIER column Batching full"*) ko "the pass called Batching full under a limit of 4 with 3 cards";; *) ok "a Batching column under its limit never refuses the pass";; esac
+[ -s "$MKLOG" ] && ok "a request is built while Batching sits under its limit" || ko "no request was built under a Batching limit of 4: '$r'"
+[ -s "$LAUNCHLOG" ] && ok "a run starts while Batching sits under its limit" || ko "no run started under a Batching limit of 4: '$r'"
+unset GH_BOARD
+
+# 14) (#2438) No Batching limit: the column holds any number of cards, and the pass dispatches as it always did.
+scene batchnone
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+{ printf '41\tTodo\n'; for n in 51 52 53; do printf '%s\tBatching\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 10\n' > "$d/co/docs/squad/defaults.yaml"
+cat > "$T/scripts/launch.py" <<'PY'
+import os
+open(os.environ["LAUNCHLOG"], "a").write("launch\n")
+PY
+r=$(run)
+case "$r" in *"FRONTIER column Batching full"*) ko "the pass called Batching full with no limit set";; *) ok "Batching with no limit never refuses the pass";; esac
+[ -s "$MKLOG" ] && ok "a request is built with no Batching limit" || ko "no request was built with no Batching limit: '$r'"
+[ -s "$LAUNCHLOG" ] && ok "a run starts with no Batching limit" || ko "no run started with no Batching limit: '$r'"
+unset GH_BOARD
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
