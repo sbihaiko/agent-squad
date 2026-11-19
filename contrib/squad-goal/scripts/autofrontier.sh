@@ -194,7 +194,9 @@ busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 # notes and improvise (#57); a number the run never set is worse than no number.
 case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allows (this pass could not read that budget: a request over it is rejected whole, spend_outside_budget)";;
   *) spendarg="spend $spend (the dispatch node's budget: a request over it is rejected whole, spend_outside_budget)";; esac
-[ "$free" -gt 0 ] || { idle_noslot; exit 0; }
+# No free run slot stops the pass (#2430), and the line names the run slots: a card count is another unit, so a free slot is
+# never refused by cards, and a full set of slots is never hidden behind them.
+[ "$free" -gt 0 ] || { echo "FRONTIER the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass"; idle_noslot; exit 0; }
 # per: the children ONE run may take, its envelope; with no readable envelope, the free run slots. cap: the children the pass
 # may take, per for each free slot (only per when the envelope is unknown, as before), and never more than the room the child
 # ceilings leave (the tighter bound wins).
@@ -270,8 +272,8 @@ export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a card whose dependenc
 # count is the pass's own board read, so the limit costs no second read.
 doing_max=$(sg_column_limit Doing); cm_rc=$?
 [ "$cm_rc" -eq 0 ] || { echo "FRONTIER the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass"; exit 0; }
-case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2=="In Progress"{n++} END{print n+0}' "$F/board")
-  [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; nothing dispatched this pass"; exit 0; } ;; esac
+case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(sg_column_cards Doing "$F/board" "$F/issues.json")   # a hand hold counts in Doing (#2430)
+  [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass"; exit 0; } ;; esac
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
 git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
 # An issue whose landing is in the base and whose publish is pending is no work (#2416): the base carries a commit whose
