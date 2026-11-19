@@ -194,6 +194,27 @@ def test_a_spec_write_carries_the_value_to_open_children(hub, monkeypatch):
     assert set(by) == {9, 10} and by[9]["sub_issues"] == [10] and by[9]["state"] == "open"
 
 
+def test_a_spec_write_sets_the_real_child_priority(hub, monkeypatch):
+    mod, port = hub
+    mod.board_cache["items"] = [
+        {"n": 9, "i": "I9", "r": "x/y", "t": "spec", "s": "OPEN", "st": "Todo", "l": ["spec"], "ot": 1, "p": "low"},
+        {"n": 10, "r": "x/y", "t": "child", "s": "OPEN", "st": "Todo", "l": [], "ot": 1, "pa": 9},
+        {"n": 12, "r": "x/y", "t": "child bug", "s": "OPEN", "st": "Todo", "l": ["bug"], "ot": 1, "pa": 9},
+        {"n": 11, "r": "x/y", "t": "child closed", "s": "CLOSED", "st": "Done", "l": [], "ot": 1, "pa": 9},
+    ]
+    real = importlib.util.spec_from_file_location("priority_backfill_real", ROOT / "contrib/squad-goal/scripts/priority_backfill.py")
+    backfill = importlib.util.module_from_spec(real)
+    real.loader.exec_module(backfill)
+    monkeypatch.setattr(mod, "priority_backfill", backfill)
+    written = []
+    monkeypatch.setattr(mod, "board_seam", lambda: types.SimpleNamespace(set_priority=lambda n, v: written.append((n, v))))
+
+    ask(port, {"issue": 9, "priority": "normal"})
+    mod.wait_for_priorities(10)
+
+    assert sorted(written) == [(10, "normal"), (12, "high")]
+
+
 def test_a_pull_request_card_shows_no_priority_dropdown(hub):
     mod, _ = hub
     mod.board_cache["prs"] = [{"n": 77, "t": "a pr", "u": 1, "r": "x/y"}]
