@@ -62,6 +62,7 @@ def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     assert set(served_lists()["models"]) == set(reg.entries) | set(reg.aliases)
 
 
+@pytest.mark.heavy   # builds the page bundle: 3.3 s on a CI runner
 def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bundle():
     """#120: dashboard/core/ holds one file per concern; the build bundles each exactly once. The page and the node runner get one text."""
     files = sorted(p.name for p in CORE_DIR.glob("*.js"))
