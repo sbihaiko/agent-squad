@@ -14,6 +14,7 @@ NOT_DELIVERED = "not_planned"
 NO_TRANSITION = "no_transition"
 NO_START = "no_start"   # the card never entered the start column (#1248)
 NOT_READ = "not_read"
+NO_LEAD = "no_lead_time"   # closed with under one second on the board: a log axis cannot place it (#2424)
 OPEN = "open"           # an open card is no dot, and no exclusion either: the survival reading holds it censored (#1250)
 
 
@@ -33,6 +34,7 @@ EXCLUSION_WORDS = {
     NO_TRANSITION: "no transition into the chosen columns",
     NO_START: "never entered the start column",
     NOT_READ: "not yet read by the history pass",
+    NO_LEAD: "closed with no time on the board",
 }
 
 
@@ -62,6 +64,8 @@ def _exclusion(row):
         return OPEN
     if not row["o"]:
         return "no_opened"
+    if (row.get("hours") or 0) * 3600 < 1:   # a record of work done before the card existed (#2424)
+        return NO_LEAD
     return None
 
 
