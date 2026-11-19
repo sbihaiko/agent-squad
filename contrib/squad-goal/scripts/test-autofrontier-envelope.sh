@@ -44,10 +44,13 @@ cp "$(dirname "$src")/startability.sh" "$T/scripts/startability-real.sh"; cp "$(
 printf '#!/bin/bash\n. "$(dirname "$0")/startability-real.sh"\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_ledger_held() { return 1; }\nsg_ac_refused() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\nsg_board_rows() { if [ -n "${GH_BOARD:-}" ]; then cat "$GH_BOARD"; else jq -r ".[]|\\"\\(.number)\\tTodo\\"" "$GH_ISSUES"; fi; }\n' > "$T/scripts/startability.sh"   # every fixture card sits in Todo (#550) unless a case writes its own rows
 printf '#!/bin/bash\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
 cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt} "$T/scripts/"
-printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
+printf '%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
 cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,liveholds.py,siblings.py,cluster.py,loopbug.sh,basered.sh,columnlimit.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+# The issues an open work branch names (#361, workbranches.sh): the real read is `git ls-remote` against github.com, which no
+# fixture may reach, so the stand-in answers WORK_ISSUES (none unless a case sets it) (as in test-autofrontier-one-run.sh).
+printf '#!/bin/bash\nsg_work_issues() { echo "${WORK_ISSUES:-}"; }\n' > "$T/scripts/workbranches.sh"
 scene() { # <name>: fresh state, its own env.sh; no graph written here -- each case writes the one it needs
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
@@ -213,6 +216,37 @@ case "$r" in *"FRONTIER column Doing full: 6 of 6 card(s) in Doing; the cards un
 issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"ready-for-HAL9K"}]}]'
 r=$(run)
 case "$r" in *"FRONTIER column Doing full"*) ko "a hold on a Doing card was counted twice: '$r'";; *) ok "a hold on a card already in Doing counts once";; esac
+unset GH_BOARD
+
+# 12) (#2438) A full Batching column holds dispatch: the cards that wait for their landing already fill the column, so the
+#     pass starts no run and names the count, the limit and the cards unit. One Todo card is startable and stays waiting.
+scene batchfull
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+{ printf '41\tTodo\n'; for n in 51 52 53; do printf '%s\tBatching\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 10\ncolumns:\n  Batching:\n    max_cards: 3\n' > "$d/co/docs/squad/defaults.yaml"
+r=$(run)
+case "$r" in *"FRONTIER column Batching full: 3 of 3 card(s) in Batching; the cards unit stopped the pass; nothing dispatched this pass"*) ok "a full Batching column refuses the pass, naming the count, the limit and the cards unit";; *) ko "no Batching-full line: '$r'";; esac
+[ "$(printf '%s' "$r" | $G -c 'FRONTIER column Batching full')" = 1 ] && ok "the Batching refusal is said once a pass" || ko "the Batching refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Batching full') times"
+[ ! -s "$MKLOG" ] && ok "no request is built while Batching is full" || ko "a request was built while Batching was full"
+[ ! -s "$LAUNCHLOG" ] && ok "no run starts while Batching is full" || ko "a run started while Batching was full"
+
+# 13) (#2438) The same three Batching cards under a limit of 4 leave the column under its limit: the startable Todo card
+#     dispatches as it always did.
+printf 'caps:\n  runs: 10\ncolumns:\n  Batching:\n    max_cards: 4\n' > "$d/co/docs/squad/defaults.yaml"
+: > "$d/mk.log"; : > "$d/launch.log"
+r=$(run)
+case "$r" in *"FRONTIER column Batching full"*) ko "the pass called Batching full under a limit of 4 with 3 cards";; *) ok "a Batching column under its limit never refuses the pass";; esac
+[ -s "$MKLOG" ] && ok "a request is built while Batching sits under its limit" || ko "no request was built under a Batching limit of 4: '$r'"
+[ -s "$LAUNCHLOG" ] && ok "a run starts while Batching sits under its limit" || ko "no run started under a Batching limit of 4: '$r'"
+
+# 14) (#2438) No Batching limit: the column holds any number of cards, and the pass dispatches as it always did.
+printf 'caps:\n  runs: 10\n' > "$d/co/docs/squad/defaults.yaml"
+: > "$d/mk.log"; : > "$d/launch.log"; rm -f "$d/st"/auto/disp-*   # the pass before took issue 41: free its marker for a new start
+r=$(run)
+case "$r" in *"FRONTIER column Batching full"*) ko "the pass called Batching full with no limit set";; *) ok "Batching with no limit never refuses the pass";; esac
+[ -s "$MKLOG" ] && ok "a request is built with no Batching limit" || ko "no request was built with no Batching limit: '$r'"
+[ -s "$LAUNCHLOG" ] && ok "a run starts with no Batching limit" || ko "no run started with no Batching limit: '$r'"
 unset GH_BOARD
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
