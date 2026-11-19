@@ -1,10 +1,11 @@
 #!/bin/bash
 # usage: shell-suites.sh   Runs every test-*.sh next to this script and reports every failing suite, not just the first; exit 1 if any failed.
-# Hermetic by construction (#1410, #755): each suite runs with every inherited SG_* and SERIAL_* variable cleared (the gate exports its lock bounds) and HOME pointed at its own temp dir, so the live loop's state, fork and profile never reach an assertion.
+# Hermetic by construction (#1410, #755): each suite runs with every inherited SG_* and SERIAL_* variable cleared (the gate exports its lock bounds), no git location variable (#2306), and HOME pointed at its own temp dir, so the live loop's state, fork and profile never reach an assertion.
 # Offline by construction: the suites stub gh, claude and the board and use throwaway repos; nothing here touches the network, a model or the emulator.
 # No machine-wide `gate` lock (#94): the lock guards the full pytest gate only, taken around that half alone. Held
 # across these suites, one holder blocked every other gate on the machine for a quarter hour.
 here="$(cd "$(dirname "$0")" && pwd)"; failed=""; n=0
+. "$here/caps.sh" 2>/dev/null; sg_git_env_scrub 2>/dev/null   # (#2306) no suite writes a GIT_DIR its caller exported
 for s in "$here"/test-*.sh; do [ -f "$s" ] || continue; b=$(basename "$s"); n=$((n+1))
   echo "=== $b"
   hm=$(mktemp -d); if env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="$hm" bash "$s"; then echo "--- ok: $b"; else rc=$?; echo "--- FAILED: $b (exit $rc)"; failed="$failed $b"; fi; rm -rf "$hm"

@@ -2157,6 +2157,15 @@ def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lan
     if dry or mk.exists(): return
     alert(f"WATCHD-ORPHAN: watchd.pid names no live supervisor (pid {sup or 'none'}), and {', '.join(lanes)} still runs (NEEDS OWNER)")
     mk.write_text(f"{now}\n")
+def checkout_bare():   # bare checkout (#2306): core.bare = true on the profile's checkout fails every git command in its work tree; one alert per episode
+    mk = st / "checkout-bare-alert"
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")}
+    if _run(["git", "-C", str(co), "config", "--bool", "--get", "core.bare"], env=env)[1].strip() != "true":
+        if not dry: mk.unlink(missing_ok=True)
+        return
+    if dry or mk.exists(): return
+    alert(f"CHECKOUT-BARE {co}: core.bare = true, so every git command in the work tree fails; run `git -C {co} config core.bare false` (NEEDS OWNER)")
+    mk.write_text(f"{now}\n")
 def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
     parts = rel.split("/")
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
@@ -2185,6 +2194,7 @@ frontier_idle()
 spec_stall()
 deadlock_audit()
 watchd_orphan()
+checkout_bare()
 live_mtime()
 if acts and not dry:
     kinds = {}

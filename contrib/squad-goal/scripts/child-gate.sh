@@ -10,6 +10,7 @@
 # quarters of the user's process limit (SG_CHILD_GATE_MAXPROC overrides it).
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/caps.sh"
+sg_git_env_scrub   # (#2306) the suite never writes a GIT_DIR its caller exported
 [ $# -gt 0 ] || { echo "usage: child-gate.sh <suite> [args...]" >&2; exit 2; }
 suite=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); shift
 # One suite per call (#2025). A glob of suites gives the first suite the others as its arguments, and a suite that reads its

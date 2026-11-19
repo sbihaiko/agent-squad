@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rule B (#2306): the profile's checkout carries core.bare = true, so every git command in its work tree fails. The janitor
+# The bare-checkout rule (#2306): the profile's checkout carries core.bare = true, so every git command in its work tree fails. The janitor
 # raises CHECKOUT-BARE in alerts.log, once for the episode, and names the checkout. A checkout that is not bare raises nothing
 # and ends the episode, so the next bare state alerts again.
 # Stubbed gh and board; a temp state dir and a temp checkout. usage: bash test-janitor-checkout-bare.sh [janitor.py]

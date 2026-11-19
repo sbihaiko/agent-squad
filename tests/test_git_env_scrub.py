@@ -6,10 +6,9 @@ writes GIT_DIR instead, and sets `core.bare = true` on the checkout that runs th
 import os
 import subprocess
 
-from tests import shell_suites
-from tests import conftest
+from tests import conftest, shell_suites
 
-GIT_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
+GIT_LOCATION = shell_suites.GIT_LOCATION
 
 
 def _checkout(tmp_path):

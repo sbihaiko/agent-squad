@@ -1,5 +1,5 @@
 #!/bin/bash
-# mirrors: git-env-scrub.sh fast-gate.sh gate.sh child-gate.sh shell-suites.sh
+# mirrors: caps.sh fast-gate.sh gate.sh child-gate.sh shell-suites.sh
 # Regression test for #2306: a git hook or a gate exports GIT_DIR, and a suite under it runs `git init --bare <path>`. Git then
 # re-initializes GIT_DIR, not <path>, and sets core.bare = true on the checkout that runs the gate. Each gate entry point clears
 # the git location variables before it runs a suite, so the probe's bare repository lands at its own path and the checkout
@@ -43,7 +43,7 @@ check all "gate.sh under all five git location variables"
 
 # shell-suites.sh runs every test-*.sh beside it; a copy beside one probe suite runs that suite alone.
 mkdir -p "$T/s"; cp "$d/shell-suites.sh" "$T/s/shell-suites.sh"; cp "$T/probe.sh" "$T/s/test-probe.sh"
-[ ! -f "$d/git-env-scrub.sh" ] || cp "$d/git-env-scrub.sh" "$T/s/git-env-scrub.sh"
+cp "$d/caps.sh" "$T/s/caps.sh"
 (cd "$R" && GIT_DIR="$R/.git" bash "$T/s/shell-suites.sh") >/dev/null 2>&1
 check '' "shell-suites.sh under GIT_DIR"
 

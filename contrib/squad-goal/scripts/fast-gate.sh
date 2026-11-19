@@ -37,6 +37,7 @@ base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # over the same fast gate. Its pytest takes a bounded worker count, SG_GATE_WORKERS, never `auto`.
 . "$here/base-battery.sh"
 . "$here/caps.sh"   # sg_gate_python: the one interpreter lookup (#1086), never a second copy of it here
+sg_git_env_scrub   # (#2306) no suite or battery writes a GIT_DIR its caller exported
 py=$(sg_gate_python)
 # (#1872, #2085) A child's count is one, whatever the selector answers: its battery is a delta, and a change the delta cannot
 # place runs no pytest at all (the `narrow` battery below), so no child gate is ever a full battery that would need the whole
