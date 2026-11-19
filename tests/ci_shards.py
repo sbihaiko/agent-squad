@@ -10,7 +10,9 @@ file to one shard then merge both lines cleanly instead of conflicting on one.
 
 The partition is balanced by a declared weight, one per test function and ten per `heavy` mark, because a heavy call spends
 at least a second and often a subprocess. The file count balances nothing on its own, and a rebalance is an edit of the
-lists below, proved exact again by the same guard.
+lists below, proved exact again by the same guard. The order of each shard is stable: a reflow to one file per line shows
+as no movement, and a new file joins the lightest shard. The weights of shards 1 to 6 are 2571, 2961, 1927, 2569, 2145
+and 2631; `tests/test_ci_shards.py` joined shard 3, whose weight was the lightest before it.
 
 The balance is by time too, and the wave suites are what proves it: a file whose calls run past twenty seconds is spread
 one per shard, because a sibling job's check is the wall clock of the slowest shard. Shard 3 held every wave suite once and

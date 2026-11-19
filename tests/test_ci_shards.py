@@ -7,10 +7,11 @@ exactly one shard.
 """
 
 import ast
+from collections import Counter
 from pathlib import Path
 
 from tests import ci_shards
-from tests.gitrepo import make_repo
+from tests.gitrepo import make_repo, sh, sh_result
 
 ROOT = Path(__file__).resolve().parent.parent
 SHARDS_FILE = ROOT / "tests" / "ci_shards.py"
@@ -30,33 +31,32 @@ def _listed() -> list[str]:
     return [p for shard in ci_shards.SHARDS for p in shard]
 
 
-def _line_of_each_path() -> dict[str, list[int]]:
-    """The source line of every path inside the SHARDS literal, so two paths on one line are visible as one line."""
+def _paths_by_line() -> dict[int, list[str]]:
+    """The test-file strings of the SHARDS literal, keyed by their source line, so two strings on one line share a key."""
     tree = ast.parse(SHARDS_FILE.read_text())
     by_line: dict[int, list[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("tests/test_"):
             by_line.setdefault(node.lineno, []).append(node.value)
-    return {p: [line] for line, paths in by_line.items() for p in paths}
+    return by_line
 
 
 def test_every_test_file_is_in_exactly_one_shard_list():
     """Every `tests/test_*.py` file of the tree is in exactly one shard: a missing one never runs in the complete tier,
-    and a doubled one runs twice."""
+    a doubled one runs twice, and a stale one names a file the tree no longer has."""
     on_disk = {p.name for p in (ROOT / "tests").glob("test_*.py")}
     listed = [Path(p).name for p in _listed()]
     missing = sorted(on_disk - set(listed))
-    twice = sorted({p for p in listed if listed.count(p) > 1})
+    twice = sorted(name for name, count in Counter(listed).items() if count > 1)
+    stale = sorted(set(listed) - on_disk)
     assert missing == [], f"a test file is in no shard, so the complete tier never runs it: {missing}"
     assert twice == [], f"a test file is in more than one shard, so the complete tier runs it twice: {twice}"
+    assert stale == [], f"a shard names a test file the tree no longer has: {stale}"
 
 
 def test_each_shard_list_puts_one_test_file_on_a_line():
     """One test file per source line: two branches that add a file to one shard then touch different lines, not one."""
-    by_line: dict[int, list[str]] = {}
-    for path, lines in _line_of_each_path().items():
-        by_line.setdefault(lines[0], []).append(path)
-    shared = {line: paths for line, paths in by_line.items() if len(paths) > 1}
+    shared = {line: paths for line, paths in _paths_by_line().items() if len(paths) > 1}
     assert shared == {}, f"a shard line holds more than one test file, so two additions to it conflict: {shared}"
 
 
@@ -79,7 +79,6 @@ def _merge_two_additions(tmp_path, with_union: bool) -> tuple[int, str]:
     (repo / "tests" / "ci_shards.py").write_text(BASE_SHARD)
 
     def g(*args: str) -> None:
-        from tests.gitrepo import sh
         sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", *args)
 
     def add(path: str) -> None:
@@ -97,8 +96,7 @@ def _merge_two_additions(tmp_path, with_union: bool) -> tuple[int, str]:
     add("tests/test_c.py")
     g("commit", "-q", "-am", "two")
     g("checkout", "-q", "one")
-    import subprocess
-    r = subprocess.run(["git", "merge", "--no-edit", "two"], cwd=repo, capture_output=True, text=True)
+    r = sh_result(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-edit", "two")
     return r.returncode, (repo / "tests" / "ci_shards.py").read_text()
 
 
