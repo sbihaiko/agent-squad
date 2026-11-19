@@ -787,6 +787,14 @@ out=$(SG_CALL_DEADLINE_SECONDS=2 SG_GATE_BOUND_SECONDS=2 SG_FAST_CMD="bash $T/ha
 out=$(GATE_STUB_73=1 BASE_FAIL=1 sgfg); rc=$?
 [ $rc = 1 ] && case "$out" in *"test_a"*) ok "1760 a measured red after a slot wait still fails the run (exit 1)";; *) ko "1760 real red: '$out'";; esac || ko "1760 real red: rc $rc '$(last "$out")'"
 
+# (#2330) A tip check's gate that waited out its slot wait answers 75 with the budget's line. The fast gate passes that code
+# through unchanged: a 4 reads as an unproven check, and the batch landing then lands each run alone instead of waiting.
+printf '#!/bin/bash\necho "caps: gate-1 waited 2s for caps.gates, held by child-gate-7" >&2\nexit 75\n' > "$sg/gate.sh"
+out=$(cd "$R" && env -u SG_SERIAL_HELD -u SG_GATE_WORKERS SG_GATE_CALLER=tip SG_FAST_BASE=dev SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD=false bash "$sg/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 75 ] && ok "2330 a tip check's waited-out gate answers 75, never 4" || ko "2330 tip wait: rc $rc '$(last "$out")'"
+case "$out" in *"waited 2s for caps.gates"*) ok "2330 the waited-out line reaches the caller";; *) ko "2330 no waited-out line: '$out'";; esac
+case "$out" in *inconclusive*) ko "2330 the waited-out tip check reads as inconclusive: '$out'";; *) ok "2330 the waited-out tip check is not read as inconclusive";; esac
+
 # (#1927) A suite the fast gate runs never inherits GATE_REUSE_FILE: gate.sh --inner exports that file for the gate's own
 # verdict, and a fixture gate inside a suite that kept it would write the outer gate's reuse from its own memo hit, and its
 # row would vanish. The fast gate found this on its own suite, whose memo row went missing under the gate.

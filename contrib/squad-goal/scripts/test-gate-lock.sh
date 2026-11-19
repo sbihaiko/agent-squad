@@ -168,4 +168,21 @@ wait "$tipj"; wait "$kidj"
 [ "$(tr '\n' ' ' < "$T/order")" = "tip child " ] && ok "the tip check takes the freed slot before a waiting child gate" \
   || ko "order: '$(tr '\n' ' ' < "$T/order")': $(tr '\n' ' ' < "$T/p.err")"
 capsctl | /usr/bin/grep -q '"next"' && ko "the tip marker outlived the take: $(capsctl)" || ok "the tip marker goes with the take"
+
+# (#2330) A tip check needs its whole count, and a child gate holds one of three slots. When the slot wait runs out, the gate
+# answers the waited-out code (75) with the budget's own line, never the try-mode skip (73). A landing reads a skip as a check
+# that measured nothing and names no wait, so it lands each run alone.
+rm -rf "$T/caps"; mkdir -p "$T/three/docs/squad"; printf 'caps:\n  gates: 3\n' > "$T/three/docs/squad/defaults.yaml"
+capsctl take gates "child-gate-$live" --count 1 --target "$T/three" --pid "$live" >/dev/null
+t0=$(date +%s)
+out=$( (cd "$T/three" && SG_GATE_WORKERS=3 SG_GATE_CALLER=tip SG_GATE_SLOT_WAIT_SECONDS=2 bash "$T/s/gate.sh" sh -c 'echo took') 2>"$T/err5"); rc=$?
+el=$(( $(date +%s) - t0 ))
+[ $rc = 75 ] && ok "2330 a tip check whose slot wait runs out answers 75" || ko "2330 short take wait: rc $rc out='$out' err=$(tr '\n' ' ' < "$T/err5")"
+[ $el -le 10 ] && ok "2330 the tip check's slot wait ends at its own bound" || ko "2330 the short take waited ${el}s, want at most 10"
+/usr/bin/grep -qE '^caps: gate-[0-9]+ waited [0-9.]+s for caps\.gates' "$T/err5" && ok "2330 the gate writes the waited-out line the landing reads" \
+  || ko "2330 waited-out line: $(tr '\n' ' ' < "$T/err5")"
+/usr/bin/grep -q 'skipped, not queued' "$T/err5" && ko "2330 a tip check that waited reports a try-mode skip" || ok "2330 a tip check that waited reports no skip"
+[ "$(occ gates)" = 1 ] && ok "2330 the tip check that gave up holds no slot" || ko "2330 slots after the short take: $(occ gates) held, want the one child slot"
+capsctl | /usr/bin/grep -q '"next"' && ko "2330 the tip marker outlived the expired wait: $(capsctl)" || ok "2330 the expired wait leaves no tip marker"
+capsctl release gates "child-gate-$live" >/dev/null 2>&1
 cd "$T"; rm -rf "$T"; exit $fail
