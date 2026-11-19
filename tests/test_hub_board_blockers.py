@@ -181,7 +181,7 @@ def test_a_board_change_recomputes_the_collapse_without_a_reload(hub):
     page = hub.PAGE
     poll = page[page.index("async function pollBoard()"): page.index("finally{lim.busy=0}}")]
     assert 'if($("#bbody").dataset.h!==html)' in poll and "location.reload" not in poll
-    assert re.search(r"setInterval\(pollBoard,", page), "a card moving or a run ending must repaint the strip on its own"
+    assert re.search(r"setInterval\(pollIfVisible\(pollBoard\),", page), "a card moving or a run ending must repaint the strip on its own"
 
 
 # ---- one colour per board column (#1793) -----------------------------------------------------------

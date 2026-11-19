@@ -197,6 +197,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_janitor_stranded_card.py",
         "tests/test_handhold.py",
         "tests/test_hub_live_cache.py",
+        "tests/test_hub_poll_cost.py",
         "tests/test_hub_live_work.py",
         "tests/test_janitor_hand_hold.py",
         "tests/test_janitor_takeover.py",
