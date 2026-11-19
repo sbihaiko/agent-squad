@@ -16,7 +16,7 @@ like any other bug.
 ## Decision
 
 1. **A loop defect has its own chain.** The `loop_defect` chain in `contrib/squad-goal/scripts/models.json` starts with
-   `claude-fable-5-2`, then `gpt-6-astra`. Its remaining entries are the review chain, in its own order. DeepSeek stays
+   `claude-fable-5-2`, then `gpt-6-astra`. It may then name a strong option, and it ends with the review chain, in its own order. DeepSeek stays
    reachable and is never first. A model outside its window or switched off is skipped by the existing rules, so the
    fallback still runs.
 2. **The label selects the chain.** A review reads the issue's labels once. An issue that carries `loop-bug`, or any label

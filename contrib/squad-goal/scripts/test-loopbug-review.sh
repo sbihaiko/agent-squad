@@ -32,10 +32,11 @@ if { [ "${loop_ids[0]:-}" = claude-fable-5-2 ] && [ "${loop_ids[1]:-}" = gpt-6-a
   ok "1a loop_defect head is Fable and Astra, in some order"
 else ko "1a loop_defect head is not Fable then Astra: ${loop_ids[*]:-none}"; fi
 [ "$routes" = cli,cli ] && ok "1b the first two entries are on the cli route" || ko "1b the first two routes are not cli,cli: ${routes:-none}"
-tail_ids=("${loop_ids[@]:2}")
+# ADR-0171: after Fable and Astra the chain may name a strong option (Gemini 4 Carbon, 3943e976d), then ends with the review chain.
+tail_ids=("${loop_ids[@]:$(( ${#loop_ids[@]} - ${#review_ids[@]} > 2 ? ${#loop_ids[@]} - ${#review_ids[@]} : 2 ))}")
 if [ "${#review_ids[@]}" -gt 0 ] && [ "$(printf '%s\n' "${tail_ids[@]}")" = "$(printf '%s\n' "${review_ids[@]}")" ]; then
-  ok "1c the rest of loop_defect is the review chain, in its order"
-else ko "1c loop_defect tail is not the review chain: ${tail_ids[*]:-none} vs ${review_ids[*]:-none}"; fi
+  ok "1c loop_defect ends with the review chain, in its order"
+else ko "1c loop_defect does not end with the review chain: ${tail_ids[*]:-none} vs ${review_ids[*]:-none}"; fi
 [ "${#loop_ids[@]}" -gt 0 ] && [ "${review_ids[0]:-}" = deepseek-flash ] && [ "${loop_ids[0]:-}" != deepseek-flash ] && [ "${loop_ids[1]:-}" != deepseek-flash ] \
   && ok "1d deepseek-flash is reachable in loop_defect and never first" || ko "1d deepseek-flash is first or missing in loop_defect"
 
@@ -118,7 +119,7 @@ PLAN_CHANGES=1 PLAN_PROMPT="$T/plan.prompt" LB_LABELS='{"name":"loop-bug"}' bash
 /usr/bin/grep -q 'lb_is_loop_bug' "$d/autobug.sh" && ok "4b autobug.sh selects loop-bug by label" || ko "4b autobug.sh does not select loop-bug by label"
 # The frontier pass dispatches a loop-bug too (a loop defect without the bug label): it asks the same plan verdict, so the gate
 # is never bypassed by one missing label.
-/usr/bin/grep -q 'lb_plan_verdict' "$d/autofrontier.sh" && ok "4c autofrontier.sh asks for the plan verdict of a loop-bug" || ko "4c autofrontier.sh dispatches a loop-bug with no plan review"
+/usr/bin/grep -q 'a loop defect is never dispatched' "$d/autofrontier.sh" && ok "4c autofrontier.sh never dispatches a loop-bug (ADR-0171)" || ko "4c autofrontier.sh may dispatch a loop-bug"
 /usr/bin/grep -q 'lb_is_loop_bug' "$d/autofrontier.sh" && ok "4d autofrontier.sh selects loop-bug by label" || ko "4d autofrontier.sh does not select loop-bug by label"
 
 # --- 5) the record -------------------------------------------------------------------------------------------------------
