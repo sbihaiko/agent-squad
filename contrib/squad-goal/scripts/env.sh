@@ -72,7 +72,7 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 : "${SG_BASE:=dev}" "${SG_STG_BRANCH:=stg}" "${SG_MAIN_BRANCH:=main}" "${SG_PROMOTE:=on}"
 # The worker count the base battery's pytest runs with (base-battery.sh): six fits a 16 GB machine, where `auto` takes every
 # core and a gate beside a second one saturates it. Read here, after the profile, so a profile that sets it wins.
-: "${SG_GATE_WORKERS:=6}"
+: "${SG_GATE_WORKERS:=3}"
 # A proved board-door move is drawn at once, marked pending, until a list read agrees (#650). It may stand no longer than
 # SG_PENDING_WINDOW_SECONDS (120 s): an older entry is dropped, the card returns to the read's column, and the loop's log
 # names the disagreement once (#651). hub.py validates the window and warns on stderr when the value is not a
