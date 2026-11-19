@@ -54,7 +54,7 @@ def _tree(tmp_path, suites):
     """A scripts folder holding the real shell-suite runner and serial.sh, plus the given fake suites."""
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "serial.sh", "caps.sh"):   # caps.sh holds the git scrub shell-suites.sh requires (#2306)
         shutil.copy(SCRIPTS / name, d / name)
     for name, body in suites.items():
         (d / name).write_text("#!/bin/bash\n" + body + "\n")
