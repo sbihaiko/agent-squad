@@ -7423,7 +7423,7 @@ const LIM_FIELD={limg:"guard",limc:"cap",limf:"factor"},LIM_NAME={guard:"token g
 const LIM_ID={guard:"#limg",cap:"#limc",factor:"#limf"};
 let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr={},limPauseMs=700,limSent={},limChain=Promise.resolve();   // limSent holds the value each field last posted, so a timer save and a later blur send one request; limTmr holds one timer per field, so a pause in one field never drops another field's edit; limChain runs one write at a time, so the next body carries the value the last write saved (#2433)
 const limKName=k=>LIM_NAME[k]||k;
-const limMark=k=>limOK===k?"<span class=lok aria-label=saved>✓</span>":"";
+const limMark=k=>limOK===k?`<span class=lok id="limmk-${k}" aria-label=saved>✓</span>`:"";   // the mark carries an id, so a save patches it instead of redrawing its input (#2433)
 const limBadCls=k=>limBad===k?" class=bad":"";
 const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
 function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
@@ -7435,7 +7435,7 @@ const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   //
  const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
 async function limSend(body){const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
 function limWrite(which,send=limSend){const run=()=>limWriteNow(which,send),p=limChain.then(run,run);limChain=p.catch(()=>{});return p}   // the writes queue, so a second field's body carries the value the first one saved (#2433)
-async function limWriteNow(which,send=limSend){if(which.startsWith("kan:"))return kanWrite(which.slice(4),send);   // the Kanban row carries the same send, so a test's stub reaches it (#2433)
+async function limWriteNow(which,send=limSend){if(RO)return {skip:true};if(which.startsWith("kan:"))return kanWrite(which.slice(4),send);   // a read-only view writes nothing, and the Kanban row carries the same send, so a test's stub reaches it (#2433)
  if(which.startsWith("slot:"))return slotPost(true);   // a slot cap saves on its own, like the limit fields (#2435)
  const cur=limS||{},vals={guard:String(cur.guard??""),cap:String(cur.cap??""),factor:String(cur.factor??"")},typed=limTyped(which);
  if(typed!==null)vals[which]=which==="cap"&&limCapParse(typed)!=null?String(limCapParse(typed)):typed;   // a cap leaves as the whole integer its units denote; text the parse refuses stays raw, for the hub to refuse (#2433)
@@ -7445,7 +7445,7 @@ async function limWriteNow(which,send=limSend){if(which.startsWith("kan:"))retur
  if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0;delete limSent[which]}   // a refused value is never remembered as posted
  else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now();limSent[which]=vals[which]}
  limRender();if(typeof setBar==="function")setBar();return d}
-function limQueue(which,send){clearTimeout(limTmr[which]);limTmr[which]=setTimeout(()=>{delete limTmr[which];limWrite(which,send).catch(()=>{})},limPauseMs)}   // each field holds its own timer (#2433)
+function limQueue(which,send){if(RO)return;clearTimeout(limTmr[which]);limTmr[which]=setTimeout(()=>{delete limTmr[which];limWrite(which,send).catch(()=>{})},limPauseMs)}   // each field holds its own timer (#2433)
 
 /* Settings > Spend & limits · Kanban (#2432): the card limit of each active board column, inside one theme with the token
    guard. The page renders and asks; the hub validates, shows the diff and writes the project settings file on confirm
@@ -7456,6 +7456,9 @@ let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBa
 const kanClone=o=>JSON.parse(JSON.stringify(o));
 const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
+const kanLims=c=>Object.fromEntries(c.map(x=>[x.name,x.max_cards==null?"none":String(x.max_cards)]));
+const kanBody=name=>{const out=kanLims((kanS&&kanS.columns)||[]),c=kanDraft&&kanDraft.find(x=>x.name===name);   // the payload is the last saved state, with only the column being saved overlaid, so another drafted column never rides along (#2433)
+ if(c)out[name]=c.max_cards==null?"none":String(c.max_cards);return out};
 const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify(kanS.columns);
 const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
 const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
@@ -7463,12 +7466,12 @@ const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`
 const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
  :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · ${span((Date.now()-kanAt)/1000)} ago`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
 function kanWrite(name,send){const run=()=>kanWriteNow(name,send),p=kanChain.then(run,run);kanChain=p.catch(()=>{});return p}
-async function kanWriteNow(name,send){if(!kanDraft)return;
- const val=String(kanLimits()[name]??"");
+async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)return;
+ const body=kanBody(name),val=String(body[name]??"");
  if(kanSent[name]===val){if(kanBad===name){kanBad="";kanBadMsg="";limRender()}return {skip:true}}   // the last write posted this column's value already (#2433)
- let d;try{d=send?await send({columns:kanLimits(),confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:kanLimits(),confirm:true})})).json()}catch(x){d={err:"save failed"}}
+ let d;try{d=send?await send({columns:body,confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:body,confirm:true})})).json()}catch(x){d={err:"save failed"}}
  if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";delete kanSent[name]}
- else{kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanBad="";kanBadMsg="";kanOK=name;kanVal=String(kanLimits()[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
+ else{kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanBad="";kanBadMsg="";kanOK=name;kanVal=String(body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
@@ -7520,9 +7523,14 @@ const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s
 const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
+const limBusy=()=>{const a=typeof document!=="undefined"?document.activeElement:null;if(a&&a.id&&Object.keys(LIM_ID).some(k=>LIM_ID[k]==="#"+a.id))return true;return Object.keys(limTmr).length>0};   // a focused field, or any pending timer, holds text the page has not saved (#2433)
+function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k);if(m){m.hidden=limOK!==k;continue}   // the mark moves in place, so a focused input keeps what it holds (#2433)
+  const el=$(LIM_ID[k]),row=el&&el.parentNode;if(row&&row.insertAdjacentHTML&&limOK===k)row.insertAdjacentHTML("beforeend",limMark(k))}
+ const st=$("#limstat");if(st)st.innerHTML=limLine()}   // and so does the saved line (#2433)
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ if(limBusy()){limPatch();if(typeof setBar==="function")setBar();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
@@ -7533,7 +7541,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
   setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
   setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
   setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
- ],limLine());   // one line: the saved value and its age, or what the hub refused (#2433)
+ ],`<span id=limstat>${limLine()}</span>`);   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
