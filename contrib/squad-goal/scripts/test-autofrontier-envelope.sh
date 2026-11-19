@@ -161,7 +161,7 @@ four
 { for n in 41 42 43 44 45 46; do printf '%s\tDoing\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
 printf 'caps:\n  runs: 10\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$d/co/docs/squad/defaults.yaml"
 r=$(run)
-case "$r" in *"FRONTIER column Doing full: 6 of 2 card(s) in Doing; nothing dispatched this pass"*) ok "a full Doing column refuses the pass, naming the count and the limit";; *) ko "no column-full line: '$r'";; esac
+case "$r" in *"FRONTIER column Doing full: 6 of 2 card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass"*) ok "a full Doing column refuses the pass, naming the count, the limit and the cards unit";; *) ko "no column-full line: '$r'";; esac
 [ "$(printf '%s' "$r" | $G -c 'FRONTIER column Doing full')" = 1 ] && ok "the refusal is said once a pass" || ko "the refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Doing full') times"
 [ ! -s "$MKLOG" ] && ok "no request is built while Doing is full" || ko "a request was built while Doing was full"
 # 7) The same cards under a limit above the count: the column is not full, and the pass dispatches as it always did.
@@ -184,6 +184,36 @@ printf '#!/bin/bash\nsg_column_limit() { return 2; }\n' > "$T/scripts/columnlimi
 r=$(run)
 case "$r" in *"FRONTIER the Doing column limit is unreadable"*) ok "an unreadable limit stops the pass";; *) ko "no unreadable-limit line: '$r'";; esac
 [ ! -s "$MKLOG" ] && ok "nothing is dispatched with an unread limit" || ko "a request was built with an unread limit"
+
+# 10) The run slots are their own unit (#2430): Doing sits far under its card limit, and the one run slot is held, so the
+#     pass stops and its line names the run slots, never the cards.
+scene noslots
+cp "$(dirname "$src")/columnlimit.sh" "$T/scripts/columnlimit.sh"   # case 9 stubbed the seam in the shared scripts dir
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+four
+mkdir -p "$d/co/runs/run-live"; printf '{"event":"run_start"}\n' > "$d/co/runs/run-live/record.jsonl"; printf 'run-live\n' > "$d/st/active-runs.txt"
+printf 'caps:\n  runs: 1\ncolumns:\n  Doing:\n    max_cards: 9\n' > "$d/co/docs/squad/defaults.yaml"
+r=$(run)
+case "$r" in *"FRONTIER the run slots are full: 0 of 1 run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass"*) ok "no free run slot stops the pass, and the line names the run slots unit";; *) ko "no run-slot refusal line: '$r'";; esac
+case "$r" in *"FRONTIER column Doing full"*) ko "an idle Doing column was called full while the slot was held";; *) ok "the cards unit never refuses while Doing sits under its limit";; esac
+[ ! -s "$MKLOG" ] && ok "no request is built with no free run slot" || ko "a request was built with no free run slot"
+
+# 11) A hand hold counts in Doing (#2430): the owner's hand work takes its share of the column. Five Doing cards under a
+#     limit of 6, and one held Todo card makes 6 of 6: the pass refuses. A hold on a card already in Doing adds nothing.
+scene holds
+graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
+{ for n in 41 42 43 44 45; do printf '%s\tDoing\n' "$n"; done; } > "$d/board.txt"; export GH_BOARD=$d/board.txt
+printf 'caps:\n  runs: 10\ncolumns:\n  Doing:\n    max_cards: 6\n' > "$d/co/docs/squad/defaults.yaml"
+issues '[{"number":46,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"ready-for-human"}]}]'
+r=$(run)
+case "$r" in *"FRONTIER column Doing full: 6 of 6 card(s) in Doing; the cards unit stopped the pass"*) ok "a hand hold counts in Doing";; *) ko "a hand hold did not count in Doing: '$r'";; esac
+[ "$(printf '%s' "$r" | $G -c 'FRONTIER column Doing full')" = 1 ] && ok "the hold refusal is said once a pass" || ko "the hold refusal printed $(printf '%s' "$r" | $G -c 'FRONTIER column Doing full') times"
+[ ! -s "$MKLOG" ] && ok "no request is built while a held card makes Doing full" || ko "a request was built while a held card made Doing full"
+# The held card is already a Doing card: it counts once, so 5 of 6 is under the limit and never refuses on cards.
+issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"frontier"},{"name":"ready-for-HAL9K"}]}]'
+r=$(run)
+case "$r" in *"FRONTIER column Doing full"*) ko "a hold on a Doing card was counted twice: '$r'";; *) ok "a hold on a card already in Doing counts once";; esac
+unset GH_BOARD
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
