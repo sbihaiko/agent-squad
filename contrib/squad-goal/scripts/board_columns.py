@@ -25,35 +25,41 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "f9d402b6f93a59dc1ca8165af5ec17161ddbb3670b55c23820dfcf241daf1281"
+PIN_SHA256 = "a34f7ad1d7fb3471c51b117dd4dee395974181c2e31d9a2abf4abd63b986f732"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
-# the work reached, so it maps to None and the reconciler writes the marker instead. `Landing` is the shipped column of
-# version 2, so it is no old option: a card the legacy board spelled that way already holds the column it names.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Landing"}
+# the work reached, so it maps to None and the reconciler writes the marker instead. `Landing` is the version 2
+# spelling of `Batching` (ALIAS_COLUMNS), so it is no old option: a card the legacy board spelled that way already holds
+# the column it names.
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Batching"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
-CODE_REVIEW = "Review"   # the child's code is done, and its review or a fix round holds it (#603)
-LANDING = "Landing"   # the shipped column of a card whose child entered the run's wave (ADR-0145)
+REVIEWING = "Reviewing"   # the child's code is done, and its review or a fix round holds it (#603)
+BATCHING = "Batching"   # the shipped column of a card whose child entered the run's wave (ADR-0145)
+TESTING = "Testing"   # the shipped column of a card whose wave gate waits for a slot or runs (ADR-0170)
 
 
-def landing_column(shipped):
-    """The column a card whose child entered the wave holds: `Landing`, in either vocabulary. No board carries the old
-    option, so no writer sends the old name (#2155, #2190); `shipped` stays in the signature for the callers that pick."""
-    return LANDING
+def batching_column(shipped):
+    """The column a card whose child entered the wave holds: `Batching`, in either vocabulary. A writer sends the new
+    name, and the board's own option answers it through the alias map (#2315); `shipped` stays in the signature for the
+    callers that pick."""
+    return BATCHING
 
 # The one alias map (ADR-0141, ADR-0170): each column's canonical name, the old names it may still read, and the option id
-# a writer sends. No board carries an old option now, so no column holds one (#2190). A definition version 1 named
-# `Review` and `Landing` as `Code Review` and `Code Complete`: its own read path renames them (V1_NAMES), and card history
-# keeps the strings it recorded. A writer sends the option id of the column it writes. The retired options of the
-# pre-definition board (`In Progress`, `Done`, `Open Specs`, `Blocked`, `Merging`) are a different set: SHIPPED_NAME
-# names them, and a reader of the legacy vocabulary never reads one as a shipped column.
+# a writer sends. Definition version 3 renames three columns (#2315): `Review` is `Reviewing`, `Landing` is `Batching` and
+# `Gating` is `Testing`. A board the live migration has not renamed yet carries the version 2 options, and card history
+# keeps the strings it recorded, so a reader resolves either spelling to the new column. A writer names the new column
+# and sends the option id the board carries for it (option_id, option_name), so a write never refuses before or after
+# the rename in place. A definition version 1 named two columns `Code Review` and `Code Complete`: its own read path
+# renames them (V1_NAMES). The retired options of the pre-definition board (`In Progress`, `Done`, `Open Specs`,
+# `Blocked`, `Merging`) are a different set: SHIPPED_NAME names them, and a reader of the legacy vocabulary never reads
+# one as a shipped column.
 ALIAS_COLUMNS = (
     {"name": "Backlog", "old": ()},
     {"name": "Todo", "old": ()},
     {"name": "Doing", "old": ()},
-    {"name": "Review", "old": ()},
-    {"name": "Landing", "old": ()},
-    {"name": "Gating", "old": ()},
+    {"name": "Reviewing", "old": ("Review",)},
+    {"name": "Batching", "old": ("Landing",)},
+    {"name": "Testing", "old": ("Gating",)},
     {"name": "Closed", "old": ()},
     {"name": "Abandoned", "old": ()},
 )
@@ -104,14 +110,14 @@ def _pinned_text():
     return text
 
 
-CURRENT_DEFINITION_VERSION = 2   # the version this reader writes; it reads the versions below and refuses any other
-KNOWN_DEFINITION_VERSIONS = (1, 2)   # a board that still carries a version 1 definition reads under the canonical names
+CURRENT_DEFINITION_VERSION = 3   # the version this reader writes; it reads the versions below and refuses any other
+KNOWN_DEFINITION_VERSIONS = (1, 2, 3)   # an older definition reads under the canonical names
 V1_NAMES = {"Code Review": "Review", "Code Complete": "Landing"}   # what version 1 called two columns (#2190)
 
 
 def recorded_column(name):
-    """The column a recorded string names. Card history and the board's migration keep the version 1 names they
-    recorded, so a reader of a past record renames them (V1_NAMES); a live read never needs this (#2190)."""
+    """The column a recorded string names. Card history and the board's migration keep the names they recorded, so a
+    reader of a past record renames a version 1 name (V1_NAMES), then a version 2 name (the alias map, #2315)."""
     return canonical(V1_NAMES.get(name, name)) if name else name
 
 
@@ -161,8 +167,8 @@ def _definition_from(text):
 
     A file with no `definition_version` reads as the current version, with today's behaviour: only a version this reader
     does not know is unknown. Every known version answers the canonical names: a version 1 definition reads its
-    `Code Review` and `Code Complete` as `Review` and `Landing` (V1_NAMES), and only that version does. An expression
-    outside the grammar is unknown too, named with its column."""
+    `Code Review` and `Code Complete` through V1_NAMES, and only that version does; a version 2 name reads through the
+    alias map (#2315). An expression outside the grammar is unknown too, named with its column."""
     data = json.loads(text)
     version = data.get("definition_version", CURRENT_DEFINITION_VERSION)
     if version not in KNOWN_DEFINITION_VERSIONS:
@@ -195,27 +201,27 @@ def shipped_columns(text=None):
             for s in shipped_definition(text)]
 
 
-def landing_columns(text=None):
-    """The canonical columns from `Landing` on, in the definition's order: the blocker's work is approved and on its way.
+def batching_columns(text=None):
+    """The canonical columns from `Batching` on, in the definition's order: the blocker's work is approved and on its way.
     One source for both readers (#2260): stack.sh asks this module for the set, and the janitor asks it per card."""
     names = [s["name"] for s in shipped_definition(text)]
-    if LANDING not in names: return (LANDING,)
-    return tuple(n for n in names[names.index(LANDING):] if n != "Abandoned")
+    if BATCHING not in names: return (BATCHING,)
+    return tuple(n for n in names[names.index(BATCHING):] if n != "Abandoned")
 
 
-def from_landing(name):
-    """True when one card column names `Landing` or a column after it, in either vocabulary: `Code Complete` is the version
-    1 spelling of Landing, and `Done` the legacy spelling of Closed (ADR-0141, #2260)."""
+def from_batching(name):
+    """True when one card column names `Batching` or a column after it, in any spelling: `Landing` and `Code Complete`
+    are older spellings of Batching, and `Done` the legacy spelling of Closed (ADR-0141, #2260, #2315)."""
     if not name: return False
     n = recorded_column(name)
-    return (SHIPPED_NAME.get(n) or n) in landing_columns()
+    return canonical(SHIPPED_NAME.get(n) or n) in batching_columns()
 
 
 if __name__ == "__main__":   # stack.sh asks this module: the one set, and the answer for one card column (#2260)
     import sys as _sys
-    if len(_sys.argv) > 2 and _sys.argv[1] == "--from-landing":
-        raise SystemExit(0 if from_landing(_sys.argv[2]) else 1)
-    print(" ".join(landing_columns()))
+    if len(_sys.argv) > 2 and _sys.argv[1] == "--from-batching":
+        raise SystemExit(0 if from_batching(_sys.argv[2]) else 1)
+    print(" ".join(batching_columns()))
 
 
 _NOTED = set()   # the unknowns already named on stderr: a reader that meets the same one every card says it once
@@ -262,8 +268,8 @@ def column_for(facts, written=None, text=None):
     booleans, each missing one false: abandoned, closed, in_dev (the wave is in dev), gating (a gate is live for the wave,
     or its last attempt ended without a pass and none was made since: #1257), wave_branch, run_live, spec, child_live
     (a spec whose sub-issue is in flight), owner (an owner label), gated (another item gates it), and review_wait (the
-    child's code is done and its review or a fix round holds it: Review, #603). The push, the approval and the dev CI
-    are reported facts, never a column: a card in the wave holds Landing until its wave is in dev, and then it is
+    child's code is done and its review or a fix round holds it: Reviewing, #603). The push, the approval and the dev CI
+    are reported facts, never a column: a card in the wave holds Batching until its wave is in dev, and then it is
     Closed. `written` is the card's last written column, kept when the definition is unknown (#1901)."""
     return resolve_column(facts, written, text)[:2]
 
@@ -279,7 +285,7 @@ HEX = {"GRAY": "var(--s8)", "BLUE": "var(--s1)", "YELLOW": "var(--wait)", "ORANG
        "PURPLE": "var(--none)", "PINK": "var(--s7)", "GREEN": "var(--ok)", "RED": "var(--err)"}
 LANES = ({"key": "pr_open", "name": "Open PRs", "color": "var(--acc)", "tracking": True},)
 ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo",
-        "gating": "Gating"}
+        "gating": TESTING}
 DOING = "Doing"   # the column a claimed card wears: the lane bar counts it as the amber share (owner, 2026-11-02)
 SPEC_LABEL = "spec"
 
@@ -291,7 +297,7 @@ def claimed_names():
 
 
 # A column whose GitHub colour another column already wears takes its own hex here: the hub draws one colour per column.
-COLUMN_HEX = {CODE_REVIEW: "var(--s5)"}
+COLUMN_HEX = {REVIEWING: "var(--s5)"}
 
 
 def view_columns():
@@ -356,12 +362,12 @@ def terminal_column(state, reason=None):
     return ROLE["abandoned"] if not_planned(reason) else ROLE["issue_closed"]
 
 
-STATUS_FACT = {"Backlog": "spec", "Todo": "child_live", "Doing": "run_live", "Review": "review_wait",
-               "Landing": "wave_branch", "Gating": "gating", "Closed": "closed", "Abandoned": "abandoned"}
+STATUS_FACT = {"Backlog": "spec", "Todo": "child_live", "Doing": "run_live", REVIEWING: "review_wait",
+               BATCHING: "wave_branch", TESTING: "gating", "Closed": "closed", "Abandoned": "abandoned"}
 
 
 def view_column(status, closed, labels=(), reason=None, text=None):
-    """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
+    """(column, freeze label or None) the hub draws one card in, from its Status (any spelling), state and labels.
 
     The written Status names the facts, and the column is the one the definition's expression answers (#1901): the hub read
     and the GitHub writer reach a column by the same rule, so no reader invents one. Blocked is no column: it is the owner

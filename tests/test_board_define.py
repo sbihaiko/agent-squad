@@ -300,9 +300,9 @@ def test_rename_carries_every_option_id_and_every_card_keeps_its_column(monkeypa
     sent = body["variables"]["input"]["singleSelectOptions"]
     assert body["variables"]["input"]["fieldId"] == "F_S" and "updateProjectV2Field" in body["query"]
     assert [(o["id"], o["name"]) for o in sent] == [
-        ("bl", "Backlog"), ("cr", "Review"), ("cc", "Landing"), ("cl", "Closed")]
+        ("bl", "Backlog"), ("cr", "Reviewing"), ("cc", "Batching"), ("cl", "Closed")]
     names = [board.names[c["oid"]] for c in board.cards]
-    assert names == ["Review", "Landing", "Closed"]
+    assert names == ["Reviewing", "Batching", "Closed"]
     assert "Code Review" not in names and "Code Complete" not in names
     out = capsys.readouterr().out
     assert "done: 3 card(s), 3 before the call; every card kept its column" in out, out
@@ -316,7 +316,7 @@ def test_a_second_rename_call_writes_nothing(monkeypatch, tmp_path, capsys):
     assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
     assert len(board.writes) == 1, board.writes
     assert "no old name" in capsys.readouterr().out
-    assert board.names == {"bl": "Backlog", "cr": "Review", "cc": "Landing", "cl": "Closed"}
+    assert board.names == {"bl": "Backlog", "cr": "Reviewing", "cc": "Batching", "cl": "Closed"}
 
 
 def test_the_rename_counts_the_cards_before_the_field_call(monkeypatch, tmp_path):
@@ -331,3 +331,48 @@ def test_rename_fails_the_proof_when_the_call_drops_a_card(monkeypatch, tmp_path
     assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 1
     err = capsys.readouterr().err
     assert "COUNT 2 before the call, 1 after it" in err, err
+
+
+def _v2_board(cards, extra=()):
+    """#2315: the live board carries the version 2 names Review, Landing and Gating, each on its own option id."""
+    board = RenameBoard(cards)
+    board.fields[0]["options"] = [{"id": i, "name": {"raw": n}, "color": "GRAY", "description": {"raw": ""}}
+                                  for i, n in (("bl", "Backlog"), ("rv", "Review"), ("la", "Landing"), ("ga", "Gating"),
+                                               *extra, ("cl", "Closed"))]
+    board.names = {o["id"]: o["name"]["raw"] for o in board.fields[0]["options"]}
+    return board
+
+
+def test_the_version_2_rename_keeps_every_option_id_and_every_card(monkeypatch, tmp_path, capsys):
+    board = _v2_board([("1", "a/x", 5, "rv"), ("2", "a/x", 6, "la"), ("3", "b/y", 7, "ga"), ("4", "b/y", 8, "cl")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == 0
+
+    (body,) = board.writes
+    sent = body["variables"]["input"]["singleSelectOptions"]
+    assert [(o["id"], o["name"]) for o in sent] == [
+        ("bl", "Backlog"), ("rv", "Reviewing"), ("la", "Batching"), ("ga", "Testing"), ("cl", "Closed")]
+    assert [board.names[c["oid"]] for c in board.cards] == ["Reviewing", "Batching", "Testing", "Closed"]
+    out = capsys.readouterr().out
+    assert "RENAME Review -> Reviewing" in out and "RENAME Landing -> Batching" in out and "RENAME Gating -> Testing" in out
+    assert "done: 4 card(s), 4 before the call; every card kept its column" in out, out
+
+
+def test_the_rename_dry_run_names_each_rename_and_writes_nothing(monkeypatch, tmp_path, capsys):
+    board = _v2_board([("1", "a/x", 5, "rv")])
+    assert run(board, monkeypatch, tmp_path, "--rename", "--dry-run") == 0
+    assert board.writes == [] and board.log == ["fields"], board.log
+    out = capsys.readouterr().out
+    assert "RENAME Gating -> Testing" in out and "dry run: 5 option(s) in one field call, nothing written" in out, out
+
+
+def test_dry_run_and_apply_exclude_each_other(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        run(_v2_board([]), monkeypatch, tmp_path, "--rename", "--dry-run", "--apply")
+
+
+def test_a_rename_that_gives_two_options_one_name_is_refused(monkeypatch, tmp_path, capsys):
+    """A stale Testing option beside Gating: one field call would leave the name twice, so nothing is written."""
+    board = _v2_board([("1", "a/x", 5, "ga")], extra=(("te", "Testing"),))
+    assert run(board, monkeypatch, tmp_path, "--rename", "--apply") == board_define.REFUSED
+    assert board.writes == []
+    assert "refused: the rename gives two options the name Testing" in capsys.readouterr().err

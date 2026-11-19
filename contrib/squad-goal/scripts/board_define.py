@@ -13,9 +13,10 @@ With no --apply the run is a dry run: one read, no write. --check exits 1 when t
 on the board and waits for the owner's grant (ADR-0024). The definition is read from its path, never kept here (ADR-0141).
 --migrate moves each card on an old Status option to the column board_migrate plans (ADR-0143), and proves every move by
 one items read after the writes. --contract drops each Status option the definition does not name, and refuses while a
-card still carries one: no card ever loses the value it carries. --rename renames the two old options in place (#2154):
+card still carries one: no card ever loses the value it carries. --rename renames each old option in place (#2154, #2315):
 one field call carries every option with its own id, so each card keeps its column, and one items read proves every card
-moved with its option and the count is the same. All three are dry runs without --apply."""
+moved with its option and the count is the same; a rename that would give two options one name is refused. All three are
+dry runs without --apply, and --dry-run says so outright: it refuses --apply."""
 import argparse, json, sys
 from issue_state import HOLDER_FIELDS, board_state
 import board_migrate
@@ -174,6 +175,10 @@ def rename(binding, status, apply):
     moves. One items read before the call counts the cards, and one after it proves every card kept its column and the
     count is the same (#2154). A board already renamed takes no write and no read."""
     sent, changed = board_migrate.renamed(status["options"])
+    clash = board_migrate.clashes(status["options"])
+    if clash:   # an option already carries a new name: one call would leave the field with that name twice (#2315)
+        print("refused: the rename gives two options the name " + ", ".join(clash) + "; remove the stale option first", file=sys.stderr)
+        return REFUSED
     for o in status["options"]:
         if o["name"] in board_migrate.RENAMES:
             print(f"RENAME {o['name']} -> {board_migrate.RENAMES[o['name']]}")
@@ -206,12 +211,14 @@ def main(argv):
     p.add_argument("--definition", required=True, help="the board definition's board.json")
     p.add_argument("--check", action="store_true", help="exit 1 when the board drifts from the definition")
     p.add_argument("--apply", action="store_true", help="write the expand plan to the live board (needs the owner's grant)")
+    p.add_argument("--dry-run", action="store_true", help="read and print the plan, write nothing; the default without --apply")
     step = p.add_mutually_exclusive_group()
     step.add_argument("--migrate", action="store_true", help="move each card off an old Status option (ADR-0143)")
     step.add_argument("--contract", action="store_true", help="drop the Status options the definition does not name; refused while a card carries one")
     step.add_argument("--rename", action="store_true", help="rename the Status options in place, keeping every option id (#2154)")
     p.add_argument("owner"); p.add_argument("project")
     a = p.parse_args(argv)
+    if a.dry_run and a.apply: p.error("--dry-run and --apply exclude each other")
     definition = json.load(open(a.definition))
     try:
         binding = board_state(owner=a.owner, project=a.project, kind=None).binding

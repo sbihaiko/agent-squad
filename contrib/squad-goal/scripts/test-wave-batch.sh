@@ -161,23 +161,23 @@ r=$(landq run-y); rc=$?
 case "$r" in *"WAVE WAIT batch run-y,run-z"*) ok "l: one wait line names the batch";; *) ko "l: no wait line: '$r'";; esac
 rm -f "$T/st/auto"/basecheck-* "$T/st/auto"/wland-*
 
-# m (#2295, ADR-0170): the batch gate moves the card of every wave in the batch to Gating before it starts, and the landing
-# moves each card from Gating to Closed. The tip stub writes GATE into the board log, so the log shows the order.
+# m (#2295, ADR-0170): the batch gate moves the card of every wave in the batch to Testing before it starts, and the landing
+# moves each card from Testing to Closed. The tip stub writes GATE into the board log, so the log shows the order.
 printf '#!/bin/bash\necho GATE >> "%s/board.log"\nexit "$(cat "%s/m-rc")"\n' "$T" "$T" > "$T/m-tip.sh"; echo 0 > "$T/m-rc"
 mgate() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="bash '$T/m-tip.sh'" SG_WAVE_CHILD_GATES=true bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
 mkrun run-ma 121; mkrun run-mb 122; queue run-mb; reset; : > "$T/board.log"
 r=$(mgate run-ma); rc=$?
 [ $rc = 0 ] && [ "$(devpushes)" = 1 ] && ok "m: the batch lands by one push" || ko "m: exit $rc: '$r'"
-[ "$(sed -n 1,2p "$T/board.log" | sort)" = "$(printf 'o 3 Gating 121\no 3 Gating 122')" ] && [ "$(sed -n 3p "$T/board.log")" = GATE ] \
-  && ok "m: each card of the batch moves to Gating before the gate starts" || ko "m: board log '$(cat "$T/board.log")': '$r'"
-[ "$(sed -n '4,$p' "$T/board.log" | sort)" = "$(printf 'o 3 Closed 121\no 3 Closed 122')" ] && ok "m: the landing moves each card from Gating to Closed" || ko "m: board log '$(cat "$T/board.log")': '$r'"
+[ "$(sed -n 1,2p "$T/board.log" | sort)" = "$(printf 'o 3 Testing 121\no 3 Testing 122')" ] && [ "$(sed -n 3p "$T/board.log")" = GATE ] \
+  && ok "m: each card of the batch moves to Testing before the gate starts" || ko "m: board log '$(cat "$T/board.log")': '$r'"
+[ "$(sed -n '4,$p' "$T/board.log" | sort)" = "$(printf 'o 3 Closed 121\no 3 Closed 122')" ] && ok "m: the landing moves each card from Testing to Closed" || ko "m: board log '$(cat "$T/board.log")': '$r'"
 rm -f "$T/st/auto"/wland-*
 
-# n (#2295): a red batch gate, and a red gate for each run alone, write no move after Gating.
+# n (#2295): a red batch gate, and a red gate for each run alone, write no move after Testing.
 mkrun run-mc 131; mkrun run-md 132; queue run-md; reset; : > "$T/board.log"; echo 1 > "$T/m-rc"
 r=$(mgate run-mc); rc=$?
 [ "$(devpushes)" = 0 ] && ok "n: no wave lands on a red gate" || ko "n: pushes: '$(cat "$T/pushes.log")': '$r'"
-[ "$(/usr/bin/grep -v '^GATE$' "$T/board.log" | sort -u)" = "$(printf 'o 3 Gating 131\no 3 Gating 132')" ] && ok "n: a red attempt writes no move after Gating" || ko "n: board log '$(cat "$T/board.log")': '$r'"
+[ "$(/usr/bin/grep -v '^GATE$' "$T/board.log" | sort -u)" = "$(printf 'o 3 Testing 131\no 3 Testing 132')" ] && ok "n: a red attempt writes no move after Testing" || ko "n: board log '$(cat "$T/board.log")': '$r'"
 rm -f "$T/st/auto"/wland-*
 
 # o (#2330): a tip check that took no slot measured nothing, so the batch waits for a later pass. It never reads that skip as a

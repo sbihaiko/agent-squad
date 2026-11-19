@@ -1,7 +1,7 @@
 #!/bin/bash
 # The card column comes from the work branch's state, never from a pull request. With SG_BOARD_VOCAB=shipped the janitor reads
 # the remote work branches (`fix|gui/<n>-...`) and how each stands against the landing branch (dev): a branch ahead of dev puts
-# its card in Landing; a branch in dev puts a card that reached Landing in Closed (Done). An open pull request or a
+# its card in Batching; a branch in dev puts a card that reached Batching in Closed (Done). An open pull request or a
 # merged one, whatever its state, moves no card. Stubbed gh and board.sh; a temp state dir, the live board is never touched.
 # usage: bash test-janitor-branch-state.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -41,7 +41,7 @@ case "$a" in
   *compare/dev...sha2208*) echo behind;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
-    for n in 2201:Doing 2202:"Landing" 2203:Doing 2206:Doing 2207:"Landing" 2208:"Landing"; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "${n%%:*}" "${n#*:}"; done;;
+    for n in 2201:Doing 2202:"Batching" 2203:Doing 2206:Doing 2207:"Batching" 2208:"Batching"; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "${n%%:*}" "${n#*:}"; done;;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""; for n in 2201 2202 2203 2206 2207 2208; do
@@ -55,11 +55,11 @@ sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:
 o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
-has '^STATUS o 4 Landing 2201$' && ok "a work branch ahead of dev puts the card in Landing" || ko "#2201 not Landing: $(bc) $o"
-has '^STATUS o 4 Closed 2202$' && ok "a branch in dev puts a Landing card in Closed (Done)" || ko "#2202 not Closed: $(bc)"
-has '^STATUS o 4 Closed 2208$' && ok "a branch in dev puts a Landing card in Closed (ADR-0145 rule 12)" || ko "#2208 not Closed: $(bc)"
-! has '\(Closed\|Landing\) 2203$' && ok "a branch in dev does not close a card still in Doing (a fresh branch is in dev too)" || ko "#2203 moved: $(bc)"
-! has '\(Closed\|Landing\) 2206$' && ok "an open pull request moves no card to Landing" || ko "#2206 moved over a PR: $(bc)"
+has '^STATUS o 4 Batching 2201$' && ok "a work branch ahead of dev puts the card in Batching" || ko "#2201 not Batching: $(bc) $o"
+has '^STATUS o 4 Closed 2202$' && ok "a branch in dev puts a Batching card in Closed (Done)" || ko "#2202 not Closed: $(bc)"
+has '^STATUS o 4 Closed 2208$' && ok "a branch in dev puts a Batching card in Closed (ADR-0145 rule 12)" || ko "#2208 not Closed: $(bc)"
+! has '\(Closed\|Batching\) 2203$' && ok "a branch in dev does not close a card still in Doing (a fresh branch is in dev too)" || ko "#2203 moved: $(bc)"
+! has '\(Closed\|Batching\) 2206$' && ok "an open pull request moves no card to Batching" || ko "#2206 moved over a PR: $(bc)"
 ! has '\(Closed\) 2207$' && ok "a merged pull request moves no card to Closed" || ko "#2207 moved over a PR: $(bc)"
 /usr/bin/grep -q 'repos/x/y/branches' "$T/gh.calls" && ok "the work branches are read" || ko "no branch read: $(cat "$T/gh.calls")"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

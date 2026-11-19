@@ -11,7 +11,7 @@ from squad import board_limits as B
 from squad import defaults as D
 from squad import project_settings as P
 
-TABLE = {"Todo": None, "Doing": 6, "Review": 4, "Landing": None, "Gating": None}
+TABLE = {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
 
 
 def _project(tmp_path, text):

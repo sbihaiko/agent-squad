@@ -24,7 +24,7 @@ case "$a" in
     /usr/bin/grep -v "^$n	" "TMPDIR/cards.tsv" > "TMPDIR/cards.new"; printf '%s\t%s\n' "$n" "$name" >> "TMPDIR/cards.new"; mv "TMPDIR/cards.new" "TMPDIR/cards.tsv"
     echo '{"id":"ITEM"}';;
   *users/o*) echo '{"type":"Organization"}';;
-  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"Backlog","name":{"raw":"Backlog"}},{"id":"Todo","name":{"raw":"Todo"}},{"id":"Doing","name":{"raw":"Doing"}},{"id":"Review","name":{"raw":"Review"}},{"id":"Landing","name":{"raw":"Landing"}},{"id":"Closed","name":{"raw":"Closed"}},{"id":"Abandoned","name":{"raw":"Abandoned"}}]}]';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"Backlog","name":{"raw":"Backlog"}},{"id":"Todo","name":{"raw":"Todo"}},{"id":"Doing","name":{"raw":"Doing"}},{"id":"Reviewing","name":{"raw":"Reviewing"}},{"id":"Batching","name":{"raw":"Batching"}},{"id":"Closed","name":{"raw":"Closed"}},{"id":"Abandoned","name":{"raw":"Abandoned"}}]}]';;
   *'fields[]=F_STATUS'*) while IFS=$'\t' read -r n s; do printf '%s\t%s\thttps://api.github.com/repos/%s\n' "$n" "$s" "$(cat "TMPDIR/urlrepo")"; done < "TMPDIR/cards.tsv";;
   *items?per_page=100*) u=$(cat "TMPDIR/urlrepo"); while IFS=$'\t' read -r n s; do printf '[%s,"ITEM%s","https://api.github.com/repos/%s"]\n' "$n" "$n" "$u"; done < "TMPDIR/cards.tsv";;
   *) echo '{"message":"not found"}' >&2; exit 1;;
@@ -45,7 +45,7 @@ seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-a run o 4 
 [ "$(comments 2004)" = 1 ] && ok "a no-landing reset posts one comment on its issue" || ko "no-landing comments: $(comments 2004): $(cat "$T/gh.calls")"
 [ "$(labeled 2004 'board-reset:no-delivery')" = 1 ] && ok "a no-landing reset labels its issue board-reset:no-delivery" || ko "no-landing label: $(cat "$T/gh.calls")"
 [ "$(created 'board-reset:no-delivery')" = 1 ] && ok "a reset label absent from the repository is created" || ko "label create: $(cat "$T/gh.calls")"
-python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["body"]; sys.exit(0 if all(s in b for s in ("Landing","Todo","run-a")) else 1)' "$T/comment.in" 2>/dev/null \
+python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["body"]; sys.exit(0 if all(s in b for s in ("Batching","Todo","run-a")) else 1)' "$T/comment.in" 2>/dev/null \
   && ok "the comment names the column left, the column reached and the event id" || ko "comment body: $(cat "$T/comment.in" 2>/dev/null)"
 
 seed; o=$(SG_MOVE_BY=loop SG_MOVE_REASON=launch-refused SG_MOVE_EVENT=run-b run o 4 Todo 2002 2>&1); rc=$?
@@ -77,7 +77,7 @@ SG_MOVE_BY=loop SG_MOVE_REASON=reopened SG_MOVE_EVENT=reopen-f run o 4 Doing 200
   && ok "a forward move with a reset reason drops the reset label it answers and adds none" || ko "forward reset: dropped $(dropped 2004 'board-reset%3Ano-delivery'), reopened $(labeled 2004 'board-reset:reopened'), comments $(comments 2004): $(cat "$T/gh.calls")"
 
 seed; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-h run o 4 Todo 2004 >/dev/null 2>&1
-awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Landing"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
+awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Batching"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
 git -C "$T/co" -c user.name=t -c user.email=t@t commit -q --allow-empty -m next
 SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-h run o 4 Todo 2004 >/dev/null 2>&1
 [ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 1 ] \
@@ -89,7 +89,7 @@ SG_MOVE_BY=owner run o 4 Backlog 2004 >/dev/null 2>&1
   && ok "a backward move keeps the reset label, since it does not answer the reset" || ko "backward move: column $(col 2004), dropped $(dropped 2004 'board-reset%3Ano-delivery'): $(cat "$T/gh.calls")"
 
 seed; touch "$T/fail-label"; SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
-awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Landing"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
+awk -F'\t' -v OFS='\t' '$1 == 2004 {$2 = "Batching"} 1' "$T/cards.tsv" > "$T/cards.new" && mv "$T/cards.new" "$T/cards.tsv"
 SG_MOVE_BY=loop SG_MOVE_REASON=no-landing SG_MOVE_EVENT=run-e run o 4 Todo 2004 >/dev/null 2>&1
 [ "$(comments 2004)" = 1 ] && [ "$(labeled 2004 'board-reset:no-delivery')" = 1 ] \
   && ok "a label that fails once is applied on the next move without a second comment" || ko "partial failure: comments $(comments 2004), labels $(labeled 2004 'board-reset:no-delivery'): $(cat "$T/gh.calls")"

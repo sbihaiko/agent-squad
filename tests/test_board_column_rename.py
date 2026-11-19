@@ -82,7 +82,7 @@ def test_the_history_reads_an_old_event_as_the_new_column():
               {"t": "2026-11-01T01:00:00Z", "type": "status", "status": "Landing"},
               {"t": "2026-11-01T02:00:00Z", "type": "status", "status": "Gating"},
               {"t": "2026-11-01T03:00:00Z", "type": "status", "status": "Testing"}]
-    columns = [r["column"] for r in history.intervals(events)]
+    columns = [r["column"] for r in history.intervals(events) if r["column"]]   # the add alone draws no column
     assert columns == ["Reviewing", "Batching", "Testing"], columns
 
 

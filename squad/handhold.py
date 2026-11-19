@@ -27,7 +27,7 @@ Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at 
 
 usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold renew <n>... [--by manual|hal9k] [--minutes N]
-       python3 -m squad.handhold release <n>... --to Todo|Landing|Closed [--by manual|hal9k]
+       python3 -m squad.handhold release <n>... --to Todo|Batching|Closed [--by manual|hal9k]
        python3 -m squad.handhold holds [--live] [--closed n...]
 
 The bound defaults to `SG_HAND_HOLD_MINUTES` (240). The label writes name the repository `SG_REPO` names (owner/name).
@@ -50,7 +50,8 @@ from squad import run_liveness as RL
 
 CARRIERS = ("manual", "hal9k")
 LABELS = {"manual": "ready-for-human", "hal9k": "ready-for-HAL9K"}   # the holder label each carrier writes on the issue
-COLUMNS = ("Todo", "Landing", "Closed")   # the columns a release may name, in the shipped vocabulary: work is done or it goes back to Todo (#2190)
+COLUMNS = ("Todo", "Batching", "Closed")   # the columns a release may name, in the shipped vocabulary: work is done or it goes back to Todo (#2190)
+OLD_COLUMNS = {"Landing": "Batching"}   # a release that names the column's version 2 spelling records the new name (#2315)
 DEFAULT_MINUTES = 240
 ENV_MINUTES = "SG_HAND_HOLD_MINUTES"
 ENV_REPO = "SG_REPO"
@@ -296,7 +297,8 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, to=None, label
         raise ValueError(f"--by names one of {', '.join(CARRIERS)}, not {by!r}")
     if verb == "release":
         if to is None:
-            raise ValueError('release needs --to Todo|Landing|Closed: a card is never left in a ghost state')
+            raise ValueError('release needs --to Todo|Batching|Closed: a card is never left in a ghost state')
+        to = OLD_COLUMNS.get(to, to)
         if to not in COLUMNS:
             raise ValueError(f"--to names one of {', '.join(COLUMNS)}, not {to!r}")
     nums = _numbers(issues)
@@ -470,7 +472,7 @@ def main(argv=None, **kw):
         s.add_argument("issues", nargs="+", metavar="n")
         s.add_argument("--by", choices=CARRIERS, default="manual")
         if verb == "release":
-            s.add_argument("--to", choices=COLUMNS, required=True)
+            s.add_argument("--to", choices=COLUMNS + tuple(OLD_COLUMNS), required=True)
         else:
             s.add_argument("--minutes", type=int)
     h = sub.add_parser("holds")

@@ -25,11 +25,11 @@ def _column(**given):
 
 
 def test_a_child_in_the_wave_branch_is_code_complete():
-    assert _column() == "Landing"
+    assert _column() == "Batching"
 
 
 def test_an_approved_wave_still_ahead_of_dev_is_code_complete():
-    assert _column(approved=True) == "Landing"
+    assert _column(approved=True) == "Batching"
 
 
 def test_a_wave_in_dev_with_a_running_ci_is_closed_not_held_open():
@@ -50,7 +50,7 @@ def test_a_child_that_did_not_enter_the_wave_has_no_wave_fact():
 
 
 def test_a_waiting_review_marks_code_review():
-    assert _column(entered=False, review_waits=True) == "Review"
+    assert _column(entered=False, review_waits=True) == "Reviewing"
 
 
 def test_review_state_reads_the_verdict_for_the_tip_only():
@@ -66,12 +66,12 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_ticket_in_flight_reads_todo():
-    for child in ("Todo", "In Progress", "Doing", "Code Complete", "Review", "Landing", "Gating"):
+    for child in ("Todo", "In Progress", "Doing", "Code Complete", "Reviewing", "Batching", "Testing"):
         assert columns.column_for(_spec(child))[0] == "Todo"
 
 
 def test_a_spec_whose_child_is_no_longer_a_column_reads_backlog():
-    for child in ("Pushing", "Testing"):
+    for child in ("Pushing",):   # Testing is a column again (#2315); Pushing stays retired
         assert columns.column_for(_spec(child))[0] == "Backlog"
 
 
@@ -89,15 +89,15 @@ def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
 def test_the_child_live_fact_marks_a_ticket_in_flight():
     assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": True}
     assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
-    assert facts.spec_facts(["Landing"]) == {"child_live": True}   # the renamed column, read after the board moves (#2151)
-    assert facts.spec_facts(["Gating"]) == {"child_live": True}
+    assert facts.spec_facts(["Batching"]) == {"child_live": True}   # the renamed column, read after the board moves (#2151)
+    assert facts.spec_facts(["Testing"]) == {"child_live": True}
     assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
-    assert facts.spec_facts(["Review", "Todo"]) == {"child_live": True}
+    assert facts.spec_facts(["Reviewing", "Todo"]) == {"child_live": True}
     assert facts.spec_facts(["Backlog", "Closed"]) == {"child_live": False}
 
 
 def test_a_live_or_held_gate_marks_gating_before_the_wave_test():
-    assert _column(gating=True) == "Gating"
+    assert _column(gating=True) == "Testing"
     produced = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False,
                                  review_waits=False, gating=True)
     assert produced["gating"] is True
@@ -132,12 +132,12 @@ def test_the_gating_fact_reads_the_attempt_journal(tmp_path):
     held = ga.gating(journal, 1257, "W1")
     derived = facts.issue_facts(entered=True, standing="ahead", approved=False, dev_running=False,
                                 review_waits=False, gating=held)
-    assert columns.column_for(derived)[0] == "Gating"
+    assert columns.column_for(derived)[0] == "Testing"
 
 
 def test_a_spec_whose_only_active_child_is_gating_reads_it_live():
-    assert facts.spec_facts(["Gating"]) == {"child_live": True}
-    assert columns.column_for(_spec("Gating"))[0] == "Todo"
+    assert facts.spec_facts(["Testing"]) == {"child_live": True}
+    assert columns.column_for(_spec("Testing"))[0] == "Todo"
 
 
 def test_the_page_counts_the_same_columns_in_flight_as_the_facts():
@@ -152,5 +152,5 @@ def test_the_hub_legacy_table_names_no_pull_request_fact():
     names = {c["fact"] for c in columns.COLUMNS}
 
     assert "merged" not in names and "open_pr" not in names
-    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo", "gating"}   # re-anchored (#1256): Gating has a role
-    assert "Testing" not in {s["name"] for s in columns.shipped_columns()}
+    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo", "gating"}   # re-anchored (#1256): Testing has a role
+    assert "Pushing" not in {s["name"] for s in columns.shipped_columns()}

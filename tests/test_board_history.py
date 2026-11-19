@@ -64,9 +64,9 @@ def test_a_status_move_the_clock_hides_is_read_from_the_board_row():
     stored = {2286: {"issue_updated": "2026-11-18T14:29:07Z", "status_updated": "2026-11-18T14:29:10Z",
                      "events": [{"t": "2026-11-18T14:29:07Z", "type": "status", "status": "Todo"}],
                      "complete": True}}
-    row = {"n": 2286, "su": "2026-11-18T14:29:10Z", "st": "Review", "s": "OPEN"}
+    row = {"n": 2286, "su": "2026-11-18T14:29:10Z", "st": "Reviewing", "s": "OPEN"}
     assert bh.due_items([row], stored) == [2286], "the clock agrees and only the value says the record is behind"
-    stored[2286]["events"].append({"t": "2026-11-18T16:39:39Z", "type": "status", "status": "Review"})
+    stored[2286]["events"].append({"t": "2026-11-18T16:39:39Z", "type": "status", "status": "Reviewing"})
     assert bh.due_items([row], stored) == [], "a record that ends in the card's Status is settled"
 
 
@@ -329,16 +329,16 @@ def test_a_gating_interval_opens_and_closes_with_its_instants():
     runs = bh.intervals(_timeline(
         (10, 0, "added", {}),
         (10, 1, "status", {"status": "Todo"}),
-        (11, 0, "status", {"status": "Gating"}),
+        (11, 0, "status", {"status": "Testing"}),
         (11, 45, "status", {"status": "Closed"}),
         (11, 45, "closed", {}),
     ))
 
-    gating = next(run for run in runs if run["column"] == "Gating")
+    gating = next(run for run in runs if run["column"] == "Testing")
 
     assert (gating["from"], gating["to"]) == ("2026-10-01T11:00:00Z", "2026-10-01T11:45:00Z")
     obs = bh.lead_observation(runs, start="Todo")
-    assert obs["columns"]["Gating"] == pytest.approx(0.75)
+    assert obs["columns"]["Testing"] == pytest.approx(0.75)
     assert obs["gate"] == pytest.approx(0.75)
 
 
@@ -346,20 +346,20 @@ def test_two_gating_stretches_separated_by_a_freeze_sum_to_both():
     runs = bh.intervals(_timeline(
         (10, 0, "added", {}),
         (10, 1, "status", {"status": "Todo"}),
-        (11, 0, "status", {"status": "Gating"}),
+        (11, 0, "status", {"status": "Testing"}),
         (11, 15, "label", {"name": "frozen:owner"}),
         (11, 45, "unlabel", {"name": "frozen:owner"}),
         (12, 0, "status", {"status": "Closed"}),
         (12, 0, "closed", {}),
     ))
 
-    gating = [run for run in runs if run["column"] == "Gating"]
+    gating = [run for run in runs if run["column"] == "Testing"]
     assert len(gating) > 1, "the freeze ends the interval without changing the column"
 
     obs = bh.lead_observation(runs, start="Todo")
-    stretches = [s for s in obs["stretches"] if s["column"] == "Gating"]
+    stretches = [s for s in obs["stretches"] if s["column"] == "Testing"]
     assert len(stretches) == 1, "contiguous runs of one column are one stretch"
-    assert stretches[0]["hours"] == pytest.approx(1.0), "the freeze inside Gating is still gate time"
+    assert stretches[0]["hours"] == pytest.approx(1.0), "the freeze inside Testing is still gate time"
     assert obs["gate"] == pytest.approx(1.0)
 
 
@@ -374,7 +374,7 @@ def test_a_card_that_never_gated_has_no_gating_hours():
 
     obs = bh.lead_observation(runs, start="Todo")
 
-    assert "Gating" not in obs["columns"]
+    assert "Testing" not in obs["columns"]
     assert obs["gate"] == 0.0
 
 
@@ -383,7 +383,7 @@ def test_the_columns_total_equals_the_measure_for_a_card_that_held_elsewhere_bef
         (9, 0, "added", {}),
         (9, 30, "status", {"status": "Doing"}),
         (10, 0, "status", {"status": "Todo"}),
-        (11, 0, "status", {"status": "Gating"}),
+        (11, 0, "status", {"status": "Testing"}),
         (12, 0, "status", {"status": "Closed"}),
         (12, 0, "closed", {}),
     ))
@@ -393,7 +393,7 @@ def test_the_columns_total_equals_the_measure_for_a_card_that_held_elsewhere_bef
     assert sum(obs["columns"].values()) == pytest.approx(obs["flowing"] + obs["held"]), \
         "the stack and the measure beside it total the same hours"
     assert "Doing" not in obs["columns"], "the time before the start column is no band"
-    assert obs["columns"]["Gating"] == pytest.approx(1.0)
+    assert obs["columns"]["Testing"] == pytest.approx(1.0)
 
 
 def test_a_parked_run_with_a_hold_is_a_backlog_band_with_its_held_hours():

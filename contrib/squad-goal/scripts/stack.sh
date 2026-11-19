@@ -1,17 +1,17 @@
 # usage: stack.sh <issue>   Dispatch readiness for one issue, from its "## Blocked by" section:
-#   READY                    every blocker is closed, or every open blocker sits in Landing with an approved tip (#2260)
+#   READY                    every blocker is closed, or every open blocker sits in Batching with an approved tip (#2260)
 #   STACK TIP <sha> <branch> #<n>
 #                            second line after READY, one per blocker satisfied that way: the approved tip the child's branch
 #                            starts from, so its work builds on the blocker's line of commits and not on the base alone.
 #   WAIT <reason>            anything else: an open blocker, a blocker whose state is not readable, a blocker the body names
 #                            with no native blocked-by relation while it reads open (#1758), a blocker sitting in Doing or
-#                            Review, or in Landing with no approved tip, or a ticket of a spec the owner has not started
+#                            Reviewing, or in Batching with no approved tip, or a ticket of a spec the owner has not started
 #                            (below). The loop builds a child only on the line, so a blocker whose branch is not in $SG_BASE
-#                            yet waits unless its card reads Landing and its review approves the tip (#2260). The landing
+#                            yet waits unless its card reads Batching and its review approves the tip (#2260). The landing
 #                            pass rebases the child onto $SG_BASE before its own landing (ffland.sh, proven by
-#                            test-ffland.sh case 3), and the janitor stops a run whose stacked blocker leaves Landing without
-#                            landing (janitor.py, rule W). The columns from Landing on come from the board definition
-#                            (board_columns.from_landing), one source shared with that rule.
+#                            test-ffland.sh case 3), and the janitor stops a run whose stacked blocker leaves Batching without
+#                            landing (janitor.py, rule W). The columns from Batching on come from the board definition
+#                            (board_columns.from_batching), one source shared with that rule.
 # A caller that already holds the facts hands them over and saves the reads (#383): SG_STACK_ISSUE names a file with the
 # issue's entry of the open-issue list (ghread.py's shape, each blocker's state beside it). Without it, or for a blocker whose
 # state the entry lacks, the issue and the state are read one each.
@@ -67,33 +67,33 @@ for b in $body_bl; do
   echo "WAIT blocker #$b is open: the body names it with no native blocked-by relation, and its work is not in $SG_BASE yet"; exit 0
 done
 hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
-# #2260 A blocker in Landing is a stop for the dependent no longer: its review approved the tip and the landing pass holds
+# #2260 A blocker in Batching is a stop for the dependent no longer: its review approved the tip and the landing pass holds
 # that tip, so the child starts on the blocker's own line of commits. The card's column is the caller's one board read
 # ($SG_STACK_BOARD, "<issue>\t<state>" rows) and, for a blocker it lacks, the seam's own read of that card. A blocker in any
-# other live column (Doing, Review, Todo) still waits: its work is not approved yet. The review is the one parser's
+# other live column (Doing, Reviewing, Todo) still waits: its work is not approved yet. The review is the one parser's
 # (revformat.py --classify): an approval of THIS tip, never a first-line substring. A tip already in $SG_BASE is no stack:
 # the child builds on the base and the blocker's work is already there.
-# The columns from Landing on come from the board definition, one source shared with the janitor's rule W (#2260): a column
-# the definition puts after Landing never starts a child here and never stops a run there. An unreadable helper reads no
-# column as Landing, so the blocker waits.
-inland() { python3 "$here/board_columns.py" --from-landing "$1" >/dev/null 2>&1; }
+# The columns from Batching on come from the board definition, one source shared with the janitor's rule W (#2260): a column
+# the definition puts after Batching never starts a child here and never stops a run there. An unreadable helper reads no
+# column as Batching, so the blocker waits.
+inland() { python3 "$here/board_columns.py" --from-batching "$1" >/dev/null 2>&1; }
 colof() { local c=""
   [ -n "${SG_STACK_BOARD:-}" ] && [ -s "$SG_STACK_BOARD" ] && c=$(awk -F '\t' -v n="$1" '$1 == n { print $2; exit }' "$SG_STACK_BOARD")
   [ -n "$c" ] || c=$(python3 "$here/issue_state.py" --state "$1" 2>/dev/null)
   printf '%s' "$c"; }
 inbase() { [ -n "$1" ] && /usr/bin/git -C "${SG_CHECKOUT:-.}" merge-base --is-ancestor "$1" "refs/remotes/origin/$SG_BASE" 2>/dev/null; }
-# landed_blocker <issue>: exit 0 and print "<tip> <branch>" when the blocker's card reads Landing and its review approves
+# landed_blocker <issue>: exit 0 and print "<tip> <branch>" when the blocker's card reads Batching and its review approves
 # the branch tip. Exit 1 and print the reason otherwise.
 landed_blocker() { local b=$1 c br tip rk cls
   c=$(colof "$b")
-  [ -n "$c" ] || { printf ''; return 1; }   # an unread column is no Landing: the caller keeps its own wording for it
-  inland "$c" || { printf 'its card sits in %s, not in Landing' "$c"; return 1; }
+  [ -n "$c" ] || { printf ''; return 1; }   # an unread column is no Batching: the caller keeps its own wording for it
+  inland "$c" || { printf 'its card sits in %s, not in Batching' "$c"; return 1; }
   br=$(printf '%s' "${SG_FORK_BRANCH:-gui/%n}" | sed "s/%n/$b/")
   tip=$(gh_api "repos/$SG_REPO/commits/$br" -q .sha 2>/dev/null) || { printf 'its branch %s is not readable' "$br"; return 1; }
   case "$tip" in ''|*[!0-9a-fA-F]*) printf 'its branch %s names no tip' "$br"; return 1;; esac
   rk="$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_')"
   cls=$(python3 "$here/revformat.py" --classify "$rk.md" "$rk.sha" "$tip" 2>/dev/null)
-  [ "$cls" = approves ] || { printf 'it is in Landing with no approved tip (%s)' "${cls:-no review}"; return 1; }
+  [ "$cls" = approves ] || { printf 'it is in Batching with no approved tip (%s)' "${cls:-no review}"; return 1; }
   printf '%s %s' "$tip" "$br"; }
 open=(); stacked=(); why=""; for b in $bl; do st=$(printf '%s' "$issue" | jq -r --argjson b "$b" '[.blockers[]?|select(.number==$b)|.state|select(.)][0] // empty' 2>/dev/null)
   [ -n "$st" ] || st=$(gh_api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)

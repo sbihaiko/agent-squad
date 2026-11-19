@@ -187,9 +187,9 @@ printf '#!/bin/bash\necho "$*" >> "%s/board-refuse.log"\necho "board refused: th
 chmod +x "$T/board.sh"; REV_BASE=$W14 rev 310; : > "$T/board-refuse.log"
 r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1); rc=$?
 [ $rc = 0 ] && $O merge-base --is-ancestor "$($G -C "$T/c310" rev-parse HEAD)" "$W14" && ok "T: a refused card write does not keep the child out of the wave" || ko "T: exit $rc: '$r'"
-case "$r" in *"WAVE-BOARD #310 Landing refused:"*) ok "T: the refused entry card write is named";; *) ko "T: the refused write is silent: '$r'";; esac
+case "$r" in *"WAVE-BOARD #310 Batching refused:"*) ok "T: the refused entry card write is named";; *) ko "T: the refused write is silent: '$r'";; esac
 case "$r" in *"board refused: the project is locked"*) ok "T: the refusal names the board's own error";; *) ko "T: the board error is not named: '$r'";; esac
-/usr/bin/grep -qx 'o 3 Landing 310' "$T/board-refuse.log" && ok "T: the entry still attempted the Landing write" || ko "T: no Landing write was attempted"
+/usr/bin/grep -qx 'o 3 Batching 310' "$T/board-refuse.log" && ok "T: the entry still attempted the Batching write" || ko "T: no Batching write was attempted"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "${SG_MOVE_REASON:-none} $*" >> "%s/board-reason.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" "$T" > "$T/board.sh"
 chmod +x "$T/board.sh"
 # A write that worked names no refusal: the seam's read note is not an error.

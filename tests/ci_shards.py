@@ -128,6 +128,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
     (
         "tests/test_autonomy_fragment.py",
         "tests/test_board_archive.py",
+        "tests/test_board_column_rename.py",
         "tests/test_board_columns.py",
         "tests/test_board_definition_grammar.py",
         "tests/test_board_reset.py",

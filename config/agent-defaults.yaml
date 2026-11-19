@@ -55,9 +55,9 @@ caps:                               # machine-wide, across every repository and 
 columns:                            # the card limit of each board column (#2287), a whole number from 1 to 100 or none; a project may change one in docs/squad/defaults.yaml
   Todo: {max_cards: null}           # a waiting card holds no machine
   Doing: {max_cards: 6}             # six cards may be in flight at once
-  Review: {max_cards: 4}            # caps.reviews 4
-  Landing: {max_cards: null}        # a landing is one fast-forward push and holds no machine
-  Gating: {max_cards: null}         # caps.gates bounds the gate workers, and one wave gate carries all the cards of its wave
+  Reviewing: {max_cards: 4}         # caps.reviews 4
+  Batching: {max_cards: null}       # a landing is one fast-forward push and holds no machine
+  Testing: {max_cards: null}        # caps.gates bounds the gate workers, and one wave gate carries all the cards of its wave
 
 dashboard:                          # the run dashboard page; run_start records it, the page reads it from the record
   reread_seconds: 1                 # how often the page rereads record.jsonl while a run lives. The page has no control for it. The page uses 1 when a record lacks it.

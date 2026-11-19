@@ -230,7 +230,8 @@ for n in nums:
         written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
-        print(f"#{n} -> {status}"); proved.append((iid, carried_name)); moved.append((n, have, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": carried_name, "by": by, "pass": pss, "reason": reason})
+        # the record names the column, never the option's spelling (#2315)
+        print(f"#{n} -> {status}"); proved.append((iid, canonical(status))); moved.append((n, have, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": canonical(status), "by": by, "pass": pss, "reason": reason})
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1

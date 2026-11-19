@@ -189,8 +189,8 @@ def test_a_board_change_recomputes_the_collapse_without_a_reload(hub):
 # The decision, not a starting point: the seven shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#90a4ae", "Todo": "#14b8c0", "Doing": "#e8d44d", "Review": "#ff8a5c", "Landing": "#f5b041",
-    "Gating": "#f48fb1", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
+    "Backlog": "#90a4ae", "Todo": "#14b8c0", "Doing": "#e8d44d", "Reviewing": "#ff8a5c", "Batching": "#f5b041",
+    "Testing": "#f48fb1", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
 RING = ["#9ccc65", "#d88cd0", "#b99126", "#2cbcd8"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -332,7 +332,7 @@ def test_a_column_added_later_leaves_the_ones_already_there_alone(hub):
 
 
 def test_a_ring_colour_never_matches_a_named_column_colour(hub):
-    """Gating took the ring's pink, so that slot moved to amber (#1254). A named column that later lands on a ring colour
+    """Testing took the ring's pink, so that slot moved to amber (#1254). A named column that later lands on a ring colour
     would restyle a user column silently: this guard names the collision where it happens."""
     ring, named = _col(hub, "RING"), _col(hub, "Object.values(COLORS)")
 

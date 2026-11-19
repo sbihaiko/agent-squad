@@ -289,26 +289,26 @@ printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes
 out=$(pass lb)
 [ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"
 
-# Review (#603): with the shipped vocabulary, childcc moves a Doing card to Review when it starts the review of a
-# child and when it defers a child that waits for review, through board.sh, once per child. A card past Review (Landing)
-# and a card a requeue sent to Todo are never moved; the old vocabulary has no Review and gets no write (#2155).
-crv() { cat "$T/moves" 2>/dev/null | /usr/bin/grep -c "^x 4 Review $1\$"; }
+# Reviewing (#603): with the shipped vocabulary, childcc moves a Doing card to Reviewing when it starts the review of a
+# child and when it defers a child that waits for review, through board.sh, once per child. A card past Reviewing (Batching)
+# and a card a requeue sent to Todo are never moved; the old vocabulary has no Reviewing and gets no write (#2155).
+crv() { cat "$T/moves" 2>/dev/null | /usr/bin/grep -c "^x 4 Reviewing $1\$"; }
 run2 crv 5700 5701; : > "$WAVE_CALLS"; : > "$T/cr.calls"; rm -f "$T/moves"
 export GH_NUMS="5700:Doing 5701:Doing"
 SG_BOARD_VOCAB=shipped pass crv >/dev/null
-[ "$(crv 5700)" = 1 ] && /usr/bin/grep -q '^crv 5700' "$T/cr.calls" && ok "the review start moves the child's card to Review" || ko "review start: moves '$(cat "$T/moves" 2>/dev/null)', reviews '$(cat "$T/cr.calls")'"
-[ "$(crv 5701)" = 1 ] && ! /usr/bin/grep -q '^crv 5701' "$T/cr.calls" && ok "a child deferred for review moves its card to Review" || ko "defer: moves '$(cat "$T/moves" 2>/dev/null)'"
+[ "$(crv 5700)" = 1 ] && /usr/bin/grep -q '^crv 5700' "$T/cr.calls" && ok "the review start moves the child's card to Reviewing" || ko "review start: moves '$(cat "$T/moves" 2>/dev/null)', reviews '$(cat "$T/cr.calls")'"
+[ "$(crv 5701)" = 1 ] && ! /usr/bin/grep -q '^crv 5701' "$T/cr.calls" && ok "a child deferred for review moves its card to Reviewing" || ko "defer: moves '$(cat "$T/moves" 2>/dev/null)'"
 SG_BOARD_VOCAB=shipped pass crv >/dev/null
-[ "$(crv 5700)" = 1 ] && [ "$(crv 5701)" = 1 ] && ok "Review is written once per child" || ko "Review writes after two passes: '$(cat "$T/moves" 2>/dev/null)'"
+[ "$(crv 5700)" = 1 ] && [ "$(crv 5701)" = 1 ] && ok "Reviewing is written once per child" || ko "Reviewing writes after two passes: '$(cat "$T/moves" 2>/dev/null)'"
 run2 crl 5710 5711; : > "$WAVE_CALLS"; rm -f "$T/moves"
 export GH_NUMS="5710:Code_Complete 5711:Todo"
 SG_BOARD_VOCAB=shipped pass crl >/dev/null; SG_BOARD_VOCAB=shipped pass crl >/dev/null
-[ "$(crv 5710)" = 0 ] && ok "a card in Landing never goes back to Review" || ko "Landing card moved back: '$(cat "$T/moves")'"
-[ "$(crv 5711)" = 0 ] && ok "a card a requeue sent to Todo is not moved to Review" || ko "Todo card moved: '$(cat "$T/moves")'"
+[ "$(crv 5710)" = 0 ] && ok "a card in Batching never goes back to Reviewing" || ko "Batching card moved back: '$(cat "$T/moves")'"
+[ "$(crv 5711)" = 0 ] && ok "a card a requeue sent to Todo is not moved to Reviewing" || ko "Todo card moved: '$(cat "$T/moves")'"
 run2 cro 5720 5721; : > "$WAVE_CALLS"; rm -f "$T/moves"
 export GH_NUMS="5720:In_Progress 5721:In_Progress"
 pass cro >/dev/null
-! /usr/bin/grep -qE 'Code (Review|Complete)' "$T/moves" 2>/dev/null && ok "the old vocabulary gets no review or landing write" || ko "old vocabulary wrote an old name: '$(cat "$T/moves")'"
+! /usr/bin/grep -qE 'Code (Reviewing|Complete)' "$T/moves" 2>/dev/null && ok "the old vocabulary gets no review or landing write" || ko "old vocabulary wrote an old name: '$(cat "$T/moves")'"
 
 # A run reviews its own children (#600, #601): the review gate's verdict is in the child's `land` event. A child its run
 # approved enters its wave with no second review call; a child its run held, whose requeued marker exists, is neither

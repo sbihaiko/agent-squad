@@ -61,8 +61,8 @@ def _node(mod, body):
 def test_the_route_answers_every_column_and_its_limit(hub):
     mod, _ = hub
     got = mod.columns_read()
-    assert [c["name"] for c in got["columns"]] == ["Todo", "Doing", "Review", "Landing", "Gating"]
-    assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Todo": None, "Doing": 6, "Review": 4, "Landing": None, "Gating": None}
+    assert [c["name"] for c in got["columns"]] == ["Todo", "Doing", "Reviewing", "Batching", "Testing"]
+    assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
     assert got["file"].endswith("docs/squad/defaults.yaml")
 
 
@@ -75,11 +75,11 @@ def test_a_save_asks_for_the_diff_before_it_writes(hub):
 
 def test_a_confirmed_save_writes_the_project_settings_file(hub):
     mod, co = hub
-    out = mod.columns_set({"columns": {"Doing": "2", "Review": "none"}, "confirm": True})
-    assert out["diff"] == ["Board · Doing: 6 -> 2", "Board · Review: 4 -> none"]
+    out = mod.columns_set({"columns": {"Doing": "2", "Reviewing": "none"}, "confirm": True})
+    assert out["diff"] == ["Board · Doing: 6 -> 2", "Board · Reviewing: 4 -> none"]
     data = yaml.safe_load((co / "docs" / "squad" / "defaults.yaml").read_text())
     assert data["columns"]["Doing"]["max_cards"] == 2
-    assert data["columns"]["Review"]["max_cards"] is None
+    assert data["columns"]["Reviewing"]["max_cards"] is None
     assert {c["name"]: c["max_cards"] for c in mod.columns_read()["columns"]}["Doing"] == 2
 
 
@@ -98,12 +98,12 @@ def test_a_write_that_fails_on_a_later_column_leaves_no_partial_file(hub, monkey
     real = ps._write
 
     def boom(path, data):
-        if isinstance((data.get("columns") or {}).get("Review"), dict):
+        if isinstance((data.get("columns") or {}).get("Reviewing"), dict):
             raise OSError("disk full")
         return real(path, data)
 
     monkeypatch.setattr(ps, "_write", boom)
-    out = mod.columns_set({"columns": {"Doing": "2", "Review": "none"}, "confirm": True})
+    out = mod.columns_set({"columns": {"Doing": "2", "Reviewing": "none"}, "confirm": True})
     assert "err" in out
     assert not (co / "docs" / "squad" / "defaults.yaml").exists(), "a failed save left a partial settings file"
 
@@ -146,4 +146,4 @@ def test_the_kanban_draws_the_header_through_col_count(hub):
     assert "colCount(ccount(c),COLS[c])" in page, "the lane grid column header does not carry the limit"
     assert "colCount(g.n,COLS[g.name])" in page, "the column header does not carry the limit"
     assert "const COLS=b.limits||{}" in page, "the page does not read the limits the board payload carries"
-    assert mod.board_column_limits() == {"Todo": None, "Doing": 6, "Review": 4, "Landing": None, "Gating": None}
+    assert mod.board_column_limits() == {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
