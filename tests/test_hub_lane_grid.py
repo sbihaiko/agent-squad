@@ -89,9 +89,9 @@ def _drawn(model=None):
     return html
 
 
-def _board(groups):
-    """The board model `buildBoard` builds for these groups, with the page's options at their defaults."""
-    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "hidden": []}
+def _board(groups, **o):
+    """The board model `buildBoard` builds for these groups, with the page's options at their defaults unless `o` sets one."""
+    opts = {"mode": "spec", "fw": [], "fs": [], "lc": {}, "hideDone": False, "closed": "Closed", "hidden": [], **o}
     return _lanes_rule(f"console.log(JSON.stringify(buildBoard({json.dumps(groups)},{json.dumps(opts)})));")
 
 
@@ -157,22 +157,22 @@ def test_a_collapsed_lanes_cards_never_widen_a_column():
     assert "<span>Todo</span><b>4</b>" in _drawn(collapsed), "the header does not count the whole board"
 
 
-def test_an_empty_visible_column_is_drawn():
-    """A column the board holds no card in is still a lane, so a reader sees it and reads it as empty (#1994)."""
+def test_a_column_with_no_card_is_hidden_whether_the_user_hid_it_or_not():
+    """Owner 2026-11-19: an empty column takes no slot. It replaces the rule that a visible empty column kept its place
+    (#1994), so neither the drawn set nor the pill names a column that holds no work card."""
     model = _board([
         {"name": "Todo", "end": False, "items": []},
         {"name": "Doing", "end": False, "items": [{"n": 5, "t": "e", "l": []}]},
         {"name": "Closed", "end": True, "items": []},
     ])
-    assert model["vc"] == ["Todo", "Doing"], model["vc"]
-    assert model["hc"] == [], model["hc"]
-    html = _drawn({"vc": ["Todo", "Doing"], "cols": ["Todo", "Doing"],
-                   "lanes": [{"id": "none", "kind": "none", "title": "No spec", "closed": 0, "total": 0, "doing": 1,
-                              "review": 0, "st": "", "collapsed": False,
-                              "counts": {"Todo": 0, "Doing": 1},
-                              "cells": {"Todo": [], "Doing": [{"n": 5, "t": "e"}]}}]})
-    assert '<div class=cell data-lane="none" data-col="Todo"' in html, "the empty column draws no lane"
-    assert re.search(r'data-col="Todo"[^>]*><div class=clh><span>Todo</span><b>0</b>', html), html
+    assert model["vc"] == ["Doing"], model["vc"]
+    assert model["hc"] == [], "an empty column the user hid is named in the pill"
+    both = _board([
+        {"name": "Todo", "end": False, "items": []},
+        {"name": "Doing", "end": False, "items": [{"n": 5, "t": "e", "l": []}]},
+    ], hidden=["Todo", "Doing"])
+    assert both["vc"] == [], "a column the user left visible at zero cards is drawn"
+    assert [x["name"] for x in both["hc"]] == ["Doing"], both["hc"]
 
 
 def test_each_lane_names_its_column_and_its_count():
