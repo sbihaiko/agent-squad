@@ -4223,7 +4223,13 @@ def _holder_fact_now(i, run, now):
     try:
         live = (run in active_run_names() or now - moved < reaper().NO_PID_IDLE_S) and reaper().run_live(folder, now)
     except Exception as e:
-        log_once(f"hub: the holder of run {run} is unknown: {type(e).__name__}: {' '.join(str(e).split())}")
+        # The line names the reap module that answered, so the next miss records which root and which copy it read (#2358).
+        src = None
+        try: src = getattr(reaper(), "__file__", None)
+        except Exception: pass
+        try: when = dt.datetime.fromtimestamp(pathlib.Path(src).stat().st_mtime, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if src else "-"
+        except OSError: when = "-"
+        log_once(f"hub: the holder of run {run} is unknown: {type(e).__name__}: {' '.join(str(e).split())} (squad.reap {src or '-'} mtime {when})")
         return None, None
     if live: return holder_text(i), "running"
     return f"held · run {run} ended " + dt.datetime.fromtimestamp(moved, dt.timezone.utc).strftime("%Y-%m-%d %H:%M") + " UTC", "ended"

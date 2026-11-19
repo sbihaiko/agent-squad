@@ -110,10 +110,14 @@ def test_an_unreadable_holder_fact_yields_no_holder_and_one_named_failure(hub, m
     (folder / "record.jsonl").write_text("{}\n")
     monkeypatch.setattr(hub, "run_folder", lambda name: folder)
     monkeypatch.setattr(hub, "active_run_names", lambda: {run})
-    monkeypatch.setattr(hub, "reaper", lambda: types.SimpleNamespace(NO_PID_IDLE_S=300))
+    reap_src = tmp_path / "reap.py"
+    reap_src.write_text("")
+    monkeypatch.setattr(hub, "reaper", lambda: types.SimpleNamespace(NO_PID_IDLE_S=300, __file__=str(reap_src)))
     item = {"n": 2358, "h": {"run": run, "started": "2026-11-19T00:00:00Z"}}
 
     facts = [hub._holder_fact_now(item, run, time.time()) for _ in range(2)]
 
     assert facts == [(None, None), (None, None)]
-    assert capsys.readouterr().err.count(run) == 1
+    err = capsys.readouterr().err
+    assert err.count(run) == 1
+    assert f"squad.reap {reap_src} mtime 20" in err   # the line names the module that answered and when it was written
