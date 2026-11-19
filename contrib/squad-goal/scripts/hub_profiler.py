@@ -850,11 +850,12 @@ def gate_row_link(row, links):
     return {"waves": sorted(waves), "card": card}
 
 
-def wave_gate_rows(gates, wave, issues, end):
-    """The tip and landing gate-history rows of one delivery, one `(begin, seconds)` a row: `begin` is the row's start
-    less its slot wait, and `seconds` its slot wait plus its run. A row counts when its link names the wave that carried
-    the issue (`wave`, the run id the wave is named by) or, for a landing gate, one of the run's `issues` at or after its
-    verdict `end`. Child, entry and other rows never count, and neither does a row whose link the caller could not read."""
+def _gating_rows(gates, wave, issues, end):
+    """The tip and landing gate-history rows of one delivery, as one dict a row: `start`, `finish`, `wait` (the lock wait
+    and the slot wait together), `ask` (the instant the gate asked for its slots) and `got` (the instant it held them,
+    None when its record states neither). A row counts when its link names the wave that carried the issue (`wave`, the
+    run id the wave is named by) or, for a landing gate, one of the run's `issues` at or after its verdict `end`. Child,
+    entry and other rows never count, and neither does a row whose link the caller could not read."""
     out = []
     for g in gates or ():
         if g.get("caller") not in GATING_CALLERS:
@@ -868,15 +869,25 @@ def wave_gate_rows(gates, wave, issues, end):
         if not mine:
             continue
         try:
-            start, run = float(g["start"]), float(g["finish"]) - float(g["start"])
+            start, finish = float(g["start"]), float(g["finish"])
         except (KeyError, TypeError, ValueError):
             continue
-        if run < 0:
+        if finish < start:
             continue
         wait = g.get("wait")
-        wait = float(wait) if _num(wait) and wait >= 0 else 0.0
-        out.append((start - wait, run + wait))
+        got = g.get("slot_got")
+        out.append({"start": start, "finish": finish,
+                    "wait": float(wait) if _num(wait) and wait >= 0 else 0.0,
+                    "ask": float(g["slot_ask"]) if _num(g.get("slot_ask")) and g["slot_ask"] >= 0 else None,
+                    "got": float(got) if _num(got) and got >= 0 else None})
     return out
+
+
+def wave_gate_rows(gates, wave, issues, end):
+    """The tip and landing gate-history rows of one delivery, one `(begin, seconds)` a row: `begin` is the row's start
+    less its slot wait, and `seconds` its slot wait plus its run, for the rows `_gating_rows` counts."""
+    return [(r["start"] - r["wait"], (r["finish"] - r["start"]) + r["wait"])
+            for r in _gating_rows(gates, wave, issues, end)]
 
 
 def wave_gate(gates, wave, issues, end):
@@ -884,6 +895,29 @@ def wave_gate(gates, wave, issues, end):
     reading is no time."""
     rows = wave_gate_rows(gates, wave, issues, end)
     return sum(sec for _, sec in rows) if rows else None
+
+
+def wave_gate_split(gates, wave, issues, end):
+    """The Gating seconds of one delivery, split where the gate held its slots (#2317): `slot_wait` is the seconds from
+    the gate's own start to the instant it got its slots, its lock wait included, and `gate_run` the seconds from there
+    to its finish. A row whose record states no `slot_got` reads its whole stint as gate run, and `no_slot` counts it,
+    because a wait the record never stated is no reading. The two parts add to the delivery's `wave_gate`. None when no
+    row counts."""
+    rows = _gating_rows(gates, wave, issues, end)
+    if not rows:
+        return None
+    slot_wait = gate_run = 0.0
+    no_slot = 0
+    for r in rows:
+        begin, finish, got = r["start"] - r["wait"], r["finish"], r["got"]
+        if got is None:
+            no_slot += 1
+            gate_run += finish - begin
+            continue
+        got = min(max(got, begin), finish)
+        slot_wait += got - begin
+        gate_run += finish - got
+    return {"slot_wait": slot_wait, "gate_run": gate_run, "no_slot": no_slot}
 
 
 def landing_until_gate(stint, stint_from, gates, wave, issues, end):
@@ -1202,6 +1236,7 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
     """
     per = {key: [] for key in TRIP_FOLD_KEYS}
     deliveries = 0
+    gate_waits, gate_runs, gates_no_slot = [], [], 0   # the Gating split (#2317): one reading a delivery, and the gates with no slot record
     for i, s in enumerate(spans):
         if s is None or s["end"] < since:
             continue
@@ -1217,6 +1252,10 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
         gated = wave_gate(gates, wave, named, s["end"])
         if gated is not None:
             per[GATING_GATE].append(gated)
+        split = wave_gate_split(gates, wave, named, s["end"])
+        if split is not None:
+            gate_waits.append(split["slot_wait"]); gate_runs.append(split["gate_run"])
+            gates_no_slot += split["no_slot"]
     readings = {key: _spread(v) for key, v in per.items()}
     columns = trip_columns()
     held = {col: [k for k in keys if readings[k]["median_s"] is not None] for col, _, keys in columns}
@@ -1253,6 +1292,14 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
             beside = {"stage": others[0], "label": TRIP_STAGE_LABELS[others[0]], "observations": o["observations"],
                       "min_s": _rounded(o["min_s"]), "median_s": _rounded(o["median_s"]),
                       "p85_s": _rounded(o["p85_s"]), "max_s": _rounded(o["max_s"])}
+        # Only Gating is a gate, so only its row carries the split of the gate stint (#2317): the slot wait and the gate
+        # run, each the median over the deliveries whose wave ran a linked gate, and the count of gates whose record
+        # states no slot. Every other column answers a dash on the page, because it holds no such split.
+        split_cells = {}
+        if col == GATING_COLUMN.lower():
+            split_cells = {"slot_wait_s": _rounded(percentile(gate_waits, 50)),
+                           "gate_run_s": _rounded(percentile(gate_runs, 50)),
+                           "no_slot_gates": gates_no_slot}
         rows.append({"column": col, "label": label, "stage": main, "observations": r["observations"],
                      "min_s": _rounded(r["min_s"]), "median_s": _rounded(r["median_s"]),
                      "p85_s": _rounded(r["p85_s"]), "max_s": _rounded(r["max_s"]),
@@ -1260,7 +1307,7 @@ def trip(spans, gates, since, cards=None, calls=None, review_calls=None, loads=N
                      "parallelism": round(parallel[col], 3) if effective[col] is not None else None,
                      "effective_s": round(effective[col], 3) if effective[col] is not None else None,
                      "share": round(effective[col] / effective_total, 4) if effective_total and effective[col] else 0.0,
-                     "beside": beside, **consumed["lines"][col]})
+                     "beside": beside, **split_cells, **consumed["lines"][col]})
         stages.append({"column": col, "label": label, "observations": r["observations"],
                        "min_s": _rounded(r["min_s"]), "median_s": _rounded(r["median_s"]),
                        "p85_s": _rounded(r["p85_s"]), "max_s": _rounded(r["max_s"])})
@@ -1444,7 +1491,10 @@ GATE_HISTORY_FIELDS = ("finish", "kind", "result", "sha", "start", "selection", 
                        # green verdict answered instead of a battery (ADR-0168).
                        "tree", "wait", "wall", "cpu", "reused",
                        # (#1927) Which proof produced the verdict (ci or local), and the CI run id a `ci` proof names.
-                       "runner", "run_id")
+                       "runner", "run_id",
+                       # (#2317) When the gate asked for its slots inside the lock and when it got them, so the gate
+                       # stint splits into its wait and its run (ADR-0166).
+                       "slot_ask", "slot_got")
 # The entry mode (#1798): how the gate came to its verdict, the seventeenth field. A row from before the field ends with its
 # load reading, a number or a dash, never one of these words, so the tail is counted by the word and an older row reads its
 # own columns. A row that carries the queue fields (#1856) ends with its reuse word, five fields after its mode; a row that
@@ -1459,14 +1509,19 @@ def gate_row(line):
     """One gate-history line as named fields, or None when it is too short to hold a finish and a start. A reason that
     holds a tab is rejoined, so the columns after it keep their place; an older row answers '' for its later fields. A row
     that ends with the queue fields keeps thirteen tail columns, a row whose last field is the entry mode keeps eight, and a
-    row from before the mode keeps seven, and a row that carries the runner fields keeps fifteen."""
+    row from before the mode keeps seven, a row that carries the runner fields keeps fifteen, and one that carries the
+    slot fields keeps seventeen."""
     parts = line.split("\t")
     if len(parts) < 5:
         return None
     # The reason is the ninth field and the only free text, so the words at the row's end say how many fields follow it:
-    # the runner words first, then the reuse word, then the entry mode.
-    if len(parts) >= len(GATE_HISTORY_FIELDS) and parts[-2] in RUNNERS and parts[-3] in REUSE_WORDS and parts[-8] in ENTRY_MODES:
+    # the slot fields first, then the runner words, the reuse word and the entry mode.
+    if (len(parts) >= len(GATE_HISTORY_FIELDS) and parts[-4] in RUNNERS and parts[-5] in REUSE_WORDS
+            and parts[-10] in ENTRY_MODES):
         tail = len(GATE_HISTORY_FIELDS) - 9
+    elif (len(parts) >= len(GATE_HISTORY_FIELDS) - 2 and parts[-2] in RUNNERS and parts[-3] in REUSE_WORDS
+          and parts[-8] in ENTRY_MODES):
+        tail = 15
     elif len(parts) >= 22 and parts[-1] in REUSE_WORDS and parts[-6] in ENTRY_MODES:
         tail = 13
     elif len(parts) >= 17 and parts[-1] in ENTRY_MODES:

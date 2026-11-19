@@ -2841,8 +2841,13 @@ def gate_attempt_links():
 
 def trip_gates(since, links=None):
     """The gate-history rows of the window, `start` and `finish` in seconds beside their kind, outcome, caller, slot
-    wait and wave link (`hub_profiler.gate_row_link`, None when the journal names no wave or card for the row). A row
+    wait, the instants it asked for its slots and held them (`slot_ask`, `slot_got`, None when the record states none),
+    and wave link (`hub_profiler.gate_row_link`, None when the journal names no wave or card for the row). A row
     that ran no battery (#1798, mode `reused` or `skipped`) is no gate observation: its start is its finish."""
+    def slot(name):
+        try: v = float(row.get(name))
+        except (TypeError, ValueError): return None
+        return v if v >= 0 else None
     out = []
     try: lines = (STATE / "gate-history").read_text(errors="replace").splitlines()
     except OSError: return out
@@ -2857,6 +2862,7 @@ def trip_gates(since, links=None):
         except (TypeError, ValueError): wait = None
         out.append({"finish": finish, "start": start, "kind": row.get("kind", ""),
                     "outcome": row.get("outcome", ""), "caller": row.get("caller", ""), "wait": wait,
+                    "slot_ask": slot("slot_ask"), "slot_got": slot("slot_got"),
                     "link": hub_profiler.gate_row_link(row, links)})
     return out
 

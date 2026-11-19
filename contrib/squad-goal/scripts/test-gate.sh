@@ -47,7 +47,12 @@ hn0=$(wc -l < "$H" 2>/dev/null | tr -d ' '); hn0=${hn0:-0}; cp "$H" "$T/h0" 2>/d
 (cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" sh -c 'sleep 1; echo "selected 2 files" > "$GATE_SELECT_FILE"; echo delta > "$GATE_SCOPE_FILE"'); rc=$?
 IFS=$'\t' read -r fin kind res at start _ < <(tail -n 1 "$H"); sel=$(tail -n 1 "$H" | cut -f6); scope=$(tail -n 1 "$H" | cut -f7)
 [ $rc = 0 ] && [ "$kind" = fast ] && [ "$res" = pass ] && [ "$at" = "$sha" ] && ok "a finished gate appends one history line: kind, result and sha" || ko "history line: '$(tail -n 1 "$H" 2>&1)'"
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 23 ] && ok "the history line has twenty-four fields: the selection and scope, the verdict, the slots, how a red cleared, the stage, the load at the start and at the finish, the entry mode, then the tree, the wait, the wall time, the cpu, the reuse, the runner and its CI run id" || ko "history fields: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 25 ] && ok "the history line has twenty-six fields: the selection and scope, the verdict, the slots, how a red cleared, the stage, the load at the start and at the finish, the entry mode, then the tree, the wait, the wall time, the cpu, the reuse, the runner, its CI run id and the two slot clocks" || ko "history fields: '$(tail -n 1 "$H")'"
+# (#2317) The slot clocks: when the gate asked for its slots inside the lock and when it held them, so the gate stint
+# splits into its wait and its run (ADR-0166).
+IFS=$'\t' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ sla slg < <(tail -n 1 "$H")
+case "$sla$slg" in ''|*[!0-9]*) ko "the history line carries no slot ask or slot got: '$sla' '$slg'";; \
+  *) [ "$slg" -ge "$sla" ] && ok "the row states when the gate asked for its slots and when it held them" || ko "slot clocks: ask $sla got $slg";; esac
 # (#1798) The entry mode is the seventeenth field: a gate that ran its battery is `gated`, and one that ran none is `skipped`.
 [ "$(tail -n 1 "$H" | cut -f17)" = gated ] && ok "a gate that ran a battery names its entry mode gated" || ko "entry mode of a battery gate: '$(tail -n 1 "$H")'"
 [ "$sel $scope" = "selected 2 files delta" ] && ok "the history line carries the gate's selection and its scope" || ko "history selection: '$sel' scope: '$scope'"
@@ -57,7 +62,7 @@ case "$start" in ''|*[!0-9]*) ko "the history line carries no start epoch: '$sta
 cmp -s "$T/h0" <(head -n "$hn0" "$H") && [ "$(wc -l < "$H" | tr -d ' ')" = "$((hn0 + 1))" ] && ok "the history is append-only: earlier lines are untouched" || ko "history was rewritten"
 
 (cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" sh -c 'exit 7'); rc=$?
-[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 23 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
+[ "$(tail -n 1 "$H" | tr -cd '\t' | wc -c | tr -d ' ')" = 25 ] && [ "$(tail -n 1 "$H" | cut -f2,3)" = "$(printf 'full\tfail')" ] && ok "a gate with no selection writes an empty selection field" || ko "fail history: '$(tail -n 1 "$H")'"
 [ "$(tail -n 1 "$H" | cut -f17)" = skipped ] && ok "a gate that ran no battery names its entry mode skipped" || ko "entry mode of a gate with no battery: '$(tail -n 1 "$H")'"
 
 # --- the load (#1691): a gate line carries the one-minute load at its start and at its finish, so a set of gate runs can be
@@ -197,8 +202,8 @@ rsha=$(git -C "$T/w" rev-parse HEAD)
 # waiting (ADR-0166: gate wait is no run time).
 (cd "$T/w" && SG_STATE="$RS" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_CALLER=landing bash "$d/gate.sh" bash "$T/green-full.sh" >/dev/null 2>&1)
 row=$(rh); rtree=$(git -C "$T/w" rev-parse 'HEAD^{tree}')
-[ "$(printf '%s' "$row" | awk -F'\t' '{print NF}')" = 24 ] \
-  && ok "a gate row carries twenty-four fields: the entry mode, the tree, the wait, the wall time, the CPU, the reuse, the runner and its CI run id" || ko "row width: '$(printf '%s' "$row" | awk -F'\t' '{print NF}')' fields: '$row'"
+[ "$(printf '%s' "$row" | awk -F'\t' '{print NF}')" = 26 ] \
+  && ok "a gate row carries twenty-six fields: the entry mode, the tree, the wait, the wall time, the CPU, the reuse, the runner, its CI run id and the two slot clocks" || ko "row width: '$(printf '%s' "$row" | awk -F'\t' '{print NF}')' fields: '$row'"
 [ "$(printf '%s' "$row" | cut -f14)" = landing ] && ok "the landing's gate names its stage landing" || ko "landing stage: '$(printf '%s' "$row" | cut -f14)'"
 [ "$(printf '%s' "$row" | cut -f17)" = gated ] && ok "a landing gate that ran its battery names its mode gated" || ko "mode field: '$(printf '%s' "$row" | cut -f17)'"
 [ "$(printf '%s' "$row" | cut -f18)" = "$rtree" ] && ok "the row names the tree sha the gate read, never only its commit" || ko "tree field: '$(printf '%s' "$row" | cut -f18)', want $rtree"

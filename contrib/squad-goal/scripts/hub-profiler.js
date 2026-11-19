@@ -54,6 +54,15 @@ const profTripTitle=c=>profTripRead(c.label,c);
 // label and the table print both numbers, so no width is a figure the page never shows.
 const profTripPar=p=>p==null?"&#8212;":"×"+Number(p).toFixed(1);
 const profTripTime=c=>`${profTripNum(c.effective_s)} · ${profTripPar(c.parallelism)}`;
+// The Gating segment's split (#2317): the slot wait and the gate run the fold emits. A column that is no gate, or a
+// Gating column whose window ran no linked gate, holds no split and draws one segment as it always did.
+const profGatingSplit=c=>{if(c.column!=="gating")return null;
+ const w=c.slot_wait_s,r=c.gate_run_s,total=w+r;
+ return typeof w==="number"&&typeof r==="number"&&isFinite(w)&&isFinite(r)&&w>0&&r>0?{wait:w/total,run:r/total}:null};
+// The gates whose record states no slot (#2317): their whole stint stands as a gate run, so the page names them and
+// never lets an unsplit run read as a measured one.
+const profNoSlotGates=t=>{const n=(t.columns||[]).reduce((s,c)=>s+(Number(c.no_slot_gates)||0),0);
+ return n>0?` ${n} gate${n===1?"":"s"} carried no slot record, so their whole stint is gate run.`:""};
 // The chart's layout follows the mock of #2222 (#2255): a left gutter holds each lane's title, unit and legend, its axis
 // values stand at the left of the plot, and the bands run right of the gutter. A thin bar sits under the Machine lane,
 // its segments under their bands, and each label prints the column's name in bold with its effective time and its
@@ -164,7 +173,11 @@ function profTripChart(t,cols){
  // The trip bar is thin, it has the plot's width and it sits under the Machine lane (#2255): one segment a column, each
  // under its band, and a column with no median paints no colour.
  const barBands=bands.map(b=>{const painted=(b.c.median_s||0)>0;
-  return `<rect class="ptb-seg ptc${painted?` pts-${esc(b.c.column)}`:" ptb-none"}" x="${b.x0.toFixed(1)}" y="${barY.toFixed(1)}" width="${Math.max(0,b.x1-b.x0).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(profTripTitle(b.c))}</title></rect>`}).join("");
+  const w=Math.max(0,b.x1-b.x0),y=barY.toFixed(1),sp=painted?profGatingSplit(b.c):null;
+  // #2317: the Gating segment splits into its slot wait and its gate run, each in its own shade of the Gating colour.
+  if(sp)return `<rect class="ptb-seg ptc pts-gating ptb-wait" x="${b.x0.toFixed(1)}" y="${y}" width="${(w*sp.wait).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`Gating: slot wait ${profTripNum(b.c.slot_wait_s)}`)}</title></rect>`
+   +`<rect class="ptb-seg ptc pts-gating ptb-run" x="${(b.x0+w*sp.wait).toFixed(1)}" y="${y}" width="${(w*sp.run).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`Gating: gate run ${profTripNum(b.c.gate_run_s)}`)}</title></rect>`;
+  return `<rect class="ptb-seg ptc${painted?` pts-${esc(b.c.column)}`:" ptb-none"}" x="${b.x0.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(profTripTitle(b.c))}</title></rect>`}).join("");
  const bar=`<rect class=ptbbar x="${G}" y="${barY.toFixed(1)}" width="${W}" height="${PROF_TRIP_BAR}"></rect>`+barBands;
  // One line joins the points of the columns it crosses (#2253): a column with no point ends the run, and that stretch
  // is marked as no record, never drawn as a zero. The mark is a band over the lane from its top, so it stands off the
@@ -266,7 +279,10 @@ function profTripLanes(t){
  const mach=`<div class=ptlh>Machine &middot; min-max per line <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU ${span(cpu)} <i class="ptkey ptkey-ram"></i>RAM ${span(ram)}</span></div>`
   +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns, each scaled from its own lowest to its own highest reading, or at mid height when it holds one reading" preserveAspectRatio=none>`
   +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,cpu,"ptl-cpu",(c,v)=>v==null?"CPU: no reading":`CPU ${profTripPct(v)} of the whole machine`)}${profTripLine(parts,"ram",PROF_MACH_H,ram,"ptl-ram",(c,v)=>v==null?"RAM: no reading":`RAM ${profTripPct(v)} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
- const strip=`<div class=ptstrip>${parts.map(({c,w})=>`<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${w.toFixed(1)} 1 0"></i>`).join("")}</div>`;
+ // #2317: the Gating segment splits into its slot wait and its gate run, in the same two shades the desktop bar draws.
+ const strip=`<div class=ptstrip>${parts.map(({c,w})=>{const sp=(c.median_s||0)>0?profGatingSplit(c):null;
+  if(sp)return `<i class="ptseg pts-gating ptb-wait" style="flex:${(w*sp.wait).toFixed(1)} 1 0"></i><i class="ptseg pts-gating ptb-run" style="flex:${(w*sp.run).toFixed(1)} 1 0"></i>`;
+  return `<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${w.toFixed(1)} 1 0"></i>`}).join("")}</div>`;
  const labels=`<div class=ptlabels>${cols.map(c=>`<span class=ptlab><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i>${esc(c.label)} ${profTripTime(c)}</span>`).join("")}</div>`;
  return tok+mach+strip+labels}
 function profTripFacts(t){
@@ -284,15 +300,17 @@ function profTrip(t,phone){
  // takes the header `Time per issue` it carried in #2256. Both screens print a token count in k or M, so the phone and
  // the desktop never drift (#2253).
  const dash="&#8212;";
- const table=`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Stage</th><th>Min</th><th>Time per issue</th><th>p85</th><th>Max</th><th>Parallelism</th><th>Effective time</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
+ const table=`<table id=proftt aria-label="The trip of an issue, a board column a row"><thead><tr><th>Stage</th><th>Min</th><th>Time per issue</th><th>p85</th><th>Max</th><th>Parallelism</th><th>Effective time</th><th>Tokens / issue</th><th>CPU mean</th><th>RAM mean</th><th>Slot wait</th><th>Gate run</th></tr></thead><tbody>${cols.map(c=>`<tr data-p="trip/${esc(c.column)}"><td class=pn><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i><span class=pnm>${esc(c.label)}</span></td>`
   +`<td>${profTripNum(c.min_s)}</td><td>${profTripNum(c.median_s)}</td><td>${profTripNum(c.p85_s)}</td><td>${profTripNum(c.max_s)}</td>`
   +`<td>${profTripPar(c.parallelism)}</td><td>${profTripNum(c.effective_s)}</td>`
   +`<td>${profTokUnit(c.tokens_per_issue)}</td>`
-  +`<td>${(c.cpu||{}).mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${(c.ram||{}).mean!=null?profTripPct(c.ram.mean):dash}</td></tr>`).join("")}</tbody></table>`;
+  +`<td>${(c.cpu||{}).mean!=null?profTripPct(c.cpu.mean):dash}</td><td>${(c.ram||{}).mean!=null?profTripPct(c.ram.mean):dash}</td>`
+  +`<td>${c.column==="gating"&&c.slot_wait_s!=null?profTripNum(c.slot_wait_s):dash}</td><td>${c.column==="gating"&&c.gate_run_s!=null?profTripNum(c.gate_run_s):dash}</td></tr>`).join("")}</tbody></table>`;
  // The rework line (#2292): a stint that went back to work counts in no column; the rule layer words the line.
  const rw=t.rework&&t.rework.text?`<p class=tprw>${esc(t.rework.text)}</p>`:"";
  // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
- if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.</p>`
+ const noSlot=profNoSlotGates(t);
+ if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.${noSlot}</p>`
   +profTripFacts(t)+profTripLanes(t)+table+rw+`</section>`;
  // A RAM field the record never carried is named, so a dash never reads as zero memory use (#2253).
  const ramReason=t.ram_minutes===0?"No RAM reading in this window: the load record has no memory field there.":"";
@@ -306,7 +324,7 @@ function profTrip(t,phone){
  // machine facts stand in one note under the table, so the chart opens as the mock opens.
  const sub=[`${n} deliveries in the last ${span}: the bar folds ${cols.length} segments, one per board column, in the order of the rows below.`,
   "Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.",
-  "CPU and RAM are readings of the whole machine, in percent of it; each line is scaled to its own lowest and highest reading in the window."].join(" ");
+  "CPU and RAM are readings of the whole machine, in percent of it; each line is scaled to its own lowest and highest reading in the window."].join(" ")+noSlot;
  const foot=[sentence, badLoad, ramReason].filter(Boolean).join(" ");
  return `<section id=proftrip>${head}<p class=tpn>${sub}</p>`
   +profTripChart(t,cols)+table+`<p class=ptfoot>${foot}</p>`+rw+`</section>`}
