@@ -57,8 +57,9 @@ def _node(mod, body):
     lim = page[page.index("let limS=null"):page.index("async function limLoad()")]
     for fn in ("function limRender(", "function limWrite(", "function kanHtml("):
         assert fn in lim, f"{fn!r} left the // lim slice: fix the harness, not the renderer"
-    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:"",value:""});'
-            'const setBar=()=>{};function setChip(){}')
+    # a field the page has not drawn carries no value; a test that types one sets `value` itself
+    stub = ('const STORE=new Proxy({},{get:(o,s)=>o[s]||(o[s]={innerHTML:"",textContent:"",className:"",value:undefined})});'
+            'const $=s=>STORE[s];const setBar=()=>{};function setChip(){}')
     p = subprocess.run(["node", "-"], input="\n".join([stub, esc, sett, lim, body]),
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
@@ -73,12 +74,13 @@ def test_a_valid_edit_posts_once_with_the_confirm_the_route_writes_on(hub):
 let n=0,seen=null;
 limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
 limRender();
+STORE["#limc"].value="2000";   // the reader typed 2000 into the drawn field
 limWrite("cap",async b=>{n++;seen=b;return {diff:["Spend & limits · token cap: 1000 -> 2000"],state:{...limS,cap:2000}}}).then(()=>{
-  console.log(JSON.stringify({n,seen,ok:limOK,val:limVal,state:limS.cap,pend:limPend}))});""")
+  console.log(JSON.stringify({n,seen,ok:limOK,val:limVal,state:limS.cap}))});""")
     assert got["n"] == 1, got
     assert got["seen"]["confirm"] is True, got["seen"]
-    assert str(got["seen"]["cap"]) in ("", "1000"), got["seen"]   # the DOM stub carries no typed value
-    assert (got["ok"], got["val"], got["state"], got["pend"]) == ("cap", "2000", 2000, None), got
+    assert got["seen"]["cap"] == "2000", got["seen"]   # the typed value, never the saved one and never a blank
+    assert (got["ok"], got["val"], got["state"]) == ("cap", "2000", 2000), got
 
 
 def test_a_pause_in_typing_posts_the_field_once(hub):
@@ -92,15 +94,35 @@ setTimeout(()=>console.log(JSON.stringify({n,ok:limOK})),120);""")
     assert got == {"n": 1, "ok": "cap"}, got
 
 
-def test_every_write_carries_the_whole_theme_so_one_file_lands_whole(hub):
+def test_one_field_write_merges_its_edit_onto_the_saved_state(hub):
+    """The body is the whole theme, because the route writes one file whole; only the edited field leaves the saved state."""
     mod, _, _ = hub
     got = _node(mod, """
 let seen=null;limS={guard:"off",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
-$("#limg").checked=true;$("#limc").value="3000";$("#limf").value="4";
 limRender();
-limWrite("guard",async b=>{seen=b;return {diff:["token guard: on"],state:{guard:"on",cap:3000,factor:4}}}).then(()=>{
+STORE["#limg"].checked=true;   // only the guard is edited; the other rows are drawn but untouched
+STORE["#limc"].value="1000";STORE["#limf"].value="2";
+limWrite("guard",async b=>{seen=b;return {diff:["token guard: on"],state:{guard:"on",cap:1000,factor:2}}}).then(()=>{
   console.log(JSON.stringify(seen))});""")
-    assert got == {"guard": "on", "cap": "3000", "factor": "4", "confirm": True}, got
+    assert got == {"guard": "on", "cap": "1000", "factor": "2", "confirm": True}, got
+
+
+def test_a_refused_value_in_one_field_is_never_reposted_by_another(hub):
+    """A cap the hub refused stays in its own field; a later guard save never carries it, and the cap is not written."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let sent=[];
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
+limRender();
+STORE["#limc"].value="1.5";
+const send=async b=>{sent.push(b);return b.cap==="1.5"?{err:"token cap must be a positive whole number"}:{diff:[],state:{...limS,guard:"off"}}};
+limWrite("cap",send).then(async()=>{
+  STORE["#limg"].checked=false;
+  await limWrite("guard",send);
+  console.log(JSON.stringify({sent,cap:limS.cap,bad:limBad}));});""")
+    assert got["sent"], got            # the refused cap was tried once
+    assert [b.get("cap") for b in got["sent"]].count("1.5") == 1, got["sent"]   # and never again by the guard save
+    assert got["cap"] == 1000, got
 
 
 # --- the field shows a check mark, the group one line with the value and its age
@@ -122,12 +144,29 @@ def test_the_group_shows_one_line_that_names_the_saved_value_and_its_age(hub):
     mod, _, _ = hub
     got = _node(mod, """
 limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
+STORE["#limc"].value="2000";
 limWrite("cap",async()=>({diff:["x"],state:{guard:"on",cap:2000,factor:2}})).then(()=>{
   limAt=Date.now()-4000;limRender();
   const h=STORE["#lbody"].innerHTML,set=h.slice(h.indexOf("data-blk=settings"),h.indexOf("data-blk=kanban"));
-  console.log(JSON.stringify({n:(set.match(/Saved · /g)||[]).length,line:(set.match(/Saved · [^<]*/)||[""])[0]}))});""")
+  const notes=[...set.matchAll(/<p class=note>(.*?)<\\/p>/g)],last=notes.length?notes[notes.length-1][1]:"";
+  console.log(JSON.stringify({n:(set.match(/Saved · /g)||[]).length,line:last.replace(/<[^>]*>/g,"").replace(/\\s+/g," ").trim()}))});""")
     assert got["n"] == 1, got
-    assert got["line"].strip() == "Saved · daily token cap 2000 · 4s ago", got
+    assert got["line"] == "✓ Saved · daily token cap 2000 · 4s ago", got
+
+
+def test_the_age_line_grows_with_the_clock_and_no_new_write(hub):
+    """The line reads the clock as it ticks: the age moves on with no second write and no re-render."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let n=0;
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
+STORE["#limc"].value="2000";
+limWrite("cap",async()=>{n++;return {diff:["x"],state:{guard:"on",cap:2000,factor:2}}}).then(()=>{
+  limAt=Date.now()-4000;limRender();
+  limTick(Date.now()+3000);
+  console.log(JSON.stringify({n,age:STORE["#limage"].textContent}))});""")
+    assert got["n"] == 1, got
+    assert got["age"] == "7s ago", got
 
 
 # --- an invalid value marks the field and writes nothing
@@ -187,10 +226,9 @@ kanWrite("Doing",async b=>{n++;return {diff:["Kanban · Doing: 6 -> 5"],state:{f
 def _set_bar(mod):
     page = mod.PAGE
     src = page[page.index("const STH="):page.index("function setTheme(")]
+    # the four names the bar's own slice calls from outside it: the DOM accessor, the stored theme, and two dirty tests
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:false,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
-            'const kanDirty=()=>false;'
-            'const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null;'
             'let RO=false;const RO_WHY="";')
     body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;setBar();'
             'out[t]={save:$("#ssave").hidden,disc:$("#sdisc").hidden,text:$("#schg").textContent}}'
