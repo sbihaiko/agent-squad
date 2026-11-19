@@ -275,11 +275,12 @@ doing_max=$(sg_column_limit Doing); cm_rc=$?
 case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(sg_column_cards Doing "$F/board" "$F/issues.json")   # a hand hold counts in Doing (#2430)
   [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass"; exit 0; } ;; esac
 # A card limit on the Batching column (#2438): a card in Batching waits for its landing, so a full column holds dispatch. The
-# pass starts no new run while Batching holds its maximum, and says so once; the count is the pass's own board read, so the
-# limit costs no second read. A column with no limit never refuses the pass.
+# pass starts no new run while Batching holds its maximum, and says so once. Batching is a column of its own, so its cards are
+# a second count over the pass's own board file -- no new GitHub read, but neither is there a Doing count to reuse. The Doing
+# refusal runs first, so when both columns are full the pass names Doing alone. A column with no limit never refuses the pass.
 batching_max=$(sg_column_limit Batching); cb_rc=$?
 [ "$cb_rc" -eq 0 ] || { echo "FRONTIER the Batching column limit is unreadable; a defect, not no limit: nothing dispatched this pass"; exit 0; }
-case "$batching_max" in ''|*[!0-9]*) ;; *) batching_n=$(sg_column_cards Batching "$F/board")
+case "$batching_max" in ''|*[!0-9]*) ;; *) batching_n=$(sg_column_cards Batching "$F/board" "$F/issues.json")
   [ "$batching_n" -lt "$batching_max" ] || { echo "FRONTIER column Batching full: $batching_n of $batching_max card(s) in Batching; the cards unit stopped the pass; nothing dispatched this pass"; exit 0; } ;; esac
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
 git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
