@@ -2129,7 +2129,7 @@ landconflict() {
 # `wland-<run>` for each claimed run that landed; the caller writes the marker of <run>. With no other run waiting, with
 # SG_LAND_BATCH=1, or without SG_LAND_QUEUE (a hand call), this is `land` itself, unchanged.
 land_queue() {
-  local self=${1:-} srd=${2:-${1:-}} lim=${SG_LAND_BATCH:-4} q r h n=1 rc i
+  local self=${1:-} srd=${2:-${1:-}} lim=${SG_LAND_BATCH:-4} q r h n=1 rc brc i
   local -a cr=() crd=()
   case $lim in ''|*[!0-9]*) lim=4;; esac
   if [ "${SG_LAND_QUEUE:-}" != 1 ] || [ "$lim" -le 1 ] || [ -z "$self" ]; then land "$@"; return; fi
@@ -2146,7 +2146,7 @@ land_queue() {
   [ ${#cr[@]} -gt 0 ] || { land "$@"; return; }
   echo "WAVE BATCH ${self##*/}: it lands with ${cr[*]} behind one tip gate"
   local -a args=("${self##*/}" "$srd"); for i in "${!cr[@]}"; do args+=("${cr[$i]}" "${crd[$i]}"); done
-  land_batch "${args[@]}"; rc=$?
+  land_batch "${args[@]}"; rc=$?; brc=$rc
   if [ $rc = 10 ]; then
     # The fallback (#2058): no bisection in this version. Each run of the batch takes today's one-run landing, with its own
     # gate and its own red path, so a red batch costs one gate more and changes no red path. The claimed runs go first, so the
@@ -2158,8 +2158,9 @@ land_queue() {
     land "${self##*/}" "$srd"; rc=$?
   fi
   # (#2330) A batch that waits (exit 1 or 2) lands none of its runs, so each claimed run goes back to the queue with its folder,
-  # and the next pass that holds the landing lock claims it again.
-  if [ $rc = 1 ] || [ $rc = 2 ]; then
+  # and the next pass that holds the landing lock claims it again. The batch's own exit decides it, never the code of the
+  # fallback's last landing: a run that landed alone or retired there never goes back to the queue.
+  if [ $brc = 1 ] || [ $brc = 2 ]; then
     for i in "${!cr[@]}"; do [ -e "$SG_STATE/auto/wland-${cr[$i]}.queued" ] || printf '%s\n' "${crd[$i]}" > "$SG_STATE/auto/wland-${cr[$i]}.queued"; done
   fi
   for r in "${cr[@]}"; do [ "$(cat "$SG_STATE/auto/wland-$r.busy" 2>/dev/null)" = "$$" ] && rm -f "$SG_STATE/auto/wland-$r.busy"; done
