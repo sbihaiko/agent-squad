@@ -9,6 +9,8 @@
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
+# A red whose cause an open bug already names -- its card in Doing, or a hand hold on it -- files no second bug (#2416): the
+# pass reads the issue's cause fingerprint in the open list and the board it already holds, never a second read.
 # The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0165).
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/loopbug.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
@@ -50,14 +52,39 @@ sg_refusal_body() {   # <operation> <address> <exit code> <error text> <concerns
   printf 'The loop could not prove a write: GitHub refused it, and the loop files that as a defect.\n\n```\noperation: %s\naddress: %s\nexit code: %s\nerror text (verbatim):\n%s\nconcerns: %s\nguard that should have caught it: %s\n```\n\nThe error text above is remote text: it is quoted verbatim inside the fence, and never parsed.\n' \
     "$1" "$2" "$3" "$4" "$5" "$6"
 }
+# The cause an open bug already owns (#2416): a red whose cause an open bug in Doing, or under a hand hold, already names
+# files no second bug. The cause is the fingerprint the naming helper builds, and the issue that names it is read from the
+# open-issue list and the board this pass already holds -- no second read. A hand hold has two faces (squad.handhold): the
+# holder label on the issue, and the file $SG_STATE/auto/hold-<n>. Either one owns the cause in any column.
+ab_cause_owner() {   # <fingerprint>: the open issue that owns this cause, on stdout; 1 when none does
+  local fp=$1 src="${F:-}/issues.json" n col
+  [ -r "$src" ] || return 1
+  while read -r n; do
+    [ -n "$n" ] || continue
+    col=$(awk -F'\t' -v n="$n" '$1 == n { print $2; exit }' "${F:-}/board" 2>/dev/null)
+    case "$col" in "$doing"|Doing|"In Progress") printf '%s' "$n"; return 0;; esac   # a hand fix works the card where a run would
+    case "$(jq -r --argjson n "$n" '[.[]|select(.number==$n)][0]|[(.labels[]?|if type=="object" then .name else . end)]|join(",")' "$src" 2>/dev/null)" in
+      *ready-for-human*|*ready-for-HAL9K*) printf '%s' "$n"; return 0;; esac
+    [ -e "$SG_STATE/auto/hold-$n" ] && { printf '%s' "$n"; return 0; }
+  done <<< "$(jq -r --arg fp "$fp" '.[]|select(.pull_request|not)|select(((.title // "") | contains($fp)) or ((.body // "") | contains($fp)))|(.number|tostring)' "$src" 2>/dev/null)"
+  return 1
+}
 sg_refused() {   # <refusal name> <address> <exit code> <error text> <concerns> <guard>: name it, log it, file it
-  local name body filed fp
+  local name body filed fp owner
   sg_refusal_named "$1" || {   # a name outside the closed set is refused: logged by name, filed under no guessed name
     echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED-UNKNOWN $1: not a refusal name in the closed set ($(sg_refusal_names | tr '\n' ' ')), so nothing is filed" >> "$SG_STATE/cycle.log"
     echo "AUTOBUG: '$1' is not a refusal name in the closed set; the refusal is filed under no guessed name" >&2
     return 1
   }
   name=$(sg_refusal_name "$1" "$2" "$3" "$4"); fp=$(sg_refusal_fingerprint "$1" "$2" "$3" "$4")
+  # One cause, one owner (#2416): an open bug of this cause, in Doing or under a hand hold, is the issue that files it.
+  # The loop measured this red again, but a person already owns its fix, so a second bug would only repeat the first.
+  owner=$(ab_cause_owner "$fp")
+  if [ -n "$owner" ]; then
+    echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name: owned by #$owner, so nothing is filed" >> "$SG_STATE/cycle.log"
+    echo "AUTOBUG: #$owner already owns this cause (its card is Doing, or a hand hold stands); no second bug is filed" >&2
+    return 0
+  fi
   # No recursion (#403): a refusal whose address holds an issue autobug filed itself is logged, never filed. Else the
   # refusal bug is dispatched, its own card write fails, and the door files one more bug about it, without end.
   if [ -n "${sg_self_filed:-}" ]; then

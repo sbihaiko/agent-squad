@@ -907,6 +907,26 @@ r=$(run)
 [ "$(marked 1759)" = 1 ] && ok "B2: a record past the window yields to a Todo read" || ko "B2: #1759 hidden by a stale Backlog record: '$r'"
 [ "$(marked 1760)" = 1 ] && ok "B2: an older Todo write on the same card cannot resurrect over the read either" || ko "B2: #1760 not dispatched: '$r'"
 
+# L (#2416): an issue whose landing is in the base and whose publish is pending is no work. A hand landing (`ffland.sh`)
+# puts the commits in dev and leaves the issue open: the publish closes it. The frontier reads the base's own commits -- the
+# `Refs #N` line every landing carries -- and dispatches no run for an issue the base already carries.
+scene landed
+issues '[{"number":771,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":772,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+git init -q "$d/wk"
+git -C "$d/wk" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+git -C "$d/wk" branch -M dev
+git -C "$d/wk" checkout -q -b fix/771
+git -C "$d/wk" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Land the fix for 771" -m "Refs #771"
+git clone -q --bare "$d/wk" "$d/remote.git"
+landout=$(SG_BASE=dev SG_LAND_REMOTE=$d/remote.git SG_LAND_STATUS=off bash "$(dirname "$src")/ffland.sh" fix/771 771 2>&1)
+landsha=$(printf '%s\n' "$landout" | sed -nE 's/^FFLAND ([0-9a-f]+)$/\1/p')
+[ -n "$landsha" ] && ok "L1: ffland lands #771 in dev and leaves its issue open" || ko "L1: ffland did not land: '$landout'"
+git -C "$d/co" init -q; git -C "$d/co" fetch -q "$d/remote.git" dev:refs/remotes/origin/dev   # the checkout sees the base the landing pushed
+r=$(run)
+[ "$(marked 771)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "L1: the frontier dispatches no run for an issue dev already carries" || ko "L1: #771 marked=$(marked 771), $(lines "$LAUNCHLOG") launch(es): '$r'"
+[ "$(marked 772)" = 1 ] && ok "L1: the issue beside it still dispatches" || ko "L1: #772 not dispatched: '$r'"
+case "$r" in *"landed, publish pending"*) ok "L1: the frontier names the card as landed, publish pending";; *) ko "L1: no landed line: '$r'";; esac
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
