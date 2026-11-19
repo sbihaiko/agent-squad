@@ -1,8 +1,8 @@
 """The card limit of each board column (#2287): `columns.<column>.max_cards` in the project settings.
 
 The project settings file accepts one limit per board column, a whole number from 1 to 100 or `none`. The plugin
-defaults follow the present machine limits, so the first release changes no behaviour. A column limit never raises a
-machine cap: the lower of the two applies.
+defaults follow the present machine limits, so the first release changes no behaviour. The module answers a card limit
+only (#2430): a machine cap counts run slots, and the pass that bounds slots reads it in its own unit.
 """
 import pytest
 import yaml
@@ -75,14 +75,6 @@ def test_a_project_may_change_a_column_limit(tmp_path):
     assert got == {**TABLE, "Doing": 2, "Todo": 20}
 
 
-def test_the_lower_of_a_column_limit_and_a_machine_cap_applies():
-    assert B.effective(4, 2) == 2
-    assert B.effective(2, 4) == 2
-    assert B.effective(None, 4) == 4
-    assert B.effective(3, None) == 3
-    assert B.effective(None, None) is None
-
-
 def test_a_column_with_no_limit_answers_none(tmp_path):
     assert B.limit("Todo", tmp_path) is None
     assert B.limit("Doing", tmp_path) == 6
@@ -95,8 +87,11 @@ def test_a_project_null_keeps_an_explicit_none_over_a_default_number(tmp_path):
     assert B.limits(tmp_path)["Doing"] is None
 
 
-def test_the_effective_limit_comes_from_the_command_line(tmp_path, capsys):
-    # The dispatch passes read the lower of the column limit and the machine cap through this one command, so a column
-    # never raises a machine cap.
-    B.main(["Doing", "--target", str(tmp_path), "--machine-cap", "2"])
-    assert capsys.readouterr().out.strip() == "2"
+def test_the_command_answers_a_card_limit_and_takes_no_machine_cap(tmp_path, capsys):
+    # #2430: the column-limit seam answers a card limit only. A run slot is another unit, read by the pass that bounds
+    # run slots, so this command holds no cap and refuses one.
+    B.main(["Doing", "--target", str(tmp_path)])
+    assert capsys.readouterr().out.strip() == "6"
+    with pytest.raises(SystemExit):
+        B.main(["Doing", "--target", str(tmp_path), "--machine-cap", "2"])
+
