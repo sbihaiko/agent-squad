@@ -2,10 +2,10 @@
 # Rule R leaves a card the owner froze, and never moves a card forward for a run that stopped needs-human or failed.
 #
 # A run that reached the landing cap stopped needs-human; wave.sh stuck() froze its issue (frozen:owner) and put the card
-# in Todo. Rule R then read the stale work branch, still ahead of dev, and wrote Code Complete over it: nothing had landed
+# in Todo. Rule R then read the stale work branch, still ahead of dev, and wrote Landing over it: nothing had landed
 # and the owner was the next actor. The freeze is the owner's hold on the column the work reached, so R leaves it alone
 # and says why in cycle.log. A stopped run's work branch is stale in the same way: it never lifts the Todo or Blocked its
-# own verdict set. An issue with no such freeze or stop still follows its branch to Code Complete.
+# own verdict set. An issue with no such freeze or stop still follows its branch to Landing.
 # Stubbed gh and board.sh; a temp state dir. usage: bash test-janitor-frozen-owner.sh [janitor.py]
 unset SG_BOARD_VOCAB   # this suite reads the legacy option names
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -69,16 +69,16 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
   || ko "#3001 moved: $(bc) $o"
 /usr/bin/grep -q 'BOARD-FROZEN #3001: frozen:owner holds the card in Todo' "$T/st/cycle.log" 2>/dev/null \
   && ok "cycle.log names why R left the frozen card" || ko "no BOARD-FROZEN reason: $(cat "$T/st/cycle.log" 2>/dev/null)"
-/usr/bin/grep -q 'would have written Code Complete' "$T/st/cycle.log" 2>/dev/null \
+/usr/bin/grep -q 'would have written Landing' "$T/st/cycle.log" 2>/dev/null \
   && ok "cycle.log names the write it held back" || ko "the held write is not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-# 3002 is frozen by nothing: the branch still sets Code Complete.
-/usr/bin/grep -q '^STATUS o 4 Code Complete 3002$' "$T/board.calls" 2>/dev/null \
-  && ok "an unfrozen issue with a work branch ahead still goes to Code Complete" || ko "#3002 not Code Complete: $(bc) $o"
+# 3002 is frozen by nothing: the branch still sets Landing.
+/usr/bin/grep -q '^STATUS o 4 Landing 3002$' "$T/board.calls" 2>/dev/null \
+  && ok "an unfrozen issue with a work branch ahead still goes to Landing" || ko "#3002 not Landing: $(bc) $o"
 # 3003 stopped needs-human: its verdict sets Blocked, and the stale branch never lifts it.
 /usr/bin/grep -q '^STATUS o 4 Blocked 3003$' "$T/board.calls" 2>/dev/null \
   && ok "a needs-human run keeps its card Blocked over a stale work branch" || ko "#3003 not Blocked: $(bc) $o"
-/usr/bin/grep -q 'Code Complete 3003' "$T/board.calls" 2>/dev/null \
-  && ko "#3003 moved forward over a stale work branch: $(bc)" || ok "and the stale branch never writes Code Complete"
+/usr/bin/grep -q 'Landing 3003' "$T/board.calls" 2>/dev/null \
+  && ko "#3003 moved forward over a stale work branch: $(bc)" || ok "and the stale branch never writes Landing"
 # 3004 failed: the card stays in the queue; the branch is stale.
 ! /usr/bin/grep -q ' 3004$' "$T/board.calls" 2>/dev/null \
   && ok "a failed run's card stays in Todo over a stale work branch" || ko "#3004 moved: $(bc) $o"
@@ -88,8 +88,8 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 # 3006 is the observed shape: a needs-human run whose child landed locally, with the work branch still ahead.
 /usr/bin/grep -q '^STATUS o 4 Blocked 3006$' "$T/board.calls" 2>/dev/null \
   && ok "a needs-human run that landed only locally keeps its card Blocked" || ko "#3006 not Blocked: $(bc) $o"
-/usr/bin/grep -q 'Code Complete 3006' "$T/board.calls" 2>/dev/null \
-  && ko "#3006 read Code Complete from a landing that stopped needs-human: $(bc)" || ok "and the local landing never writes Code Complete"
+/usr/bin/grep -q 'Landing 3006' "$T/board.calls" 2>/dev/null \
+  && ko "#3006 read Landing from a landing that stopped needs-human: $(bc)" || ok "and the local landing never writes Landing"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "test-janitor-frozen-owner: PASS" || echo "test-janitor-frozen-owner: FAIL"
 exit "$fail"
