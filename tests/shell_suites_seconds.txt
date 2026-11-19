@@ -241,6 +241,7 @@ test-wave-compete.sh 8.03
 test-wave-conflict.sh 66.38
 test-wave-dropped.sh 10.00
 test-wave-entry.sh 26.87
+test-wave-entrywait.sh 11.54
 test-wave-eviction.sh 24.51
 test-wave-issue.sh 32.89
 test-wave-land.sh 69.06

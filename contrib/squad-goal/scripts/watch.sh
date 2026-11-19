@@ -173,7 +173,10 @@ if v:
     # `wave.sh expired`, so a live run whose wave is old lands without waiting for its verdict. The run stays unread (the
     # landing clears the wave marker), so a failed landing is tried again next cycle, and the verdict path below reads a
     # run with a verdict exactly as it did before.
-    if [ -z "$v" ] && [ -e "$SG_STATE/auto/wave-${r##*/}" ] && bash "$(dirname "$0")/wave.sh" expired "${r##*/}"; then
+    # A wave also closes earlier, on its oldest entry (#2316, ADR-0145 rule 16): past SG_WAVE_ENTRY_WAIT_SECONDS it lands
+    # the children that entered, and the rest of the run enters a later wave. `wave.sh entrywait` is the predicate.
+    if [ -z "$v" ] && [ -e "$SG_STATE/auto/wave-${r##*/}" ] \
+      && { bash "$(dirname "$0")/wave.sh" expired "${r##*/}" || bash "$(dirname "$0")/wave.sh" entrywait "${r##*/}"; }; then
       land_wave "$r"; continue; fi
     [ -n "$v" ] && {
       # A run that ended lands its wave (#375, ADR-0145 rule 10): the branch the run cut at its start is rebased on $SG_BASE
