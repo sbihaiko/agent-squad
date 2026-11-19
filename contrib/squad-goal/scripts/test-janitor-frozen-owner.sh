@@ -29,10 +29,10 @@ case "$a" in
   *repos/x/y/branches*) printf 'fix/3001-a sha3001\nfix/3002-a sha3002\nfix/3003-a sha3003\nfix/3004-a sha3004\nfix/3005-a sha3005\nfix/3006-a sha3006\n';;
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
-  *projectsV2/4/items*) for n in 3001 3002 3003 3004 3005 3006; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done;;
+  *projectsV2/4/items*) for n in 3001 3002 3003 3004 3005 3006 3007; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done;;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 3001 3002 3003 3004 3005 3006; do
+    sep=""; for n in 3001 3002 3003 3004 3005 3006 3007; do
       case $n in
         3001|3005) labs='{"nodes":[{"name":"frozen:owner"}]}';;
         *) labs='{"nodes":[]}';;
@@ -60,6 +60,11 @@ rec run-needs-human-land '{"event":"run_start","run_id":"run-needs-human-land","
 {"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #3006 on fix/3006-a"}
 {"event":"land","node":"route.router.1","parent":"route","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"a7df8f1ecff77bdb5833721121a7a50be4066053"}}
 {"event":"verdict","verdict":"needs-human","reasons":["landing cap"],"exit_code":3}'
+# 3007 found the bug does not reproduce and landed nothing: the owner decides it, so the card never returns to the queue
+# and the stale branch never writes Landing (ADR-0029).
+mk run-no-repro 3007
+rec run-no-repro '{"event":"run_start","run_id":"run-no-repro","ts":"2026-10-19T18:03:00Z"}
+{"event":"verdict","verdict":"no-repro","reasons":["the defect does not reproduce at the tip"],"exit_code":40,"end_class":"does-not-reproduce"}'
 o=$(HOME="$T/home" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/none" \
     python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
@@ -90,6 +95,11 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
   && ok "a needs-human run that landed only locally keeps its card Blocked" || ko "#3006 not Blocked: $(bc) $o"
 /usr/bin/grep -q 'Landing 3006' "$T/board.calls" 2>/dev/null \
   && ko "#3006 read Landing from a landing that stopped needs-human: $(bc)" || ok "and the local landing never writes Landing"
+# 3007 is a no-repro run: the card is the owner's (Blocked), never the queue and never Landing.
+/usr/bin/grep -q '^STATUS o 4 Blocked 3007$' "$T/board.calls" 2>/dev/null \
+  && ok "a no-repro run leaves its card Blocked for the owner" || ko "#3007 not Blocked: $(bc) $o"
+/usr/bin/grep -q 'Landing 3007\|Todo 3007' "$T/board.calls" 2>/dev/null \
+  && ko "#3007 moved back or forward: $(bc)" || ok "and a no-repro run writes neither Todo nor Landing"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "test-janitor-frozen-owner: PASS" || echo "test-janitor-frozen-owner: FAIL"
 exit "$fail"

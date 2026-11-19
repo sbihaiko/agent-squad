@@ -3,6 +3,7 @@
 # rule R writes the loop-board card (Todo), rule O moves the bug card (To triage) and drops the dispatch marker, so the next cycle
 # re-dispatches it. A run that landed work stops at Landing and keeps its marker (#239: a local landing is not a
 # merge into the base, so it is not Done); a live run writes Run fields. Stubbed gh/board. usage: bash test-janitor-failed-dispatch.sh [janitor.py]
+unset SG_BOARD_VOCAB   # this suite reads the legacy option names, so the caller's vocabulary never decides it
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/issue_ledger.py" "$T/s/"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
@@ -96,6 +97,12 @@ printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #
 mk run-nccase; printf 'CHILD — GitHub issue #717 (one PR):\n' > "$T/co/runs/run-nccase/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #717"}\n{"event": "land", "node": "c1", "outcome": "pass", "reasons": ["review_nochange"], "effect": {"name": "review", "before": "a1b2c3", "head": "a1b2c3", "review": {"verdict": "No_Change"}}}\n{"event": "verdict", "verdict": "completed", "reasons": ["unproven:route.router.1"], "exit_code": 0}\n' > "$T/co/runs/run-nccase/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-nc2/record.jsonl" "$T/co/runs/run-ncfail/record.jsonl" "$T/co/runs/run-nccase/record.jsonl"
+# A run that found the bug does not reproduce made no wrong work: it is no failed dispatch, so nothing reaches wave.sh fail,
+# and the owner decides the issue (ADR-0029). One comment names the run and its evidence.
+mk run-nr; printf 'CHILD — GitHub issue #720 (one PR):\n' > "$T/co/runs/run-nr/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #720"}\n{"event": "verdict", "verdict": "no-repro", "reasons": ["the defect does not reproduce at the tip"], "exit_code": 40, "end_class": "does-not-reproduce"}\n' > "$T/co/runs/run-nr/record.jsonl"
+echo run-nr > "$T/st/auto/disp-720"
+touch -t 202001010000 "$T/co/runs/run-nr/record.jsonl"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "O: failed run -> card back to Todo" || ko "O #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
 [ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
@@ -122,6 +129,13 @@ x718=$(/usr/bin/grep '^fail 718 ' "$T/wave.calls" 2>/dev/null | sort)
 [ "$x718" = 'fail 718 run-nc2 ended completed: review_held nochange' ] && ok "O: the no-change child marks the issue it names (#2245 review)" || ko "O no-change child: '$(/usr/bin/grep '^fail 718 ' "$T/wave.calls" 2>/dev/null)'"
 x719=$(/usr/bin/grep '^fail 719 ' "$T/wave.calls" 2>/dev/null | sort)
 [ "$x719" = 'fail 719 run-nc2 ended completed: review_held own' ] && ok "O: a sibling child's own review decides its own issue, never the no-change child's (#2245 review)" || ko "O sibling issue: '$(/usr/bin/grep '^fail 719 ' "$T/wave.calls" 2>/dev/null)'"
+n720=$(/usr/bin/grep -c '^fail 720 ' "$T/wave.calls" 2>/dev/null)
+[ "${n720:-0}" = 0 ] && ok "O: a no-repro run is no failed dispatch, so wave.sh fail is never called (ADR-0029)" || ko "O no-repro counted: $n720 fail calls for #720"
+/usr/bin/grep -q 'NO-REPRO #720: run run-nr found the bug does not reproduce' "$T/st/cycle.log" 2>/dev/null && ok "O: cycle.log names the no-repro run and the reason" || ko "O cycle.log no-repro: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -Eq '^--add o 4 Blocked 720$|^o 4 Blocked 720$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Todo 720' "$T/board.calls" 2>/dev/null && ok "O: a no-repro run leaves its card for the owner, never back in Todo" || ko "O #720 card: $(cat "$T/board.calls" 2>/dev/null)"
+[ ! -e "$T/st/auto/disp-720" ] && ok "O: a no-repro run drops its dispatch marker" || ko "O disp-720 kept: $o"
+nc720=$(/usr/bin/grep -l 'the defect does not reproduce at the tip' "$T/st/cq/"*720* 2>/dev/null | /usr/bin/grep -c .)
+[ "$nc720" = 1 ] && /usr/bin/grep -q 'run-nr' "$T/st/cq/"*720* && ok "O: one comment names the run and the run's evidence" || ko "O no-repro comment: $(ls "$T/st/cq" 2>/dev/null)"
 n712=$(/usr/bin/grep -c '^fail 712 ' "$T/wave.calls" 2>/dev/null)
 [ "${n712:-0}" = 0 ] && ok "O: three unproven-only runs never count, so no SQUAD-NOT-STARTABLE marker (ADR-0164)" || ko "O unproven runs counted: $n712 fail calls for #712"
 n713=$(/usr/bin/grep -c '^fail 713 ' "$T/wave.calls" 2>/dev/null)

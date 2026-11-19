@@ -432,6 +432,16 @@ def test_the_table_counts_each_verdict_and_each_reason_of_a_failed_run(prof):
     assert t["label"] == "Time in failed runs", "the view names time, never waste"
 
 
+def test_the_table_counts_a_no_repro_run_apart_from_failed(prof):
+    """A run that found no bug is no failure on the Loop page: its own verdict row, and none of the failed seconds."""
+    rows = [run_row(NOW - 300, NOW - 180, "no-repro", ["the defect does not reproduce"]),
+            run_row(NOW - 180, NOW - 60, "failed", ["gate:red"])]
+    t = prof.failed_run_table(rows, 3600, NOW)
+    assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [
+        ("failed", "gate:red", 1, 120.0), ("no-repro", "", 1, 120.0)]
+    assert t["failed_seconds"] == 120.0
+
+
 def test_a_run_with_no_verdict_counts_as_running_up_to_now(prof):
     t = prof.failed_run_table([run_row(NOW - 120, None, None)], 3600, NOW)
     assert [(r["verdict"], r["reason"], r["count"], r["seconds"]) for r in t["rows"]] == [("running", "", 1, 120.0)]
