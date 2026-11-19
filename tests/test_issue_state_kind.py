@@ -139,6 +139,7 @@ def test_fresh_hub_board_cache_serves_status_and_kind_without_a_board_read(tmp_p
     assert calls == []
 
 
+@pytest.mark.heavy   # loads issue_state beside a stubbed live read: over the 2 s line on a loaded runner, never on an idle one
 @pytest.mark.parametrize("cache_state", ["missing", "stale"])
 def test_missing_or_stale_hub_board_cache_falls_back_to_live_read(tmp_path, monkeypatch, cache_state):
     cache = tmp_path / "hub-board.json"

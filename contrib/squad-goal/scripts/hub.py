@@ -684,15 +684,19 @@ def _imported(names, mods):
     return pkg is not None and all(_bound(pkg, n, m) for n, m in zip(names, mods))
 
 def _held_squad(roots, names):
-    """The modules this process already holds, when the first of them lives under one of the asked roots: the answer needs
-    no purge, so no other thread's import is disturbed. An empty answer sends the caller to the resolving path."""
+    """The modules this process already holds, when the first of them lives under the first asked root that holds a squad
+    package of its own: the answer needs no purge, so no other thread's import is disturbed. A copy under a later root never
+    answers for an earlier one that holds its own: the live tree's parent, ~/.claude, contains the plugin cache's copy, and
+    that copy answered for the checkout that stood first (#2474). An empty answer sends the caller to the resolving path."""
     try:
         mods = tuple(importlib.import_module("squad." + n) for n in names)
     except Exception:
         return ()
     here = getattr(mods[0], "__file__", None)
     if not here or not _imported(names, mods): return ()
-    if any(r and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(r).resolve()) for r in roots): return (mods,)
+    for r in roots:
+        if r and pathlib.Path(r, "squad", "__init__.py").is_file():
+            return (mods,) if pathlib.Path(here).resolve().is_relative_to(pathlib.Path(r).resolve()) else ()
     return ()
 
 def load_squad(roots, names=("caps", "run_caps")):
@@ -712,6 +716,12 @@ def load_squad(roots, names=("caps", "run_caps")):
         for m in _squad_names(): sys.modules.pop(m, None)
         try:
             for root in roots:
+                if not pathlib.Path(root, "squad", "__init__.py").is_file():
+                    # A root that holds no package is skipped rather than imported against: the import would answer with a
+                    # copy another root's parent happens to contain, and the message would name that copy as this root's
+                    # (#2474: ~/.claude contains the plugin cache's old squad).
+                    err = ModuleNotFoundError(f"{root} holds no squad package")
+                    continue
                 added = not (sys.path and sys.path[0] == root)   # the asked root goes first, else a squad earlier on sys.path answers for it
                 if added: sys.path.insert(0, root)
                 try:

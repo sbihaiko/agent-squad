@@ -449,12 +449,16 @@ def tree(acc, root="loop", window_s=None):
 MIN_SHARE = 0.01   # the Loop tab draws one percent of the loop's CPU and above; a smaller row has no reader (#2464)
 
 
-def trim(node, floor=MIN_SHARE):
+def trim(node, floor=MIN_SHARE, whole=None):
     """The tree cut to the rows a reader can tell apart: a child under `floor` of the loop's total time leaves with its
     whole subtree. A child's total is never above its parent's, so a row that leaves never hides a larger one, and the cut
-    is exact. The root stays, and every kept node keeps its own children, cut the same way."""
+    is exact. The root stays, and every kept node keeps its own children, cut the same way.
+    A tree with no measured total is left whole: a share is a share of a measurement, and every reading failing gives every
+    child share zero, so the cut would empty a tree that says only that nothing was measured (#2474)."""
+    if whole is None: whole = node.get("total_s") or 0
+    if whole <= 0: return node
     kept = dict(node)
-    kept["children"] = [trim(k, floor) for k in node.get("children") or [] if (k.get("share") or 0) >= floor]
+    kept["children"] = [trim(k, floor, whole) for k in node.get("children") or [] if (k.get("share") or 0) >= floor]
     return kept
 
 

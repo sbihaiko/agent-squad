@@ -305,11 +305,14 @@ def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
 
 
 def test_the_theme_opens_on_its_state_line():
-    """The theme's first line states on, off, draining or starting, before any other fact (#1280)."""
-    for state in ("on", "off", "draining", "starting"):
-        out = run_js(f"loopLogHtml({js_view(state=state)})")
-        m = re.match(r'<div class="lstate (\w+)">Loop \w+</div>', out)
-        assert m and m.group(1) == state, out[:140]
+    """The theme's first line states on, off, draining or starting, before any other fact (#1280).
+    The four states are read in one node call: four calls of about a second each crossed the 2 s line on a loaded runner,
+    and one call answers the same four lines (#2475)."""
+    states = ("on", "off", "draining", "starting")
+    out = run_js("[" + ",".join(f"loopLogHtml({js_view(state=s)})" for s in states) + "].join('\\u0000')")
+    for state, one in zip(states, out.split("\u0000"), strict=False):
+        m = re.match(r'<div class="lstate (\w+)">Loop \w+</div>', one)
+        assert m and m.group(1) == state, one[:140]
 
 
 def test_a_draining_loop_turns_the_switch_itself_warn_coloured():
