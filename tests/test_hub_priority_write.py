@@ -61,7 +61,8 @@ def hub(monkeypatch, tmp_path):
     def fake_read(route, transport=None):
         m = re.search(r"/issues/(\d+)(/sub_issues)?", route)
         n = int(m.group(1))
-        if m.group(2): return read_answer(mod.rest_subs.get(n, []))
+        if m.group(2):
+            return read_answer(mod.rest_subs.get(n, []))
         item = next((i for i in mod.board_cache.get("items") or [] if i.get("n") == n), {})
         return read_answer({"number": n, "body": item.get("body", ""), "labels": [{"name": x} for x in item.get("l") or []],
                             "state": str(item.get("s") or "open").lower()})
