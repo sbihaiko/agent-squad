@@ -70,8 +70,8 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
 }
 # A card limit on the Review column (#2287): the pass starts no review while the column holds its maximum. The bound is
 # the lower of the column limit and caps.reviews, the machine cap that also bounds Review. The count is this pass's single
-# board read, through the same seam every dispatcher uses. An unread limit is a defect, never "no limit": the pass names
-# it and starts no review.
+# board read, through the same seam every dispatcher uses. An unread limit falls back to caps.reviews with one alert;
+# only with no machine cap either is it a defect that starts no review.
 reviews_cap=$(sg_caps value reviews --target "$SG_CHECKOUT" 2>/dev/null)
 review_max=$(sg_board_limit_effective Review "$reviews_cap"); cm_rc=$?
 [ "$cm_rc" -eq 0 ] || { echo "BRANCHREVIEW the Review column limit is unreadable; a defect, not no limit: no review starts this pass"; exit 0; }

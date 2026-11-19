@@ -1,12 +1,14 @@
 #!/bin/bash
 # usage: . columnlimit.sh
 #   sg_column_limit <column> [target]                  the number, or nothing for no limit; exit 2 when the read fails
-#   sg_board_limit_effective <column> <machine_cap> [target]   the lower of the column limit and the machine cap; exit 2 on a failed read
+#   sg_board_limit_effective <column> <machine_cap> [target]   the lower of the column limit and the machine cap; on a failed
+#                                                              read, the machine cap and one alert; exit 2 with no machine cap
 # The card limit of one board column (#2287), from the plugin defaults and the project settings file, resolved by
 # squad/board_limits.py: the one module the frontier, the review pass and the hub read. `effective` combines the column
 # limit with the machine cap that also bounds it, so a column limit never raises a machine cap.
 # A read that fails is a defect, never "no limit": the function prints nothing, returns 2, and names the failure on stderr
-# once per pass. A caller stops on the failure instead of dispatching with an unread bound.
+# once per pass. `effective` then answers the machine cap with one alerts.log line, so a dispatcher keeps working inside the
+# machine bound; a caller with no machine cap stops on the failure instead of dispatching unbounded.
 _SG_COLUMN_ROOT=; _SG_COLUMN_LOGGED=
 sg_column_root() {   # the repository that holds squad/board_limits.py, or exit 1
   if [ -z "$_SG_COLUMN_ROOT" ]; then
@@ -39,7 +41,18 @@ sg_column_limit() {   # <column> [target]
   printf '%s\n' "$_SG_COLUMN_OUT"
 }
 sg_board_limit_effective() {   # <column> <machine_cap> [target]
-  sg_column_read "$1" "${2:-}" "${3:-}" || return $?
+  # An unread limit falls back to the machine cap, which bounds the column anyway: one alert names it, and dispatch
+  # continues inside the machine bound. With no numeric machine cap the read still fails.
+  if ! sg_column_read "$1" "${2:-}" "${3:-}"; then
+    case "${2:-}" in ''|*[!0-9]*) return 2 ;; esac
+    # One alert per episode: a caller reads in a subshell, so the marker is a file; a good read removes it.
+    if [ -n "${SG_STATE:-}" ] && [ ! -e "$SG_STATE/columnlimit-alert" ]; then
+      printf '%s COLUMNLIMIT the %s column limit is unreadable; the pass uses the machine cap %s\n' "$(date -u +%FT%TZ)" "$1" "$2" >> "$SG_STATE/alerts.log"
+      : > "$SG_STATE/columnlimit-alert"
+    fi
+    printf '%s\n' "$2"; return 0
+  fi
+  [ -z "${SG_STATE:-}" ] || rm -f "$SG_STATE/columnlimit-alert"
   case "$_SG_COLUMN_OUT" in none) return 0 ;; esac
   printf '%s\n' "$_SG_COLUMN_OUT"
 }

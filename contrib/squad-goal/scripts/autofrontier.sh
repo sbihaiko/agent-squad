@@ -266,8 +266,8 @@ export SG_STACK_BOARD="$F/board"   # stack.sh reads a parent spec's column from 
 export SG_STACK_GRAPH="$F/issues.json"   # stack.sh holds a card whose dependency component is invalid or unknown (#1984)
 # A card limit on the Doing column (#2287): the pass starts no card while the column holds its maximum, and says so once.
 # The bound is the lower of the column limit and caps.runs, the machine cap that also bounds Doing. The count is the pass's
-# own board read, so the limit costs no second read. An unread limit is a defect, never "no limit": the pass names it and
-# dispatches nothing.
+# own board read, so the limit costs no second read. An unread limit falls back to caps.runs with one alert, so dispatch
+# continues inside the machine bound; only with no machine cap either is it a defect that dispatches nothing.
 doing_max=$(sg_board_limit_effective Doing "$runs_cap"); cm_rc=$?
 [ "$cm_rc" -eq 0 ] || { echo "FRONTIER the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass"; exit 0; }
 case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2=="In Progress"{n++} END{print n+0}' "$F/board")

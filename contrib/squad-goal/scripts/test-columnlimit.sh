@@ -40,10 +40,17 @@ mkdir -p "$T/state"; export SG_STATE=$T/state
 got=$(sg_board_limit_effective Doing 3 "$T/co" 2>/dev/null); rc=$?
 [ "$rc" = 0 ] && [ "$got" = 3 ] && ok "an unread limit falls back to the machine cap" || ko "effective on a broken module: '$got' rc=$rc, not 3 rc=0"
 [ "$(/usr/bin/grep -c 'COLUMNLIMIT' "$T/state/alerts.log" 2>/dev/null)" = 1 ] && ok "the fallback writes one alert" || ko "alerts.log: '$(cat "$T/state/alerts.log" 2>/dev/null)'"
-sg_board_limit_effective Doing 3 "$T/co" > /dev/null 2>&1
-[ "$(/usr/bin/grep -c 'COLUMNLIMIT' "$T/state/alerts.log" 2>/dev/null)" = 1 ] && ok "the alert is written once per pass" || ko "a second fallback alerted again"
+got=$(sg_board_limit_effective Doing 3 "$T/co" 2>/dev/null)
+[ "$(/usr/bin/grep -c 'COLUMNLIMIT' "$T/state/alerts.log" 2>/dev/null)" = 1 ] && ok "the alert is written once per episode" || ko "a second fallback alerted again"
 got=$(sg_board_limit_effective Doing "" "$T/co" 2>/dev/null); rc=$?
 [ "$rc" = 2 ] && [ -z "$got" ] && ok "with no machine cap the unread limit still fails" || ko "no cap on a broken module: '$got' rc=$rc"
+# A good read ends the episode, so a later failure alerts again.
+. "$T/s/columnlimit.sh"; SG_SQUAD=$repo; limits 7
+got=$(sg_board_limit_effective Doing 3 "$T/co" 2>/dev/null)
+[ "$got" = 3 ] && [ ! -e "$T/state/columnlimit-alert" ] && ok "a good read ends the alert episode" || ko "after a good read: '$got', marker $(ls "$T/state")"
+. "$T/s/columnlimit.sh"; SG_SQUAD=$T/broken
+got=$(sg_board_limit_effective Doing 3 "$T/co" 2>/dev/null)
+[ "$(/usr/bin/grep -c 'COLUMNLIMIT' "$T/state/alerts.log")" = 2 ] && ok "a new failure alerts again" || ko "alerts after a new failure: $(/usr/bin/grep -c COLUMNLIMIT "$T/state/alerts.log")"
 unset SG_STATE
 
 # 5) A missing squad/board_limits.py is the same defect, never an empty limit.
