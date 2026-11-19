@@ -199,7 +199,10 @@ def test_a_held_card_whose_run_is_dead_reads_held_and_ended(hub, monkeypatch, tm
 
 
 def test_a_held_card_whose_run_is_live_reads_running(hub, monkeypatch, tmp_path):
-    runs = _run_folder(tmp_path, RUN, os.getpid(), NOW, NOW)
+    # The record moves at the moment of the read, never at this module's import: the holder reader asks the process table only
+    # for a run the loop's list names or whose record moved inside `NO_PID_IDLE_S` (300 s), and a starved worker runs this test
+    # long after the import, so a fixture stamped then read as an old record (#2474).
+    runs = _run_folder(tmp_path, RUN, os.getpid(), NOW, time.time())
     # The chip's own rule is under test, not the host's process table: `run_live` answers live on a Linux runner and dead on
     # a macOS one for the same fixture, because it compares the pid's real start with the record's. The stub fixes the fact,
     # and `tests/test_reap.py` proves the predicate it stands for.

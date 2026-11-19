@@ -53,6 +53,39 @@ def test_an_empty_root_before_the_real_one_is_skipped(hub, tmp_path):
     assert pathlib.Path(caps.__file__).resolve().is_relative_to(ROOT.resolve()), caps.__file__
 
 
+def _package(root, who):
+    pkg = root / "squad"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    for name in ("caps", "run_caps"):
+        (pkg / f"{name}.py").write_text(f"WHO = {who!r}\n")
+    return root
+
+
+def test_a_held_copy_under_a_later_root_never_answers_for_an_earlier_root(hub):
+    """#2475: the copy this interpreter already holds answers only under the FIRST root that holds a package. The live tree's
+    parent is `~/.claude`, which contains the plugin cache's old copy, and that copy answered for the checkout that stood
+    first, so every process read failed."""
+    import importlib
+    import sys
+
+    before = _ambient()
+    with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+        _package(pathlib.Path(a), "first")
+        _package(pathlib.Path(b), "later")
+        sys.path.insert(0, b)   # the later root's copy is the one this process holds, the plugin cache's place
+        try:
+            importlib.import_module("squad.caps")
+            caps, _ = hub.load_squad([a, b])
+            assert caps.WHO == "first", "the held copy under the later root answered for the earlier root"
+            assert pathlib.Path(caps.__file__).resolve().is_relative_to(pathlib.Path(a).resolve()), caps.__file__
+        finally:
+            sys.path.remove(b)
+            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]:
+                sys.modules.pop(m, None)
+            sys.modules.update(before)   # the interpreter's own package is the one it held, as the resolution leaves it
+
+
 def test_a_refused_root_is_not_left_on_sys_path(hub, tmp_path):
     """The refused root goes back off sys.path, so the next root imports clean (a root that stayed would shadow it)."""
     import sys

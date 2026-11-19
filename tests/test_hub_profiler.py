@@ -327,10 +327,21 @@ def test_a_node_under_a_percent_of_the_loop_leaves_with_its_subtree(prof):
     assert names(prof.trim(tree)) == ["costly"], "a node under one percent of the loop's CPU stayed in the tree"
     kept = prof.tree({(("costly", "gate"),): [99.0, 0], (("edge", "driver"),): [1.0, 0]})
     assert names(prof.trim(kept)) == ["costly", "edge"], "a node at exactly one percent left the tree"
-    hand = {"name": "loop", "share": 1.0, "children": [
-        {"name": "big", "share": 0.5, "children": []},
-        {"name": "small", "share": 0.005, "children": [{"name": "under", "share": 0.004, "children": []}]}]}
+    hand = {"name": "loop", "share": 1.0, "total_s": 10.0, "children": [
+        {"name": "big", "share": 0.5, "total_s": 5.0, "children": []},
+        {"name": "small", "share": 0.005, "total_s": 0.05, "children": [{"name": "under", "share": 0.004, "total_s": 0.04, "children": []}]}]}
     assert [c["name"] for c in prof.trim(hand)["children"]] == ["big"], "a node that leaves kept a node under it"
+
+
+def test_a_tree_with_no_measured_total_keeps_every_row(prof):
+    """Every reading failing leaves the loop's total at zero, and each child then reads share zero: a cut by share would empty
+    a tree that only says nothing was measured (#2474)."""
+    empty = prof.tree({})
+    kept = prof.trim(empty)
+    assert kept["children"] == [], "an empty fold gained a row"
+    zeros = {"name": "loop", "share": 1.0, "total_s": 0.0, "children": [
+        {"name": "driver", "share": 0.0, "total_s": 0.0, "children": []}]}
+    assert [c["name"] for c in prof.trim(zeros)["children"]] == ["driver"], "an unmeasured tree lost its rows"
 
 
 def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
