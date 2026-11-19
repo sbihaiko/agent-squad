@@ -333,6 +333,25 @@ def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
 
 
 def test_the_summary_chip_reports_the_same_dispatch_state_as_the_nav_line(ctx):
-    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"), (dict(LIM, guard="off"), "off")):
+    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"),
+                       (dict(LIM, guard="off"), "guard off · never pauses")):
         out = lim_draw(ctx["hub"], view)
         assert out["sr"] == out["nav"] == want, out
+
+
+def test_a_guard_off_names_itself_and_shows_no_pause_line(ctx):
+    """With the guard off dispatch never pauses on token burn, so the tile is greyed and the chip says so (#2434)."""
+    out = lim_draw(ctx["hub"], dict(LIM, guard="off"))
+    now, _ = lim_blocks(out)
+    pause = re.search(r'<div class="tile ([a-z]+)"><span class=tk>Pauses over</span><span class=tv>(.*?)</span></div>', now)
+    assert pause, now
+    assert pause.group(1) == "muted", pause.group(0)
+    assert not re.search(r"\d", pause.group(2)), f"the tile still shows a pause line: {pause.group(2)!r}"
+    assert out["sr"] == "guard off · never pauses" and out["navcls"].split() == [], out
+
+
+def test_a_guard_on_keeps_the_pause_line_its_tone_and_its_number(ctx):
+    now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
+    pause = re.search(r'<div class="tile ([a-z]+)"><span class=tk>Pauses over</span><span class=tv>(.*?)</span></div>', now)
+    assert pause and pause.group(1) == "neutral", now
+    assert pause.group(2) == "188K tokens/h", pause.group(2)

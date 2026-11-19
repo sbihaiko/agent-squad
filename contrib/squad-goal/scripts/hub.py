@@ -6966,7 +6966,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .tile{background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);padding:6px 8px;min-width:0;font-size:var(--fs-caption)}
 #tab-set .tile .tk{display:block;color:var(--mute);font-weight:600}
 #tab-set .tile .tv{display:block;color:var(--fg);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-#tab-set .tile.ok .tv{color:var(--ok)}#tab-set .tile.warn .tv{color:var(--warn)}#tab-set .tile.err .tv{color:var(--err)}#tab-set .tile.neutral .tv{color:var(--fg)}
+#tab-set .tile.ok .tv{color:var(--ok)}#tab-set .tile.warn .tv{color:var(--warn)}#tab-set .tile.err .tv{color:var(--err)}#tab-set .tile.neutral .tv{color:var(--fg)}#tab-set .tile.muted{opacity:.45}#tab-set .tile.muted .tv{color:var(--mute)}
 #tab-set .setrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
 #tab-set .setrow .sl{min-width:0;font-size:var(--fs-body);color:var(--fg)}
 #tab-set .setrow .sc{justify-self:end;min-width:0;max-width:100%}
@@ -7400,12 +7400,13 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s;setChip("lim",s.guard==="off"?"off":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282)
+ const s=limS,v=limPend||s,off=s.guard==="off";
+ setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
-  setTile("Pauses over",limN(s.pause_line)+" tokens/h","neutral"),
+  setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
  ],`Profile file: <code>${esc(s.profile||"none in force")}</code>`)   // the note row is the profile path alone; the last change stays data, never a fifth fact
  +setSettings("lim",[
   setRow("Token guard",`<select id=limg aria-label="Token guard"><option value=on${v.guard==="on"?" selected":""}>on</option><option value=off${v.guard==="off"?" selected":""}>off</option></select>`),
@@ -8105,7 +8106,7 @@ let loopV=null,loopErr="";
 // SETT{ the Settings tab's one shape (#1278). Every theme draws a Now block of tiles and a Settings block of rows through
 // these writers, and the whole tab writes a moment and a span one way. Both read the value the hub gives: an epoch second or
 // the hub's own date text for a moment, a count of seconds for a span. Run in node by tests.
-const SETT_TONES=["ok","warn","err","neutral"];   // the tones the hub names: FOOT_TONES plus the neutral one
+const SETT_TONES=["ok","warn","err","neutral","muted"];   // the tones the hub names: FOOT_TONES plus the neutral one and the greyed one
 function moment(t){const s=String(t??"").replace(" ","T"),m=s.match(/^(\d{4}-\d\d-\d\d)T(\d\d:\d\d)/);if(m)return m[1]+" "+m[2];
  if(typeof t==="number"||/^\d+(\.\d+)?$/.test(s)){const n=typeof t==="number"?t:+s,d=new Date(n*1000),p=x=>String(x).padStart(2,"0");if(isNaN(d))return "?";return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
  return s?String(t):"?"}   // a value the hub hands in another shape is shown as it came, never replaced by "?"
