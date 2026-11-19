@@ -129,7 +129,8 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A card only moves forward, and an old option is removed only after its cards moved** ([ADR-0143](docs/adr/0143-a-card-only-moves-forward.md)). Guard: `contrib/squad-goal/scripts/test-board-migrate.sh`, `tests/test_board_migrate.py`, `contrib/squad-goal/scripts/test-board-forward.sh`.
 - **This repository's card state stays on the Project Status field; a writer sends a board write only when the value changes** ([ADR-0144](docs/adr/0144-the-carrier-is-the-project-field.md)). Guard: none yet; a draft.
 - **A gate is a column, and its attempt count one number field; a red attempt is a marker, not a move** ([ADR-0170](docs/adr/0170-the-gate-is-a-column-and-an-attempt-count-is-a-board-fact.md)). Guard: `tests/test_board_pin.py`, `tests/test_board_columns.py`.
-- **Bug first: a bug is filed in Todo at once, even a hand fix, and the loop dispatches bugs first** ([ADR-0148](docs/adr/0148-bug-first.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `contrib/squad-goal/scripts/test-board-todo-limit.sh`.
+- **Bug first: a bug is filed in Todo at once, even a hand fix, and the loop dispatches bugs first** ([ADR-0148](docs/adr/0148-bug-first.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`,
+  `contrib/squad-goal/scripts/test-board-todo-limit.sh`.
 - **A burn over the token cap is a report and an alert, never a stop; dispatch pauses only while the last hour burns over 3x the cap, and resumes by itself under it** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `contrib/squad-goal/scripts/test-token-guard.sh`.
 
 ## Where decisions go
