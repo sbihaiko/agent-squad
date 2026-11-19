@@ -167,6 +167,52 @@ L79="$T/st/wave-check-wave_run-79.log"
 [ -f "$L79" ] && /usr/bin/grep -q 'tip-check-ran' "$L79" && /usr/bin/grep -q 'gate: bounded: ' "$L79" \
   && ok "W1700: the bounded child's own line stays in the check log" || ko "W1700: check log: '$(cat "$L79" 2>/dev/null)'"
 
+# 5 (#2330): a caps.gates skip names the gate that held the slot, and the wave's wait line says which one. The lines are the
+# budget's own: squad.caps writes them here, with one of three slots held by a child gate, so a tip take of the whole count
+# skips (73). Both shapes the budget writes are covered: the free-slot line and the line a queued priority waiter makes.
+W80=wave/run-80; start2 run-80 >/dev/null; child 1710 g1710 "origin/$W80"; en2 run-80 1710 >/dev/null
+mkdir -p "$T/genproj/docs/squad"; printf 'caps:\n  gates: 3\n' > "$T/genproj/docs/squad/defaults.yaml"
+sleep 30 & hp=$!
+capgen() { PYTHONPATH="$SG_SQUAD" SQUAD_CAPS_DIR="$T/genleases" python3 -m squad.caps take gates "$@" --pid "$hp" --target "$T/genproj"; }
+capgen child-gate-7 --count 1 >/dev/null 2>&1
+SKIP1=$(capgen gate-9 --count 3 --try --priority tip 2>&1); s1=$?
+[ "$s1" = 73 ] && case "$SKIP1" in *"has 2 free slot(s) of 3"*"held by child-gate-7 (lease pid"*"skipped, not queued (try)"*) ok "W2330: the budget writes the partial skip line";; *) ko "W2330: skip line: '$SKIP1'";; esac || ko "W2330: the budget's skip exits $s1, not 73: '$SKIP1'"
+capskip() { { echo '#!/bin/bash'; echo "cat >&2 <<'EOX'"; printf '%s\n' "$1"; echo EOX; echo 'exit 73'; } > "$2"; }
+capskip "$SKIP1" "$T/capskip1.sh"
+r=$(SG_WAVE_TIP_GATES="bash $T/capskip1.sh" land2 run-80 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W80"*"gate slots are held by child-gate-7"*) ok "W2330: the wait names the gate that held the slot";; *) ko "W2330: no holder named: exit $rc: '$r'";; esac
+# A live priority waiter ahead of this gate makes the budget name the free slots it keeps for that waiter; the line still says
+# who holds the slots, and the wait still names that holder. The first skip left gate-9's own waiting marker, so it goes first.
+PYTHONPATH="$SG_SQUAD" SQUAD_CAPS_DIR="$T/genleases" python3 -m squad.caps release gates gate-9 >/dev/null 2>&1
+capgen wave-tip-2 --count 3 --try --priority tip >/dev/null 2>&1
+SKIP2=$(capgen child-gate-9 --count 2 --try 2>&1); s2=$?
+[ "$s2" = 73 ] && case "$SKIP2" in *"keeps its freed slots for wave-tip-2"*"held by child-gate-7 (lease pid"*) ok "W2330: the budget writes the queued-waiter skip line";; *) ko "W2330: queued-waiter line: '$SKIP2'";; esac || ko "W2330: the queued skip exits $s2, not 73: '$SKIP2'"
+capskip "$SKIP2" "$T/capskip2.sh"
+r=$(SG_WAVE_TIP_GATES="bash $T/capskip2.sh" land2 run-80 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W80"*"gate slots are held by child-gate-7;"*) ok "W2330: the queued-waiter skip names the holder too";; *) ko "W2330: queued-waiter holder not named: exit $rc: '$r'";; esac
+# The holder is read from the FIRST `held by` of the line, never from a later one: a skip line that names a second gate after
+# the first must blame the gate that caused the skip, not the last name it quotes. The lease detail is dropped from the wait.
+TWO2330='caps: caps.gates has 2 free slot(s) of 3: gate-9 needs its whole count of 3; held by child-gate-7 kept for wave-tip-2; held by other-gate-3 (lease pid 9): skipped, not queued (try)'
+capskip "$TWO2330" "$T/capskip3.sh"
+r=$(SG_WAVE_TIP_GATES="bash $T/capskip3.sh" land2 run-80 2>&1); rc=$?
+case "$r" in *"gate slots are held by child-gate-7;"*) ok "W2330: a line that names a second gate still blames the first holder";; *) ko "W2330: the second name was read as the holder: exit $rc: '$r'";; esac
+case "$r" in *"lease pid"*) ko "W2330: the wait line quotes the lease detail: '$r'";; *) ok "W2330: the wait line carries no lease detail";; esac
+kill $hp 2>/dev/null
+# The parsed value itself is pinned, at the predicate the landing calls: the first holder's name with the `slots:` tag, and
+# exit 0; a line that names no holder answers nothing and exits 1, so the landing never reads a broken skip as a hold.
+# wave.sh sources the env beside it, so the probe runs with $0 in the fixture's scripts dir, as a landing there does.
+hby() { bash -c '. "$1/wave.sh"; held_by "$2"' "$T/s/probe.sh" "$T/s" "$1"; }
+got=$(hby "$SKIP1"); grc=$?
+[ "$got" = "slots:child-gate-7" ] && [ "$grc" = 0 ] && ok "W2330: held_by names the first holder of the free-slot line" || ko "W2330: held_by(free-slot) = '$got' (exit $grc)"
+got=$(hby "$SKIP2"); grc=$?
+[ "$got" = "slots:child-gate-7" ] && [ "$grc" = 0 ] && ok "W2330: held_by names the holder of the queued-waiter line" || ko "W2330: held_by(queued) = '$got' (exit $grc)"
+got=$(hby "$TWO2330"); grc=$?
+[ "$got" = "slots:child-gate-7" ] && [ "$grc" = 0 ] && ok "W2330: held_by reads the first of two held-by names" || ko "W2330: held_by(two names) = '$got' (exit $grc)"
+got=$(hby 'caps: caps.gates is full (3 slots), held by ?: gate-9 skipped, not queued (try)'); grc=$?
+[ "$got" = "slots:?" ] && [ "$grc" = 0 ] && ok "W2330: held_by names an anonymous holder" || ko "W2330: held_by(anonymous) = '$got' (exit $grc)"
+got=$(hby 'caps: caps.gates says nothing useful'); grc=$?
+[ -z "$got" ] && [ "$grc" = 1 ] && ok "W2330: a line with no holder answers nothing" || ko "W2330: held_by(no holder) = '$got' (exit $grc)"
+
 # SD (#1434): the sibling filter before dispatch reads the bodies; the entry also reads each child's own diff. Two siblings
 # whose bodies name nothing in common but whose diffs touch one file are a conflict before the wave: the second never
 # enters and its issue goes back to the queue, so the landing never attempts the merge of the pair. A sibling whose diff

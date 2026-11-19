@@ -68,5 +68,13 @@ first: only a tip check or a landing check keeps the freed slots for itself. The
 (ADR-0166), because the gate's clock starts in `--run`, once the slots are held. Every other gate keeps the one-try take
 and the 73 it answers.
 
+The bound answers 75, the waited-out code, and never 73. A 73 says the gate took no slot at once, and every reader of a
+check's answer reads it as a hold, so a waited-out wait reported as a skip leaves the landing unable to tell the two
+apart (ADR-0164). The budget's own command, `caps take`, owns the bounded wait for a tip or landing check, so one module
+writes that line and one code names its end. A landing pass that reads a 73 from a tip check waits for a later pass: it
+never reads the skip as the check's red, and it never lands the batch's runs each alone.
+
 Guard: `contrib/squad-goal/scripts/test-fast-gate.sh` runs a delta child, an `all` child and an entry gate through a stub
-`gate.sh`, and reads the count and the slot-wait flag that reached the lock.
+`gate.sh`, and reads the count and the slot-wait flag that reached the lock. Guard:
+`contrib/squad-goal/scripts/test-gate-lock.sh` holds one of three slots and reads the tip check's answer at its bound,
+and `contrib/squad-goal/scripts/test-wave-batch.sh` reads a batch that meets a skipped tip check and waits.

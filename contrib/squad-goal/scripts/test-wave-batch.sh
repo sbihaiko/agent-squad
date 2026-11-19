@@ -179,4 +179,36 @@ r=$(mgate run-mc); rc=$?
 [ "$(/usr/bin/grep -v '^GATE$' "$T/board.log" | sort -u)" = "$(printf 'o 3 Gating 131\no 3 Gating 132')" ] && ok "n: a red attempt writes no move after Gating" || ko "n: board log '$(cat "$T/board.log")': '$r'"
 rm -f "$T/st/auto"/wland-*
 
+# o (#2330): a tip check that took no slot measured nothing, so the batch waits for a later pass. It never reads that skip as a
+# failed check and lands each run alone, which runs one full battery per run. The skip line is the budget's own: squad.caps
+# writes it here, with one of three slots held by a child gate, so a take of the whole count skips (73), and its holder is named.
+mkdir -p "$T/ogen/docs/squad"; printf 'caps:\n  gates: 3\n' > "$T/ogen/docs/squad/defaults.yaml"
+sleep 30 & ohp=$!
+ocap() { PYTHONPATH="$SG_SQUAD" SQUAD_CAPS_DIR="$T/ogenleases" python3 -m squad.caps take gates "$@" --pid "$ohp" --target "$T/ogen"; }
+ocap child-gate-7 --count 1 >/dev/null 2>&1
+OSKIP=$(ocap gate-9 --count 3 --try --priority tip 2>&1); os=$?
+[ "$os" = 73 ] && case "$OSKIP" in *"has 2 free slot(s) of 3"*"held by child-gate-7 (lease pid"*) ok "o: the budget writes the skip line";; *) ko "o: skip line: '$OSKIP'";; esac || ko "o: the budget's skip exits $os, not 73: '$OSKIP'"
+{ echo '#!/bin/bash'; echo "cat >&2 <<'EOX'"; printf '%s\n' "$OSKIP"; echo EOX; echo 'exit 73'; } > "$T/o-tip.sh"
+ogate() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="bash '$T/o-tip.sh'" bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
+rm -f "$T/st/auto"/wland-*; mkrun run-ta 141; mkrun run-tb 142; queue run-tb; reset
+r=$(ogate run-ta); rc=$?
+kill $ohp 2>/dev/null
+[ $rc != 0 ] && ok "o: the pass waits" || ko "o: exit $rc: '$r'"
+case "$r" in *"WAVE WAIT batch run-ta,run-tb"*) ok "o: one wait line names the batch";; *) ko "o: no wait line: '$r'";; esac
+case "$r" in *"the gate slots are held by child-gate-7"*) ok "o: the wait names the gate that held the slot";; *) ko "o: no holder named: '$r'";; esac
+case "$r" in *"lease pid"*) ko "o: the wait line quotes the lease detail: '$r'";; *) ok "o: the wait line carries no lease detail";; esac
+case "$r" in *"each run lands alone"*) ko "o: the batch read the skip as a failed check: '$r'";; *) ok "o: the skip never lands each run alone";; esac
+[ "$(devpushes)" = 0 ] && ok "o: no wave lands on the skipped check" || ko "o: pushes to dev: '$(cat "$T/pushes.log")'"
+$O rev-parse -q --verify wave/run-tb >/dev/null && ok "o: the queued wave keeps its branch" || ko "o: the queued run's branch went"
+rm -f "$T/st/auto"/wland-*
+# o2 (#2330): a 73 that names no gate hold is not a skip the batch can wait out: a gate that answered 73 for a real failure
+# would wait for ever. The batch takes the check's own failure path and lands each run alone, as a red does.
+printf '#!/bin/bash\necho "gate: something went wrong the batch never saw"\nexit 73\n' > "$T/o2-tip.sh"
+o2gate() { (cd "$T/co" && SG_LAND_QUEUE=1 SG_WAVE_TIP_GATES="bash '$T/o2-tip.sh'" bash "$T/s/wave.sh" land "$1" "$T/co/runs/$1" 2>&1); }
+mkrun run-tc 143; mkrun run-td 144; queue run-td; reset
+r=$(o2gate run-tc); rc=$?
+case "$r" in *"answered 73 and named no gate hold"*) ok "o2: the unnamed 73 is named as the check's own failure";; *) ko "o2: the unnamed 73 is not named: exit $rc: '$r'";; esac
+case "$r" in *"WAVE WAIT batch"*) ko "o2: the batch waited on a 73 that named no hold: '$r'";; *) ok "o2: the batch never waits on an unnamed 73";; esac
+rm -f "$T/st/auto"/wland-*
+
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
