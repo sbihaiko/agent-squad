@@ -184,6 +184,8 @@ def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     # cap, and this one lowers it. Owner 2026-11-19: four slots, because the loop's gate asks two and a run's command asks two,
     # so a landing and a child gate run together; at three the landing took the whole budget and 18 runs waited in one day.
     # Owner 2026-11-19, later: six runs, because the Doing count carries cards the loop never dispatches, and two such
-    # cards cost half the dispatch; five slots, because a landing's pair, a run command's pair and one child gate fit together.
-    assert overlay["caps"] == {"runs": 6, "children": 12, "gates": 5}
+    # cards cost half the dispatch. The gate slots went to five and then back to three: at five two full gates ran at once
+    # and every suite took three to four times longer, so two gates together delivered less than one gate alone. Three holds
+    # one full gate of two workers and one child gate beside it, and the loop gate never takes the whole budget.
+    assert overlay["caps"] == {"runs": 6, "children": 12, "gates": 3}
     assert overlay["limits"]["max_budget_usd"] == 30
