@@ -304,6 +304,7 @@ def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
     assert health["live_gates"] == len(v["live"]["gates"]) == 1, health
 
 
+@pytest.mark.heavy   # one node call over the four states: 2.3 s on a loaded runner, never on an idle one
 def test_the_theme_opens_on_its_state_line():
     """The theme's first line states on, off, draining or starting, before any other fact (#1280).
     The four states are read in one node call: four calls of about a second each crossed the 2 s line on a loaded runner,
