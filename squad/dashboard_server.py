@@ -42,7 +42,7 @@ MAX_BODY = 4096                  # a request is a few names; a larger body is re
 MAX_NODES = 100
 NODE_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}")     # a node or a child, never one `each` item: a hold is by name
 BODY_TIMEOUT = 5.0                                    # a client that stalls on its body frees the thread
-ENDED = ("completed", "failed", "conflict", "needs-human")
+ENDED = ("completed", "failed", "conflict", "needs-human", "no-repro")
 
 
 def _inside(path, folder):

@@ -112,7 +112,7 @@ def _verdict(run, verdict, reasons=()):
     (run / "record.jsonl").write_text(RECORD + json.dumps(ev) + "\n")
 
 
-@pytest.mark.parametrize("verdict", ["completed", "failed", "conflict", "needs-human"])
+@pytest.mark.parametrize("verdict", ["completed", "failed", "conflict", "needs-human", "no-repro"])
 def test_a_run_that_has_ended_takes_no_request(served, run, verdict):
     _verdict(run, verdict)
     st, data = post(served)

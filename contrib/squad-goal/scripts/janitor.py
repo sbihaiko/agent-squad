@@ -1433,6 +1433,11 @@ def reconcile_board():
                 else:
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} " + ("" if lf else f"{oc or 'stopped'} ") + f"with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
+            elif i["name"] == "no-repro":   # the bug did not reproduce, so the owner decides it: the card keeps its column under the owner freeze (ADR-0029)
+                stopped.add(n)
+                why = "; ".join(i["reasons"]) or "no reason recorded"
+                if rearmed_after(n, i): unfrozen(n, f, i)
+                else: set_expected(n, "Blocked", f"run {i['run_id']} found the bug does not reproduce with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             elif i["failed"]:
                 stopped.add(n)
                 why = "; ".join(i["reasons"]) or "nothing landed"
@@ -1744,6 +1749,9 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # unfinished proofs and rule O would count nothing. The trigger is the passing land plus the no-change verdict, read
     # per (child, issue) in kid_nc, so a sibling child's review never marks an issue it does not name. That run counts
     # once, and wave.sh fail stops the issue for the owner at that one run, so a second empty wave starts no new run.
+    if i["name"] == "no-repro":   # no work is wrong, the premise is: the issue is the owner's, never a failed dispatch (ADR-0029)
+        say(f"NO-REPRO #{n}: run {f.name} found the bug does not reproduce, so the issue is the owner's, not a failed dispatch")
+        return True
     nochange = any(n in iss and i["kid_nc"].get(k) for k, iss in i["kid_issue"].items())
     if proof_unfinished(i["reasons"]) and not nochange:
         say(f"UNPROVEN #{n}: run {f.name} ended with its proof unfinished, so it is no failed dispatch ({'; '.join(i['reasons'])})")
@@ -1896,7 +1904,9 @@ if owner and proj and repo0:
             kept = unpushed(f)   # #771: the loop pushes no work (#361), so the release names a child's unpushed commits for salvage
             salv = f"; its child left commits on no remote branch, kept for salvage: {', '.join(kept)}" if kept else ""
             stop = stop_of(n)   # the count above may have just stopped the issue (WAVE STOP): the line names the stop, never a dispatch that will not come (#1958)
+            nr = i["name"] == "no-repro"   # the bug did not reproduce: the evidence is this comment and the owner decides the issue (ADR-0029)
             nxt = (f"; its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo" if park
+                   else "; the bug did not reproduce, so the issue is the owner's under frozen:owner" if nr
                    else f"; the issue is stopped ({stop}), so no pass dispatches it until the owner rearms it" if stop else " so it dispatches again")
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped{nxt}{salv}")
             if not dry:
@@ -1905,7 +1915,7 @@ if owner and proj and repo0:
                 if kept: (st / "auto" / f"salvage-{n}").write_text("".join(k + "\n" for k in kept))   # the next dispatch names it (startability.sh)
                 (st / "cq").mkdir(exist_ok=True)
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (". Its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo." if park else f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") +(f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped" + (". Its card sits in Backlog, which only the owner leaves, so no pass dispatches it until the owner moves it to Todo." if park else ". The bug did not reproduce, so no work is wrong: the issue is the owner's under frozen:owner, and no pass dispatches it until the owner rearms it." if nr else f". The issue is stopped ({stop}), so no pass dispatches it until the owner rearms it." if stop else ", so the next cycle dispatches the issue again.") +(f" The child left commits on no remote branch, kept for salvage: {', '.join(kept)}. The loop flags them and never pushes them (#361); the next dispatch of this issue names them, so the new run can reuse them." if kept else "") + "\n")
         if not again and not dry: mk.touch()
     # O (#888): a probe's refutation that failed for a transient cause leaves auto/probe-retry-<n>. Rule O above never reads a
     # child that entered its wave, so this sweep sends it again: once a pass, for an open probe frozen for the owner, read from
