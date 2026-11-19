@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
 # Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open work branch naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
-# which stack.sh says READY or STACK, wave label first. The column Todo is the one go signal (#1672, #1676): a card in Todo
+# which stack.sh says READY or STACK, wave label first. An issue whose landing is in the base and whose publish is pending
+# (a `Refs #N` commit the base carries, the issue still open) is no work and dispatches no run (#2416). The column Todo is the one go signal (#1672, #1676): a card in Todo
 # with no triage label is taken, and the pass writes $SG_FRONTIER_LABEL on its issue once, after the claim and every gate,
 # beside the request. A holder label (ready-for-human, ready-for-HAL9K) or any other hold still wins and costs no write.
 # A pass starts one run per free run slot, never more runs than children (#728):
@@ -34,7 +35,7 @@ release_pending() { local n; for n in ${claimed[@]+"${claimed[@]}"}; do [ "$(cat
 # waits, in this fixed order; a reason no card carries still prints as 0, so the shape of the line never changes. The per-card
 # detail follows only when the reasons differ from the previous pass (a hash in $A/frontier-why), so a quiet loop costs one
 # line a beat and a changed one explains itself.
-WHY_REASONS=("triage failed" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed")
+WHY_REASONS=("triage failed" "held" "sibling" "no slot" "blocked" "claimed" "busy" "not startable" "skip label" "ac paths" "not listed" "landed")
 why_card() {   # <issue> <reason> [note]: a Todo card this walk left behind. A refusal for "no slot" is the one the exit
                # hook records the slot holders for (#2286), so the reason is read here and nowhere else.
   printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$F/why"
@@ -274,6 +275,13 @@ case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(awk -F '\t' '$2=="Doing"||$2==
   [ "$doing_n" -lt "$doing_max" ] || { echo "FRONTIER column Doing full: $doing_n of $doing_max card(s) in Doing; nothing dispatched this pass"; exit 0; } ;; esac
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
 git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
+# An issue whose landing is in the base and whose publish is pending is no work (#2416): the base carries a commit whose
+# message names it with a `Refs #N` line, and the issue is still open because the publish has not closed it yet. A hand
+# landing (`ffland.sh`) writes no ledger, so the commits of the base are the fact; a base that cannot be read lands
+# nothing, and the walk goes on as before.
+landed=$(git -C "${SG_CHECKOUT:-.}" log --format=%B "origin/${SG_LAND_BRANCH:-dev}" 2>/dev/null \
+  | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' ')
+landed=" ${landed} "
 closers=" $(python3 "$here/specstall.py" closers "$F/issues.json" "$F/dev-subjects" 2>/dev/null | tr '\n' ' ')"   # a ticket that closes its spec ranks before ordinary work (#1962)
 while IFS=$'\x1f' read -r _rank w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r --arg cl "$closers " '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number as $m | if ($cl | contains(" \($m) ")) then 0 else 1 end),([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0
@@ -293,6 +301,9 @@ while [ $i -lt ${#cands[@]} ]; do
   if lb_is_loop_bug "$labels"; then [ -z "$card" ] || why_card "$n" "loop-bug" "a loop defect is never dispatched"; continue; fi
   case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
   case "$refs" in *" $n "*) why_card "$n" busy "an open work branch names it"; continue;; esac
+  # The landing is in the base and the publish has not closed the issue yet (#2416): a run on it would find nothing to
+  # change, so it waits for the publish that closes it.
+  case "$landed" in *" $n "*) why_card "$n" landed "landed, publish pending"; echo "FRONTIER skip #$n: landed, publish pending"; continue;; esac
   case ",$busy," in *",$n,"*) why_card "$n" busy "a live run holds it"; continue;; esac
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
   # The list's entry decides; only an entry that carried no comments costs the comments read.
