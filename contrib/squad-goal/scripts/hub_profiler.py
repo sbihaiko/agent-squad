@@ -446,6 +446,18 @@ def tree(acc, root="loop", window_s=None):
     return out(top)
 
 
+MIN_SHARE = 0.01   # the Loop tab draws one percent of the loop's CPU and above; a smaller row has no reader (#2464)
+
+
+def trim(node, floor=MIN_SHARE):
+    """The tree cut to the rows a reader can tell apart: a child under `floor` of the loop's total time leaves with its
+    whole subtree. A child's total is never above its parent's, so a row that leaves never hides a larger one, and the cut
+    is exact. The root stays, and every kept node keeps its own children, cut the same way."""
+    kept = dict(node)
+    kept["children"] = [trim(k, floor) for k in node.get("children") or [] if (k.get("share") or 0) >= floor]
+    return kept
+
+
 def context(acc):
     """The context row of a fold: the CPU seconds of every process outside the loop, largest first. A row per other
     profile's loop, told apart by that profile's supervisor pid and run folders, then one row for each application of the

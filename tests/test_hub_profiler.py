@@ -321,6 +321,18 @@ def test_the_rows_sort_by_inclusive_cost_and_carry_their_share(prof, scope):
                          "starts_s", "total_starts_s", "children"}
 
 
+def test_a_node_under_a_percent_of_the_loop_leaves_with_its_subtree(prof):
+    """The Loop tab draws a node at or above one percent of the loop's CPU, and leaves a smaller node out (#2464)."""
+    tree = prof.tree({(("costly", "gate"),): [5.0, 0], (("leaf", "driver"),): [0.04, 0]})
+    assert names(prof.trim(tree)) == ["costly"], "a node under one percent of the loop's CPU stayed in the tree"
+    kept = prof.tree({(("costly", "gate"),): [99.0, 0], (("edge", "driver"),): [1.0, 0]})
+    assert names(prof.trim(kept)) == ["costly", "edge"], "a node at exactly one percent left the tree"
+    hand = {"name": "loop", "share": 1.0, "children": [
+        {"name": "big", "share": 0.5, "children": []},
+        {"name": "small", "share": 0.005, "children": [{"name": "under", "share": 0.004, "children": []}]}]}
+    assert [c["name"] for c in prof.trim(hand)["children"]] == ["big"], "a node that leaves kept a node under it"
+
+
 def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
     """A reused pid is another process, though its CPU time is larger than the old one's."""
     a = {(7, 100.0): (1, 50.0, f"bash {S}/watch.sh")}
