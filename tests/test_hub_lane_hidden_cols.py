@@ -59,7 +59,7 @@ def test_a_hidden_column_counts_work_and_never_a_spec_card():
     ]
     m = _build(groups, hidden=["Todo", "Doing"])
     hc = {x["name"]: x for x in m["hc"]}
-    assert hc["Todo"]["count"] == 0, f"a spec card counted as work: {hc}"
+    assert "Todo" not in hc, f"a column holding a spec card alone is named as work: {hc}"
     assert hc["Doing"]["count"] == 1, f"the count is not the work cards alone: {hc}"
 
 

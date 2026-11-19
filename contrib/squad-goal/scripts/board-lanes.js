@@ -85,13 +85,12 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   const lc=o.lc||{};
   list.forEach(l=>{l.collapsed=Object.prototype.hasOwnProperty.call(lc,l.id)?!!lc[l.id]:l.done});   // a done lane starts collapsed (#891)
   const hide=new Set(o.hidden||[]);   // the user's hidden columns: never drawn, named in the pill with their whole total
-  // Every column the user leaves visible is drawn, even one holding no card at all (#1994): an empty visible column
-  // keeps its minimum width and its label, so a group shows each column the board has and an empty one reads as
-  // empty, never as missing. Only the user's hidden set removes a column from the board.
-  const vc=cols.filter(c=>!hide.has(c));
-  // A spec card is a lane, never work: the pill counts the work cards alone, so its total is the one the drawn column
-  // shows for the same status (#2466).
-  const hc=groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.filter(x=>!x.sp).length,user:true}));
+  // Owner 2026-11-19: a column that holds no work card is hidden, whether the user hid it or not, so an empty column
+  // never takes a slot. It replaces the rule that a visible empty column kept its place (#1994). A spec card is a lane,
+  // never work, so it counts nowhere (#2466): the pill's total is the one the drawn column shows for the same status.
+  const work={};rows.forEach(x=>{if(!ends.has(x.col))work[x.col]=(work[x.col]||0)+1});
+  const vc=cols.filter(c=>!hide.has(c)&&work[c]>0);
+  const hc=groups.filter(g=>!g.end&&hide.has(g.name)&&work[g.name]>0).map(g=>({name:g.name,count:work[g.name],user:true}));
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
   return{cols,vc,hc,lanes:list};
 }
