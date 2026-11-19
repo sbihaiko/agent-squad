@@ -89,7 +89,9 @@ groups.forEach(g=>g.items.forEach(x=>{if(x.sp){if(!ends.has(g.name)&&!specs.has(
   // keeps its minimum width and its label, so a group shows each column the board has and an empty one reads as
   // empty, never as missing. Only the user's hidden set removes a column from the board.
   const vc=cols.filter(c=>!hide.has(c));
-  const hc=groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.length,user:true}));
+  // A spec card is a lane, never work: the pill counts the work cards alone, so its total is the one the drawn column
+  // shows for the same status (#2466).
+  const hc=groups.filter(g=>!g.end&&hide.has(g.name)).map(g=>({name:g.name,count:g.items.filter(x=>!x.sp).length,user:true}));
   list.forEach(l=>{l.cells={};cols.forEach(c=>{l.cells[c]=l.vis.filter(x=>x.col===c)})});
   return{cols,vc,hc,lanes:list};
 }

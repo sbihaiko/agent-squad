@@ -51,6 +51,18 @@ def test_a_hidden_open_column_is_not_drawn_and_shows_its_total():
     assert hc["Doing"]["count"] == 1 and hc["Doing"]["user"] is True, hc
 
 
+def test_a_hidden_column_counts_work_and_never_a_spec_card():
+    """A spec is a lane, never a work card (@2466): the pill's total agrees with the column a reader sees drawn."""
+    groups = [
+        {"name": "Todo", "end": False, "items": [{"n": 5, "t": "a spec", "l": [], "sp": True}]},
+        {"name": "Doing", "end": False, "items": [{"n": 2, "t": "a card", "l": []}, {"n": 6, "t": "b spec", "l": [], "sp": True}]},
+    ]
+    m = _build(groups, hidden=["Todo", "Doing"])
+    hc = {x["name"]: x for x in m["hc"]}
+    assert hc["Todo"]["count"] == 0, f"a spec card counted as work: {hc}"
+    assert hc["Doing"]["count"] == 1, f"the count is not the work cards alone: {hc}"
+
+
 def test_a_closed_status_is_never_a_column_even_when_nothing_is_hidden():
     m = _build(hidden=[])
     assert m["vc"] == ["Todo", "Doing"], m["vc"]
