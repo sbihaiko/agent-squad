@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.03
 # The real-project check of a card's Testing path (SPEC 1218, #1258): board_gate_check.py reads the live board cache, the
 # history store, the attempt journal, the gate's own log and the proved moves, and answers one line per rule.
 # Fixtures shaped like those stores, a temp dir, no gh and no network: the check is proven here, and its live run is the

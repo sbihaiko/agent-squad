@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 12.00
 # A wave that reached its age cap retires its run before any issue of the run goes back to the queue (#1970). The landing
 # pass names the run to the retirement (SG_RETIRE_CMD, a stub here: no process is read or signalled), and only an exit 0
 # lets the requeue go on. A held retirement keeps the claim (the dispatch marker stays, no WAVE REQUEUE line) and leaves a

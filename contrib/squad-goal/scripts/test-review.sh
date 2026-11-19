@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 266.80
 # Regression tests for review.sh with stubbed gh and claude (no network, no model). usage: bash test-review.sh [path/to/review.sh]
 # 1) a reviewer that answers with a VERDICT is accepted: exit 0, rc 0 in review-times.tsv (the bug: rc=$? read the status of the superseded test, so every model "failed")
 # 2) the branch tip moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
@@ -1112,8 +1113,8 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); 
 rm -f "$T/bin/curl" "$T/bin/grok"; unset CURL_BODY CURL_REPLY GROK_ARGS
 suite_s=$(( $(date +%s) - suite_t0 ))
 # #1413, #1488: the suite's own wall time is an info line, never a verdict. Wall time on a shared machine measures load, not
-# the code, so a green suite must not turn red for it. The runtime guards are the measured line in
-# tests/shell_suites_seconds.txt, the slow cap, and the acceptance cap the runner enforces (SG_AC_TIMEOUT).
+# the code, so a green suite must not turn red for it. The runtime guards are the suite's own `# seconds:` header,
+# the slow cap, and the acceptance cap the runner enforces (SG_AC_TIMEOUT).
 cap=${SG_AC_TIMEOUT:-300}
 echo "info: the suite took ${suite_s}s of the ${cap}s acceptance cap"
 rm -rf "$T"; exit $fail

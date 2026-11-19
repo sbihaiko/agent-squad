@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 84.36
 # A suite that starts a driver stops the driver's whole tree before it exits (#989), on a failed assertion, a timeout or a signal.
 # Each suspect runs under a private TMPDIR, once to its end and once with a TERM sent while a driver of its copy is alive; a process
 # whose command line still names that TMPDIR afterwards is a leaked driver. A suite that starts a driver kills the tree in its EXIT trap.

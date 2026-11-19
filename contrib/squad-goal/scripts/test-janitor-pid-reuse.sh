@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.35
 # A live but later process with a reused call pid is not the stranded run. The janitor reaps it and frees its issue marker and leases.
 # usage: bash test-janitor-pid-reuse.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

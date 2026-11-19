@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.24
 # Rule O (#1811): `landed` is the pass of the stage that lands the work, and the release must actually happen.
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
 #  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed), and whose landing reached

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.19
 # Regression test for the ceiling on the new issues ONE PASS files (#140, SPEC #117): a defect storm cannot starve a
 # landing. The loop's one filer (autohunt.sh --file) files at most $SG_FILE_CEILING new issues for ONE pass -- the pass
 # the caller names in SG_FILE_PASS, else the hunt that is running -- and a filing the ceiling held back is named with the

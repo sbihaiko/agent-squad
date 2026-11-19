@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 25.79
 # Regression test for the batch landing (#2058): the landing pass takes every run that waits for the landing lock, stacks
 # their waves on the base, runs one tip gate on that exact tip and pushes it by one fast-forward. A red or unproven batch
 # gate, or a stack conflict, falls back to one landing per run. SG_LAND_BATCH=1 keeps the one-run pass. A bare local remote,

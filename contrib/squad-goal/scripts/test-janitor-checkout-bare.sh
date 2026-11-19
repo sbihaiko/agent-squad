@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.61
 # The bare-checkout rule (#2306): the profile's checkout carries core.bare = true, so every git command in its work tree fails. The janitor
 # raises CHECKOUT-BARE in alerts.log, once for the episode, and names the checkout. A checkout that is not bare raises nothing
 # and ends the episode, so the next bare state alerts again.

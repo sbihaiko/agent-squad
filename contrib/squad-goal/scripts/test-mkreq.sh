@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 6.64
 # Regression test for mkreq.sh's dispatch-time slice gate (ADR-0274, Refs #1400, #1519). usage: bash test-mkreq.sh
 # Offline: HOME is a throwaway directory, and the only holder of a file is a queued request (#361: the loop reads no pull request).
 # The report is buffered so the first line says TDD RED while a fix is missing, TDD GREEN once it is in.

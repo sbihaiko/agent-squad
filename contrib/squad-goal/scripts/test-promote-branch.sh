@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.94
 # The promotion branch is a profile setting (#1646): a repository that promotes `dev` into `staging` names it with
 # SG_STG_BRANCH, and the pass reads it everywhere -- the fetch, the ancestry read, the open-pull-request lookup, the pull
 # request's base and its title. With no setting the branch is `stg`, and SG_PROMOTE=off makes the pass exit 0 before any

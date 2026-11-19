@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.48
 # (#1999) The reopen rule (ADR-0143 rule 2) returns a Closed card to Todo only for an issue GitHub reports open on a
 # FRESH read. The open-issue list a pass reads is a snapshot up to 90 s old, and issue-facts.json (the one cached issue
 # read, #1744) can still hold the open state GitHub already changed: a hand landing closed #1972, and that pass read the

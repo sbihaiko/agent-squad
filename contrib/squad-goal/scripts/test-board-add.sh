@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 8.13
 # `board.py --add` is idempotent: an issue the board does not carry is added and its Status written in the same call;
 # an add GitHub refuses because the item already exists (a stale cached item list) is repaired by one re-read of the
 # items, and the id that read finds is written to, with no error named. Only a second miss is a failure, named on

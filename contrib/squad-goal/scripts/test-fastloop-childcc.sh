@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.97
 # A childcc pass never holds the fast lane's beat (#590): one pass reviews and gates a child for 2 to 15 min, and in the
 # foreground it held every dispatch and the pid refresh behind it. The pass runs in the background; a later beat starts no
 # second pass while it lives.

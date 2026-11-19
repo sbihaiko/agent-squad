@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.35
 # The requeue count belongs to the issue, not the run (#532): each run that a review sent back started afresh, and one issue
 # was dispatched 19 times. The third requeue of one issue stops it: its dispatch marker stays, its card keeps the reached
 # column with the owner freeze marker, and a SQUAD-NOT-STARTABLE comment is queued, which both dispatch passes read. A

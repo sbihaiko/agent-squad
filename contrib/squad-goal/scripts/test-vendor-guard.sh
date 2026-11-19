@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.38
 # Regression test for vendor-guard.sh: the step the watch cycle runs every cycle to re-vendor the personal skills when
 # they drifted from vendor/skills/VERSIONS.json. The build is the costly step, so the guard keys its input -- the
 # personal skills, the vendor tree and VERSIONS.json -- in $SG_STATE and returns at once when the key is unchanged

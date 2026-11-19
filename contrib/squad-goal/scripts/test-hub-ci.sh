@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.08
 # Regression test: a completed GitHub job with no steps is an account stop, not a failed branch.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

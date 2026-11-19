@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.87
 # A refused write is not a log line (#141): the issue the write was about says why it did not move. The pass that hit the
 # refusal queues ONE comment on that issue, carrying the refusal's name and GitHub's error, through the queue the loop
 # already uses for consequences (cq/ -> cqflush.sh), so the comment is posted on that issue whatever happens to the pass

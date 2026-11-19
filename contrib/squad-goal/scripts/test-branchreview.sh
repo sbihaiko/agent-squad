@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 14.14
 # Regression test for the branch review (#357): review.sh --branch, branchreview.sh and branchfix.sh, with stubbed gh and claude
 # (no network, no model). The review reads the diff of a work branch against `dev`, never a pull request; its findings go to the
 # one status comment of the issue (a queue file of the status kind, which cqflush.sh edits in place); a fix round works on the

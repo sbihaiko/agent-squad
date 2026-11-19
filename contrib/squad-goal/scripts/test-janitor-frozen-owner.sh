@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.95
 # Rule R leaves a card the owner froze, and never moves a card forward for a run that stopped needs-human or failed.
 #
 # A run that reached the landing cap stopped needs-human; wave.sh stuck() froze its issue (frozen:owner) and put the card

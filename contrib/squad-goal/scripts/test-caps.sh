@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.16
 # Regression test for caps.sh and squad/caps.py (#1573): the machine-wide cap counts only live holders.
 # A gate slot whose holder pid is dead, or is a zombie, is stale: it holds no slot and is reaped with exactly one line naming
 # the slot and its holder. A slot whose holder lives still holds the cap and writes no line. serial.sh already applies this

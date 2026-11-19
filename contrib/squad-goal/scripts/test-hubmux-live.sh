@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.12
 # Regression test for the hub index: it counts and lists the runs the hub sees working (no verdict, a dashboard that answers), never the finished runs the live-run list keeps on purpose (no network, no server). usage: bash test-hubmux-live.sh
 here=$(cd "$(dirname "$0")" && pwd); export HUBMUX_SRC=$here/hubmux.py; T=$(mktemp -d); fail=0
 mkdir -p "$T/profiles" "$T/state/alpha" "$T/co"

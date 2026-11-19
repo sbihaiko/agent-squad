@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.19
 # Rule (#1962): a spec whose open tickets made no commit in dev past the bound (docs/squad/defaults.yaml, janitor.spec_stall_seconds)
 # raises one SPEC-STALL alert, naming each open ticket. It repeats at most once per bound. A ticket that lands inside the bound
 # keeps its spec quiet. Rule (#2002, ADR-0142 clause 5): the alert names only a spec whose card sits in Todo or a later column,

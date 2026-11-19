@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.54
 # Regression test for #1848 / ADR-0136: the guard refuses a fix whose test passes at the fix's parent, and
 # passes one whose test fails there -- the two are the same refusal, and so is a range that carries no test.
 # A commit that puts its test and its code together (a squash) hid the red the history would have shown:

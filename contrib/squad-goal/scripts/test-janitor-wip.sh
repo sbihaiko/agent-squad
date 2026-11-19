@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.40
 # Guard for #1662: a run the janitor takes over (rule T) is snapshotted before its teardown. Every git tree of the run
 # (its own tree, ws/*, worktrees/*) writes its tracked changes and untracked files into a commit reached only by
 # refs/wip/<run-id>/<label>, one cycle.log line per tree (`WIP saved` or `WIP clean`). The real index, the branch tip and

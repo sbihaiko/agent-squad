@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.75
 # One state directory per repository, and one shared directory for what must not split (address.sh, env.sh). Two profiles
 # whose repositories carry the same issue number each see only their own markers, live-run list, queued requests and
 # queued comments. The provider limit markers and the quota cache are one per machine: a limit one loop writes is the

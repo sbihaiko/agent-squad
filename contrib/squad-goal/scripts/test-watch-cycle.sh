@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 61.41
 # Regression test for the watch cycle's lanes (#1845): the cycle must not pay, inside itself, for work that does not have to be
 # synchronous, and a step must not run twice when both lanes are up. usage: bash test-watch-cycle.sh [path/to/watch.sh]
 # Fixture: a copy of watch.sh in a temp scripts dir with every step stubbed, a `sleep` that returns at once (a cycle then costs its

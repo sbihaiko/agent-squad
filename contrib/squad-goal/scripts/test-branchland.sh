@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 86.83
 # Regression test for branchland.sh (#355): the pass that lands a pushed work branch whose check is green in `dev` by a
 # fast-forward push. Stub gh (every argv logged), a bare local remote, a stub board, temp state dir. One line per case.
 # usage: bash test-branchland.sh [scripts dir]

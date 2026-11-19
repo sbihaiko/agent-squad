@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 18.04
 # Regression test for wave.sh land (#1003): a wave whose commits name no issue (no `Refs #N` line at all) falls back to the
 # issues its run was dispatched for, read from the run's own request (run_issues). It closes them as a Refs line would, and it
 # clears their dispatch marker (auto/disp-<n>). A wave with a Refs line keeps the per-commit rule. A run whose issues cannot be

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 24.51
 # The tip check's eviction and the run's end class (#2209, #2216, #2217): a red child is evicted and the trimmed
 # wave lands or holds, and a run that ends owner-only or does-not-reproduce freezes its issue once.
 # mirrors: wave.sh wave-fixture.sh

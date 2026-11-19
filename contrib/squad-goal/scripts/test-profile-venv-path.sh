@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.07
 # A profile value a child or a gate echoes names the interpreter by its ABSOLUTE path.
 #
 # The `ac-verify` gate runs each declared command in the run's workspace, a git worktree cut from the base: it carries

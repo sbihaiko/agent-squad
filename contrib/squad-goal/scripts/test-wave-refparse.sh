@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.20
 # Regression test for #1491: one parser reads the issues a commit message names. A `Refs #N` inside an inline backtick span, or
 # inside a fenced block, is text and names no issue; on a line with an odd backtick count the text after the last backtick is
 # text. Every other `Refs #N` counts: a subject "(Refs #5)", a mid-line "write. Refs #9", several per line. The five callers

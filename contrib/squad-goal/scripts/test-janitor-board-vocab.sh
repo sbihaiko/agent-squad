@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.58
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
 # Doing, Reviewing, Batching, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging or Pushing. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec

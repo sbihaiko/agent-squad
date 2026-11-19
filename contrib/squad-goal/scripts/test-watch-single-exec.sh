@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# seconds: 0.02
 # Every script watch.sh runs directly under single.sh (no "bash" before it) is
 # executable in git, so the pass never dies on "Permission denied".
 cd "$(dirname "$0")/../../.." || exit 1

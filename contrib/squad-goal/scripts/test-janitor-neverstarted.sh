@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.51
 # Regression test for a never-started run freeing its dispatch markers (Refs #1503).
 # Fixture: run folder with request.txt naming GitHub issue #N, no record.jsonl, past the
 # never-started threshold, auto/bug-N present. The janitor must drop the marker and queue

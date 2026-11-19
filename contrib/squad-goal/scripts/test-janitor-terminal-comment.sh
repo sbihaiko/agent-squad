@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.71
 # Every terminal entry carries its condition in a comment (#245, spec #132): with SG_BOARD_VOCAB=shipped a move into Closed
 # queues one comment naming the branch that is in dev and the test on its tip, and a move into Abandoned one naming
 # who decided and why. A terminal write whose condition cannot be read is not made (the guard). A card that settled in a

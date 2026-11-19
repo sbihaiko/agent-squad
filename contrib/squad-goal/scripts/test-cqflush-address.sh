@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.82
 # A queued comment carries the repository it is for (#20): its name is <owner>__<repo>#<n>-<tag>.md, and cqflush.sh posts it
 # to that repository -- whichever process flushes it, whichever directory it sits in. A comment for a repository the machine
 # does not know is refused by name, retired as .dead and never posted, never retried and never sent to another repository.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.73
 # A closed issue whose old run left its wave open says nothing: the wave owns nothing once the issue is closed (#1566).
 # Rule O holds an issue for an open wave and prints one HELD-BY-WAVE line per pass (observability only, #1423, ADR-0166).
 # The line had no closed check, so an issue closed by another route (a hand landing, a duplicate, a fix on another branch)

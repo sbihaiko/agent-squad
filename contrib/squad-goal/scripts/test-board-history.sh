@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.34
 # The board history store: host-free (no hub, no GitHub client), one file per repository, a points fact the Monitor draws, and the hub wires it.
 # Fixtures and a temp file only: never the network, never the live hub state.
 # usage: bash test-board-history.sh [board_history.py]

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 92.14
 # Guard for #923: `watchd.sh drain` pauses dispatch and stops the loop only once no live run and no held gate remain.
 # A live run is an active-runs line whose record.jsonl has no verdict; a held gate is a locks/gate/pid naming a live pid.
 # Offline: a temp state dir, stub cycle and stub lanes that stay up until the loop stops. No network.

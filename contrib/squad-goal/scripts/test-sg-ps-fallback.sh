@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.24
 # The process reader never answers "nothing" for a live read (#1647): a `squad.procs` that imports and prints no row is a
 # stale or absent module, not an empty process table, and sg_ps falls back to `ps`. Before the fix the empty answer passed
 # as success, so `is_watchd` was always false, `watchd start` refused, and the heartbeat marked live runs dead.

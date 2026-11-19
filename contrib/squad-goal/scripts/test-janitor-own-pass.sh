@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.46
 # Rule A spares the loop's own pass (#497): the child review (childcc.py -> childreview.sh -> review.sh -> the model) works
 # after the run's verdict, in the child's worktree inside the run folder, so to rule A it looked like a leftover of the
 # finished run and was killed on every run. A process whose ancestry carries childcc.py is never a leftover; a stray

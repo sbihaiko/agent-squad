@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.61
 # Regression test for the issue_state door (#1429): the rows it prints are this profile's repository's cards only.
 # A project may hold cards of several repositories and an issue number repeats between them, so a card of another
 # repository on the same board is never named -- not by the whole-board read, and not by a hub cache row.

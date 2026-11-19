@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.15
 # The overlay's screenshot (#903) captures with a vendored static library: its version, source and hash are recorded beside
 # it, and the hub serves it once on every page that carries the overlay.
 # usage: bash test-hub-screenshot.sh [path/to/hub.py]

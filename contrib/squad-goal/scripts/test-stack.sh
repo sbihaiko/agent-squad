@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.17
 # Regression test for stack.sh's blocker gate: the native blocked-by relation is the fact, and a blocker named only in the
 # body's "## Blocked by" section still holds a ticket while it reads open (#1758), with the note naming the missing relation.
 # The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).

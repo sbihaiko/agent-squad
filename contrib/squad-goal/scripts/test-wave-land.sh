@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 69.06
 # The wave's landing pass (#375, ADR-0145 rules 2 and 14): the rebase on the moved base, the one push, the close,
 # and the retry paths a refused push, a refused close and a conflicted landing take.
 # mirrors: wave.sh wave-fixture.sh

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.98
 # Regression test for #580: a loop run never targets the owner's checkout. Each new run gets its own linked worktree, cut from
 # origin/$SG_BASE as fetched now, so a commit in the checkout's local branch (a merge no wave landed, or a rejected one) never
 # reaches the run's target or its children, and the owner's HEAD, index and files never change. A failed fetch refuses the

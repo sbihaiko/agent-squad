@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.74
 # Regression tests for the fix-round rule ADR-0134 keeps in revformat.py: the fingerprint of a review's findings, and the
 # count of failed rounds in a row for one marker set (--fingerprint, --stall, --record-stall). branchfixpass.sh asks both,
 # and a child fix round asks the same rule later (#565), so the two cannot read one review two ways.

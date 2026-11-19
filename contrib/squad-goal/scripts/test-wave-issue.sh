@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 32.89
 # The issues a wave carries (#836, #869, #872, #1106, #1833): which commit delivers which issue, what an orphan child
 # commit holds, and the one-commit-one-issue rule the landing reads.
 # mirrors: wave.sh wave-fixture.sh

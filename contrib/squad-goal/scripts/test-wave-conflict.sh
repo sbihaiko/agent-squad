@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 66.38
 # The landing conflict and the entry gate's reuse (#1500, #1718, #1798, #1800): one rebase round on a kept branch,
 # the round rule for a conflict met on it, and the entry gate's memo and mode.
 # mirrors: wave.sh wave-fixture.sh

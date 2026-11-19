@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 7.05
 # (#1744) A janitor pass reads the issues that changed since the last pass in one list read, and keeps each issue's facts in
 # $SG_STATE/issue-facts.json. It read every issue of every run folder one by one on every pass: 155 reads and 96 s of a
 # 181 s pass, for a repository with 11 open issues. The stub counts the reads.

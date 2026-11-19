@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.41
 # Rule O, marker half (#1847): a dispatch marker expires when its run ended without landing -- and `failed` is not the
 # only way a run ends. A run that recorded any other verdict (`needs-human`, `pass`) and landed nothing left its
 # auto/disp-<n> behind, autofrontier.sh skips any issue holding that marker, and the frontier starved on a finished run.

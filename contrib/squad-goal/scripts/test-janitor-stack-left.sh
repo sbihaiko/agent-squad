@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.48
 # Regression test for janitor rule V (STACK-BASE-LEFT-LANDING, #2260): a run whose child started on a blocker's approved tip
 # is stopped and has its issue freed when that blocker leaves Batching without a landing; a blocker still in Batching, or one
 # whose work already stands in the landing branch, keeps the run. Stubbed gh and a temp state dir; the live board and the

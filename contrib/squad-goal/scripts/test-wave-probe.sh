@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.64
 # A refuted probe sends its spec back to the check (#888). When a ticket labelled `probe` ends with its acceptance command
 # unmet (its run's verdict failed on ac-verify), the loop's close path -- `wave.sh fail` from the janitor and `wave.sh
 # requeue` from the wave entry -- calls `squad premise-check <spec> --refute <premise>`, where the spec is the ticket's

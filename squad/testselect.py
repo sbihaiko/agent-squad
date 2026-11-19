@@ -11,15 +11,10 @@ SHARED = {"pyproject.toml", "uv.lock", "squad/testselect.py", INERT}
 DYNAMIC = {"import_module", "spec_from_file_location", "__import__"}
 LITERAL = {"import_module", "__import__"}
 LISTERS = {"glob", "rglob", "iterdir", "listdir", "walk", "scandir"}
-# A data file under tests/ is read by one module; its importers are the suites it reaches.
-DATA_READERS = {"tests/shell_suites_seconds.txt": "tests/shell_suites.py"}
 # The shard guard names every top-level test file, so a file added or deleted reaches it and no other test.
 SHARD_GUARD = "tests/test_tooling.py"
-# A helper that is not a test file is read by the tests that name it; the one whose reader is known is the shard map, which
-# every card edits to give a new test file its shard line (#1870).
-HELPER_READERS = {"tests/ci_shards.py": SHARD_GUARD}
-# The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no line in
-# tests/shell_suites_seconds.txt, so a suite added there reaches it and no other test (#1799).
+# The measured-line guard reads every `test-*.sh` beside the scripts and fails a suite with no `# seconds:` header, so a
+# suite added there reaches it and no other test (#1799).
 SHELL_SUITES = "contrib/squad-goal/scripts"
 MEASURED_LINE_GUARD = "tests/test_shell_suite_runner.py"
 # A script read by path, never imported as a package module, pulls files in from disk when a test loads it: the hub serves
@@ -295,13 +290,7 @@ def _answer(root, base):
     for rel in changed:
         if rel in SHARED or rel.startswith("config/"):
             _all(f"{rel} is shared by every test")
-        if rel in DATA_READERS:
-            live.append(DATA_READERS[rel])
-            continue
         if rel.startswith("tests/") and not _is_test(rel):
-            if rel in HELPER_READERS:
-                live.append(HELPER_READERS[rel])
-                continue
             # (#1883) A helper is reached by the tests that import it, like a module of the package; one no test imports
             # answers the full battery below, because that reach is not in the graph.
             live.append(rel)
@@ -368,7 +357,7 @@ def _answer(root, base):
             hits.add(rel)
         elif rel in added_paths and _is_shell_suite(rel):
             hits.add(MEASURED_LINE_GUARD)
-        elif (rel.startswith(("squad/", "tests/")) or rel in DATA_READERS.values()) and rel.endswith(".py"):
+        elif rel.startswith(("squad/", "tests/")) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
             if rel.endswith(".py"):

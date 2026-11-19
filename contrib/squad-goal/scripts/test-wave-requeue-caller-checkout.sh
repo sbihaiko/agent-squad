@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 24.48
 # The requeue cap suite reads its own checkout, never the caller's (#1486). `requeue()` counts an issue's failed dispatches
 # in its ledger, keyed by the evolution key `landed_key` reads from `${SG_CHECKOUT:-...}`, so a caller that exports one --
 # the loop does -- decides the key of every count. A case whose two failures were seeded under one key and read under

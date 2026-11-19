@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.13
 # Regression test for envelope-spend.sh: the phrase a dispatch request carries as the spend of one child is the dispatch
 # node's own budget, read from the file the engine will run.
 #
