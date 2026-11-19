@@ -2,9 +2,11 @@
 
 A limit is a whole number from 1 to 100, or `none` for no limit (`squad/project_settings.py` holds the parse). The
 defaults follow the present machine limits, so the first release changes no behaviour: Todo none, Doing 6, Reviewing 4,
-Batching none, Testing none. MACHINE names the machine cap that also bounds a column, and `effective` answers the lower of
-the two: a column limit never raises a machine cap. A column renamed by #2315 still answers under its old name (OLD), in
-a query and in a settings file, so a caller or a file the rename has not reached keeps its limit.
+Batching none, Testing none. A column renamed by #2315 still answers under its old name (OLD), in a query and in a
+settings file, so a caller or a file the rename has not reached keeps its limit.
+
+This module answers a card limit only (#2430). A machine cap counts run slots, and a run carries one or more cards, so
+the lower of the two numbers is a limit of neither: the pass that bounds a column reads the cap in its own unit.
 
 The frontier, the review pass, the Settings page and the Kanban header read this one module, so the limit of a column
 has one resolution.
@@ -18,8 +20,6 @@ from squad import project_settings as P
 
 COLUMNS = P.COLUMN_CARDS
 DEFAULTS = {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
-# The caps entry that also bounds a column: a review column never holds more reviews than the machine allows.
-MACHINE = {"Reviewing": "reviews", "Testing": "gates"}
 OLD = P.OLD_COLUMN_CARDS   # the name each renamed column carried before #2315
 
 
@@ -51,21 +51,12 @@ def limit(name, target="."):
     return limits(target).get(new.get(name, name))
 
 
-def effective(column_limit, machine_cap):
-    """The tighter of a column limit and the machine cap that bounds it. None on both is no bound."""
-    values = [v for v in (column_limit, machine_cap) if v is not None]
-    return min(values) if values else None
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Print one board column's card limit.")
     ap.add_argument("column")
     ap.add_argument("--target", default=".")
-    ap.add_argument("--machine-cap", type=int, default=None, help="the machine cap that also bounds the column; the lower applies")
     a = ap.parse_args(argv)
     value = limit(a.column, a.target)
-    if a.machine_cap is not None:
-        value = effective(value, a.machine_cap)
     print("none" if value is None else value)
 
 

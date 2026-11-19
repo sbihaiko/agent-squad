@@ -12,7 +12,7 @@
 # A red whose cause an open bug already names -- its card in Doing, or a hand hold on it -- files no second bug (#2416): the
 # pass reads the issue's cause fingerprint in the open list and the board it already holds, never a second read.
 # The card write comes before the launch: a dispatch is a pending ledger event until its write lands (#1021, ADR-0165).
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/loopbug.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/loopbug.sh"; . "$(dirname "$0")/columnlimit.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
 # The read door is ghcall.sh (gh_api, sourced by startability.sh): three outcomes, never mixed -- 0 = the answer in stdout,
@@ -271,7 +271,7 @@ fi
 AB_REASON=""; AB_PENDING=""; AB_DISPATCHED=""; AB_PASS_ENDED=""
 if [ -n "${AB_DRY:-}" ]; then AB_PASS_ENDED=1; else AB_PASS_NO=$(ab_pass_count); trap ab_pass_end EXIT; fi
 lab=${SG_BUG_LABEL:-bug}; skip=$(sg_skip_labels bug)   # the bug lane's own skip set (#1593); the freeze markers are its floor (#537)
-read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
+read -r free runs_cap < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
@@ -284,13 +284,15 @@ try:
     ceil = C.ceiling(".")
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-print(C.free_runs(ceil, sys.argv[1], root="."))
+print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"])   # the free run slots, and caps.runs for the refusal line (#2430)
 PY
 
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 [ -n "${free:-}" ] || { AB_REASON="no slot"; echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
-[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
+# No free run slot stops the lane, and the line names the run slots (#2430): a card count is another unit, so the two
+# numbers never become one.
+[ "$free" -gt 0 ] || { AB_REASON="the run slots unit"; echo "AUTOBUG the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass" >&2; exit 0; }
 # bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
 # gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
 gather() {
@@ -376,7 +378,15 @@ ab_check_open() {
   done
 }
 [ -n "${AB_DRY:-}" ] || ab_resume
-[ "$free" -gt 0 ] || { AB_REASON="no slot"; exit 0; }
+[ "$free" -gt 0 ] || { AB_REASON="the run slots unit"; echo "AUTOBUG the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass" >&2; exit 0; }
+# A card limit on the Doing column (#2287, #2430): the lane starts no bug while the column holds its maximum, and says so
+# once. The bound is the Doing card limit alone; the free run slots are the separate check above. The count is this pass's
+# own board read, plus each hand hold whose issue has no card there, so the owner's hand work takes its share. An unread
+# limit is a defect, never "no limit": the lane stops and names it.
+doing_max=$(sg_column_limit Doing); cm_rc=$?
+[ "$cm_rc" -eq 0 ] || { AB_REASON="the Doing card limit is unreadable"; echo "AUTOBUG the Doing column limit is unreadable; a defect, not no limit: nothing dispatched this pass" >&2; exit 0; }
+case "$doing_max" in ''|*[!0-9]*) ;; *) doing_n=$(sg_column_cards Doing "$F/board" "$F/issues.json")
+  [ "$doing_n" -lt "$doing_max" ] || { AB_REASON="the cards unit"; echo "AUTOBUG column Doing full: $doing_n of $doing_max card(s) in Doing; the cards unit stopped the pass; nothing dispatched this pass" >&2; exit 0; } ;; esac
 pendset=" $(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | cut -f1 | tr '\n' ' ') "
 case "$pendset" in *[0-9]*) AB_PENDING=1;; esac   # a pending card event (ADR-0165): the pass writes before it picks anything new
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
