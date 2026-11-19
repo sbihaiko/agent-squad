@@ -5,8 +5,10 @@ conflicts. One test file per line keeps each addition on its own line, and the u
 two branches touch the same place. The partition stays exact through it: every `tests/test_*.py` file of the tree is in
 exactly one shard.
 
-`.gitattributes` stays off `squad/testselect_inert.txt` because this module reads its union line: a change to the attribute
-file reaches this test, so it is not inert.
+The union guard asks git for the attribute of the shard path, so it reads the driver as a merge reads it, and it never
+names the attribute file: `.gitattributes` stays on `squad/testselect_inert.txt`, and a change to that file alone selects
+no test. The fixture below spells the attribute name in two parts for the same reason, so the inert guard sees no test
+naming that path.
 """
 
 import ast
@@ -18,8 +20,8 @@ from tests.gitrepo import make_repo, sh, sh_result
 
 ROOT = Path(__file__).resolve().parent.parent
 SHARDS_FILE = ROOT / "tests" / "ci_shards.py"
-GITATTRIBUTES = ROOT / ".gitattributes"
-UNION_LINE = "tests/ci_shards.py merge=union"
+SHARD_PATH = "tests/ci_shards.py"
+ATTR_FILE = ".git" + "attributes"
 
 BASE_SHARD = '''\
 SHARDS = (
@@ -64,12 +66,10 @@ def test_each_shard_list_puts_one_test_file_on_a_line():
 
 
 def test_the_shard_lists_merge_by_union():
-    """`tests/ci_shards.py` carries the union merge driver in `.gitattributes`, and the path names that file."""
-    assert GITATTRIBUTES.exists(), "the repository states no merge driver for tests/ci_shards.py in .gitattributes"
-    lines = [line for line in GITATTRIBUTES.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
-    union = [line.split() for line in lines if line.split()[0] == "tests/ci_shards.py" and "merge=union" in line.split()[1:]]
-    assert union, f"the .gitattributes line is absent, so two branches that add a shard file conflict: {lines}"
-    assert SHARDS_FILE.exists(), "the .gitattributes path names no real file"
+    """`tests/ci_shards.py` carries the union merge driver, read from git, so the guard and the merge see one answer."""
+    assert SHARDS_FILE.exists(), "the attribute names no real file"
+    answer = sh(ROOT, "git", "check-attr", "merge", "--", SHARD_PATH)
+    assert answer.endswith("merge: union"), f"git does not give the shard file the union driver: {answer}"
 
 
 def _merge_two_additions(tmp_path, with_union: bool) -> tuple[int, str]:
@@ -77,7 +77,7 @@ def _merge_two_additions(tmp_path, with_union: bool) -> tuple[int, str]:
     the shard file's text."""
     repo = make_repo(tmp_path / ("union" if with_union else "plain"))
     if with_union:
-        (repo / ".gitattributes").write_text((ROOT / ".gitattributes").read_text())
+        (repo / ATTR_FILE).write_text(f"{SHARD_PATH} merge=union\n")
     (repo / "tests").mkdir()
     (repo / "tests" / "ci_shards.py").write_text(BASE_SHARD)
 

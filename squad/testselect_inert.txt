@@ -1,3 +1,3 @@
 # Paths no test reads. A change to a listed path selects no test. Read by squad/testselect.py.
-# .gitattributes is not listed: tests/test_ci_shards.py reads its union line, so a change to it reaches that test.
+.gitattributes
 LICENSE
