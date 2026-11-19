@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 9.63
 # Regression test for child-gate.sh (#1762): a suite a child starts takes the machine's gates slot and waits when the
 # ceiling is full, a second copy of the same suite is refused with a reason, and each run is named with its load.
 # usage: bash test-child-gate.sh [scripts dir]

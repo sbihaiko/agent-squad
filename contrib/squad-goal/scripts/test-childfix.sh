@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.58
 # childfix.sh starts one fix run in a child's kept worktree, and none while the loop is paused (auto/off, #1792).
 d="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; log=$T/log; : > "$log"
 ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }

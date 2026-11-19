@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.09
 # Guard for #923 and #1599: the phone holds the loop control, and one loop belongs to one project. The Now strip
 # aggregates the hub's loop fact and one row per project opens that project's loop; the Loops list names every project and
 # the change log across them; the loop page writes to one project only, through that project's own route. The primary

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 120.00
 # (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
 # below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
 # by side then read each other's hang as a survivor, or ended it.

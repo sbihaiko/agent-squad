@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.65
 # Regression test for janitor rule O on a wave that landed without a child (#682). The generic "the wave of run X landed
 # without its child" was counted loop-caused whatever the real cause was: an entry gate that failed, a review hold, a rebase
 # conflict, a drop at the tip. The reason sent to `wave.sh fail` now names the cause wave.sh recorded for that child, a wave

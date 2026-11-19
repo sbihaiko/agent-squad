@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 42.69
 # The promotion line (ADR-0145, #439): promote-stg.sh moves stg to the dev tip only when the promotion proof is green on that
 # tip, and never otherwise. SG_PROMOTE_PROOF names the proof.
 #   ci (the default): the dev tip's CI. Green promotes; red, running or a missing run promotes nothing.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.73
 # Regression test for basecheck.sh (#786): a red completed check on the base branch head holds the landings of branchland.sh and
 # wave.sh, is reported once per head (one alerts.log line; one queued comment on each issue whose landed row names that head), a
 # red answer is read again after SG_BASE_CI_RECHECK, a green one is kept only once its checks are older than SG_BASE_CI_GRACE, a

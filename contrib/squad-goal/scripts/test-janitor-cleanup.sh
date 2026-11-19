@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 13.68
 # A beside-script fixture owns only the processes it starts, and a failing case shows the pass it judged (ADR-0018, ADR-0051).
 #  (A) an unrelated `sleep 20` on the machine survives test-janitor-deadline.sh: its cleanup kills the pids of the sleeps its
 #      own stub started, never every process whose command line matches. Two copies of the fixture run at once under a parallel

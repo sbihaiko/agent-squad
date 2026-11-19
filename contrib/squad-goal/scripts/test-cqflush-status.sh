@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.54
 # One loop status comment per issue, edited in place (#328): a queued comment whose name carries a marker key
 # (<owner>__<repo>#<n>-status~<tag>.md, or -delivery~) is not posted blindly. cqflush.sh finds the comment that holds the hidden
 # marker on that issue and edits it (PATCH); it posts only when none exists; and it sends no write when the body is already the same.

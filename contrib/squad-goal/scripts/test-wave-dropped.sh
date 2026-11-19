@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 10.00
 # Regression test for wave.sh land (#1416): a wave never closes the child its tip check dropped. The tip-check bisection removes
 # a child that broke the tip; the no-Refs fallback and the per-commit close skip that child's issue. A refusal alone never
 # excludes an issue, and work already in the base still closes. A bare local remote, a stub gh, a stub board: no GitHub call.

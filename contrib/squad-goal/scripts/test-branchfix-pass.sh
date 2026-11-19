@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 11.09
 # Regression test for the fix pass (#401): branchfixpass.sh dispatches one fix run for each work branch whose kept review is at the
 # tip and says CHANGES, once per reviewed tip, and stops per ADR-0134 when the findings do not change. Stub gh (every argv logged),
 # stub mkreq.sh and launch.py (the dispatch autofix.sh uses), a bare local remote, temp state dir. One line per case.

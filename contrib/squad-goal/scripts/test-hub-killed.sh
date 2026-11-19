@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.06
 # Regression test for the hub's killed runs: a run with no verdict whose own process is gone must never count as live in the WORKERS header, whatever its age.
 # A killed run writes no more events, so its record is idle for ever; without this it read `stalled` and held a footer slot for ever (no network, no server).
 # The run's own process is the pid of its last call (#1226): a process that only names the run folder never keeps it live.

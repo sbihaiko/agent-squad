@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.75
 # The janitor writes the Run fields of a Doing card only when the holder or its start differs from what the card carries (#327).
 # The card's current holder is read once per pass, never once per card; a card whose holder is the run that holds it sends no
 # PATCH, and a card whose holder changed is written in one PATCH and proven by exactly one read. A board whose holder read fails

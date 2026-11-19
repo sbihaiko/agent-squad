@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.31
 # A deleted issue is a terminal board-write refusal: report it once and stop writing it.
 # Transient refusals remain defects on every pass. A finished run that names only deleted
 # issues leaves active-runs.txt, because no future pass can reconcile it.

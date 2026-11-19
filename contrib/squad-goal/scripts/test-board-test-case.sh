@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.01
 # A finished test pass is recorded by `board.py --test-case <owner> <project> <issue#> <pass|fail> <merge-commit> [ended]`: one
 # `test case` item on the board, through the seam (#300). The read that follows the write is the proof, so an item no read carries
 # is named on stderr and exits non-zero, never reported as written; a pass that ended failed stays failed.

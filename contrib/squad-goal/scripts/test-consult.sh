@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.57
 # consult.sh asks the first coding model that may run now, read from models.json as a v1 or a v2 chain (ADR-0147).
 d="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; log=$T/log; : > "$log"
 ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }

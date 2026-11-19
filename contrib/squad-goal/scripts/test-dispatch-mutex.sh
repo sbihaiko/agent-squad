@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.06
 # Regression test for the mutual dispatch claim and live-run issue reading.
 # Offline: stub gh. usage: bash test-dispatch-mutex.sh [scripts dir]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own

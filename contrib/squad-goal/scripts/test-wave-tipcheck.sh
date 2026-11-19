@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 55.24
 # The wave tip's check (#1290, #1409, #1687, #1700, #1434): its gate rounds are marked, a Python-only red names the
 # child, a red on a tree a gate passed gets a second look, and the sibling filter reads the bodies.
 # mirrors: wave.sh wave-fixture.sh

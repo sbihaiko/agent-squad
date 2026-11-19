@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.60
 # Regression test for reconcile.py's scope: RECONCILE_MIN floors open issues only; a closed issue of any number reaches Done (stub gh and board.sh, no network).
 # And for its watermark (#246): a recomputed column lower in the shipped flow than the one the card carries is refused and reported
 # by name, never written; a card behind the recomputed column moves forward as it always did; a revert keeps the column and adds the tag.

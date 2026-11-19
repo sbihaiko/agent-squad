@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.22
 # Regression test for #8 (ADR-0277): check-gh-interface.sh refuses a live loop script that reaches GitHub with a call
 # site of its own, naming the script and the route -- a write exactly as a read -- and lets a caller through the door
 # go. It runs from shell-suites.sh beside this script, and that is what gates a branch: startability.sh runs the suites

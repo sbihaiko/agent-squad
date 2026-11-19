@@ -3,11 +3,13 @@
 `contrib/squad-goal/scripts/shell-suites.sh` runs the same files. Each suite runs the way it does there: every inherited
 `SG_*` and `SERIAL_*` variable cleared and `HOME` at its own temp dir, so the live loop's state never reaches an assertion.
 
-The measured run time of each suite sits beside the runner, in `tests/shell_suites_seconds.txt` (`name seconds`, `#` starts
-a comment); `python3 -m tests.measure_shell_suites` writes it. A suite of 0.5 s or more is heavy, so the fast battery
-(`-m "not heavy"`) leaves it out before it runs: the line is half the 1 s rule, since a full run's load makes a 1 s suite take
-2.5 s (#629). One over the slow line carries a `slow` reason, so neither the cap nor the call deadline decides a real script
-suite under that load. A new suite is found with no edit here, and a test fails until the list measures it.
+The measured run time of each suite sits in that suite's own header, `# seconds: <n>`, and
+`python3 -m tests.measure_shell_suites --write` writes it. A suite writes only its own line, so two branches that each add a
+suite never touch one file, and the measure is derived from the tree at run time. A suite of 0.5 s or more is heavy, so the
+fast battery (`-m "not heavy"`) leaves it out before it runs: the line is half the 1 s rule, since a full run's load makes a
+1 s suite take 2.5 s (#629). One over the slow line carries a `slow` reason, so neither the cap nor the call deadline decides
+a real script suite under that load. A new suite is found with no edit here, and a test fails until the suite carries its
+own header.
 
 Both lines follow the machine's own measure, never a wall second guessed on a quiet one (#736). The cap excuses a call over
 its line only up to the slowdown `tests/slowcap.py` measures and bounds (`MAX_CONTENTION_FACTOR`), so the slow line is the cap
@@ -19,6 +21,7 @@ so it took 485.2 s under load 24.6 against a 424.76 s bound and was stopped whil
 measured and bounded too, so a suite that really costs more keeps a finite bound.
 """
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -29,7 +32,8 @@ from tests import slowcap
 
 ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "contrib" / "squad-goal" / "scripts"
-SECONDS_LIST = Path(__file__).resolve().parent / "shell_suites_seconds.txt"
+SECONDS_HEADER = "# seconds:"
+SECONDS_LINE = re.compile(r"^# seconds:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
 HEAVY_SECONDS = 0.5
 LOAD_FACTOR = slowcap.MAX_CONTENTION_FACTOR
 SLOW_SECONDS = slowcap.DEFAULT_CAP_SECONDS / LOAD_FACTOR   # 5 s: at this line the cap can decide a suite under load (#736)
@@ -41,14 +45,36 @@ def discover(directory=SUITES_DIR):
     return sorted(Path(directory).glob("test-*.sh"))
 
 
-def measured():
-    """Name to measured seconds, from the list beside the runner."""
+_MEASURED: dict[str, tuple[tuple, dict]] = {}
+
+
+def measured(directory=SUITES_DIR):
+    """Name to measured seconds, read from each suite's own header line. The answer is held for the tree it read, so a
+    whole run reads every suite once and not once per suite; a suite whose file changed is read again."""
+    suites = discover(directory)
+    signature = tuple((suite.name, suite.stat().st_mtime_ns, suite.stat().st_size) for suite in suites)
+    held = _MEASURED.get(str(directory))
+    if held is not None and held[0] == signature:
+        return dict(held[1])
     seconds = {}
-    for line in SECONDS_LIST.read_text().splitlines():
-        fields = line.split("#", 1)[0].split()
-        if fields:
-            seconds[fields[0]] = float(fields[1])
+    for suite in suites:
+        found = SECONDS_LINE.search(suite.read_text(errors="replace"))
+        if found:
+            seconds[suite.name] = float(found.group(1))
+    _MEASURED[str(directory)] = (signature, seconds)
     return seconds
+
+
+def set_seconds(suite, seconds):
+    """Write one suite's measured seconds into its own header, after the shebang, and replace the header it carried: no
+    other suite's file is written, so a measure never rewrites a sibling's line."""
+    path = Path(suite)
+    header = f"{SECONDS_HEADER} {seconds:.2f}"
+    lines = path.read_text().splitlines()
+    kept = [line for line in lines if not SECONDS_LINE.fullmatch(line)]
+    keep = 1 if kept and kept[0].startswith("#!") else 0
+    kept.insert(keep, header)
+    path.write_text("\n".join(kept) + "\n")
 
 
 def heavy_names():

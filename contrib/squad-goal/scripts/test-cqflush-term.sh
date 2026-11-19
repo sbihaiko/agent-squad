@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.28
 # A reload (#873) ends the comment flusher at the end of its pass: a TERM that arrives while a post is in flight lets that
 # post land and be marked done, and the flusher starts no further file. A TERM that cut the post would leave a .posting
 # file that no pass reads again, so the comment would be lost.

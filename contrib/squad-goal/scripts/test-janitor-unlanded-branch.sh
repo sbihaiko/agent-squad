@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.97
 # A card in Done over a branch the base never took is a false delivery (#97).
 #
 # A run's own `land` pass is the run saying it finished, not the base taking the merge: the close pass merges gui/<n> and

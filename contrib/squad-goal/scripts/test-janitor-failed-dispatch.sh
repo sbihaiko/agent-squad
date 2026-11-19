@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.88
 # Regression test for janitor rule O (#1513): a run that ended with a failed verdict and landed nothing releases its issues --
 # rule R writes the loop-board card (Todo), rule O moves the bug card (To triage) and drops the dispatch marker, so the next cycle
 # re-dispatches it. A run that landed work stops at Batching and keeps its marker (#239: a local landing is not a

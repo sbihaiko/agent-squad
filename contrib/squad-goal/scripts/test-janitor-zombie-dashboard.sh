@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.43
 # A pid-less run whose only process in its folder is its dashboard server is a zombie. Rule C reads liveness as the engine
 # does (the LIVE predicate of squad/reap.py), and `python3 -m squad.dashboard_server` is not a run's process: a dashboard
 # that stayed inside an idle run kept the run "alive" for ever, so the zombie verdict never came (14:53-15:01, #1270).

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 3.60
 # The owner's rearm lifts the needs-human freeze (#1562, ADR-0029, ADR-0149). `issue_ledger.py rearm` is the owner's act on
 # an issue whose run stopped needs-human: it clears the loop's facts and records a floor (rearmed.ts). The reconciler folds a
 # needs-human run that landed nothing into its legacy Blocked, which in the shipped vocabulary is no column but a

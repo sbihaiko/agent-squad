@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.85
 # A profile that still names the retired SG_TOOLING_REPO keeps working: env.sh maps it into SG_REPOS, prints ONE warning
 # that names the profile, the setting and its replacement, and a real pass runs and reads its repository. The same profile
 # with the setting removed runs with no warning. Drives the real env.sh, address.sh and branchreviewpass.sh against a stub

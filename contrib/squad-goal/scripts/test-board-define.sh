@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.79
 # The live board is an instance of the board definition (ADR-0141). `board_define.py --definition <board.json> <owner> <project>`
 # reads the project's fields once and names, by name, each difference between the board and the definition: an option the
 # definition names that the board lacks, an option the board carries that the definition does not name, and a field the

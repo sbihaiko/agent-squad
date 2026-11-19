@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 5.04
 # A driver that dies leaves one line naming how it died (#1439), and the next start brings the loop back.
 # Offline: a temp skill with stub lanes that exit once orphaned, as the real lanes do.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0

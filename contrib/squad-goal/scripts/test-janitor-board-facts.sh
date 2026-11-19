@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.24
 # The board facts have one runtime producer (ADR-0145): the janitor's reconcile fills the facts board_columns.column_for reads
 # (wave_branch, landing, dev_ci, review_wait) from what the loop already knows -- the wave branch of a run on the remote, the
 # review of its tip kept in the state dir, the check runs of the dev tip, and the review of a work branch -- and writes the

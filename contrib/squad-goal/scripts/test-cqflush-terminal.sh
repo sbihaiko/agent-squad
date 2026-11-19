@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 1.70
 # A queued Closed comment is checked again at flush time (#777): the janitor names it <owner>__<repo>#<n>-terminal-closed-<pid>.md.
 # cqflush.sh reads the issue state before it posts one; an issue open again drops the comment with a log line, and a closed one
 # is posted. Another terminal comment is posted with no read. Offline: fixture profile, stub gh that answers the state from a file.

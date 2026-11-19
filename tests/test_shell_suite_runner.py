@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests import shell_suites, slowcap
+from tests.gitrepo import make_repo, sh, sh_result
 
 pytestmark = pytest.mark.macos_bound   # the suites it collects are the loop's own, macOS-only (ADR-0139)
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +37,53 @@ def test_the_runner_finds_the_suites_shell_suites_sh_runs():
     expected = sorted(p.name for p in SCRIPTS.glob("test-*.sh"))
     assert expected, "the scripts directory holds suites"
     assert [p.name for p in shell_suites.discover()] == expected
+
+
+def test_a_suite_carries_its_measured_seconds_in_its_own_header(tmp_path):
+    """The measure sits in the suite it measures (#2442): a suite added beside a sibling's is its own file, so no branch
+    writes the line of another."""
+    write_suite(tmp_path, "test-headed.sh", "# seconds: 2.50\necho ok\n")
+    write_suite(tmp_path, "test-plain.sh", "echo ok\n")
+    assert shell_suites.measured(tmp_path) == {"test-headed.sh": 2.5}
+
+
+def test_set_seconds_writes_the_measure_into_one_suite_s_own_header(tmp_path):
+    """`measure_shell_suites --write` touches only the suite it measured, so it never rewrites a sibling's line."""
+    suite = write_suite(tmp_path, "test-fresh.sh", "echo ok\n")
+    shell_suites.set_seconds(suite, 3.25)
+    assert shell_suites.measured(tmp_path) == {"test-fresh.sh": 3.25}
+    shell_suites.set_seconds(suite, 4.5)   # a second measure replaces the header, never adds a second one
+    assert shell_suites.measured(tmp_path) == {"test-fresh.sh": 4.5}
+    assert suite.read_text().count(shell_suites.SECONDS_HEADER) == 1
+
+
+def test_two_branches_that_each_add_a_shell_suite_merge_and_the_measure_holds_both(tmp_path):
+    """The expected behavior (#2442): a branch that adds a suite writes that suite and no shared list, so a sibling's
+    addition merges clean, and the merged tree measures both."""
+    repo = make_repo(tmp_path / "merge")
+    scripts = repo / "contrib" / "squad-goal" / "scripts"
+    scripts.mkdir(parents=True)
+    g = lambda *a: sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", *a)  # noqa: E731
+
+    def add(name: str) -> None:
+        (scripts / name).write_text("#!/bin/bash\n# seconds: 1.00\necho ok\n")
+
+    add("test-a.sh")
+    g("add", "-A")
+    g("commit", "-q", "-m", "base")
+    g("checkout", "-q", "-b", "one")
+    add("test-b.sh")
+    g("add", "-A")
+    g("commit", "-q", "-m", "one")
+    g("checkout", "-q", "main")
+    g("checkout", "-q", "-b", "two")
+    add("test-c.sh")
+    g("add", "-A")
+    g("commit", "-q", "-m", "two")
+    g("checkout", "-q", "one")
+    done = sh_result(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-edit", "two")
+    assert done.returncode == 0, f"the merge of two added suites conflicted: {done.stdout}{done.stderr}"
+    assert shell_suites.measured(scripts) == {"test-a.sh": 1.0, "test-b.sh": 1.0, "test-c.sh": 1.0}
 
 
 def test_a_green_suite_passes(tmp_path):
@@ -126,7 +174,7 @@ def test_a_slow_suite_carries_a_slow_reason_so_the_cap_does_not_fail_it():
 def test_every_suite_has_a_measured_line_so_none_lands_unmeasured():
     listed = shell_suites.measured()
     missing = [p.name for p in shell_suites.discover() if p.name not in listed]
-    assert not missing, ("each shell suite needs a line in tests/shell_suites_seconds.txt; measure it with "
+    assert not missing, ("each shell suite needs its own `# seconds:` header; measure it with "
                          f"`python3 -m tests.measure_shell_suites --write {' '.join(missing)}`")
 
 

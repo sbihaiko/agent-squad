@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 2.82
 # Rule (#744): a frontier that holds Todo cards and starts nothing for a bound says so once, in alerts.log, naming the Todo
 # count and the reasons of its own last idle line. The frontier writes $SG_STATE/frontier-idle (<epoch> TAB <line>) on an
 # idle pass and drops it when a pass dispatches, so the janitor reads that fact and never the frontier again. It repeats at

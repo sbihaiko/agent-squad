@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.05
 # Guard for skiplabels.sh (#1673): the holders and the freeze markers are a floor of both dispatch lanes, a profile's skip
 # list adds labels and never removes one, and each lane keeps its own extra labels.
 # usage: bash test-skiplabels.sh

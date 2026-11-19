@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.41
 # The dispatch writer of the labeled gate-load set (#1757): one input file, a header that names its source and write time.
 # Fixtures in a temp folder only: never the loop state.
 # usage: bash test-gate-load-set-write.sh [gate_load_set_write.sh]

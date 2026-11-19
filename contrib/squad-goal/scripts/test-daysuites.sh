@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 10.05
 # Regression test for daysuites.sh (#2307): every shell suite on the dev tip once a day, one suite at a time under the gate
 # lock and one gate slot, never beside a live landing gate, one bug per red suite through the loop's one filer, and no
 # second bug for a suite red on two passes in a row. usage: bash test-daysuites.sh [path/to/daysuites.sh]

@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 9.69
 # Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own

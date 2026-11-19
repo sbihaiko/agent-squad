@@ -1,18 +1,17 @@
-"""Guards for the shard partition's shape (#2420): one test file per line, and a union merge.
+"""Guards for the full suite's shard partition (#2442).
 
-Two branches that each add a test file to the same shard edit the same place of `tests/ci_shards.py`, so a rebase
-conflicts. One test file per line keeps each addition on its own line, and the union merge driver keeps both lines when
-two branches touch the same place. The partition stays exact through it: every `tests/test_*.py` file of the tree is in
-exactly one shard.
+The partition is derived from the tree at run time: `tests/ci_shards.py` weighs every `tests/test_*.py` of the tree and
+places each one, heaviest first, in the lightest shard. No branch writes the partition, so two branches that each add a
+test file touch no shared file: their branches merge clean, and the merged tree's partition holds both files.
 
-The union guard asks git for the attribute of the shard path, so it reads the driver as a merge reads it, and it never
-names the attribute file: `.gitattributes` stays on `squad/testselect_inert.txt`, and a change to that file alone selects
-no test. The fixture below spells the attribute name in two parts for the same reason, so the inert guard sees no test
-naming that path.
+The module names no test path, so it is no ledger a card edits, and `.gitattributes` gives it no merge driver: there is
+nothing to merge.
 """
 
 import ast
-from collections import Counter
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 from tests import ci_shards
@@ -20,95 +19,99 @@ from tests.gitrepo import make_repo, sh, sh_result
 
 ROOT = Path(__file__).resolve().parent.parent
 SHARDS_FILE = ROOT / "tests" / "ci_shards.py"
-SHARD_PATH = "tests/ci_shards.py"
-ATTR_FILE = ".git" + "attributes"
-
-BASE_SHARD = '''\
-SHARDS = (
-    (
-        "tests/test_a.py",
-    ),
-)
-'''
+SHARD_COUNT = ci_shards.SHARD_COUNT
 
 
-def _listed() -> list[str]:
-    return [p for shard in ci_shards.SHARDS for p in shard]
+def _shards(root: Path) -> list[str]:
+    """Every test file the partition of `root` holds, through the one function the CI command prints."""
+    return [path for shard in range(1, SHARD_COUNT + 1) for path in ci_shards.shard_paths(shard, root)]
 
 
-def _paths_by_line() -> dict[int, list[str]]:
-    """The test-file strings of the SHARDS literal, keyed by their source line, so two strings on one line share a key."""
-    tree = ast.parse(SHARDS_FILE.read_text())
-    by_line: dict[int, list[str]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith("tests/test_"):
-            by_line.setdefault(node.lineno, []).append(node.value)
-    return by_line
-
-
-def test_every_test_file_is_in_exactly_one_shard_list():
-    """Every `tests/test_*.py` file of the tree is in exactly one shard: a missing one never runs in the complete tier,
-    a doubled one runs twice, and a stale one names a file the tree no longer has."""
-    on_disk = {p.name for p in (ROOT / "tests").glob("test_*.py")}
-    listed = [Path(p).name for p in _listed()]
-    missing = sorted(on_disk - set(listed))
-    twice = sorted(name for name, count in Counter(listed).items() if count > 1)
-    stale = sorted(set(listed) - on_disk)
-    assert missing == [], f"a test file is in no shard, so the complete tier never runs it: {missing}"
-    assert twice == [], f"a test file is in more than one shard, so the complete tier runs it twice: {twice}"
-    assert stale == [], f"a shard names a test file the tree no longer has: {stale}"
-
-
-def test_each_shard_list_puts_one_test_file_on_a_line():
-    """One test file per source line: two branches that add a file to one shard then touch different lines, not one."""
-    shared = {line: paths for line, paths in _paths_by_line().items() if len(paths) > 1}
-    assert shared == {}, f"a shard line holds more than one test file, so two additions to it conflict: {shared}"
-
-
-def test_the_shard_lists_merge_by_union():
-    """`tests/ci_shards.py` carries the union merge driver, read from git, so the guard and the merge see one answer."""
-    assert SHARDS_FILE.exists(), "the attribute names no real file"
-    answer = sh(ROOT, "git", "check-attr", "merge", "--", SHARD_PATH)
-    assert answer.endswith("merge: union"), f"git does not give the shard file the union driver: {answer}"
-
-
-def _merge_two_additions(tmp_path, with_union: bool) -> tuple[int, str]:
-    """Two branches each add one test file to the same shard, then one merges the other; answers the merge's code and
-    the shard file's text."""
-    repo = make_repo(tmp_path / ("union" if with_union else "plain"))
-    if with_union:
-        (repo / ATTR_FILE).write_text(f"{SHARD_PATH} merge=union\n")
-    (repo / "tests").mkdir()
-    (repo / "tests" / "ci_shards.py").write_text(BASE_SHARD)
-
-    def g(*args: str) -> None:
-        sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", *args)
-
-    def add(path: str) -> None:
-        text = (repo / "tests" / "ci_shards.py").read_text()
-        (repo / "tests" / "ci_shards.py").write_text(text.replace(
-            '        "tests/test_a.py",\n', f'        "tests/test_a.py",\n        "{path}",\n'))
-
+def _partition_in(repo: Path) -> tuple[int, str, list[str]]:
+    """Two branches each add one test file and one merges the other: the merge's code, the shard file's text and the
+    merged tree's partition."""
+    g = lambda *a: sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", *a)  # noqa: E731
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "ci_shards.py").write_text(SHARDS_FILE.read_text())
+    (repo / "tests" / "test_a.py").write_text("def test_a():\n    pass\n")
     g("add", "-A")
     g("commit", "-q", "-m", "base")
     g("checkout", "-q", "-b", "one")
-    add("tests/test_b.py")
-    g("commit", "-q", "-am", "one")
+    (repo / "tests" / "test_b.py").write_text("def test_b():\n    pass\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "one")
     g("checkout", "-q", "main")
     g("checkout", "-q", "-b", "two")
-    add("tests/test_c.py")
-    g("commit", "-q", "-am", "two")
+    (repo / "tests" / "test_c.py").write_text("def test_c():\n    pass\n")
+    g("add", "-A")
+    g("commit", "-q", "-m", "two")
     g("checkout", "-q", "one")
-    r = sh_result(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-edit", "two")
-    return r.returncode, (repo / "tests" / "ci_shards.py").read_text()
+    done = sh_result(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "merge", "--no-edit", "two")
+    return done.returncode, (repo / "tests" / "ci_shards.py").read_text(), _shards(repo)
 
 
-def test_two_branches_that_add_a_file_to_one_shard_merge_without_conflict(tmp_path):
-    """With union, two branches that add a test file to the same shard merge clean and keep both files; the same merge
-    without union conflicts, which is what the attribute buys."""
-    plain_code, plain_text = _merge_two_additions(tmp_path, with_union=False)
-    assert plain_code != 0 and "<<<<<<<" in plain_text, "the control merge is expected to conflict without the union driver"
-    code, text = _merge_two_additions(tmp_path, with_union=True)
-    assert code == 0, f"the union merge conflicted: {text}"
-    assert "<<<<<<<" not in text, f"the union merge left a conflict marker: {text}"
-    assert "tests/test_b.py" in text and "tests/test_c.py" in text, f"the union merge dropped a file: {text}"
+def test_two_branches_that_each_add_a_test_file_merge_and_the_partition_holds_both(tmp_path):
+    """The expected behavior (#2442): a branch that adds a test file edits no ledger, so a sibling's addition merges clean,
+    and the merged tree's partition runs both files once."""
+    code, text, listed = _partition_in(make_repo(tmp_path / "merge"))
+    assert code == 0, f"the merge of two added test files conflicted: {text}"
+    assert "<<<<<<<" not in text, f"the merge left a conflict marker: {text}"
+    for added in ("tests/test_b.py", "tests/test_c.py"):
+        assert listed.count(added) == 1, f"the merged tree runs {added} {listed.count(added)} times: {listed}"
+
+
+def test_the_partition_is_derived_from_the_tree_at_run_time(tmp_path):
+    """Every test file of the tree is in exactly one shard, with no ledger to keep in step: a file the derivation reads
+    from the tree can never be left out or listed twice."""
+    listed = _shards(ROOT)
+    on_disk = sorted(f"tests/{p.name}" for p in (ROOT / "tests").glob("test_*.py"))
+    assert sorted(listed) == on_disk, f"the partition does not hold each test file once: {sorted(listed)} against {on_disk}"
+    empty = [k for k in range(1, SHARD_COUNT + 1) if not ci_shards.shard_paths(k)]
+    assert empty == [], f"shard(s) {empty} are empty, so their jobs prove nothing"
+
+
+def test_a_second_query_reads_a_tree_that_changed(tmp_path):
+    """The partition is derived at run time from the tree, so a query after the tree gained a test file holds that file:
+    one process that asks twice never answers for an older tree."""
+    root = tmp_path / "tree"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_a.py").write_text("def test_a():\n    pass\n")
+    first = _shards(root)
+    (root / "tests" / "test_b.py").write_text("def test_b():\n    pass\n")
+    second = _shards(root)
+    assert "tests/test_b.py" not in first, f"the first query already held a file the tree did not carry: {first}"
+    assert "tests/test_b.py" in second, f"the second query answered for the older tree: {second}"
+
+
+def test_the_partition_names_no_test_path():
+    """The partition is derived, never declared: the module's own source holds no `tests/test_*.py` path, so no branch
+    writes a row and no two branches touch one line."""
+    tree = ast.parse(SHARDS_FILE.read_text())
+    named = sorted(node.value for node in ast.walk(tree)
+                   if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                   and re.fullmatch(r"tests/test_.*\.py", node.value))
+    assert named == [], f"the partition module declares a test path, so cards edit it again: {named}"
+
+
+def test_the_command_prints_the_shard_the_module_answers():
+    """The CI job runs the module as a command, so the command prints the shard the module answers, one line."""
+    r = subprocess.run([sys.executable, "tests/ci_shards.py", "2"], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.split() == list(ci_shards.shard_paths(2)), r.stdout
+
+
+def test_a_shard_answer_is_the_same_twice():
+    """The derivation is deterministic: two answers for one tree name the same files, so two CI jobs of one shard run one set."""
+    for shard in range(1, SHARD_COUNT + 1):
+        assert ci_shards.shard_paths(shard) == ci_shards.shard_paths(shard)
+
+
+def test_the_partition_spreads_the_weight_evenly():
+    """The greedy placement leaves no shard heavier than the lightest plus the heaviest single file: a wall clock is a
+    sibling job's, so one shard carrying the heavy suites sets the tier (ADR-0163)."""
+    shards = {k: set(ci_shards.shard_paths(k)) for k in range(1, SHARD_COUNT + 1)}
+    weights = {path: ci_shards.weight(ROOT / path) for paths in shards.values() for path in paths}
+    totals = [sum(weights[path] for path in paths) for paths in shards.values()]
+    heaviest = max(weights.values())
+    assert max(totals) - min(totals) <= heaviest, f"one shard carries {totals}, uneven by more than one file's weight"
+    assert all(paths for paths in shards.values()), "a shard is empty, so its job runs no proof"

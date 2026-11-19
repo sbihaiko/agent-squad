@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.10
 # Regression test for test.sh: a coordinator test pass records its result and moves no card, since the board has no Testing column.
 # usage: bash test-test.sh [path/to/test.sh]
 src=${1:-$(dirname "$0")/test.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

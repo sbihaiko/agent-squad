@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.76
 # A move the door proves is one transition in its repository's own record, `board-transitions.<owner>_<name>.jsonl`
 # beside the state: the card, the column it came from, the column it went to, the instant and the repository (#897).
 # A move to the column the card already holds writes no transition. Two repositories on one board keep two records,
