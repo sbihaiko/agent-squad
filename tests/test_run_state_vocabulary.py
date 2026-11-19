@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # The verdict values a record can carry, plus the two the surfaces add: the hub's `starting`/`verified`/`unverified`, the dashboard's no-verdict.
 RECORD_VERDICTS = ["completed", "failed", "needs-human"]
-PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d"}
+PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d",
+           "mute": "#8a93a3"}
 # The four marks of the one state table: a filled dot, a hollow dot, a bar, or none. A texture is not a mark:
 # dotted against dashed reads as one texture, so a border style never names a difference (#1137).
 MARKS = ("filled", "hollow", "bar", "none")
