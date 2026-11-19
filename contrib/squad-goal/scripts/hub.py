@@ -7400,17 +7400,25 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
    the read and asks; the hub validates, shows the diff and writes the project settings file on confirm (ADR-0137). The
    runs cap and the gate-worker cap are editable; children and reviews stay in the file. */
 // SLOT{ the Machine slots sub-group's pure rules (#2435): its values, its dirty test, its chip, its gate line and its html. Run in node by tests.
-let slotS=null,slotDraft=null,slotMsg="";
+let slotS=null,slotDraft=null,slotMsg="",slotDiff=null;
 const slotClone=o=>JSON.parse(JSON.stringify(o));
 const slotNow=()=>slotDraft||slotS||{};
-const slotCaps=()=>({runs:String(slotNow().runs.cap),gates:String(slotNow().gates.cap)});
-const slotDirty=()=>!!slotS&&!!slotDraft&&JSON.stringify(slotDraft)!==JSON.stringify(slotS);
+const slotLabel=k=>k==="runs"?"Runs":"Gate workers";
+const slotMax=k=>{const c=slotS&&slotS.ceiling,n=c&&c[k];return typeof n==="number"&&n>=1?n:1000};   // the plugin ceiling the read names, else the catalog's high bound
+const slotWhy=(k,raw)=>{const t=String(raw==null?"":raw).trim(),n=/^\d+$/.test(t)?Number(t):0;
+ return n>=1&&n<=slotMax(k)?"":`the cap is an integer from 1 to ${slotMax(k)}`};
+const slotStage=(k,raw)=>{const why=slotWhy(k,raw);if(why){slotMsg="!"+slotLabel(k)+": "+why;slotSay();return false}
+ slotDraft[k].cap=Number(String(raw).trim());slotMsg="";slotDiff=null;slotSay();return true};   // a refused cap never reaches the draft the Save would write
+const slotVal=k=>String(slotNow()[k].cap);
+const slotCaps=()=>({runs:slotVal("runs"),gates:slotVal("gates")});
+const slotDirty=()=>!!slotS&&!!slotDraft&&(slotVal("runs")!==String(slotS.runs.cap)||slotVal("gates")!==String(slotS.gates.cap));
 const slotFull=a=>!!a&&a.in_use>=a.cap;
 const slotChip=(s=slotS)=>{s=s||{};return slotFull(s.runs)?["runs full","err"]:slotFull(s.gates)?["gate workers full","err"]:["under the caps","ok"]};
 const slotHeld=h=>h.issues&&h.issues.length?h.issues.map(n=>`<span class=chip>#${esc(n)}</span>`).join(" "):`<span class=chip>${esc(h.name)}</span>`;
-const slotRun=g=>g.running?`${g.running} gate${g.running===1?"":"s"} running`:"none running";
+const slotRun=g=>g.gates_running?`${g.gates_running} gate${g.gates_running===1?"":"s"} running`:"none running";
 const slotGateLine=g=>`${g.cap} slots ÷ ${g.workers} workers per gate = ${g.gates_at_once} ${g.gates_at_once===1?"gate":"gates"} at a time · ${slotRun(g)}`;
-const slotCap=name=>`<input data-slot=${name} type=number min=1 max=1000 step=1 inputmode=numeric value="${slotNow()[name].cap}" aria-label="${name==="runs"?"runs cap":"gate workers cap"}">`;
+const slotCap=name=>`<input data-slot=${name} type=number min=1 max="${slotMax(name)}" step=1 inputmode=numeric value="${slotNow()[name].cap}" aria-label="${name==="runs"?"runs cap":"gate workers cap"}">`;
+const slotSay=()=>{const e=$("#slotmsg");if(!e)return;e.textContent=slotMsg.replace(/^!/,"");e.className="mx"+(slotMsg.startsWith("!")?" err":"")};
 function slotsHtml(){const t=slotChip();
  if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  const s=slotNow(),r=s.runs,g=s.gates;
@@ -7418,8 +7426,9 @@ function slotsHtml(){const t=slotChip();
   +setRow("Runs",`<span class=slotnow>${r.in_use} of ${r.cap}</span> ${slotCap("runs")} <span class=slothold>${r.holders.length?r.holders.map(slotHeld).join(" "):"<small class=m>none running</small>"}</span>`)
   +setRow("Gate workers",`<span class=slotnow>${g.in_use} of ${g.cap}</span> ${slotCap("gates")} <span class=slothold>${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}</span>`)
   +`<p class=note>A run carries one or more cards, so Runs and Doing count different things. Gate workers also serve child gates, day suites and hand gates.</p>`
-  +`<p class=note>File only: children ${esc(s.children)} · reviews ${esc(s.reviews)}, in <code>${esc(s.file_label||"docs/squad/defaults.yaml")}</code>. A resume refuses when this file changed.</p></div>`
-  +(slotMsg?`<div class="mx${slotMsg.startsWith("!")?" err":""}" role=status>${esc(slotMsg.replace(/^!/,""))}</div>`:"")}
+  +`<p class=note>File only: children ${esc(s.children)} · reviews ${esc(s.reviews)}, in <code>${esc(s.file_label||"docs/squad/defaults.yaml")}</code>. A resume refuses when this file changed.</p>`
+  +(slotDiff&&slotDiff.length?`<div class="mx" role=status>${slotDiff.map(l=>esc(l)).join(" · ")}</div>`:"")
+  +`<div class="mx${slotMsg.startsWith("!")?" err":""}" id=slotmsg role=status>${esc(slotMsg.replace(/^!/,""))}</div></div>`}
 // }SLOT
 const limN=v=>v==null?"—":tk(v);
 const limVals=()=>limPend||{guard:($("#limg")||{}).value||"",cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
@@ -7442,7 +7451,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
- try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
+ try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
  limRender()}
 async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
  try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
@@ -7451,13 +7460,14 @@ async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
  limRender()}
 async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slotCaps(),confirm})}),d=await r.json();
- if(d.err){slotMsg="!"+d.err}
- else if(confirm){slotS=d.state||slotS;slotDraft=slotClone(slotS);slotMsg=(d.diff||[]).length?"saved · the next run and gate read it":"nothing changed"}
- else slotMsg=(d.diff||[]).length?"":(slotDraft=slotClone(slotS),"nothing changed")}catch(x){slotMsg="!save failed"}
+ if(d.err){slotMsg="!"+d.err;slotDiff=null;if(slotS)slotDraft=slotClone(slotS)}   // a refused payload never stays staged, so the next Save sends the server's value
+ else if(confirm){slotS=d.state||slotS;slotDraft=slotClone(slotS);slotDiff=null;slotMsg=(d.diff||[]).length?"saved · the next run and gate read it":"nothing changed"}
+ else if((d.diff||[]).length)slotDiff=d.diff;else{slotDraft=slotClone(slotS);slotDiff=null;slotMsg="nothing changed"}}catch(x){slotMsg="!save failed"}
  limRender()}
 $("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot;   // a Kanban row or a slot cap stages its value until Save (#2432, #2435)
  if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg=""}
- if(sp&&slotDraft){slotDraft[sp].cap=e.target.value===""?"":Number(e.target.value);slotMsg=""}setBar()});
+ if(sp&&slotDraft)slotStage(sp,e.target.value);   // a cleared or out-of-range cap is refused here, never staged for a Save that the hub would refuse (#2435)
+ setBar()});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7557,7 +7567,7 @@ $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
  if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"));
   if(kanDirty())groups.push(await setAskOne("/api/columns",{columns:kanLimits()},"Kanban",(kanS&&kanS.file)||"(the project settings file)"));
-  if(slotDirty())groups.push(await setAskOne("/api/slots",slotCaps(),"Machine slots",(slotS&&slotS.file)||"(the project settings file)"))}
+  if(slotDirty()){const g=await setAskOne("/api/slots",slotCaps(),"Machine slots",(slotS&&slotS.file)||"(the project settings file)");slotDiff=g.lines;groups.push(g)}}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
@@ -7577,7 +7587,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}
- if(slotS){slotDraft=slotClone(slotS);slotMsg="";limRender()}setBar()};
+ if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
@@ -9876,9 +9886,9 @@ def _slots_parts():
 
 def _slots_error(why):
     """The read's shape with the failure named: the page states it, and no row draws a guessed number."""
-    return {"file": "", "file_label": str(pathlib.Path("docs") / "squad" / "defaults.yaml"), "caps": {},
+    return {"file": "", "file_label": str(pathlib.Path("docs") / "squad" / "defaults.yaml"), "caps": {}, "ceiling": {},
             "runs": {"cap": 0, "in_use": 0, "holders": []},
-            "gates": {"cap": 0, "in_use": 0, "holders": [], "workers": 0, "gates_at_once": 0, "running": 0},
+            "gates": {"cap": 0, "in_use": 0, "holders": [], "workers": 0, "gates_at_once": 0, "gates_running": 0},
             "children": 0, "reviews": 0, "err": why}
 
 
@@ -9924,10 +9934,13 @@ def slots_set(body):
     for name, label in SLOT_CAPS:
         if name not in body: continue
         n = _slot_cap(body.get(name))
-        if n is None or not 1 <= n <= ps.CATALOG[f"caps.{name}"][2]:
-            return {"err": f"{label}: the cap is an integer from 1 to {ps.CATALOG[f'caps.{name}'][2]}"}
-        if isinstance(top.get(name), int) and n > top[name]:
-            return {"err": f"caps.{name}: {n} is above the machine-wide ceiling {top[name]}; a project may only lower it"}
+        high = ps.CATALOG[f"caps.{name}"][2]
+        if n is None or not 1 <= n <= high:
+            return {"err": f"{label}: the cap is an integer from 1 to {high}"}
+        plugin_value = top.get(name)   # a plugin file that omits the key bounds the save at the catalog's high bound, never at no bound
+        ceiling = plugin_value if isinstance(plugin_value, int) and not isinstance(plugin_value, bool) else high
+        if n > ceiling:
+            return {"err": f"caps.{name}: {n} is above the machine-wide ceiling {ceiling}; a project may only lower it"}
         new[name] = n
     diff = [f"Machine slots · {label}: {cur[name]['cap']} -> {new[name]}"
             for name, label in SLOT_CAPS if name in new and new[name] != cur[name]["cap"]]

@@ -8,6 +8,7 @@ observes the ceiling and reaps nothing (ADR-0162), so a dead lease stays for the
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -72,7 +73,17 @@ def test_the_read_names_every_gate_worker_slot_and_its_holder(world):
     assert got["gates"]["cap"] == 3
     assert got["gates"]["in_use"] == 2
     assert got["gates"]["holders"] == ["gate-11", "gate-11"]
-    assert got["gates"]["running"] == 1
+    assert got["gates"]["gates_running"] == 1
+
+
+def test_a_child_gate_or_a_day_suite_is_no_loop_gate_running(world):
+    proj, cfg, caps_dir = world
+    _lease(caps_dir, "gates", "gate-11.slot0", "gate-11")
+    _lease(caps_dir, "gates", "cg.slot0", "child-gate-999")
+    _lease(caps_dir, "gates", "ds.slot0", "daysuites-999")
+    got = _read(proj, cfg, caps_dir)
+    assert got["gates"]["in_use"] == 3, "every live lease holds a slot"
+    assert got["gates"]["gates_running"] == 1, "one holder is one loop gate, and only `gate-` names one"
 
 
 def test_the_gate_row_divides_the_cap_by_the_workers_of_one_gate(world):
@@ -99,3 +110,41 @@ def test_the_read_reaps_no_lease(world):
     assert (caps_dir / "gates" / "gate-dead.json").exists(), "the read reaped a lease it only observes"
     assert got["gates"]["in_use"] == 0
     assert got["gates"]["holders"] == []
+
+
+def test_the_read_leaves_a_dead_run_lease_for_the_next_count(world):
+    proj, cfg, caps_dir = world
+    _lease(caps_dir, "runs", "run-dead", "run-dead", pid=_dead_pid())
+    got = _read(proj, cfg, caps_dir)
+    assert (caps_dir / "runs" / "run-dead.json").exists(), "the read reaped a run lease it only observes"
+    assert got["runs"]["in_use"] == 0
+
+
+def test_a_gate_lease_held_by_a_page_server_counts_no_slot(world):
+    proj, cfg, caps_dir = world
+    page = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)", "squad.dashboard_server"])
+    try:
+        time.sleep(0.3)   # let the process table name its command line
+        _lease(caps_dir, "gates", "gate-page.slot0", "gate-page", pid=page.pid)
+        got = _read(proj, cfg, caps_dir)
+    finally:
+        page.kill()
+        page.wait()
+    assert got["gates"]["in_use"] == 0, "a page server idles, so its lease holds no gate slot"
+    assert got["gates"]["holders"] == []
+
+
+def test_a_number_the_claim_prose_names_is_no_claimed_issue(world):
+    proj, cfg, caps_dir = world
+    _lease(caps_dir, "runs", "run-a", "run-a")
+    req = proj / "runs" / "run-a" / "request.txt"
+    req.parent.mkdir(parents=True)
+    req.write_text("CHILD — GitHub issue(s) 31, 32 (both):\n2 cards, fix them\n")
+    got = _read(proj, cfg, caps_dir)
+    assert got["runs"]["holders"] == [{"name": "run-a", "issues": [31, 32]}]
+
+
+def test_the_read_names_the_plugin_ceiling_of_each_cap(world):
+    proj, cfg, caps_dir = world
+    got = _read(proj, cfg, caps_dir)
+    assert got["ceiling"] == {"runs": 10, "children": 20, "gates": 12, "reviews": 4}

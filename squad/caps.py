@@ -225,6 +225,13 @@ class Ceiling:
                 self._reap(p, pid, "a zombie" if pid in found and found[pid][2] == "Z" else "dead")
         return out
 
+    def live_leases(self, kind, reap=True):
+        """The live leases of `kind`, each as its lease carries it, in the order of their leases, under the lock. One
+        reader for the slots a page observes: the same liveness rule as every count, the same skip of a lease that names
+        a run's page server, and no write when `reap` is False (ADR-0162)."""
+        with self._lock():
+            return self._live(kind, reap)
+
     def occupancy(self):
         """{runs, children, gates, reviews, waiting}: live leases per kind and the live waits, each {ceiling, holder}, and
         `next` (the check that waits) for a priority waiter, so the panel names the next holder."""
