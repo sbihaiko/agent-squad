@@ -58,7 +58,9 @@ def _node(mod, body):
     for fn in ("function limRender(", "function limWrite(", "function kanHtml("):
         assert fn in lim, f"{fn!r} left the // lim slice: fix the harness, not the renderer"
     # a field the page has not drawn carries no value; a test that types one sets `value` itself
+    # the stub carries the page's read-only switch and its focus reader, which the write path reads as it loads them
     stub = ('const STORE=new Proxy({},{get:(o,s)=>o[s]||(o[s]={innerHTML:"",textContent:"",className:"",value:undefined})});'
+            'const document={activeElement:null};let RO=false;const RO_WHY="";'
             'const $=s=>STORE[s];const setBar=()=>{};function setChip(){}')
     p = subprocess.run(["node", "-"], input="\n".join([stub, esc, sett, lim, body]),
                        capture_output=True, text=True, timeout=60)
