@@ -7411,7 +7411,7 @@ let limS=null,limMsg="";   // the last state the hub saved; a typed value lives 
    along. The page writes and renders; the hub validates, writes atomically and records the change (ADR-0030, ADR-0137). */
 const LIM_FIELD={limg:"guard",limc:"cap",limf:"factor"},LIM_NAME={guard:"token guard",cap:"daily token cap",factor:"pause factor"};
 const LIM_ID={guard:"#limg",cap:"#limc",factor:"#limf"};
-let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr=null,limPauseMs=700,limSent={};   // limSent holds the value each field last posted, so a timer save and a later blur send one request (#2433)
+let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr={},limPauseMs=700,limSent={},limChain=Promise.resolve();   // limSent holds the value each field last posted, so a timer save and a later blur send one request; limTmr holds one timer per field, so a pause in one field never drops another field's edit; limChain runs one write at a time, so the next body carries the value the last write saved (#2433)
 const limKName=k=>LIM_NAME[k]||k;
 const limMark=k=>limOK===k?"<span class=lok aria-label=saved>✓</span>":"";
 const limBadCls=k=>limBad===k?" class=bad":"";
@@ -7424,7 +7424,8 @@ const limAgeTmr=setInterval(()=>limTick(),1000);if(limAgeTmr&&limAgeTmr.unref)li
 const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   // the guard is a switch: its checked state is the word the hub reads (#2434)
  const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
 async function limSend(body){const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
-async function limWrite(which,send=limSend){if(which.startsWith("kan:"))return kanWrite(which.slice(4));
+function limWrite(which,send=limSend){const run=()=>limWriteNow(which,send),p=limChain.then(run,run);limChain=p.catch(()=>{});return p}   // the writes queue, so a second field's body carries the value the first one saved (#2433)
+async function limWriteNow(which,send=limSend){if(which.startsWith("kan:"))return kanWrite(which.slice(4),send);   // the Kanban row carries the same send, so a test's stub reaches it (#2433)
  const cur=limS||{},vals={guard:String(cur.guard??""),cap:String(cur.cap??""),factor:String(cur.factor??"")},typed=limTyped(which);
  if(typed!==null)vals[which]=which==="cap"&&limCapParse(typed)!=null?String(limCapParse(typed)):typed;   // a cap leaves as the whole integer its units denote; text the parse refuses stays raw, for the hub to refuse (#2433)
  if(limSent[which]===vals[which]){if(limBad===which){limBad="";limBadMsg="";limRender()}return {skip:true}}   // the last write posted this value already, so a timer save and then a blur send one request (#2433)
@@ -7433,14 +7434,14 @@ async function limWrite(which,send=limSend){if(which.startsWith("kan:"))return k
  if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0;delete limSent[which]}   // a refused value is never remembered as posted
  else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now();limSent[which]=vals[which]}
  limRender();if(typeof setBar==="function")setBar();return d}
-function limQueue(which,send){clearTimeout(limTmr);limTmr=setTimeout(()=>limWrite(which,send),limPauseMs)}
+function limQueue(which,send){clearTimeout(limTmr[which]);limTmr[which]=setTimeout(()=>{delete limTmr[which];limWrite(which,send).catch(()=>{})},limPauseMs)}   // each field holds its own timer (#2433)
 
 /* Settings > Spend & limits · Kanban (#2432): the card limit of each active board column, inside one theme with the token
    guard. The page renders and asks; the hub validates, shows the diff and writes the project settings file on confirm
    (ADR-0137). A blank field is unlimited. The frontier reads Doing, the branch review pass reads Reviewing, and the
    Kanban header shows the count against the limit. */
 // KAN{ the Kanban sub-group's pure rules (#2432): its values, its dirty test, its chip and its html. Run in node by tests.
-let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="";
+let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanDiff=[],kanChain=Promise.resolve();   // kanSent holds the value each column last posted, so a timer save and a later blur send one request (#2433)
 const kanClone=o=>JSON.parse(JSON.stringify(o));
 const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
@@ -7449,11 +7450,14 @@ const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).m
 const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
 const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>${kanOK===c.name?" <span class=lok aria-label=saved>✓</span>":""}`);
 const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
- :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · ${span((Date.now()-kanAt)/1000)} ago`:"";
-async function kanWrite(name,send){if(!kanDraft)return;
+ :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · ${span((Date.now()-kanAt)/1000)} ago`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
+function kanWrite(name,send){const run=()=>kanWriteNow(name,send),p=kanChain.then(run,run);kanChain=p.catch(()=>{});return p}
+async function kanWriteNow(name,send){if(!kanDraft)return;
+ const val=String(kanLimits()[name]??"");
+ if(kanSent[name]===val){if(kanBad===name){kanBad="";kanBadMsg="";limRender()}return {skip:true}}   // the last write posted this column's value already (#2433)
  let d;try{d=send?await send({columns:kanLimits(),confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:kanLimits(),confirm:true})})).json()}catch(x){d={err:"save failed"}}
- if(d.err){kanBad=name;kanBadMsg=d.err;kanOK=""}
- else{kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanBad="";kanBadMsg="";kanOK=name;kanVal=String(kanLimits()[name]??"");kanAt=Date.now()}
+ if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";delete kanSent[name]}
+ else{kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanBad="";kanBadMsg="";kanOK=name;kanVal=String(kanLimits()[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
@@ -7495,8 +7499,8 @@ $("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.t
  if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg="";limQueue("kan:"+n)}
  else if(e.target.id&&LIM_FIELD[e.target.id])limQueue(LIM_FIELD[e.target.id]);   // a pause in typing saves the field (#2433)
  setBar()});
-$("#lbody").addEventListener("change",e=>{clearTimeout(limTmr);const n=e.target.dataset&&e.target.dataset.kan;   // the blur saves at once (#2433)
- if(n)limWrite("kan:"+n);else if(e.target.id&&LIM_FIELD[e.target.id])limWrite(LIM_FIELD[e.target.id])});
+$("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dataset.kan,key=n?"kan:"+n:(e.target.id&&LIM_FIELD[e.target.id])||null;   // the blur saves its own field at once and leaves every other field's timer alone (#2433)
+ if(!key)return;clearTimeout(limTmr[key]);delete limTmr[key];limWrite(key).catch(()=>{})});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7606,9 +7610,9 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}setBar()};
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanDiff=[];limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
