@@ -121,6 +121,7 @@ test-janitor-dup.sh 1.24
 test-janitor-env-hermetic.sh 28.13
 test-janitor-f.sh 1.39
 test-janitor-failed-dispatch.sh 0.88
+test-janitor-finished-cleanup.sh 1.79
 test-janitor-fix-run.sh 4.24
 test-janitor-floor-startable.sh 1.80
 test-janitor-frontier-idle.sh 2.82
