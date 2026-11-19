@@ -2220,6 +2220,20 @@ def test_the_slot_wait_split_names_the_todo_wait_each_holder_kind_carries(prof):
     assert {line["kind"]: line["passes"] for line in out["lines"]}["gates"] == 1, "one refusal names the gates kind"
 
 
+def test_the_slot_wait_lists_each_holder_detail_under_its_kind(prof):
+    """#2363: the row of each holder kind names its holders: the issue a card run works, the wave a wave run names, and the
+    age of the last progress of a run that names no card."""
+    recs = [{"at": 1000.0, "free": 0, "cap": 3, "todo": 4,
+             "holders": [{"name": "run-a", "kind": "doing", "issue": 88},
+                         {"name": "run-b", "kind": "wave", "wave": "wave/run-b"},
+                         {"name": "run-c", "kind": "unknown", "age_s": 600.0}]}]
+    out = prof.slot_wait(recs, [], 1000.0, 1600.0)
+    lines = {line["kind"]: line for line in out["lines"]}
+    assert lines["doing"]["holders"] == ["card #88"], "a card run names its issue"
+    assert lines["wave"]["holders"] == ["wave/run-b"], "a wave run names its wave"
+    assert lines["unknown"]["holders"] == ["no card, last progress 10 min ago"], "an unknown run names its progress age"
+
+
 def test_a_drain_that_starts_after_the_last_refusal_still_owes_its_minutes(prof):
     """#2286: a loop stopped at 1000 s owes its drained minutes to the Todo wait the last refusal named, even when that
     refusal stands before the window's own start: no pass writes a record while the loop is stopped."""

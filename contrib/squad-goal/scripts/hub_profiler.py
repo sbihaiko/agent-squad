@@ -1936,10 +1936,10 @@ def run_slots(invocations, caps, window_s, now, cap=None, unreadable=()):
 # pass writes a record while the loop is stopped, so that record speaks for the whole stretch. The fold is pure: it
 # reads the lists a caller folded from the files, never a file, a clock or GitHub.
 SLOT_WAIT_LABEL = "Who holds a run slot while a card waits"
-SLOT_KIND_LABELS = {"doing": "A run with a card in Doing", "landing": "Finished, waiting for its landing",
+SLOT_KIND_LABELS = {"doing": "A run with a card in Doing", "wave": "A wave run", "landing": "Finished, waiting for its landing",
                     "gates": "Waiting for a gate slot", "autobug": "An autobug run", "unknown": "An unknown holder",
                     "drained": "Loop drained or stopped"}
-SLOT_KIND_ORDER = ("doing", "landing", "gates", "autobug", "unknown", "drained")   # the order ties keep
+SLOT_KIND_ORDER = ("doing", "wave", "landing", "gates", "autobug", "unknown", "drained")   # the order ties keep
 SLOT_GAP_CAP_S = 900   # a refusal record speaks for the wait after it, at most this long: a stale file claims no hours
 # A drained stretch is one no pass dispatches in: the loop drains, is off, or is silent past the strip's own bound while
 # the switch says on. A `gap` names a stretch no source covers, which is no evidence of a wait and so is never drained.
@@ -1960,17 +1960,33 @@ def slot_records(text):
     return out
 
 
+def _holder_detail(h):
+    """The words a holder names on the row of its kind: the issue of a card run, the wave of a wave run, and the age of
+    the last progress of a run that names no card. Other kinds name nothing."""
+    kind = h.get("kind")
+    if kind == "doing" and isinstance(h.get("issue"), int) and not isinstance(h.get("issue"), bool):
+        return f"card #{h['issue']}"
+    if kind == "wave" and isinstance(h.get("wave"), str) and h["wave"]:
+        return h["wave"]
+    if kind == "unknown":
+        age = h.get("age_s")
+        if isinstance(age, (int, float)) and not isinstance(age, bool):
+            return f"no card, last progress {int(age // 60)} min ago"
+        return "no card"
+    return ""
+
+
 def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
     """`(records, states, since, now)` -> the Todo wait of the window per holder kind, the largest first.
 
-    `records` is one dict per refusal record (`at`, `free`, `cap`, `todo`, `holders` of `{name, kind}`), `states` the
-    strip's rows (`start`, `end`, `state`) of the same window. A record outside `[since, now]` is no part of the
-    window. Each record covers its own instant to the next record's, to `now`, or one `gap_cap` at most, whichever is
-    first, and every kind it names adds those minutes. A drained stretch adds its own minutes when the last record at
-    or before its end names a startable Todo card (`todo` above zero): no pass writes a record while no dispatch runs,
-    so that record speaks for the whole stretch, and it speaks even when it stands before the window's start.
-    `lines` holds one row per kind with minutes, the kind's own order breaking a tie, and `drained` is counted in the
-    `drained_minutes` field as well, because the page names it apart.
+    `records` is one dict per refusal record (`at`, `free`, `cap`, `todo`, `holders` of `{name, kind}` and the detail a
+    kind carries), `states` the strip's rows (`start`, `end`, `state`) of the same window. A record outside `[since, now]`
+    is no part of the window. Each record covers its own instant to the next record's, to `now`, or one `gap_cap` at
+    most, whichever is first, and every kind it names adds those minutes. A drained stretch adds its own minutes when the
+    last record at or before its end names a startable Todo card (`todo` above zero): no pass writes a record while no
+    dispatch runs, so that record speaks for the whole stretch, and it speaks even when it stands before the window's
+    start. `lines` holds one row per kind with minutes and the words of its holders (`holders`), the kind's own order
+    breaking a tie, and `drained` is counted in the `drained_minutes` field as well, because the page names it apart.
     """
     rows = sorted((r for r in records
                    if isinstance(r, dict) and isinstance(r.get("at"), (int, float)) and not isinstance(r.get("at"), bool)
@@ -1982,6 +1998,7 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
                          and not isinstance(r.get("at"), bool)), key=lambda r: r["at"])
     minutes = {k: 0.0 for k in SLOT_KIND_ORDER}
     passes = {k: 0 for k in SLOT_KIND_ORDER}
+    detail = {k: {} for k in SLOT_KIND_ORDER}
     for i, r in enumerate(rows):
         end = min(now, r["at"] + gap_cap, rows[i + 1]["at"] if i + 1 < len(rows) else now)
         span = max(0.0, end - r["at"]) / 60.0
@@ -1990,6 +2007,9 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
             if k not in minutes: continue
             minutes[k] += span
             passes[k] += 1
+        for h in (r.get("holders") or ()):
+            if isinstance(h, dict) and h.get("kind") in detail:
+                detail[h["kind"]][h.get("name")] = _holder_detail(h)
     drained, drained_rows = 0.0, 0
     for st in states or ():
         if not isinstance(st, dict) or st.get("state") not in DRAINED_STATES: continue
@@ -2005,7 +2025,8 @@ def slot_wait(records, states, since, now, gap_cap=SLOT_GAP_CAP_S):
     if drained > 0:
         minutes["drained"] = drained
         passes["drained"] = drained_rows
-    lines = [{"kind": k, "label": SLOT_KIND_LABELS[k], "minutes": round(minutes[k], 1), "passes": passes[k]}
+    lines = [{"kind": k, "label": SLOT_KIND_LABELS[k], "minutes": round(minutes[k], 1), "passes": passes[k],
+              "holders": sorted(w for w in detail[k].values() if w)}
              for k in SLOT_KIND_ORDER if minutes[k] > 0]
     lines.sort(key=lambda line: (-line["minutes"], SLOT_KIND_ORDER.index(line["kind"])))
     return {"window_s": max(0.0, now - since), "label": SLOT_WAIT_LABEL, "refusals": len(rows),

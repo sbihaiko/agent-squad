@@ -126,14 +126,16 @@ scene holders
 graph "$d/co/docs/squad/workflows/dynamic.graph.json" 2 0.75
 mkdir -p "$d/co/runs/run-live"
 printf '{"event":"run_start"}\n' > "$d/co/runs/run-live/record.jsonl"
-printf 'x\n' > "$d/co/runs/run-live/request.txt"
+printf 'CHILD — GitHub issue(s) 9999 (feature):\n' > "$d/co/runs/run-live/request.txt"
+mkdir -p "$d/st/auto"; printf 'run-live\n' > "$d/st/auto/disp-9999"
 printf 'run-live\n' > "$d/st/active-runs.txt"
 four; run
 rec=$d/st/slot-refusals.jsonl
 if [ -f "$rec" ]; then
   [ "$(tail -1 "$rec" | jq -r '.holders|length')" = 1 ] && ok "the record names the one holder of the pass's only run slot" || ko "the record names '$(tail -1 "$rec" | jq -r '.holders|length')' holders, not the one live run"
   [ "$(tail -1 "$rec" | jq -r '.holders[0].name')" = run-live ] && ok "the holder is the run the state dir's active list names" || ko "the holder is '$(tail -1 "$rec" | jq -r '.holders[0].name')', not run-live"
-  [ "$(tail -1 "$rec" | jq -r '.holders[0].kind')" = doing ] && ok "a live run with no verdict holds the slot in Doing" || ko "the holder's kind is '$(tail -1 "$rec" | jq -r '.holders[0].kind')', not doing"
+  [ "$(tail -1 "$rec" | jq -r '.holders[0].kind')" = doing ] && ok "a live run that a card dispatch started holds the slot in Doing" || ko "the holder's kind is '$(tail -1 "$rec" | jq -r '.holders[0].kind')', not doing"
+  [ "$(tail -1 "$rec" | jq -r '.holders[0].issue')" = 9999 ] && ok "the Doing holder names the issue its card dispatch holds" || ko "the holder names issue '$(tail -1 "$rec" | jq -r '.holders[0].issue')', not 9999"
   [ "$(tail -1 "$rec" | jq -r '.free')" = 0 ] && ok "the record names the zero free slots the holder leaves" || ko "the record names '$(tail -1 "$rec" | jq -r '.free')' free slots, not the holder's 0"
 else
   ko "a pass that refused a startable card for no slot wrote no slot-holder record for its holder"
