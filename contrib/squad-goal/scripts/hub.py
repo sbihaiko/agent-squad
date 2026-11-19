@@ -1585,15 +1585,22 @@ def _positive_int(v):
 CAP_UNITS = {"K": 1000, "M": 1000000, "B": 1000000000, "T": 1000000000000}
 
 def _cap_value(v):
-    """A daily cap: a positive whole number, or that number with a K, M, B or T unit (6M, 250M, 1T). The hub stores the
-    plain integer the guard reads, whatever the owner typed."""
+    """A daily cap: a positive whole number, or that number with a K, M, B or T unit (6M, 1.5M, 250M, 1T). The hub counts
+    in whole integers and stores the plain integer the guard reads, whatever the owner typed: a fraction of a unit is
+    multiplied to the exact digit, never through a float that would round it to a different number (#2434)."""
     n = _positive_int(v)
     if n is not None: return n
     if isinstance(v, bool): return None
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMBT])", str(v).strip(), re.IGNORECASE)
+    m = re.fullmatch(r"(\d+)(?:\.(\d+))?\s*([KMBT])", str(v).strip(), re.IGNORECASE)
     if not m: return None
-    x = float(m.group(1)) * CAP_UNITS[m.group(2).upper()]
-    return int(x) if x > 0 and x == int(x) else None
+    unit = CAP_UNITS[m.group(3).upper()]
+    n = int(m.group(1)) * unit
+    frac = m.group(2)
+    if frac:
+        scaled, scale = int(frac) * unit, 10 ** len(frac)
+        if scaled % scale: return None   # that fraction of the unit denotes no whole number of tokens
+        n += scaled // scale
+    return n if n > 0 else None
 
 def _positive_num(v):
     """A pause factor: a positive number, whole or fractional. A bool is not one."""
@@ -1716,7 +1723,8 @@ def limits_set(body):
     if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
     cur = limits_settings(path)
     cap = _cap_value(body.get("cap", cur["cap"]))
-    if cap is None: return {"err": "token cap must be a positive whole number, as 1500000, 6M, 250M or 1T"}
+    if cap is None: return {"err": "token cap must be a positive whole number, as 1500000, or one with a K, M, B or T "
+                                     "unit, as 6M, 1.5M, 250M or 1T"}
     factor = _positive_num(body.get("factor", cur["factor"]))
     if factor is None: return {"err": "pause factor must be a positive number"}
     guard = _guard_value(body.get("guard", cur["guard"]))

@@ -168,6 +168,17 @@ def test_a_cap_typed_with_a_unit_suffix_stores_a_plain_integer(ctx, typed, store
     assert sourced(ctx, "SG_TOKEN_BURN_CAP") == str(stored)
 
 
+@pytest.mark.parametrize("typed,stored", [("1.000001M", 1000001), ("999999999.1T", 999999999100000000000),
+                                          ("2.5K", 2500), ("1.5M", 1500000)])
+def test_a_fractional_cap_stores_the_exact_integer_it_denotes(ctx, typed, stored):
+    """A cap typed as a fraction of a unit stores the integer the owner typed, to the last digit: the hub counts in whole
+    integers, never in a float that rounds the value to a different number."""
+    out = save(ctx, cap=typed, factor="2", guard="on", confirm=True)
+    assert not out.get("err"), out
+    assert out["state"]["cap"] == stored, out
+    assert sourced(ctx, "SG_TOKEN_BURN_CAP") == str(stored)
+
+
 @pytest.mark.parametrize("bad", ["0", "-1", "abc", "", True])
 def test_a_pause_factor_that_is_not_a_positive_number_is_refused(ctx, bad):
     before = profile_text(ctx)
