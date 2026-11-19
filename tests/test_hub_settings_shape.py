@@ -400,7 +400,8 @@ def _set_bar(hub):
             'const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
     body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
-            'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent}}'
+            'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent,'
+            'save:$("#ssave").hidden,disc:$("#sdisc").hidden}}'
             'RO=true;sTheme="mdl";setBar();out.ro={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,'
             'text:$("#schg").textContent};console.log(JSON.stringify(out));')
     return json.loads(_node("\n".join([stub, src, body])))
@@ -415,10 +416,15 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
         assert out[theme]["text"] == "nothing to save here", f"{theme}: {out[theme]['text']!r}"
     # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
     assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
-    assert out["lim"]["text"] == "Spend & limits: no change" and out["mdl"]["text"] == "Models & chains: no change"
+    assert out["mdl"]["text"] == "Models & chains: no change"
+    # re-anchored (#2433): Spend & limits writes each field on its own, so its bar keeps no button and says so.
+    assert out["lim"]["text"] == "Spend & limits: each field saves as you set it", out["lim"]["text"]
+    assert out["lim"]["save"] is True and out["lim"]["disc"] is True, out["lim"]
+    for theme in ("lop", "sub", "mdl", "slk", "acc"):
+        assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
-    assert 'const SET_SAVE=["lim","mdl","slk","sub"]' in hub.PAGE
+    assert 'const SET_SAVE=["mdl","slk","sub"]' in hub.PAGE
 
 
 def test_every_input_in_settings_takes_the_body_size_and_the_page_control_height(hub):
@@ -435,8 +441,12 @@ def test_the_save_dialog_groups_its_lines_by_the_file_it_names(hub):
 
 
 def test_the_hub_names_each_path_the_dialog_shows(hub, monkeypatch):
+    """Re-anchored (#2433): Spend & limits writes each field on its own, so the one dialog no longer carries its group;
+    the theme still names the profile file it writes, and the other two themes name theirs in the dialog."""
     page = hub.PAGE
-    assert "(mdl&&mdl.file)" in page and "(limS&&limS.file)" in page and "(slS&&slS.file)" in page
+    assert "(mdl&&mdl.file)" in page and "(slS&&slS.file)" in page
+    assert "(limS&&limS.file)" not in page, "the one dialog still carries a Spend & limits group"
+    assert 's.profile||"none in force"' in page, "the theme no longer names the profile file it writes"
     assert hub.models_get()["file"].endswith("models.json")
     limit_file = hub.pathlib.Path("/p/squad.sh")
     monkeypatch.setattr(hub, "profile_file", lambda: limit_file)
