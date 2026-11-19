@@ -66,6 +66,9 @@ case "$out" in 2) ok "a full (promotion) gate takes its slots through gate.sh";;
 mkdir -p "$T/proj/docs/squad"; printf 'caps:\n  gates: 2\n' > "$T/proj/docs/squad/defaults.yaml"
 out=$(cd "$T/proj" && SG_GATE_WORKERS=6 bash "$T/s/gate.sh" sh -c "echo \$SQUAD_GATE_WORKERS" 2>&1)
 case "$out" in *"2") ok "a project that lowers caps.gates: the gate takes min(workers, ceiling) and never waits";; *) ko "min(workers, ceiling): '$out'";; esac
+mkdir -p "$T/proj3/docs/squad"; printf 'caps:\n  gates: 3\n' > "$T/proj3/docs/squad/defaults.yaml"
+out=$(cd "$T/proj3" && env -u SG_GATE_WORKERS bash "$T/s/gate.sh" sh -c "echo \$SQUAD_GATE_WORKERS" 2>"$T/err-default")
+[ "$out" = 3 ] && [ ! -s "$T/err-default" ] && ok "a gate with the default count takes the project's three slots with no clamp line" || ko "default count: '$out', stderr: $(cat "$T/err-default")"
 # the pytest of the battery runs with the count the gate took
 . "$d/base-battery.sh"; b=$(SQUAD_GATE_WORKERS=2 SG_GATE_WORKERS=6 sg_base_battery py origin/dev)
 case "$b" in *'-n "${SQUAD_GATE_WORKERS:-$workers}"'*"sg_battery_run py origin/dev 6 yes"*) ok "the battery's pytest reads the count the gate took, 6 when none";; *) ko "battery: '$b'";; esac

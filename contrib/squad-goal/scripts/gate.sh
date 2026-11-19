@@ -317,7 +317,7 @@ case "${1:-}" in
       : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}";; esac
     slot_by=$(( $(date +%s) + ${SG_GATE_SLOT_WAIT_SECONDS:-120} )); slot_rc=0
     while :; do
-      SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try "${prio[@]}"); slot_rc=$?
+      SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-3}" --pid "${PPID:-$$}" --target "$PWD" --try "${prio[@]}"); slot_rc=$?
       [ "$slot_rc" = 0 ] && break
       [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && [ "$slot_rc" = 73 ] && [ "$(date +%s)" -lt "$slot_by" ] || {
         [ ${#prio[@]} = 0 ] || sg_caps release gates "gate-$$" >/dev/null 2>&1; exit "$slot_rc"; }

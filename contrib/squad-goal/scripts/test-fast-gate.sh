@@ -657,7 +657,7 @@ esac
 
 # (#1436, #1865) A child's own gate asks for one gate slot, so three children land at once on a three-slot budget; an entry or
 # a tip gate keeps the full count. The budget is the plugin's here, so the count a gate took reaches its command as
-# SQUAD_GATE_WORKERS. The loop's own environment sets SG_GATE_WORKERS (env.sh exports six), so a child's count is never read
+# SQUAD_GATE_WORKERS. The loop's own environment sets SG_GATE_WORKERS (env.sh exports three), so a child's count is never read
 # from that inherited variable: the child overrides it, and a caller that wants another count names SG_GATE_WORKERS_CHILD.
 ws=$T/ws; mkdir -p "$ws"
 printf '#!/bin/bash\nprintf "%%s\\n" "$SQUAD_GATE_WORKERS" > "%s"\n' "$T/workers" > "$T/wbase.sh"
@@ -667,8 +667,8 @@ wcase() {  # <env assignment>...: one passing child gate, the count it took writ
   cat "$T/workers" 2>/dev/null
 }
 w=$(wcase); [ "$w" = 1 ] && ok "a child gate with no count named takes one gate slot" || ko "child gate slots: '$w', want 1"
-w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 6 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 6"
-w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=3); [ "$w" = 3 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 3"
+w=$(wcase SG_GATE_CALLER=entry); [ "$w" = 3 ] && ok "an entry gate keeps the full count" || ko "entry gate slots: '$w', want 3"
+w=$(wcase SG_GATE_CALLER=entry SG_GATE_WORKERS=2); [ "$w" = 2 ] && ok "a count named by the caller wins over the kind's default" || ko "named count: '$w', want 2"
 # (#1865) The inherited default is the loop's, never the child's decision: a child in the loop's own environment still takes
 # its own count, and only SG_GATE_WORKERS_CHILD names another.
 w=$(wcase SG_GATE_WORKERS=6); [ "$w" = 1 ] && ok "a child overrides the loop's inherited SG_GATE_WORKERS" || ko "inherited count won: '$w', want 1"
