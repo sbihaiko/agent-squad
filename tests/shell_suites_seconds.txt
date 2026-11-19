@@ -61,7 +61,7 @@ test-fastloop-interval.sh 8.33
 test-fastloop-load.sh 0.11
 test-fastloop-orphan.sh 0.73
 test-fastloop-pid.sh 0.05
-test-ffland.sh 0.35
+test-ffland.sh 2.58
 test-gate-attempts.sh 9.36
 test-gate-load-set-write.sh 0.41
 test-gate-lock.sh 19.80
