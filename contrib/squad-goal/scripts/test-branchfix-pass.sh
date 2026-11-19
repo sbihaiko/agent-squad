@@ -23,7 +23,9 @@ import os, sys
 open("$T/launch.log", "a").write(open(sys.argv[1]).read().replace("\n", " ") + "\n")
 open("$T/fix.log", "a").write(("1" if os.environ.get("SG_FIX_RUN") == "1" else "0") + "\n")
 if os.environ.get("REFUSE"): print("refused: the first coding model x is not in the router envelope", file=sys.stderr); sys.exit(1)
-if not os.environ.get("NORUN"): print("run-%d" % sum(1 for _ in open("$T/launch.log")))
+if not os.environ.get("NORUN"):
+    c = int(open("$T/rc").read() or 0) if os.path.exists("$T/rc") else 0   # one id per launch, never reused across cases (#2345)
+    c += 1; open("$T/rc", "w").write(str(c)); print("run-%d" % c)
 J
 printf '#!/bin/bash\necho "a spend envelope"\n' > "$T/s/envelope-spend.sh"
 O="$G -C $T/origin.git"
@@ -258,4 +260,42 @@ case "$r" in *"BRANCHFIX STOP gui/11-s"*"stalled"*) ok "22 the stop names the br
 : > "$T/launch.log"; push gui/40-ns; rev gui/40-ns CHANGES "v.sh:1 fix"
 r=$(OPEN="40" fp)
 [ "$(n gui/40-ns)" = 1 ] && ok "2309 the pass after the marker's release dispatches that tip again" || ko "2309 after the release: $(n gui/40-ns) dispatch(es): '$r'"
+# 25) (#2345) a round that pushes nothing is no fix round for its tip: it drops the once-per-tip marker, the branch stays where
+#     it is, the next pass dispatches one round at the same tip, and the stall rule stops the retries. A kept landing round keeps
+#     its marker (case 22 proves the kept path).
+: > "$T/launch.log"; b25=fix/41-unpushed
+push "$b25"; rev "$b25" CHANGES "w.sh:1 the cap is wrong"; t25=$($O rev-parse "$b25")
+r=$(OPEN="41" fp); rid25=$(cat "$T/st/auto/branchfix-fix_41-unpushed-"* 2>/dev/null)
+tg25=$T/tg25; $G clone -q "$T/origin.git" "$tg25" 2>/dev/null
+(cd "$tg25" && $G checkout -q -b "squad/run/$rid25" origin/dev && echo q > q41 && $G add q41 && $G -c user.email=a@b -c user.name=t commit -q -m "a round off the base (Refs #41)")
+mkdir -p "$T/co/runs/$rid25"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "completed"}\n' "$tg25" "$rid25" > "$T/co/runs/$rid25/record.jsonl"
+r=$(OPEN="41" fp)
+case "$r" in *"is no fast-forward of the branch tip"*) ok "2345 the unpushed round names both heads";; *) ko "2345 no diagnostic line: '$r'";; esac
+[ "$($O rev-parse "$b25")" = "$t25" ] && ok "2345 the work branch stays at its tip" || ko "2345 the branch moved"
+# the marker of the unpushed round is gone; the same pass dispatches the next round, so the tip names a new run
+[ "$(cat "$T/st/auto/branchfix-fix_41-unpushed-${t25:0:9}" 2>/dev/null)" != "$rid25" ] \
+  && ok "2345 the unpushed round drops its once-per-tip marker and the tip is dispatched again" \
+  || ko "2345 the marker of $rid25 survived"
+# the second round ends unpushed too: the stall rule then stops the retries
+rid25b=$(cat "$T/st/auto/branchfix-fix_41-unpushed-${t25:0:9}" 2>/dev/null)
+(cd "$tg25" && $G checkout -q -b "squad/run/$rid25b" origin/dev 2>/dev/null && echo q2 > q41b && $G add q41b && $G -c user.email=a@b -c user.name=t commit -q -m "a second round off the base (Refs #41)")
+mkdir -p "$T/co/runs/$rid25b"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "completed"}\n' "$tg25" "$rid25b" > "$T/co/runs/$rid25b/record.jsonl"
+r=$(OPEN="41" fp)
+[ "$(n "$b25")" = 2 ] && ok "2345 two rounds are dispatched at the same tip" || ko "2345 dispatched $(n "$b25") times: '$r'"
+case "$r" in *"BRANCHFIX STOP fix/41-unpushed"*) ok "2345 the stall rule stops the retries";; *) ko "2345 no stall stop: '$r'";; esac
+# 26) (#2346) a round that is gone with no verdict (no line in active-runs.txt, a record that has not moved for the dead window)
+#     steps aside: both markers go, say it once, and the same pass dispatches a fresh round. A round whose record just started
+#     keeps them, because it may still end with a head.
+: > "$T/launch.log"; b26=fix/42-dead
+push "$b26"; rev "$b26" CHANGES "x.sh:1 the cap is wrong"; t26=$($O rev-parse "$b26")
+r=$(OPEN="42" fp); rid26=$(cat "$T/st/auto/branchfix-fix_42-dead-${t26:0:9}" 2>/dev/null)
+mkdir -p "$T/co/runs/$rid26"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n' "$T/co" "$rid26" > "$T/co/runs/$rid26/record.jsonl"
+r=$(OPEN="42" fp)
+[ -e "$T/st/auto/branchfix-push-$rid26" ] && ok "2346 a round whose record just started keeps its push marker" || ko "2346 a fresh round's push marker went: '$r'"
+touch -t 202001010000 "$T/co/runs/$rid26/record.jsonl"
+r=$(OPEN="42" fp)
+case "$r" in *"ended with no verdict"*) ok "2346 a dead round is named";; *) ko "2346 no dead-round line: '$r'";; esac
+[ ! -e "$T/st/auto/branchfix-push-$rid26" ] && [ "$(cat "$T/st/auto/branchfix-fix_42-dead-${t26:0:9}" 2>/dev/null)" != "$rid26" ] \
+  && ok "2346 a dead round drops both markers and the tip is dispatched again" \
+  || ko "2346 a marker of $rid26 survived: $(ls "$T/st/auto" | /usr/bin/grep 42-dead)"
 exit $fail
