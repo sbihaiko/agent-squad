@@ -57,6 +57,10 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 # SG_WAVE_MAX_AGE_SECONDS wins. The wave tip's own check (#377) is SG_WAVE_TIP_GATES, built in wave.sh (a profile may set
 # it, and an empty value leaves the wave's CI as its only check).
 : "${SG_WAVE_MAX_AGE_SECONDS:=7200}"
+# A wave also closes early when its oldest entry waited past a limit (#2316, ADR-0145 rule 16): it lands with the children
+# that entered it, and the rest of the run enters a later wave cut from the moved base. Thirty minutes by default; a guess,
+# not a measured value. Read here, after the profile, so a profile that sets SG_WAVE_ENTRY_WAIT_SECONDS wins.
+: "${SG_WAVE_ENTRY_WAIT_SECONDS:=1800}"
 # The promotion proof promote-stg.sh reads (ADR-0145): `ci` (the default) takes the dev tip's CI, and `local` takes the promotion
 # gate's own status line, the full suite in both modes (owner decision on #439). Set `local` in the profile while the account's
 # Actions billing keeps CI from starting; a tip with no proof line is not promoted. It is read here, after the profile, so a
@@ -89,7 +93,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
   unset SG_TOOLING_REPO
 fi
 export SG_STG_BRANCH SG_MAIN_BRANCH SG_PROMOTE
-export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_ENTRY_GATE SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY SG_BOARD_VOCAB
+export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_ENTRY_GATE SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_WAVE_ENTRY_WAIT_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY SG_BOARD_VOCAB
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"
