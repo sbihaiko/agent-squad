@@ -331,6 +331,34 @@ for wmode in --inner --run; do
   [ -z "$wleft" ] || pkill -f "$wsleep"
 done
 
+# --- (#2379, ADR-0169 rule 9) a full battery takes its own bound. gate.sh reads it once (sg_full_bound) and hands the command
+# GATE_FULL_BOUND_SECONDS and GATE_FULL_DEADLINE_EPOCH beside the delta clock. Its watchdog keeps the delta deadline until the
+# command writes `full` to GATE_SCOPE_FILE, and then keeps the full one even when the file changes again. The lock hold, the
+# obligation of a full scope and a priority caller's slot wait follow the full bound, so no lease runs out under a full gate.
+FB=$T/full-bound; mkdir -p "$FB"
+fbclean="-u SERIAL_HOLD_SECONDS -u SERIAL_WAIT_SECONDS -u SG_GATE_SLOT_WAIT -u SG_GATE_SLOT_WAIT_SECONDS -u SG_GATE_MAX_SECONDS -u SG_GATE_FULL_MAX_SECONDS"
+fbrun() {  # <command>: one gate with a 1 s delta bound and a 30 s full bound on its own state, the command's output kept
+  (cd "$T/w" && env $fbclean SG_STATE="$FB" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=30 \
+    bash "$d/gate.sh" bash -c "$1" > "$T/fb.out" 2>&1)
+}
+s0=$(date +%s); fbrun 'echo "$GATE_START_EPOCH $GATE_FULL_DEADLINE_EPOCH $GATE_FULL_BOUND_SECONDS $SERIAL_HOLD_SECONDS" > "'"$T"'/fb.env"; printf "full\n" > "$GATE_SCOPE_FILE"; sleep 1; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 11'; rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 0 ] && [ "$el" -ge 12 ] && ok "2379 a command that named the full scope runs past the delta deadline, and a later delta never shortens it (${el}s)" \
+  || ko "2379 full scope under gate.sh: rc $rc in ${el}s: $(tail -n 2 "$T/fb.out" | tr '\n' ' ')"
+read -r fbs fbd fbb fbh < "$T/fb.env" 2>/dev/null
+[ "$(( ${fbd:-0} - ${fbs:-0} ))" = 30 ] && [ "$fbb" = 30 ] && ok "2379 the command reads the full clock beside the delta one" || ko "2379 full clock: '$(cat "$T/fb.env" 2>/dev/null)'"
+[ "$(tail -n 1 "$FB/gate-history" | cut -f7)" = full ] && ok "2379 the history records the full scope the watchdog latched" || ko "2379 latched scope: '$(tail -n 1 "$FB/gate-history" 2>/dev/null)'"
+[ "$fbh" = 330 ] && ok "2379 the lock hold is the full bound plus its backstop" || ko "2379 lock hold: '$fbh', want 330"
+fbh=$(cd "$T/w" && env $fbclean SG_STATE="$FB" SG_GATE_KIND=fast SG_GATE_CALLER=landing SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=1000 \
+  bash "$d/gate.sh" sh -c 'echo "$SERIAL_HOLD_SECONDS"' 2>/dev/null | tail -n 1)
+[ "$fbh" = 2360 ] && ok "2379 a landing gate's hold also covers its slot wait: the full bound and 60 s, then the full bound and 300 s" || ko "2379 landing hold: '$fbh', want 2360"
+$G -C "$T/w" commit -q --allow-empty -m full-obligation
+FO=$FB/obl; mkdir -p "$FO"
+(cd "$T/w" && env $fbclean SG_STATE="$FO" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_FULL_BOUND_SECONDS=1500 CHECKS=pytest SCOPE=full BASE=b \
+  bash "$d/gate.sh" bash "$T/unproven.sh" >/dev/null 2>&1)
+IFS=$'\t' read -r _ _ _ _ fosc fodl < "$(/bin/ls "$FO/obligations"/* 2>/dev/null | head -n 1)" 2>/dev/null
+fofin=$(tail -n 1 "$FO/gate-history" | cut -f1)
+[ "$fosc" = full ] && [ "$fodl" = "$(( fofin + 1500 ))" ] && ok "2379 a full-scope obligation's deadline is the full bound past the gate" || ko "2379 full obligation: scope '$fosc' deadline '$fodl' finish '$fofin'"
+
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
 rm -rf "$T"; exit $fail
