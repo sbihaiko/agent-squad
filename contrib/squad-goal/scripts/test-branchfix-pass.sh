@@ -9,7 +9,7 @@ G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co"
 cp "$d/branchfixpass.sh" "$d/revformat.py" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git} SG_CODING_RULES=rules
-export SG_FRONTIER_SKIP_LABELS=spec,needs-ratification,frozen:owner
+export SG_FRONTIER_SKIP_LABELS=spec,needs-ratification,frozen:owner SG_SQUAD=$(cd "$d/../../.." && pwd)
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
 . "$T/s/address.sh"; . "$T/s/ghcall.sh"
 J
@@ -187,6 +187,18 @@ r=$(OPEN="25" fp); r="$r"$'\n'"$(OPEN="25" fp)"
 rm -f "$T/st/auto/off"
 r=$(OPEN="25" fp)
 [ "$(n gui/25-off)" = 1 ] && ok "1789 the tip is dispatched once the pause lifts" || ko "1789 after the pause: $(n gui/25-off) dispatch(es): '$r'"
+# 17d) (#2381) a live hand hold on the branch's issue starts no fix round: the skip names the hold once per hold, and a stale
+#      hold (past its until) no longer holds, so the tip is dispatched.
+: > "$T/launch.log"; push gui/26-hh; rev gui/26-hh CHANGES "u.sh:1 fix"
+printf 'by hal9k\nsince 2020-01-01T00:00:00Z\nuntil 2099-01-01T00:00:00Z\n' > "$T/st/auto/hold-26"
+r=$(OPEN="26" fp); r="$r"$'\n'"$(OPEN="26" fp)"
+[ "$(n gui/26-hh)" = 0 ] && ok "2381 a live hand hold starts no fix round" || ko "2381 a fix round started under a hand hold: '$r'"
+[ "$(printf '%s' "$r" | /usr/bin/grep -c '^BRANCHFIX SKIP gui/26-hh: issue #26 has a live hand hold (hal9k until 2099-01-01T00:00:00Z), no fix round starts$')" = 1 ] \
+  && ok "2381 the hold skip is said once per hold" || ko "2381 skip lines: '$r'"
+printf 'by hal9k\nsince 2020-01-01T00:00:00Z\nuntil 2020-01-01T01:00:00Z\n' > "$T/st/auto/hold-26"
+r=$(OPEN="26" fp)
+[ "$(n gui/26-hh)" = 1 ] && ok "2381 a stale hold no longer holds the fix round" || ko "2381 after the hold went stale: $(n gui/26-hh) dispatch(es): '$r'"
+rm -f "$T/st/auto/hold-26"
 # 18) (#841) a plain bug alone: one launch, no skip line
 : > "$T/launch.log"; push gui/24-pb; rev gui/24-pb CHANGES "r.sh:1 fix"
 r=$(OPEN="24" LABELED="24=bug" fp)

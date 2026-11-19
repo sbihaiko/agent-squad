@@ -5,14 +5,14 @@
 #  (A) ended-nothing (verdict `needs-human`, no land event, no PR): marker dropped, card -> Blocked (ADR-0029: the owner is the next actor), announced once.
 #      Rule R owns that write; rule O writes no loop-board card (#91). The board stub answers the items read from the last
 #      status the pass itself wrote, as the live board does, so a second column written for the same card is a race, not a pass;
-#  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Code Complete:
+#  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Landing:
 #      a local landing is not a merge into the base, so it does not make the card Done (#239);
 #  (C) a live run (no verdict yet) keeps the marker of the issue it works and writes Run fields;
-#  (D) a work branch naming the issue keeps the marker and moves the card to Code Complete.
+#  (D) a work branch naming the issue keeps the marker and moves the card to Landing.
 #  A card is one column, written by one rule (#91): a needs-human run that landed nothing is not a completed run
 #  (ADR-0029), so the column is the dispatch's (Todo) and the release rule O owns the write. The board stub answers a
 #  read from the last status the pass itself wrote, as the live board does, so a second column for that card is a race
-#  the suite names, never a pass: with a stub that always answers In Progress, R's own Code Complete write stays hidden.
+#  the suite names, never a pass: with a stub that always answers In Progress, R's own Landing write stays hidden.
 # R (#1586): the owner's rearm clears the ledger and leaves auto/disp-<n> behind, and a run that left active-runs.txt with
 #  its folder gone is read by no other rule, so the issue stayed `claimed` for ever.
 #  (R1) a marker whose run is gone, with a rearm newer than the marker, is dropped with one line, so the frontier answers
@@ -126,11 +126,11 @@ o=$(run)
 /usr/bin/grep -q 'DISPATCH-FAILED #901.*card is Blocked' "$T/st/cycle.log" 2>/dev/null && ok "O: the drop is announced with the column R wrote" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'needs-human' "$T/st/cycle.log" 2>/dev/null && ok "O: the announcement names the verdict it ended on" || ko "O announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-[ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Code Complete 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 902' "$T/board.calls" 2>/dev/null && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Landing 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 902' "$T/board.calls" 2>/dev/null && ok "O: a run that landed stops at Landing, never Done, and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-905" ] && ok "O: a landing that moved the tip by nothing drops its marker (no delivery)" || ko "O disp-905 kept although the land carried nothing: $o"
-/usr/bin/grep -q '^o 4 Todo 905$' "$T/board.calls" 2>/dev/null && ok "R: a run that ended with nothing delivered leaves the card in the queue, never Code Complete" || ko "R #905 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 905$' "$T/board.calls" 2>/dev/null && ok "R: a run that ended with nothing delivered leaves the card in the queue, never Landing" || ko "R #905 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Blocked 904$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 904' "$T/board.calls" 2>/dev/null && ok "O: a needs-human run's stale work branch keeps its marker, and its card Blocked (#660)" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Blocked 904$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Landing 904' "$T/board.calls" 2>/dev/null && ok "O: a needs-human run's stale work branch keeps its marker, and its card Blocked (#660)" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
 /usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"

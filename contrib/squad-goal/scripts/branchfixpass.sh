@@ -110,6 +110,14 @@ lsf=$(mktemp); printf '%s' "$wb_issues" > "$lsf"; lstop=$(gh_loop_stop "$lsf"); 
 [ -n "$lstop" ] && echo "$lstop"
 # The fingerprint of a review's findings and the failed rounds in a row are revformat.py's reading (ADR-0134), so a
 # child fix round asks the same rule: a moved line or a new sha is not a change.
+# (#2381) A live hand hold (squad.handhold: a person or HAL9k works the card) starts no fix round, so no run commits beside the
+# hand work. Only a hold inside its `until` counts: `holds --live` drops a stale one. With hold files present, a read that fails
+# holds every round instead of dispatching beside hand work it cannot see.
+hh=; hherr=
+if ls "$A"/hold-[0-9]* > /dev/null 2>&1; then
+  py=${SG_SQUAD:+$SG_SQUAD/.venv/bin/python}; [ -n "$py" ] && [ -x "$py" ] || py=python3
+  hh=$(PYTHONPATH="${SG_SQUAD:-$here/../../..}${PYTHONPATH:+:$PYTHONPATH}" "$py" -m squad.handhold holds --live 2>/dev/null) || hherr=1
+fi
 done=0
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue
@@ -120,6 +128,17 @@ while read -r sha br i; do
   # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as the loop's own passes treat it (revformat.py count)
   python3 "$here/revformat.py" --summary "$f" 2>/dev/null | grep -q '^blocking=0 ' && continue
   [ -e "$A/branchfix-$key-$s9" ] && continue
+  if [ -n "$hherr" ]; then
+    [ -e "$A/branchfix-skip-hold-$key-unread" ] || { echo "BRANCHFIX SKIP $br: the hand holds could not be read, no fix round starts"; : > "$A/branchfix-skip-hold-$key-unread"; }
+    continue
+  fi
+  rm -f "$A/branchfix-skip-hold-$key-unread"
+  hl=$(printf '%s\n' "$hh" | /usr/bin/grep "^#$i ")
+  if [ -n "$hl" ]; then   # "#<n> <carrier> since <iso> until <iso>": since survives a renew, so the line is said once per hold
+    set -- $hl
+    [ -e "$A/branchfix-skip-hold-$key-$4" ] || { echo "BRANCHFIX SKIP $br: issue #$i has a live hand hold ($2 until $6), no fix round starts"; : > "$A/branchfix-skip-hold-$key-$4"; }
+    continue
+  fi
   why=; case "$bugs" in *" $i "*) why="loop-bug, fixed outside the loop";; esac
   [ -n "$why" ] || [ -z "$lstop" ] || why="LOOP STOP holds, fixed outside the loop"
   # (#1789) A paused loop (auto/off: an owner pause, or a stop or restart drain) starts no run, as autobug and autofrontier;
