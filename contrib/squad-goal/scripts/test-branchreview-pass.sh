@@ -7,7 +7,7 @@ trap 'rm -rf "$T"' EXIT
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2   # a review takes a review slot (caps.reviews, #567): a throwaway budget
 capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/chainhealth.py" "$d/grokmark.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/chainhealth.py" "$d/grokmark.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$d/startability.sh" "$d/skiplabels.sh" "$d/columnlimit.sh" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
@@ -182,4 +182,24 @@ push gui/45-k
 r2=$(OPEN="45" SG_REVIEW_PASS_MAX=1 KICKSLEEP=3 rp)
 [ "$(wc -l < "$T/kick.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "a second kick while a branchland pass runs is a no-op" || ko "two kicks ran: '$(cat "$T/kick.log" 2>&1)'"
 sleep 3
+# 14) a column limit on Review (#2287): no review starts while the Review column holds its maximum. The board read is the
+#     pass's own one read, through the same seam every dispatcher uses.
+printf 'import os, sys\nsys.stdout.write(open(os.environ["BOARD_ROWS"]).read())\nopen(os.environ["BOARDREADLOG"], "a").write("read\\n")\n' > "$T/s/issue_state.py"
+printf '7\tReview\n8\tReview\n' > "$T/rows.txt"; export BOARD_ROWS=$T/rows.txt BOARDREADLOG=$T/reads.log; : > "$T/reads.log"
+mkdir -p "$T/co/docs/squad"; printf 'columns:\n  Review:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
+push gui/51-c; : > "$T/review.log"
+r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
+case "$r" in *"BRANCHREVIEW column Review full: 2 of 2 card(s) in Review; no review starts this pass"*) ok "a full Review column holds every review";; *) ko "no column-full line: '$r'";; esac
+[ "$(n gui/51-c)" = 0 ] && ok "no review ran while the Review column was full" || ko "a review ran while Review was full: '$(cat "$T/review.log")'"
+[ "$(wc -l < "$T/reads.log" | tr -d ' ')" = 1 ] && ok "a full Review column costs the pass one board read" || ko "a full Review column read the board $(wc -l < "$T/reads.log" | tr -d ' ') times"
+printf '7\tReview\n8\tTodo\n' > "$T/rows.txt"
+r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
+[ "$(n gui/51-c)" = 1 ] && ok "a Review column under its limit reviews its branch as before" || ko "no review ran under the limit: '$r'"
+# caps.reviews lowers the Review bound (#2287): two cards under a column limit of 9 is not full on the column alone, but
+# caps.reviews 1 makes the effective bound 1, so the pass refuses. This proves the lower of the two applies.
+printf '7\tReview\n8\tReview\n' > "$T/rows.txt"
+printf 'caps:\n  reviews: 1\ncolumns:\n  Review:\n    max_cards: 9\n' > "$T/co/docs/squad/defaults.yaml"
+r=$(OPEN="51" SG_REVIEW_PASS_MAX=1 rp)
+case "$r" in *"BRANCHREVIEW column Review full: 2 of 1 card(s) in Review"*) ok "caps.reviews lowers the Review column limit";; *) ko "caps.reviews did not lower the Review limit: '$r'";; esac
+rm -f "$T/co/docs/squad/defaults.yaml"; unset BOARD_ROWS BOARDREADLOG
 exit $fail

@@ -44,6 +44,7 @@ def ran(tmp_path, node):
     return [e for e in outs(tmp_path) if e["node"] == node and e["reasons"] != ["skipped"] and not any(r.startswith("skipped") for r in e["reasons"])]
 
 
+@pytest.mark.heavy     # 1.1 to 1.3 s here and 2.8 s on a loaded runner, over the two-second line for an unmarked call
 async def test_a_trivial_input_skips_spec_and_plan_but_the_gates_still_run(tmp_path):
     repo = make_repo(tmp_path / "repo")
     eng = engine(tmp_path, repo, script(TRIVIAL))
@@ -110,6 +111,7 @@ async def test_the_manual_merge_wait_stops_at_exit_10_and_a_resume_finishes_the_
     assert len([e for e in read(tmp_path / "run" / "record.jsonl") if e["event"] == "resume"]) == 1
 
 
+@pytest.mark.heavy     # 1.6 s here, over the one-second line for an unmarked call
 async def test_a_wait_left_unanswered_fails_by_its_declared_default_after_the_deadline(tmp_path):
     repo = make_repo(tmp_path / "repo")
     eng = engine(tmp_path, repo, script(MEDIUM, actor=conflicting_actor()), wall=lambda: 1000.0)

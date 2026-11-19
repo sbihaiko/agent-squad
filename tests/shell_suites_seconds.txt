@@ -39,6 +39,7 @@ test-childcc.sh 17.10
 test-childfix.sh 0.58
 test-cluster.sh 7.87
 test-codex-reset.sh 0.15
+test-columnlimit.sh 1.43
 test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-home.sh 1.15

@@ -167,7 +167,8 @@ def test_one_eye_and_one_badge_serve_the_header_and_the_line(hub):
         "the title names what the click does, exactly as the header's does"
     assert f"{flag}?'<path d=\"M3 3l18 18\"/>':\"\"" in hub.PAGE, "the flag is what draws the slash"
     badge = _page_line(hub, "const badge=")
-    assert "${g.n}" in badge and "fits[g.name].length" in badge, "one badge, read by the header and by the line"
+    # re-anchored (#2287): the badge shows the count against the column's card limit, through the one colCount rule
+    assert "colCount(g.n,COLS[g.name])" in badge and "fits[g.name].length" in badge, "one badge, read by the header and by the line"
     assert "badge(g)" in _page_line(hub, "const one=")
 
 

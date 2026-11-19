@@ -8,6 +8,9 @@ P=$(mktemp -d); G=/usr/bin/git; pg() { $G -C "$P" -c user.email=a@b -c user.name
 pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w; pg checkout -q local/next; touch -t 202001010000 "$P/g"
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
+# health.sh reads the board through a 120 s window snapshot (#1796), and every case below rewrites the board seconds after the
+# last pass. Each case reads the live board; the window has its own case in the drift section.
+export SG_BOARD_SNAPSHOT_S=0
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of this machine: health.sh counts watch.sh processes by command line, so without this a second real loop adds a loops-duplicated alert to every count below
 mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"; cp "$(dirname "$src")/drainpolicy.py" "$T/s/"; cp "$(dirname "$src")/workbranches.sh" "$T/s/workbranches.sh"; cp "$(dirname "$src")/startability.sh" "$T/s/startability.sh"; cp "$(dirname "$src")/skiplabels.sh" "$T/s/skiplabels.sh"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/caps.sh" "$T/s/"   # the claimed column's name (#1342); the process read is caps.sh, which resolves to squad.procs through SG_SQUAD inside the child's sandbox (#1594); the skip set is skiplabels.sh (#1593)
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
@@ -88,6 +91,9 @@ bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
 echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "equal counts alerted: $o" || ok "equal counts stay silent"
 [ "$(alerts)" = 0 ] && ok "equal counts: no alerts.log line" || ko "equal counts: $(alerts) alert(s)"
 /usr/bin/grep -q '"runs":1,"inprogress":1' "$T/st/health.json" && ok "health.json carries the pair (runs, inprogress)" || ko "health.json: $(cat "$T/st/health.json")"
+# #1796: with no window set, a pass inside 120 s of the last board read answers from its snapshot and sends no board read
+printf '10\tIn Progress\n11\tIn Progress\n' > "$T/board.tsv"; SG_BOARD_SNAPSHOT_S= bash "$T/s/health.sh" >/dev/null
+/usr/bin/grep -q '"inprogress":1' "$T/st/health.json" && ok "inside its window the pass reads the board snapshot (#1796)" || ko "the default window read the live board: $(cat "$T/st/health.json")"
 reset; bd; printf '10\tIn Progress\n1783\tIn Progress\n1792\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10; liverun run-b 1768
 o=$(bash "$T/s/health.sh")
 echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "a single divergent pass alerted: $o" || ok "one divergent pass does not alert"
@@ -362,10 +368,12 @@ n2=$(bash "$T/s/health.sh" | /usr/bin/grep -c REAPED); [ "$n2" = 0 ] && ok "a ru
 kill $lp $up 2>/dev/null; wait $lp $up 2>/dev/null
 # ---- #1270: a pass that reads no free run slot names the holder that has had no live lease and no live process for five minutes ----
 # The ceiling is one run (the project file lowers it) and it is taken, so the pass reads no free slot and must say which run holds
-# it. Its engine is gone and its request is fresh: the reap leaves a run in its launch window alone, so only the report names it.
+# it. Its record names no process, so it keeps its slot (ADR-0167: a missing pid is no proof of death; a run whose named
+# process is gone frees its slot and is never named here). Its request is fresh: the reap leaves a run in its launch window
+# alone, so only the report names it.
 reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-no-free-slot"; mkdir -p "$T/co/runs" "$T/co/docs/squad"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
-sleep 0 & dp=$!; wait $dp; rrun run-noshow start "call:$dp:$(( $(date +%s) ))"; touch "$T/co/runs/run-noshow/request.txt"
+rrun run-noshow start; touch "$T/co/runs/run-noshow/request.txt"
 o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH no-free-slot: NO-SLOT run-noshow: caps.runs has no free slot and this run has had no live lease and no live process for' && ok "a full ceiling names the run that has had no lease and no process for five minutes" || ko "the stale holder was not named: $o"
 [ -e "$T/st/auto/health-no-free-slot" ] && ok "the named holder alerts once" || ko "no alert marker for the named holder"

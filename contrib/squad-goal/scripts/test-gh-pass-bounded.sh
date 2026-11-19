@@ -33,7 +33,7 @@ echo '{"core":{"remaining":100,"limit":5000,"reset":'"$(( $(date +%s) + 3000 ))"
 frontier_pass() {
   local n=$1 t; t=$(mktemp -d -p "$T")
   mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/docs/squad/workflows" "$t/fix"
-  for f in autofrontier.sh stack.sh startability.sh skiplabels.sh workbranches.sh ghcall.sh drainpolicy.py ghread.py ghthrottle.py single.sh cluster.py address.sh issue_ledger.py; do cp "$d/$f" "$t/s/"; done
+  for f in autofrontier.sh columnlimit.sh stack.sh startability.sh skiplabels.sh workbranches.sh ghcall.sh drainpolicy.py ghread.py ghthrottle.py single.sh cluster.py address.sh issue_ledger.py; do cp "$d/$f" "$t/s/"; done
   printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$t/st" "$t/co" > "$t/s/env.sh"
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":24,"max_parallel":2}]}]}' > "$t/co/docs/squad/workflows/dynamic.graph.json"
   printf 'caps:\n  runs: 10\n' > "$t/co/docs/squad/defaults.yaml"

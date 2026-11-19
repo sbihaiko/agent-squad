@@ -15,10 +15,10 @@ BOARD_FILTER_JS = SCRIPTS / "board-filter.js"
 SCREEN_ROUTES = {"cost": "/api/stats", "lead": "/api/chart/lead"}   # #1028: the plans and the models left the More tab for Settings; the lead chart reads the desktop route (#1333)
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
-    "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/live", "/api/load", "/api/models",
+    "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/columns", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/live", "/api/load", "/api/models",
     "/api/runs", "/api/sessions", "/api/sessions/card", "/api/sessions/clip", "/api/sessions/conversation", "/api/sessions/image", "/api/sessions/send", "/api/slack", "/api/speed", "/api/stats", "/api/status",
     "/api/subs", "/api/version",
-}
+}   # /api/columns: the Settings Board theme reads the card limit of each column (#2287)
 
 
 def page():

@@ -478,10 +478,9 @@ def main(argv=None):
     a = argparse.ArgumentParser(prog="squad.caps")
     a.add_argument("--target")
     sub = a.add_subparsers(dest="cmd")
-    for name in ("take", "release"):
+    for name in ("take", "release", "value"):
         s = sub.add_parser(name)
         s.add_argument("kind", choices=KINDS)
-        s.add_argument("holder")
         s.add_argument("--target")
         if name == "take":
             s.add_argument("--count", type=int, default=1)
@@ -489,6 +488,8 @@ def main(argv=None):
             s.add_argument("--wait", type=float, default=0.0)
             s.add_argument("--try", dest="try_mode", action="store_true")
             s.add_argument("--priority", default=None, help="the check that waits first in the queue (tip or landing, ADR-0174)")
+        if name != "value":
+            s.add_argument("holder")
     args = a.parse_args(argv)
     args.target = args.target if args.target is not None else "."   # the CLI resolves the working directory, as the loop does
     try:
@@ -500,6 +501,9 @@ def main(argv=None):
         return 2
     if args.cmd == "release":
         c.release_holder(args.kind, args.holder)
+        return 0
+    if args.cmd == "value":            # the cap's number, never a slot: a dispatcher reads it to bound a column (#2287)
+        print(c.caps[args.kind])
         return 0
     print(json.dumps({**c.caps, "occupancy": c.occupancy()}))
     return 0

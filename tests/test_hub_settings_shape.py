@@ -20,7 +20,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HUB_PY = os.path.join(ROOT, "contrib", "squad-goal", "scripts", "hub.py")
-THEMES = ["lop", "lim", "sub", "mdl", "slk", "acc"]
+THEMES = ["lop", "lim", "sub", "mdl", "slk", "brd", "acc"]   # brd: the Board theme, the card limit of each column (#2287)
 
 
 @pytest.fixture(scope="module")
@@ -396,10 +396,10 @@ def _set_bar(hub):
     page = hub.PAGE
     src = page[page.index("const STH="):page.index("function setTheme(")]
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
-            'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
+            'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;const brdDirty=()=>false;'
             'const limVals=()=>({guard:"",cap:"",factor:""});let limS=null,slDraft=null,slS=null;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
-    body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
+    body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","brd","acc"]){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent}}'
             'RO=true;sTheme="mdl";setBar();out.ro={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,'
             'text:$("#schg").textContent};console.log(JSON.stringify(out));')
@@ -416,9 +416,10 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
     # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
     assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
     assert out["lim"]["text"] == "Spend & limits: no change" and out["mdl"]["text"] == "Models & chains: no change"
+    assert out["brd"]["text"] == "Board: no change", out["brd"]["text"]   # the Board theme writes the project file (#2287)
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
-    assert 'const SET_SAVE=["lim","mdl","slk","sub"]' in hub.PAGE
+    assert 'const SET_SAVE=["lim","mdl","slk","sub","brd"]' in hub.PAGE
 
 
 def test_every_input_in_settings_takes_the_body_size_and_the_page_control_height(hub):
@@ -455,7 +456,7 @@ def test_the_themes_keep_one_order_in_the_nav_the_phone_select_and_the_panels(hu
     assert re.findall(r"value=(\w+)", sel) == THEMES, "the phone select does not follow the nav order"
     assert re.findall(r"<details id=(\w+) class=sp", view) == THEMES, "the panels do not follow the nav order"
     assert [t.replace("&amp;", "&") for t in re.findall(r"<button data-sp=\w+>(.*?)<small", nav)] == \
-           ["Loop", "Spend & limits", "Subscriptions", "Models & chains", "Communication", "Access"]
+           ["Loop", "Spend & limits", "Subscriptions", "Models & chains", "Communication", "Board", "Access"]
 
 
 def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hub):
@@ -547,21 +548,21 @@ class El{
  addEventListener(t,f){(this.L=this.L||{});(this.L[t]=this.L[t]||[]).push(f);this.bound=true;}
  fire(t){(this.L&&this.L[t]||[]).forEach(f=>f({target:this}));}
 }
-const DETAILS=["lop","lim","sub","mdl","slk","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
+const DETAILS=["lop","lim","sub","mdl","slk","brd","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
 const NAV=DETAILS.map(e=>new El(e.dataset.sp));
 const ELS={};DETAILS.forEach(e=>ELS[e.id]=e);
 const $=s=>{const id=String(s).replace(/^#/,"");return ELS[id]||(ELS[id]=new El(id));};
 const document={querySelectorAll:s=>s==="#tab-set details.sp"?DETAILS:s===".snav button"?NAV:[]};
 const RO=false,RO_WHY="";
-let mdln=0,limn=0,slkn=0;
-function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}
-const mdlChanged=()=>false,slDirty=()=>false;
+let mdln=0,limn=0,slkn=0,brdn=0;
+function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}function brdLoad(){brdn++;}
+const mdlChanged=()=>false,slDirty=()=>false,brdDirty=()=>false;
 let mdl=null,limS=null,slS=null,slDraft=null;
 const ls=__STORED__,save=()=>{};
 """
     tail = """
 function drain(){let n=0;while(Q.length){if(++n>100)throw new Error("toggle storm");Q.shift().fire("toggle");}}
-drain();console.log(JSON.stringify({mdl:mdln,lim:limn,slk:slkn}));"""
+drain();console.log(JSON.stringify({mdl:mdln,lim:limn,slk:slkn,brd:brdn}));"""
     src = "\n".join([harness.replace("__STORED__", json.dumps(stored)), sth, theme, acc, boot, tail])
     return json.loads(_node(src))
 
@@ -570,10 +571,11 @@ def test_an_opened_panel_loads_its_data_once_at_boot(hub):
     """A panel opened at boot loads through its own toggle, once. The models panel answers on boot while it is closed (its
     chip needs the count), and skips that boot load when the toggle already fetched it (#1278)."""
     cases = {
-        "mdl": ({"sth": "mdl"}, {"mdl": 1, "lim": 0, "slk": 0}),
-        "lim": ({"sth": "lim"}, {"mdl": 1, "lim": 1, "slk": 0}),
-        "slk": ({"sth": "slk"}, {"mdl": 1, "lim": 0, "slk": 1}),
-        "closed": ({"sth": "lop"}, {"mdl": 1, "lim": 0, "slk": 0}),
+        "mdl": ({"sth": "mdl"}, {"mdl": 1, "lim": 0, "slk": 0, "brd": 0}),
+        "lim": ({"sth": "lim"}, {"mdl": 1, "lim": 1, "slk": 0, "brd": 0}),
+        "slk": ({"sth": "slk"}, {"mdl": 1, "lim": 0, "slk": 1, "brd": 0}),
+        "brd": ({"sth": "brd"}, {"mdl": 1, "lim": 0, "slk": 0, "brd": 1}),   # the Board theme loads through its toggle (#2287)
+        "closed": ({"sth": "lop"}, {"mdl": 1, "lim": 0, "slk": 0, "brd": 0}),
     }
     for name, (stored, want) in cases.items():
         assert _boot_loads(hub, stored) == want, f"{name}: {stored}"
