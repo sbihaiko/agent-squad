@@ -16,6 +16,10 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
 export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it
 export SG_FAST_MEMO=0   # the pass memo is proved in its own block at the end; every other case here runs a fresh battery
+# (#2421) The daily pass and shell-suites.sh hand the suite a temp HOME (#2307), and this machine's python3 imports pytest's
+# pygments only from the user site under HOME: the trial battery a case starts then cannot import pytest at all. The real
+# user base is read, never written (test-hubstream.sh).
+export PYTHONUSERBASE="${PYTHONUSERBASE:-$(HOME="$(eval echo "~$(id -un)")" python3 -c 'import site;print(site.USER_BASE)' 2>/dev/null)}"
 R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs"
 # A stub suite logs its name and whether the machine lock was held, and fails when its name is in $SUITE_FAIL.
 for n in foo bar baz; do
@@ -119,6 +123,20 @@ out=$(CLS=saturation CLS2=pass cg); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -q 'test-foo.sh' "$T/ran.log" && case "$out" in *saturation*) true;; *) false;; esac && ok "an inconclusive red whose retry passes goes on to the suites and names the class" || ko "retry pass: rc $rc: '$out'"
 out=$(CLS=unknown CLS2=collection cg); rc=$?
 [ $rc = 1 ] && case "$(last "$out")" in "fast-gate: collection: "*) true;; *) false;; esac && ok "an inconclusive red whose retry is a defect fails as that defect" || ko "retry defect: rc $rc: '$(last "$out")'"
+# (#2421) A battery whose interpreter cannot import pytest exits 1 with an import traceback and no test id. The check that did
+# not run is pytest, whatever module the traceback names: it is an absent tool, unproven at once, never an unknown red twice.
+cat > "$T/nostart.sh" <<NOSTART
+#!/bin/bash
+echo "battery" >> "$T/ran.log"
+echo "Traceback (most recent call last):"
+echo "ModuleNotFoundError: No module named 'pygments'"
+exit 1
+NOSTART
+nst=$T/cls-nostart; mkdir -p "$nst"
+out=$(rm -f "$T/ran.log"; cd "$R" && SG_STATE="$nst" SG_FAST_BASE=dev SG_FAST_CMD="bash $T/nostart.sh" SG_FAST_RETRY_CMD=false bash "$d/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 4 ] && case "$(last "$out")" in "fast-gate: absent: pytest "*) true;; *) false;; esac \
+  && ok "2421 a battery whose pytest cannot import is absent, exits 4, and names pytest" || ko "2421 no-start: rc $rc, last '$(last "$out")'"
+[ "$(/usr/bin/grep -c '^battery' "$T/ran.log")" = 1 ] && ok "2421 a battery that cannot start is not retried" || ko "2421 no-start retried: '$(cat "$T/ran.log")'"
 # The gate lock is gate.sh's, and fast-gate.sh takes no lock of its own.
 /usr/bin/grep -v '^ *#' "$d/fast-gate.sh" | /usr/bin/grep -qE 'serial\.sh|lockf|flock|locks/' && ko "fast-gate.sh takes a lock of its own" || ok "fast-gate.sh takes no lock but gate.sh's"
 
@@ -838,6 +856,23 @@ loadgate() { (cd "$sl" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_
 out=$(loadgate); rc=$?
 [ $rc = 0 ] && [ "$(/usr/bin/grep -- '-m pytest' "$T/sl-argv.log" | tail -n 1)" = "-m pytest -p no:deepeval -p no:xdist -m not heavy tests/test_load.py::test_slow_under_load_only" ] \
   && ok "1726 a call slow only under parallel load passes its own serial run, and the gate passes" || ko "1726 load-only call: rc $rc: '$(cat "$T/sl-argv.log" 2>&1)' '$(last "$out")'"
+
+# (#2421) The daily pass and shell-suites.sh hand the suite a temp HOME (#2307), and this machine's python3 imports pytest's
+# pygments only from the user site under HOME. The trial battery then could not import pytest, and the gate answered unknown
+# twice where the case above reads its red. The same trial runs on python3 under a temp HOME, and the suite hands the real
+# user base down (test-hubstream.sh), so the battery starts its pytest and names the slow call.
+sh=$T/slowcap-home; mkdir -p "$sh/tests"
+cp "$d/../../../tests/slowcap.py" "$sh/slowcap.py"
+printf 'pytest_plugins = ["slowcap"]\n' > "$sh/conftest.py"
+printf '[tool.pytest.ini_options]\naddopts = "-p no:cacheprovider"\nheavy_cap_seconds = "0.05"\n' > "$sh/pyproject.toml"
+printf 'import time\n\ndef test_unmarked_slow():\n    time.sleep(0.3)\n' > "$sh/tests/test_slow.py"
+printf '#!/bin/bash\necho "$*" >> "%s/sh-argv.log"\ncase "$*" in\n  *squad.testselect*) echo tests/test_slow.py;;\n  *"-m pytest"*) exec python3 "$@";;\nesac\nexit 0\n' "$T" > "$sh/py"; chmod +x "$sh/py"
+git init -q -b dev "$sh"; $G -C "$sh" add -A; $G -C "$sh" commit -q -m base
+hmh=$(mktemp -d)
+outh=$(cd "$sh" && env -u SG_FAST_CMD -u SG_TEST_SELECT -u SG_FAST_RETRY_CMD HOME="$hmh" SG_STATE="$T/sh-st" SG_FAST_LOG_DIR="$T/sh-logs" SG_FAST_BASE=dev SG_FAST_MEMO=0 SG_GATE_PY="$sh/py" bash "$d/fast-gate.sh" 2>&1); rch=$?
+rm -rf "$hmh"
+[ $rch = 1 ] && case "$(last "$outh")" in "fast-gate: pytest: "*"tests/test_slow.py::test_unmarked_slow"*) true;; *) false;; esac \
+  && ok "2421 the trial battery starts its pytest under the runner's temp HOME and names the slow call" || ko "2421 temp HOME: rc $rch, last '$(last "$outh")'"
 
 # (#1684) A gate that cannot take its slots proved nothing and broke nothing: the machine's budget is full, so the fast gate
 # answers unproven (exit 4) on one line that names the budget. Called out as 73, it read as a red of the branch, and three
