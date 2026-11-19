@@ -130,7 +130,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_mobile_specs.py", "tests/test_hub_profiler.py", "tests/test_slot_holders.py",
         "tests/test_hub_mobile_phone_density.py",
         "tests/test_hub_mobile_push.py", "tests/test_hub_mobile_settings_theme.py", "tests/test_hub_mobile_visual_floor.py", "tests/test_hub_model_add_box.py", "tests/test_hub_model_off_switch.py", "tests/test_hub_models_version.py",
-        "tests/test_hub_page_reload.py", "tests/test_hub_router_envelope.py", "tests/test_hub_router_queue_models.py", "tests/test_hub_run_share.py", "tests/test_hub_run_sheet.py",
+        "tests/test_hub_page_reload.py", "tests/test_hub_priority_write.py", "tests/test_hub_router_envelope.py", "tests/test_hub_router_queue_models.py", "tests/test_hub_run_share.py", "tests/test_hub_run_sheet.py",
         "tests/test_hub_spec_colors.py", "tests/test_hub_tab_title.py", "tests/test_hub_usage_layout.py", "tests/test_instructions.py", "tests/test_issue_state_wave.py",
         "tests/test_killed.py", "tests/test_lead_span.py", "tests/test_model_ctx.py", "tests/test_model_window.py", "tests/test_no_suite_wall_clock.py",
         "tests/test_not_startable_build.py", "tests/test_pause.py", "tests/test_premise_check.py", "tests/test_procs.py", "tests/test_ticket_premise.py", "tests/test_project_settings.py",
