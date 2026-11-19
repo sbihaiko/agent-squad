@@ -1303,10 +1303,16 @@ def test_the_runs_own_gates_fold_into_the_column_the_card_holds_while_they_run(p
         "the gates fold into Doing: coding 200 s and between 120 s, the gate's 90 s and the 60 s merge into the wave"
 
 
-def wave_row(start, finish, caller="tip", waves=("run-a",), card=None, wait=0.0):
-    """One gate-history row as `hub.trip_gates` answers it, with the wave link the attempt journal gives it."""
-    return {"start": start, "finish": finish, "caller": caller, "wait": wait,
-            "link": {"waves": list(waves), "card": card} if waves or card else None}
+def wave_row(start, finish, caller="tip", waves=("run-a",), card=None, wait=0.0, slot_ask=None, slot_got=None):
+    """One gate-history row as `hub.trip_gates` answers it, with the wave link the attempt journal gives it. A row with no
+    `slot_ask` and no `slot_got` carries no slot record, as a row from before those fields does (#2317)."""
+    row = {"start": start, "finish": finish, "caller": caller, "wait": wait,
+           "link": {"waves": list(waves), "card": card} if waves or card else None}
+    if slot_ask is not None:
+        row["slot_ask"] = slot_ask
+    if slot_got is not None:
+        row["slot_got"] = slot_got
+    return row
 
 
 WAVES = [{"wave": "run-a", "issues": [1]}, {"wave": "run-b", "issues": [2]}, {"wave": "run-c", "issues": [3]}]
@@ -1319,6 +1325,63 @@ def test_the_wave_gate_folds_into_gating(prof):
     rows = {r["column"]: r for r in prof.trip(TRIP_SPANS, gates, since=NOW - 3600, waves=WAVES)["columns"]}
     assert (rows["gating"]["observations"], rows["gating"]["median_s"]) == (3, 90.0), \
         "each wave's 30 s slot wait and 60 s run stand in Gating; the record's own gates stand in Doing"
+
+
+def test_a_gate_row_states_when_it_asked_for_its_slots_got_them_and_ended(hub):
+    """#2317: the row states the instant the gate asked for its slots inside the lock, the instant it got them and its
+    finish, so the slot wait and the run are read from the record. A row from before the two fields names no slot
+    record, and a reason that holds a tab keeps the fields' place."""
+    mod = hub[0]
+    line = ("1000\tfast\tpass\tabc\t900\tall\troot\tpass\t-\truff\t-\t3\t-\ttip\t0.5\t0.6\tgated\ttree\t100\t100\t2"
+            "\tno\tlocal\t-\t800\t900")
+    row = mod.gate_row(line)
+    assert (row["finish"], row["slot_ask"], row["slot_got"]) == ("1000", "800", "900"), \
+        "the row names the ask, the got and the finish of the gate"
+    tabbed = mod.gate_row("1000\tfast\tpass\tabc\t900\tall\troot\tpass\twhy\twith\ttabs\t1\t0\t0\t0\ttip\t0.5\t0.6"
+                          "\tgated\ttree\t100\t100\t2\tno\tlocal\t-\t800\t900")
+    assert (tabbed["slot_ask"], tabbed["slot_got"], tabbed["run_id"]) == ("800", "900", "-"), \
+        "a reason that holds a tab keeps every later field in its place"
+    old = mod.gate_row("1000\tfast\tpass\tabc\t900\tall\troot\tpass\t-\truff\t-\t3\t-\ttip\t0.5\t0.6\tgated\ttree"
+                       "\t100\t100\t2\tno\tlocal\t-")
+    assert (old["caller"], old["slot_ask"], old["slot_got"]) == ("tip", "", ""), \
+        "a row from before the slot fields answers none, never a false ask at its start"
+
+
+def test_the_wave_gate_splits_its_slot_wait_from_its_run(prof):
+    """#2317: a gate with a slot record splits into the wait before it held its slots and the run after them. A gate
+    that took its slots at once reads a wait of zero, never an unknown. A gate with no slot record reads the whole
+    stint as its run and says so: a wait the record never stated is no reading."""
+    waited = wave_row(1000.0, 1400.0, wait=200.0, slot_ask=900.0, slot_got=980.0)
+    assert prof.wave_gate_split([waited], "run-a", (), 0.0) == {"slot_wait": 180.0, "gate_run": 420.0, "no_slot": 0}, \
+        "the stint runs from the gate's own start, 800, to its finish; the slot record says it got its slots at 980"
+    at_once = wave_row(1000.0, 1300.0, wait=0.0, slot_ask=1000.0, slot_got=1000.0)
+    assert prof.wave_gate_split([at_once], "run-a", (), 0.0) == {"slot_wait": 0.0, "gate_run": 300.0, "no_slot": 0}, \
+        "a gate that got its slots at once reads a zero wait, and the zero is a measured one"
+    no_record = wave_row(1000.0, 1400.0, wait=200.0)
+    assert prof.wave_gate_split([no_record], "run-a", (), 0.0) == {"slot_wait": 0.0, "gate_run": 600.0, "no_slot": 1}, \
+        "with no slot record the whole stint is gate run, and the row adds to the count of such gates"
+    both = prof.wave_gate_split([waited, no_record], "run-a", (), 0.0)
+    assert (both["slot_wait"], both["gate_run"], both["no_slot"]) == (180.0, 1020.0, 1), \
+        "one delivery's parts add over its linked rows"
+    assert prof.wave_gate_split([wave_row(1000.0, 1400.0, caller="child", slot_ask=900.0, slot_got=980.0)],
+                                "run-a", (), 0.0) is None, "a child's gate is no Gating reading at all"
+    splits = prof.wave_gate_split([waited], "run-a", (), 0.0)
+    assert splits["slot_wait"] + splits["gate_run"] == prof.wave_gate([waited], "run-a", (), 0.0), \
+        "the two parts are the whole stint the Gating median folds, so the page never states less than its bar"
+
+
+def test_the_trip_shows_the_gating_slot_wait_and_run_and_names_the_gates_with_no_slot_record(prof):
+    """#2317: the Gating row carries the slot wait and the gate run beside its median, and the payload names the count of
+    gates whose record states no slot, because their whole stint stands as a run the page cannot split."""
+    gates = [wave_row(1000.0, 1400.0, waves=("run-a",), wait=200.0, slot_ask=900.0, slot_got=980.0),
+             wave_row(2000.0, 2300.0, waves=("run-b",), wait=0.0, slot_ask=2000.0, slot_got=2000.0),
+             wave_row(3000.0, 3400.0, waves=("run-c",), wait=200.0)]
+    rows = {r["column"]: r for r in prof.trip(TRIP_SPANS, gates, since=NOW - 3600, waves=WAVES)["columns"]}
+    assert rows["gating"]["median_s"] == 600.0, "the Gating median still folds the whole stint of each gate"
+    assert (rows["gating"]["slot_wait_s"], rows["gating"]["gate_run_s"]) == (0.0, 420.0), \
+        "the waits are 180, 0 and 0 s and the runs 420, 300 and 600 s: each cell reads its own median"
+    assert rows["gating"]["no_slot_gates"] == 1, "one gate of the window states no slot record"
+    assert "slot_wait_s" not in rows["landing"], "only Gating carries the split, because only Gating is a gate"
 
 
 def test_gating_reads_only_the_tip_and_landing_rows_of_the_wave_that_carried_the_issue(prof):
@@ -1786,14 +1849,15 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
         "the hover names the median, the p85 and the count, and no other stage (#2280)"
     assert [h for h in re.findall(r"<th[^>]*>([^<]+)</th>", out)] == TRIP_HEADS
     rows = re.findall(r'<tr data-p="trip/(\w+)"><td class=pn><i class="ptk ptk-(\w+)( ptk-none)?" aria-hidden=true></i><span class=pnm>([^<]*)</span></td>'
-                      + r"<td>([^<]*)</td>" * 9, out)
+                      + r"<td>([^<]*)</td>" * 11, out)
     assert [r[3] for r in rows] == ["Todo", "Doing", "Review", "Landing", "Gating"], \
         "five rows, each named for its board column, in board order, with no Closed row"
     assert rows[0][3:] == ("Todo", "40.0 min", "40.0 min", "40.0 min", "40.0 min", "×1.0", "40.0 min", "0",
-                           "&#8212;", "&#8212;"), \
-        "the Todo row reads the queue alone; the fixture folds no call and no load, so its rates read a zero and two dashes"
+                           "&#8212;", "&#8212;", "&#8212;", "&#8212;"), \
+        "the Todo row reads the queue alone; the fixture folds no call and no load, so its rates read a zero and two " \
+        "dashes, and its two gate cells read dashes because it is no gate (#2317)"
     assert rows[1][3:] == ("Doing", "1.7 min", "4.2 min", "5.9 min", "6.7 min", "×1.0", "4.2 min", "0",
-                           "&#8212;", "&#8212;"), \
+                           "&#8212;", "&#8212;", "&#8212;", "&#8212;"), \
         "the four time cells read the one stage: coding's 100, 250, 355 and 400 s over the four deliveries"
     assert (rows[3][4], rows[3][5], rows[3][6], rows[3][7]) == ("30.0 s", "1.3 min", "1.8 min", "2.0 min"), \
         "Landing stands before Gating, where the board puts it"
@@ -1801,6 +1865,8 @@ def test_the_view_draws_the_trip_as_five_rows_named_for_the_columns_and_five_seg
         "the parallelism and the effective time keep the value and the format of #2256"
     assert rows[4][4:8] == ("1.0 min", "1.0 min", "1.0 min", "1.0 min"), \
         "Gating reads the wave gate, never the run's own gate"
+    assert rows[4][13:15] == ("0 ms", "1.0 min"), \
+        "the fixture's gate states no slot record, so its whole stint stands as gate run and the wait reads a zero (#2317)"
     assert [r[1] for r in rows] == [s[0] for s in segs], "a row's swatch is the color of its segment, in the same order: the table is the bar's legend"
     assert all(r[0] == r[1] for r in rows), "the swatch of a row names the column the row names"
 
@@ -1821,6 +1887,57 @@ def test_a_zero_median_draws_no_ghost_segment_either():
     assert "ptb-seg pts-review" not in out, "the bar's own min-width would draw 4 px of a column that has no time in it"
     row = re.search(r'<tr data-p="trip/review"><td class=pn><i class="([^"]*)" aria-hidden=true></i>', out)
     assert row and "ptk-none" in row.group(1), "a zero median reads as hollow in the legend too"
+
+
+def test_the_trip_bar_draws_the_gating_slot_wait_and_gate_run_as_two_shades():
+    """#2317: the Gating segment splits into the slot wait and the gate run, each in its own shade of the Gating colour,
+    so the bar answers whether the gate waits or works."""
+    t = {**TRIP, "columns": [{**c, "slot_wait_s": 180.0, "gate_run_s": 420.0, "no_slot_gates": 0}
+                             if c["column"] == "gating" else c for c in TRIP["columns"]]}
+    out = trip_part(run_js(f"profHtml({json.dumps({**VIEW, 'trip': t})},new Set())"))
+    segs = re.findall(r'<rect class="ptb-seg ptc pts-gating (ptb-wait|ptb-run)" x="([\d.]+)" y="[\d.]+" '
+                      r'width="([\d.]+)"[^>]*><title>([^<]*)</title></rect>', out)
+    assert [s[0] for s in segs] == ["ptb-wait", "ptb-run"], \
+        "the Gating segment splits in two, the wait first and then the run"
+    wait_w, run_w = float(segs[0][2]), float(segs[1][2])
+    assert wait_w > 0 and run_w > wait_w and (wait_w, run_w) != (0, 0), "both shades draw the width their reading holds"
+    assert wait_w / run_w == pytest.approx(180.0 / 420.0, abs=0.06), \
+        "the two shades divide the segment the way the slot wait and the gate run divide the gate"
+    assert (segs[0][3], segs[1][3]) == ("Gating: slot wait 3.0 min", "Gating: gate run 7.0 min"), \
+        "each shade names its own reading"
+    assert re.search(r"#proftrip rect\.ptb-seg\.ptb-wait\{[^}]*opacity", page()), \
+        "the wait is a second shade of the Gating colour, never another colour"
+
+
+def test_the_trip_table_shows_the_gating_slot_wait_and_gate_run_and_dashes_the_other_columns():
+    """#2317: the Gating row states its slot wait and its gate run in their own cells; a column that is no gate reads a
+    dash there, because it holds no split."""
+    t = {**TRIP, "columns": [{**c, "slot_wait_s": 180.0, "gate_run_s": 420.0, "no_slot_gates": 0}
+                             if c["column"] == "gating" else c for c in TRIP["columns"]]}
+    out = trip_part(run_js(f"profTrip({json.dumps(t)},false)"))
+    heads = [re.sub(r"<[^>]+>", "", h) for h in re.findall(r"<th[^>]*>(.*?)</th>", out, re.S)]
+    assert heads[-2:] == ["Slot wait", "Gate run"], "the two readings take their own columns, last in the table"
+    gating = re.search(r'<tr data-p="trip/gating">(.*?)</tr>', out, re.S).group(1)
+    cells = [re.sub(r"<[^>]+>", "", td) for td in re.findall(r"<td[^>]*>(.*?)</td>", gating, re.S)]
+    assert cells[-2:] == ["3.0 min", "7.0 min"], "the Gating row states its slot wait and its gate run"
+    landing = re.search(r'<tr data-p="trip/landing">(.*?)</tr>', out, re.S).group(1)
+    assert [re.sub(r"<[^>]+>", "", td) for td in re.findall(r"<td[^>]*>(.*?)</td>", landing, re.S)][-2:] == \
+        ["&#8212;", "&#8212;"], "a column that is no gate holds no split, and reads a dash in both cells"
+
+
+def test_the_page_names_the_gates_whose_record_states_no_slot():
+    """#2317: a gate with no slot record shows its whole stint as gate run, and the page states how many such gates the
+    window holds, so a reader never takes an unsplit run for a measured one."""
+    t = {**TRIP, "columns": [{**c, "slot_wait_s": 180.0, "gate_run_s": 420.0, "no_slot_gates": 2}
+                             if c["column"] == "gating" else c for c in TRIP["columns"]]}
+    for phone in ("false", "true"):
+        out = run_js(f"profTrip({json.dumps(t)},{phone})")
+        assert "2 gates carried no slot record, so their whole stint is gate run" in out, \
+            "the page names the count of gates it could not split"
+    clean = {**TRIP, "columns": [{**c, "slot_wait_s": 180.0, "gate_run_s": 420.0, "no_slot_gates": 0}
+                                 if c["column"] == "gating" else c for c in TRIP["columns"]]}
+    assert "carried no slot record" not in run_js(f"profTrip({json.dumps(clean)},false)"), \
+        "a window whose gates all state their slot record says nothing about a missing one"
 
 
 def test_the_swatch_rules_are_shipped_with_the_widget():
@@ -3095,13 +3212,35 @@ def test_a_machine_load_payload_is_never_drawn_as_a_chart():
     assert "class=plc" not in out and "saturation &middot;" not in out, "the core reference line went with the chart"
 
 
+class Clock:
+    """The hub's clock, frozen at one instant: every other time attribute is the real module's."""
+
+    def __init__(self, at):
+        self.at = at
+
+    def time(self):
+        return self.at
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+EDGE_NOW = 1_800_000_000.1236     # a stamp whose own millisecond rounds up, as the record's writer stamps one
+
+
+def load_record_rows_at(now):
+    """The case's rows of the minute record, one a minute and the newest in the case's own second. The writer stamps
+    whole seconds, so no row sits at the window's edge, where a stamp rounded to the millisecond lands past the route's
+    clock a moment later (#2300)."""
+    return [f"{int(now) - 600 + i * 60}\t{2.0 + i:.2f}\t{50.0 + i:.1f}" for i in range(11)]
+
+
 def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
     """The load is the rule layer's fold of the minute record: its rows are in the answer, on the strip's own window, so
     a column of the page is one instant in both. A file view: no process table."""
     mod, port, _, state, table = hub
     now = time.time()
-    rows = [f"{now - 600 + i * 60:.3f}\t{2.0 + i:.2f}\t{50.0 + i:.1f}" for i in range(11)]
-    (state / "load-record.tsv").write_text("\n".join(rows) + "\n")
+    (state / "load-record.tsv").write_text("\n".join(load_record_rows_at(now)) + "\n")
     mod.LOAD_STATE.update(record_rows=None, record_stamp=None)
     code, v = ask(port, "GET", path="/api/profiler?sw=14400")
     assert code == 200
@@ -3111,6 +3250,18 @@ def test_the_route_answers_the_machine_load_on_the_strips_own_window(hub):
     assert len(flat(load)) >= 10 and load["peak"] > 0 and load["gaps"], "an unrecorded head is a gap, never a zero"
     assert [p["load"] for p in flat(load)] == [2.0 + i for i in range(11)], "the points are the file's own lines"
     assert table.reads == 0, "the load line reads files only"
+
+
+def test_the_route_answers_the_newest_row_when_its_clock_reads_a_moment_later(hub, monkeypatch):
+    """The case stamps its rows and the route reads its own clock a moment later. The newest row lies inside the window,
+    so no skew of a fraction of a millisecond moves it past the strip's own end (#2300)."""
+    mod, port, _, state, table = hub
+    (state / "load-record.tsv").write_text("\n".join(load_record_rows_at(EDGE_NOW)) + "\n")
+    mod.LOAD_STATE.update(record_rows=None, record_stamp=None)
+    monkeypatch.setattr(mod, "time", Clock(EDGE_NOW + 0.0002))
+    code, v = ask(port, "GET", path="/api/profiler?sw=14400")
+    assert code == 200
+    assert [p["load"] for p in flat(v["load"])] == [2.0 + i for i in range(11)], "the points are the file's own lines"
 
 
 # The load monitor's own minute record: one line a minute, written atomically and bounded to a fixed age, with the CPU
@@ -3588,10 +3739,10 @@ def chart_trip():
 
 CHART = chart_trip()
 
-# The trip table's one header (#2280): the stage first, the four readings of its larger stage, then the two #2256
-# columns the owner kept, then the three costs. Both screens print this list.
+# The trip table's one header (#2280, #2317): the stage first, the four readings of its larger stage, then the two
+# #2256 columns the owner kept, then the three costs, then the split of the Gating stint. Both screens print this list.
 TRIP_HEADS = ["Stage", "Min", "Time per issue", "p85", "Max", "Parallelism", "Effective time", "Tokens / issue",
-              "CPU mean", "RAM mean"]
+              "CPU mean", "RAM mean", "Slot wait", "Gate run"]
 
 
 def chart_svg(out):
@@ -4153,8 +4304,9 @@ def test_the_trip_table_orders_the_stage_the_four_times_and_the_three_costs():
              for h in re.findall(r"<th[^>]*>(.*?)</th>", phone_out[pat:phone_out.index("</table>", pat)], re.S)]
     assert desk == TRIP_HEADS and phone == TRIP_HEADS, (desk, phone)
     assert trip_row(out, "todo") == ["Todo", "1.0 min", "1.0 min", "1.0 min", "1.0 min", "×3.0", "20.0 s",
-                                     "600", "50%", "40%"], \
-        "the four time cells read the column's stage: three like deliveries give one value four times"
+                                     "600", "50%", "40%", "&#8212;", "&#8212;"], \
+        "the four time cells read the column's stage: three like deliveries give one value four times, and a column that " \
+        "is no gate states no split (#2317)"
     assert "&middot;" not in "".join(trip_row(out, "doing")), "each cell holds one value, never two facts"
 
 
@@ -4165,7 +4317,8 @@ def test_a_column_with_no_observation_prints_a_dash_in_each_time_cell():
     row = trip_row(out, "gating")
     assert row[:5] == ["Gating", "&#8212;", "&#8212;", "&#8212;", "&#8212;"], row
     assert row[5:7] == ["&#8212;", "&#8212;"], "the parallelism and the effective time read a dash too"
-    assert row[8:] == ["&#8212;", "&#8212;"], "the two machine means read a dash too"
+    assert row[8:10] == ["&#8212;", "&#8212;"], "the two machine means read a dash too"
+    assert row[10:] == ["&#8212;", "&#8212;"], "the split of a column no gate ran reads a dash too (#2317)"
 
 
 def test_the_bar_segment_hover_reads_the_median_the_p85_and_the_count():
@@ -4773,8 +4926,8 @@ def test_the_gate_row_names_the_tree_the_wait_the_wall_the_cpu_and_the_reuse(pro
     row = prof.gate_row(gate_queue_line(1000, 900))
     assert (row["tree"], row["wait"], row["wall"], row["cpu"], row["reused"]) == ("t-a", "30", "60", "12", "no")
     assert row["mode"] == "gated" and row["caller"] == "child", "the entry mode keeps its place before the queue fields"
-    assert prof.GATE_HISTORY_FIELDS[-7:-2] == ("tree", "wait", "wall", "cpu", "reused"), \
-        "the queue fields still end five before the row's last field, the CI run id (#1927)"
+    assert prof.GATE_HISTORY_FIELDS[-9:-4] == ("tree", "wait", "wall", "cpu", "reused"), \
+        "the queue fields keep their place before the runner, the CI run id and the slot clocks (#1927, #2317)"
     old = prof.gate_row(gate_line(1000, 900))
     assert (old["tree"], old["wait"], old["wall"], old["cpu"], old["reused"]) == ("", "", "", "", ""), \
         "a row from before the fields answers '' for each, never a reading it does not hold"
@@ -4880,9 +5033,10 @@ def test_the_gate_row_names_the_runner_and_the_ci_run_id(prof):
     row = prof.gate_row(gate_queue_line(1000, 900) + "\tci\t4242")
     assert (row["runner"], row["run_id"]) == ("ci", "4242")
     assert row["tree"] == "t-a" and row["reused"] == "no", "the fields before the runner keep their place"
-    assert prof.GATE_HISTORY_FIELDS[-2:] == ("runner", "run_id")
+    assert prof.GATE_HISTORY_FIELDS[-4:-2] == ("runner", "run_id")
     old = prof.gate_row(gate_queue_line(1000, 900))
     assert (old["runner"], old["run_id"]) == ("", ""), "a row from before the fields answers '' for each"
+    assert (old["slot_ask"], old["slot_got"]) == ("", ""), "a row from before the slot fields states no slot record (#2317)"
     split = prof.gate_row(gate_queue_line(1000, 900, reason="red\tstands") + "\tlocal\t-")
     assert (split["reason"], split["runner"], split["run_id"]) == ("red\tstands", "local", "-"), \
         "a reason that holds a tab is rejoined, so the runner fields keep their place"
@@ -5127,7 +5281,7 @@ def test_the_table_keeps_each_header_on_one_line_and_short_counts():
     big["columns"][1]["tokens_per_issue"] = 834000.0
     assert trip_row(chart_js(big), "doing")[7] == "834k", "834000 prints as 834k"
     for col in ("todo", "doing", "review", "landing", "gating"):
-        assert len(trip_row(out, col)) == 10, f"one value a cell in the {col} row"
+        assert len(trip_row(out, col)) == 12, f"one value a cell in the {col} row"
 
 
 # ---------------------------------------------------------------- the least width of a column (#2278)

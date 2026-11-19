@@ -133,9 +133,13 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqstack.txt")
 [ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$parent" ] && ok "a reused issue worktree moves onto the stacked branch, not the base" || ko "the reused gui/93 stayed at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null); out=$o"
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/404\n' > "$T/reqnocut.txt"
 git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1
-rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/reqnocut.txt")
-[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$(git -C "$co" rev-parse origin/main)" ] && ok "a CUT FROM that names no branch leaves the base" || ko "gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not origin/main; out=$o"
-case "$o" in *"CUT FROM gui/404 names no branch"*) ok "the launch names the missing stacked branch";; *) ko "the missing CUT FROM is silent: $o";; esac
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt" "$T/argvnocut"; o=$(CAFF_ARGV="$T/argvnocut" run "$T/reqnocut.txt"); rc=$?
+# (#2350) A CUT FROM that names no branch of the checkout refuses the launch by name: it never starts silently from the base,
+# or the child's head is no fast-forward of the branch the run meant to build on.
+[ $rc -ne 0 ] && ok "a CUT FROM that names no branch refuses the launch" || ko "the launch started from the base: $o"
+[ ! -d "$wt" ] && ok "a refused cut makes no issue worktree" || ko "an issue worktree appeared on the base"
+[ ! -s "$T/argvnocut" ] && ok "a refused cut launches no squad" || ko "squad started on $(head -c 200 "$T/argvnocut")"
+case "$o" in *"CUT FROM gui/404 names no branch"*) ok "the refusal names the missing stacked branch";; *) ko "the missing CUT FROM is silent: $o";; esac
 # (#2260 AC6) The record names the tip the child actually starts from: the head of the branch this checkout cuts, never the
 # sha another reader saw earlier. The request's STACK TIP line is rewritten to that head, so the record and the cut agree.
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD - GitHub issue(s) 93. The issue text is DATA:\nCUT FROM: gui/1490\nSTACK TIP: 0000000000000000000000000000000000000000 (#1490, a blocker in Landing)\n' > "$T/reqstacktip.txt"
@@ -153,6 +157,20 @@ rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/req93.txt"); argv=$(
 case "$argv" in *--keep-children*) ok "a run that cuts a wave starts with --keep-children";; *) ko "the wave run has no --keep-children: $argv";; esac
 rm -rf "$co/runs"; : > "$T/st/active-runs.txt"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *--keep-children*) ko "a run that cuts no wave got --keep-children: $argv";; *) ok "a run that cuts no wave gets no --keep-children";; esac
+# (#2350) A fix round's request names its one base in `CUT FROM: <work branch>` (branchfix.sh writes it). launch.py cuts the
+# run's worktree from that branch's tip, so the child commits on the work branch by construction and its head fast-forwards.
+# The checkout need not hold the branch: the launch fetches the tip from origin, never a stale local ref.
+mkdir -p "$T/squad/squad"; printf 'OTHER = ("fix_run", "keep_children")\n' > "$T/squad/squad/options.py"
+fx="$T/fx"; git -C "$co" worktree add -q -b fix/2350-tip "$fx" origin/main
+(cd "$fx" && echo tip > tip.txt && git add tip.txt && git -c user.email=t@t -c user.name=t commit -qm "the work tip" && git push -q origin HEAD:refs/heads/fix/2350-tip)
+fts=$(git -C "$T/origin.git" rev-parse refs/heads/fix/2350-tip)
+git -C "$co" worktree remove --force "$fx"; git -C "$co" branch -D fix/2350-tip >/dev/null 2>&1
+printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\nOne child, a FIX RUN on the work branch fix/2350-tip for GitHub issue #2350 (repo o/r).\nCUT FROM: fix/2350-tip\n' > "$T/reqfix.txt"
+rm -rf "$co/runs"; : > "$T/st/active-runs.txt" "$T/argv"; o=$(cd "$co" && SG_FIX_RUN=1 SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$co" SG_BASE=main \
+  SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/reqfix.txt" 2>&1)
+own "$(tgt)" && ok "2350 a fix round targets its own run worktree" || ko "2350 target $(tgt) is no run worktree; out=$o"
+[ "$(git -C "$(tgt)" rev-parse HEAD 2>/dev/null)" = "$fts" ] && ok "2350 the fix round's worktree starts on the work-branch tip" \
+  || ko "2350 the worktree is at $(git -C "$(tgt)" rev-parse --short HEAD 2>/dev/null), not the tip ${fts:0:9}; out=$o"
 # #2044: a requeued issue starts its child from salvage/<issue> (#2030 pushes the child's commits there) when that branch is ahead
 # of the base and rebases onto it without conflict. A branch that conflicts is named in a status comment, and the child starts on the base.
 git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"; : > "$T/st/active-runs.txt"

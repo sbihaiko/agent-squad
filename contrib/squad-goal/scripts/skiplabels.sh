@@ -23,3 +23,5 @@ sg_skip_labels() {
     *) echo "sg_skip_labels: name a lane, frontier or bug, not '${1:-}'" >&2; return 2 ;;
   esac
 }
+# sg_frontier_skip: the frontier's skip set, the one list the frontier pass and the janitor's stale-card rule both read (#2352).
+sg_frontier_skip() { sg_skip_labels frontier "${SG_BUG_LABEL:-bug},debt,run-parent"; }

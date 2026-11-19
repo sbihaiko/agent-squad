@@ -16,7 +16,7 @@
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/loopbug.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
-skipcsv=$(sg_skip_labels frontier "${SG_BUG_LABEL:-bug},debt,run-parent")   # the frontier's own skip set (#1593): a bug-lane label like no-auto never holds a frontier card; the bug, debt and run-parent units belong to their own lanes
+skipcsv=$(sg_frontier_skip)   # the frontier's own skip set (#1593): a bug-lane label like no-auto never holds a frontier card; the bug, debt and run-parent units belong to their own lanes
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 [ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)

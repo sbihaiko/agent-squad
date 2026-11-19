@@ -517,10 +517,10 @@ def drop_line(r):   # #2144: every run loop rule that leaves a run's line out of
     # primitive: it edits no other list and reads no file, so a caller that must also read the run for its card calls keep_run
     # beside it (FINISHED-RUN does). The second keep source is `reaped`: a run whose open wave still lands it keeps its line
     # there, and the rewrite keeps a reaped line whatever `dropped` says (see the zombie rule below).
-    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. Only FINISHED-RUN drops a
-    # line and still reads the card, so only it calls keep_run beside the drop. The other callers drop with no record, and
-    # that is correct: GONE-RUN's issues are deleted, CLOSED-RUN's card the closed-issue Done rule already answered, the
-    # killed and never-started runs write reoffer markers for the card's way back, and a missing folder has no record.
+    # The record that feeds the card pass belongs to the caller's keep_run, never to this primitive. FINISHED-RUN and CLOSED-RUN
+    # drop a line and still read the card, so they call keep_run beside the drop. The other callers drop with no record, and
+    # that is correct: GONE-RUN's issues are deleted, the killed and never-started runs write reoffer markers for the card's
+    # way back, and a missing folder has no record.
     dropped.add(r)
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
@@ -609,13 +609,12 @@ for r in names:
             say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
             drop_line(r)
             continue
-        # #2138: the run has its verdict and every issue it names is closed, so nothing reads its line again: the card pass
-        # has no card to move and the landing pass has no issue to wait for. A line the loop still counts as live work holds
-        # the child room the frontier needs, and six such lines left it reporting "no slot" with nothing running. A run with
-        # an open issue keeps its line, as before: its wave or its card still read it.
+        # #2138: the run has its verdict and every issue it names is closed, so its line leaves active-runs. A line the loop
+        # still counts as live work holds the child room the frontier needs, and six such lines left it reporting "no slot"
+        # with nothing running. A run with an open issue keeps its line, as before: its wave or its card still read it.
         if nums and all(issue_read(x)[0] == "closed" for x in nums):
             say(f"CLOSED-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is closed; dropped from active-runs")
-            drop_line(r)
+            drop_line(r); keep_run(r, f, i)   # a closed issue is not in the open list, so only the run's record moves its card
             continue
         # #2138: a run whose verdict is final is over. Its line stays only while a wave stands for it (that wave still lands
         # its children) or a live process or lease names it. A line the loop counts as live work holds the child room the
@@ -865,6 +864,9 @@ base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to 
 def issue_info(x, fresh=False):
     return issue_read(x, fresh)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
+def frontier_skip():   # the labels the frontier refuses an issue for: the list autofrontier.sh reads (sg_frontier_skip, #2352)
+    r = subprocess.run(["bash", "-c", '. "$0"; sg_frontier_skip', str(pathlib.Path(__file__).parent / "skiplabels.sh")], capture_output=True, text=True)
+    return {x for x in r.stdout.strip().split(",") if x}
 _open = None
 def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
     door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
@@ -1461,6 +1463,7 @@ def reconcile_board():
                                 os.environ.get("SG_FRONTIER_SKIP_LABELS") or "") for x in v.split(",") if x} | {
         "frozen:owner", "frozen:dependency", "ready-for-human", "ready-for-HAL9K", "needs-triage", "needs-info",
         "needs-ratification", "debt", RUN_PARENT}
+    FRONTIER_SKIP = frontier_skip()
     oans, olabels = open_issues()
     if oans: fill_missing(proj, set(olabels) | set(expected))   # a card the REST read omitted is asked once of the GraphQL read and rides the pass's map (#1463)
     specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
@@ -1533,8 +1536,12 @@ def reconcile_board():
             # the two apart: a card the loop dispatched goes back to Todo, and the pass names it once before any other case.
             if not is_spec and have_cards.get(n, "") == doing and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
                 if dispatched(n) and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a card a run left in Doing has no other way back, and the recorded dispatch proves the loop owns it (#1987)
-                    say(f"STALE-CARD #{n}: card {doing} with a recorded dispatch, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
-                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with a recorded dispatch, no live run, no marker and nothing landed", rank=20)
+                    held = sorted(issue_labels(n) & FRONTIER_SKIP)   # the frontier refuses such an issue, so Todo would never dispatch it (#2352)
+                    if held:
+                        say(f"SKIP-LABEL #{n}: card {doing} with a recorded dispatch stays; the frontier skips the issue for label {', '.join(held)}")
+                    else:
+                        say(f"STALE-CARD #{n}: card {doing} with a recorded dispatch, no live run, no marker and nothing landed; card -> {os.environ.get('SG_TODO', 'Todo')}, so the next cycle dispatches the issue again")
+                        set_expected(n, os.environ.get("SG_TODO", "Todo"), f"card in {doing} with a recorded dispatch, no live run, no marker and nothing landed", rank=20)
                 else:
                     mk = st / "auto" / f"janitor-doing-norun-{n}"
                     if not mk.exists():

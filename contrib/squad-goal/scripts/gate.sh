@@ -66,7 +66,11 @@
 # The runner field (#1927) is the proof that produced the verdict: `ci` when the gate's command names the CI half of a
 # hybrid proof (GATE_RUNNER), else `local`; the run id field names that CI run's id, `-` when none; a batch landing gate
 # (SG_GATE_BATCH, #2058) writes `batch:<size>:<runs>` there instead of `-`. A row from before these
-# two fields has 22 and reads as a local gate with no run. A gate that sets SG_GATE_STATUS=self writes no history line, as it
+# two fields has 22 and reads as a local gate with no run. The two slot clocks follow them (#2317): `<slot ask>` is the
+# instant the gate asked for its slots inside the lock and `<slot got>` the instant it held them, so a reader splits the
+# gate stint into its wait and its run (ADR-0166); a gate that took no slots of its own, a reused verdict or a skipped
+# entry, writes `-` in both, because it holds no slot record. A row from before these two fields has 24 and reads as a
+# gate with no slot record. A gate that sets SG_GATE_STATUS=self writes no history line, as it
 # writes no status line and no obligation. The file only grows: the throughput report
 # reads it, and nothing rewrites it.
 # A caller that names GATE_OUTCOME_READ_FILE gets the same outcome line copied there inside the lock, so it decides on the word
@@ -267,7 +271,7 @@ gate_history() {  # <kind> <result> <sha> <start epoch> <selection> <scope> <out
   wall=$(( fin - ${4:-$fin} )); [ "$wall" -ge 0 ] || wall=0
   [ -z "${gate_wall:-}" ] || wall=$gate_wall   # a cancelled gate spends no wall, whatever second its two clocks fell in
   mkdir -p "$st" 2>/dev/null || return 0
-  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6" "${13:-no}")" "${tree:--}" "${gate_wait:--}" "$wall" "${gate_cpu_s:--}" "${13:-no}" "$runner" "${runid:--}"
+  printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$fin" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12:--}" "${SG_GATE_CALLER:-other}" "${gate_load0:--}" "$(gate_load)" "$(gate_mode "$5" "$6" "${13:-no}")" "${tree:--}" "${gate_wait:--}" "$wall" "${gate_cpu_s:--}" "${13:-no}" "$runner" "${runid:--}" "${gate_slot_ask:--}" "${gate_slot_got:--}"
   append_line "$st/gate-history" "$line"
 }
 # A gate a green verdict already answers writes one line and runs nothing (#1856, #1798, ADR-0168): the same shape as a
@@ -315,6 +319,9 @@ case "${1:-}" in
     case ${SG_GATE_CALLER:-} in tip|landing)
       prio=(--priority "$SG_GATE_CALLER")
       : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}";; esac
+    # (#2317) The two clocks the record needs to split the gate stint: when it asked for its slots inside the lock, and
+    # when it held them. The run clock starts after this, so its seconds are the run, never the wait (ADR-0166).
+    slot_ask=$(date +%s)
     slot_by=$(( $(date +%s) + ${SG_GATE_SLOT_WAIT_SECONDS:-120} )); slot_rc=0
     while :; do
       SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" --try "${prio[@]}"); slot_rc=$?
@@ -324,7 +331,7 @@ case "${1:-}" in
       echo "gate: holding the lock for its slots: a full battery needs the whole count, so it waits for the running gates to end" >&2
       sleep 2
     done
-    export SQUAD_GATE_WORKERS
+    export SQUAD_GATE_WORKERS SG_GATE_SLOT_ASK="$slot_ask" SG_GATE_SLOT_GOT="$(date +%s)"
     trap 'exit 143' TERM; trap 'exit 130' INT   # a stop past the hold deadline still runs the EXIT trap below
     trap 'sg_caps release gates "gate-$$"' EXIT
     bash "$here/gate.sh" --run "$@"; exit $?;;
@@ -341,6 +348,9 @@ case "${1:-}" in
     # (#1856) The wait is everything before this clock: the lock wait and the slot wait, measured from the gate's own start
     # (SG_GATE_T0, set by this invocation before it queued), never a constant and never folded into the run time (ADR-0166).
     gate_wait=$(( start - ${SG_GATE_T0:-$start} )); [ "$gate_wait" -ge 0 ] || gate_wait=0
+    # (#2317) The instant it asked for its slots and the instant it held them, from the holder above; a gate that took no
+    # slots of its own, a reused verdict or a skipped entry, carries a dash in both fields, because it holds no record.
+    gate_slot_ask=${SG_GATE_SLOT_ASK:--} gate_slot_got=${SG_GATE_SLOT_GOT:--}
     # One attempt identity per logical gate invocation (#1255): the aid is a token written to a marker before the
     # gate runs, and a replay for the same card and tip reads that marker instead of drawing a new token. Two runs
     # in one second still differ, because each draws its own token; and a crash-restart answers as the same attempt
@@ -497,6 +507,9 @@ esac
 # gate set afresh never inherits the clock of a gate that called it. --inner and --run sit below the lock, so the value they
 # read is this one.
 SG_GATE_T0=$(date +%s); export SG_GATE_T0
+# (#2317) A gate inside a gate inherits the outer gate's environment, so the slot clocks are cleared here at every gate's
+# own start: only the --inner that takes this gate's slots sets them, and a gate that takes none writes dashes.
+unset SG_GATE_SLOT_ASK SG_GATE_SLOT_GOT
 wave_wait=${SERIAL_WAIT_SECONDS:-1800}
 export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( $(gate_bound) + 300 ))}
 case ":${SG_SERIAL_HELD:-}:" in

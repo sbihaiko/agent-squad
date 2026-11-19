@@ -40,6 +40,9 @@
 #proftrip .ptkey{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
 #proftrip .ptbbar{fill:var(--edge);opacity:.35}
 #proftrip rect.ptb-seg{fill:currentColor;opacity:1}
+/* The gating segment's two parts (#2317): the slot wait is a lighter shade of the same column colour, so the bar shows
+   how much of the gate the wait took without adding a colour the legend would have to name. */
+#proftrip rect.ptb-seg.ptb-wait{opacity:.45}#proftrip i.ptseg.ptb-wait{opacity:.45}
 #proftrip rect.ptb-seg.ptb-none{fill:none}
 #proftrip .ptk.ptk-none{background:none;box-shadow:inset 0 0 0 1px currentColor}
 #proftrip .ptb-seg.ptb-none{min-width:0;background:none}

@@ -42,7 +42,7 @@ open(os.environ["LAUNCHLOG"], "a").write("launch\n")
 PY
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh,basered.sh,specstall.py} "$T/scripts/"
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh,basered.sh,specstall.py,board_columns.py,liveholds.py,slicecut.py} "$T/scripts/"
 cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$T/st; SG_CHECKOUT=$T/co; SG_BASE=main
 SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
@@ -52,7 +52,7 @@ mkdir -p "$T/st/req" "$T/st/cq"; : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":1,"max_parallel":2,"budget":{"stalls":{"min":2,"max":5},"spend":{"min":0.05,"max":0.75}}}]}]}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
 git -C "$T/co" init -q
-dev() { git -C "$T/co" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"; git -C "$T/co" update-ref refs/remotes/origin/dev HEAD; }
+dev() { git -C "$T/co" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"; git -C "$T/co" update-ref refs/remotes/origin/dev HEAD; git -C "$T/co" update-ref refs/remotes/origin/main HEAD; }
 dev "Start the spec"
 export HOME=$T/home SG_STATE=$T/st SG_CHECKOUT=$T/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$T/mk.log LAUNCHLOG=$T/launch.log BOARDLOG=$T/board.log
 export GH_ISSUES=$T/issues.json GH_OPEN=$T/open.json GH_CLOSED=$T/closed.json GH_ISSUE1=$T/issue1.json

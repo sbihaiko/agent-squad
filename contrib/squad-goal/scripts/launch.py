@@ -320,16 +320,26 @@ if fix_run and not _names_option("fix_run"):
              "and its final gate would prove in the target (#1374). Publish a build that records fix_run first.")
 # (#1504, ADR-0150 across runs) A stacked child's request names the branch it was cut from (`CUT FROM: <branch>`, written by
 # autofrontier.sh): the issue worktree starts on THAT branch, never the base, so the file one run lands is edited by one line
-# of commits. A branch this checkout does not hold leaves the base, and the note says so: the cut is never made up here.
+# of commits. A fix round's request names the work branch in the same line (#2350): its run worktree is cut from that tip, so
+# the child commits on the work branch by construction and its head fast-forwards. A branch the checkout does not hold is a
+# refusal, named here: the run never starts from the base in its place, since that head is no fast-forward of the branch.
 cut = re.search(r"^CUT FROM: *([^\s]+) *$", req_text, re.M)
 cut_ref = None; cut_sha = ""
-if cut and len(issues) == 1:
-    if subprocess.run(["git", "-C", checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{cut.group(1)}^{{commit}}"], capture_output=True).returncode == 0:
-        cut_ref = cut.group(1)
-        cut_sha = subprocess.run(["git", "-C", checkout, "rev-parse", f"{cut.group(1)}^{{commit}}"],
-                                 capture_output=True, text=True).stdout.strip()
-    else:
-        print(f"note: CUT FROM {cut.group(1)} names no branch of {checkout}: the issue worktree starts from the base", file=sys.stderr)
+if cut and (len(issues) == 1 or fix_run):
+    name = cut.group(1)
+    if fix_run:   # a work branch lives on origin, and a local ref of it can be stale: its tip is what the round builds on
+        try: subprocess.run(["git", "-C", checkout, "fetch", "-q", "origin", f"+refs/heads/{name}:refs/remotes/origin/{name}"],
+                            capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired: pass   # no ref resolves below, so the start refuses by name
+    refs = [f"refs/remotes/origin/{name}"] if fix_run else [f"refs/heads/{name}"]
+    for ref in refs:
+        if subprocess.run(["git", "-C", checkout, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], capture_output=True).returncode == 0:
+            cut_ref = ref.removeprefix("refs/remotes/origin/").removeprefix("refs/heads/")
+            cut_sha = subprocess.run(["git", "-C", checkout, "rev-parse", f"{ref}^{{commit}}"],
+                                     capture_output=True, text=True).stdout.strip()
+            break
+    if not cut_sha:
+        sys.exit(f"refusing to start: CUT FROM {name} names no branch of {checkout} (#1504, #2350): the run never starts from the base in its place")
 # (#2260 AC6) The record names the tip the child actually starts from: the head of the branch cut here, never the sha another
 # reader saw earlier. A STACK TIP line of a stacked child is rewritten to that head, so the record and the cut agree.
 if cut_sha and re.fullmatch(r"[0-9a-f]{40,64}", cut_sha):
@@ -342,8 +352,9 @@ if named:
 elif target:
     print(f"note: the run's target is the issue worktree {target}: the engine commits it (#93, ADR-0106 rule 4)", file=sys.stderr)
 else:
-    target = _run_worktree(checkout, land)
-    print(f"note: the run's target is its own worktree {target}, from origin/{os.environ.get('SG_BASE') or 'main'} at {land[:9]} (#580)", file=sys.stderr)
+    target = _run_worktree(checkout, cut_sha or land)
+    src = f"the CUT FROM branch {cut.group(1)} at {cut_sha[:9]}" if cut_sha else f"origin/{os.environ.get('SG_BASE') or 'main'} at {land[:9]}"
+    print(f"note: the run's target is its own worktree {target}, from {src} (#580)", file=sys.stderr)
 
 # workflow graph root check: the graph the run reads is the target's, so the owner's files never change (#580)
 wf = os.environ.get("SG_WORKFLOW") or "dynamic"; root = os.environ.get("SG_ROOT_NAME")

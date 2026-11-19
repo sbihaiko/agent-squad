@@ -21,6 +21,7 @@ Documented defaults (every one of them overridable per loop, never edited at run
     SG_GH_COOLDOWN_JITTER     60   seconds of jitter added to that cooldown, drawn per writer
     SG_GH_CACHE_WINDOW        60   seconds a read is answered from the snapshot; 0 turns the snapshot off
     SG_GH_AGGREGATE_WINDOW    90   seconds a caller that chose it reads the open-PR and open-issue lists from the snapshot
+    SG_GH_FLOOR              300   requests a GraphQL or core pool may fall to before every live read is held, unsent (#2355)
 
 Why 300/60 s: the landing pass is the loop's heaviest reader and it reads in bursts, not in a stream. Its eligible-branch
 collection reads the open-PR list once and then two routes per candidate (the issue's state and its `Blocked by` body) --
@@ -98,7 +99,10 @@ JITTER_ENV = "SG_GH_COOLDOWN_JITTER"
 STATE_ENV = "SG_STATE"
 CACHE_WINDOW_ENV = "SG_GH_CACHE_WINDOW"
 AGGREGATE_WINDOW_ENV = "SG_GH_AGGREGATE_WINDOW"
+QUOTA_FLOOR_ENV = "SG_GH_FLOOR"
+QUOTA_POOLS = ("graphql", "core")  # every pool a read may spend; each one has its own limit and its own hour
 
+DEFAULT_QUOTA_FLOOR = 300  # requests a pool may fall to before every read is held, and no request is sent
 DEFAULT_BUDGET = 300  # requests per window, shared by every process
 DEFAULT_WINDOW = 60.0  # seconds in a window
 DEFAULT_COOLDOWN = 900.0  # the first self-attributed 403/429 holds every reader back for this long
@@ -180,7 +184,7 @@ def default_state_dir() -> Path:
     return Path(os.environ.get(STATE_ENV) or Path.home() / ".cache" / "squad-goal")
 
 
-def pool_below(pool: str, floor: float, state_dir: Path | None = None) -> int | None:
+def pool_below(pool: str, floor: float, state_dir: Path | None = None, now: float | None = None) -> int | None:
     """The requests left in `pool` when that is under `floor` and the hour that reading describes is still running;
     `None` otherwise. A missing reading or a rolled-over hour is no floor (#847): the pass runs, as it did before the
     reading. GraphQL is a pool of its own (#1648): a pass that floors on core alone reads into a refusal with thousands
@@ -191,8 +195,18 @@ def pool_below(pool: str, floor: float, state_dir: Path | None = None) -> int | 
         remaining, reset = int(entry["remaining"]), float(entry.get("reset") or 0)
     except (KeyError, TypeError, ValueError):
         return None
-    if reset and reset <= time.time(): return None
+    if reset and reset <= (time.time() if now is None else now): return None
     return remaining if remaining < floor else None
+
+
+def quota_hold(state_dir: Path | None = None, now: float | None = None) -> tuple[str, int] | None:
+    """The first pool under `SG_GH_FLOOR` and its requests left, or None: the pool a read is held for, before any request (#2355)."""
+    floor = _number(QUOTA_FLOOR_ENV, DEFAULT_QUOTA_FLOOR)
+    for pool in QUOTA_POOLS:
+        left = pool_below(pool, floor, state_dir, now)
+        if left is not None:
+            return pool, left
+    return None
 
 
 def core_below(floor: float, state_dir: Path | None = None) -> int | None:
@@ -340,6 +354,14 @@ class Cache:
         return res is not None and _http_status(res.body) == 304
 
 
+def _pool_of(route: str, body: str) -> str:
+    """The pool a refusal drew on: the resource GitHub names in its headers, else the pool the route spends."""
+    named = ghread.headers_of(body).get("x-ratelimit-resource")
+    if named:
+        return named
+    return "graphql" if ghread.aggregate(route) is not None else "core"
+
+
 class Throttle:
     """The shared bucket and the shared cooldown. One instance per process; both files are what makes it shared."""
 
@@ -417,7 +439,7 @@ class Throttle:
                 wait = max((1.0 - tokens) / self.rate, _MIN_WAIT)
             self.sleeper(wait)
 
-    def write_cooldown(self, out: ghread.Read) -> None:
+    def write_cooldown(self, out: ghread.Read, pool: str) -> None:
         """The FIRST self-attributed refusal writes it; a later reader under it cannot move it or stretch it."""
         if self.holding():
             return
@@ -434,6 +456,7 @@ class Throttle:
                 "request_id": out.request_id,
                 "pid": os.getpid(),
                 "pass": ghread.current_pass(),  # who owns it: the answer to "the loop is quiet, or has no quota left?"
+                "pool": pool,  # which limit was exhausted: graphql and core are separate, and the pass alone does not say which
             },
         )
 
@@ -486,6 +509,11 @@ class Throttle:
                 request_id=str(held.get("request_id", "")),
                 detail=f"cooling down for {self._remaining(held):.0f}s more (no request sent)",
             )
+        hold = quota_hold(self.state_dir, self.clock())
+        if hold is not None:
+            pool, left = hold
+            self._log(route, ghread.MISS, ghread.COOLING)
+            return ghread.Read(kind=ghread.FAILED, detail=f"quota pool {pool} has {left} requests left, under SG_GH_FLOOR: no request sent")
         self.spend()
         status: dict[str, int | None] = {"code": None}
         inner = transport or ghread.gh_transport
@@ -499,7 +527,7 @@ class Throttle:
         out = ghread.read(route, transport=probe)
         self._log(route, ghread.MISS, out.kind)
         if _self_attributed(out, status["code"]):
-            self.write_cooldown(out)
+            self.write_cooldown(out, _pool_of(route, out.body))
         return out
 
     def _note_quota(self, body: str) -> None:
@@ -571,7 +599,8 @@ class Throttle:
             return ""
         return (
             f"the shared cooldown holds for {self._remaining(held):.0f}s more: GitHub answered '{held.get('message', '')}'"
-            f" (request id {held.get('request_id') or 'not named'}), written by pid {held.get('pid')} for the {held.get('pass') or ghread.UNATTRIBUTED} pass. No request is sent until it expires."
+            f" (request id {held.get('request_id') or 'not named'}), written by pid {held.get('pid')} for the {held.get('pass') or ghread.UNATTRIBUTED} pass"
+            f" on the {held.get('pool') or 'unnamed'} pool. No request is sent until it expires."
         )
 
 
