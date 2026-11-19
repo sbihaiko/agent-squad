@@ -63,10 +63,19 @@ owner, num = args[0], args[1]
 st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
 
+def _limit_value(v):
+    """A limit as a whole number above 0, or None for no limit: a settings value may arrive as text, and neither a zero
+    nor a negative number is a bound a move can fit under (#2437)."""
+    if isinstance(v, bool): return None
+    if isinstance(v, int): return v if v > 0 else None
+    if isinstance(v, str) and v.strip().isdigit(): return int(v.strip()) or None
+    return None
+
 def todo_limit():
     """The Todo column's card limit (#2437): `columns.Todo.max_cards` from `squad/board_limits.py` in the tree this file
-    sits in, then SG_SQUAD, over the project settings file under SG_CHECKOUT. None for no limit, and None when the reader
-    does not load, so a tree without the squad package keeps the move it made before and a failed read invents no limit."""
+    sits in, then SG_SQUAD, over the project settings file under SG_CHECKOUT. A whole number above 0, or None for no limit,
+    and None when the reader does not load or answers no bound: a tree without the squad package keeps the move it made
+    before, and a failed read invents no limit."""
     try: roots = [str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD") or ""]
     except IndexError: roots = [os.environ.get("SG_SQUAD") or ""]   # a copy too near the root names no tree of its own
     target = os.environ.get("SG_CHECKOUT") or "."
@@ -76,20 +85,19 @@ def todo_limit():
             if root not in sys.path: sys.path.insert(0, root)
             bl = importlib.import_module("squad.board_limits")
             if not pathlib.Path(bl.__file__).resolve().is_relative_to(pathlib.Path(root).resolve()): continue
-            return bl.limit("Todo", target)
+            return _limit_value(bl.limit("Todo", target))
         except Exception: continue
     return None
 
-_TODO = {"max": False, "now": None}   # the limit is one read, and only a move reads it; the count is one read, kept by each proved move
-def todo_full():
-    """True when the Todo column holds its card limit. The count is one live board read, the read a write that gates another
-    write takes (#1796), and each Todo move this pass proves adds one, so a batch never passes the limit it started under."""
-    if _TODO["max"] is False: _TODO["max"] = todo_limit()
-    if not _TODO["max"]: return False
-    if _TODO["now"] is None:
-        try: _TODO["now"] = sum(1 for s in state.read_all(fresh=True).values() if canonical(s) == "Todo")
-        except (RuntimeError, ValueError): return False   # a count no read answers holds nothing: a failed read settles no premise (ADR-0155)
-    return _TODO["now"] >= _TODO["max"]
+def todo_full(lim):
+    """True when the live Todo column holds `lim` cards. The count is a live board read before each decision, so a bug this
+    pass added into Todo, a card that left Todo and a hand move all count as the board carries them now: a running count
+    that only knows what this pass wrote drifts from the board and refuses a move that fits (#2437). A count no read
+    answers holds nothing, because a failed read settles no premise (ADR-0155)."""
+    if lim is None: return False
+    try: now = sum(1 for s in state.read_all(fresh=True).values() if canonical(s) == "Todo")
+    except (RuntimeError, ValueError): return False
+    return now >= lim
 if gate_tries:   # the journal's count is the source; the field is its projection (#1255)
     n = int(args[2])
     try: carried = state.set_gate_tries(n, int(args[3]))   # never lowers, and writes only on a change (#1255, ADR-0144, ADR-0149)
@@ -211,6 +219,7 @@ def settle_resets(moved, at):   # a reset names its move on the issue; a forward
             fcntl.flock(lk, fcntl.LOCK_UN)
 was = recorded()
 moved = []
+todo_lim = todo_limit()   # the Todo bound this pass gates with: one read of the settings, and a count read per decision (#2437)
 for n in nums:
     read_failed = None
     try: have = state.read_one(n) or None   # the compare: the card's own read, and no PATCH when it already carries the Status (#327)
@@ -221,9 +230,9 @@ for n in nums:
         print(f"#{n} -> {status} (already carried, not written)"); continue
     if automated and read_failed and status == "Todo":
         print(f"#{n}: the compare read failed ({read_failed}); an automated writer does not move the card to 'Todo' unread", file=sys.stderr); rc = 1; continue
-    if canonical(status) == "Todo" and canonical(have) == "Backlog" and todo_full():   # a full Todo holds the Backlog to Todo move only (#2437)
+    if canonical(status) == "Todo" and canonical(have) == "Backlog" and todo_full(todo_lim):   # a full Todo holds the Backlog to Todo move only (#2437)
         refusals.append({"issue": n, "from": have, "to": status, "by": by, "pass": pss, "reason": "the Todo card limit", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        print(f"#{n}: refused, the move from {have!r} to 'Todo' passes the Todo limit of {_TODO['max']} card(s); the card keeps {have!r} (#2437)", file=sys.stderr); continue
+        print(f"#{n}: refused, the move from {have!r} to 'Todo' passes the Todo limit of {todo_lim} card(s); the card keeps {have!r} (#2437)", file=sys.stderr); continue
     if automated and refused_for_automated(have, status, reason):   # a move back along the axis: the card keeps its column and carries rework (ADR-0143)
         refusals.append({"issue": n, "from": have, "to": status, "by": by, "pass": pss, "reason": reason, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         if (have, status) == HOLD:   # the owner starts a card from Backlog: a hold is named, never a rework (#1909)
@@ -263,7 +272,6 @@ for n in nums:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
         # the record names the column, never the option's spelling (#2315)
         print(f"#{n} -> {status}"); proved.append((iid, canonical(status))); moved.append((n, have, status)); transitions.append({"issue": n, "item": iid, "from": have, "to": canonical(status), "by": by, "pass": pss, "reason": reason})
-        if canonical(status) == "Todo" and _TODO["now"] is not None: _TODO["now"] += 1   # the count this pass holds follows each Todo move it proves (#2437)
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
         print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
