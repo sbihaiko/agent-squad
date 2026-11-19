@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 1.58
+# seconds: 0.58
 # Guard for #2433: the Spend & limits theme saves each field on its own, and the field's typed text is the hub's input.
 # The page parses a cap with limCapParse before it posts, so 6M, 250M and 1T reach the hub as whole integers and only text
 # the parse refuses leaves raw. A field whose value the last write already posted never posts again, so a timer save and
@@ -73,14 +73,23 @@ const send=async b=>{n++;return {diff:[],state:{...limS,cap:+b.cap}}};
   STORE["#limc"].value="7M";await limWrite("cap",send);
   console.log(JSON.stringify({n}))})();'
 
+run "two fields edited inside one pause each post once" '{"n":2,"order":["cap","factor"],"cap":"2000","factor":"3"}' '
+let got=[];limPauseMs=20;
+const send=async b=>{got.push(b);return {diff:[],state:{guard:"on",cap:+b.cap,factor:+b.factor,profile:"/p/t.sh",paused:false,last_change:null}}};
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+STORE["#limc"].value="2000";STORE["#limf"].value="3";
+limQueue("cap",send);limQueue("factor",send);
+setTimeout(()=>{const last=got[got.length-1]||{};
+  console.log(JSON.stringify({n:got.length,order:got.map(b=>b.factor==="3"?"factor":"cap"),cap:last.cap,factor:last.factor}))},150);'
+
 # --- a refused field never holds another field's write
 
-run "a refused cap does not hold the guard's write" '{"sent":2,"guard":"off"}' '
+run "a refused cap does not hold the guard's write" '{"sent":2,"guard":"off","cap":"1000"}' '
 let sent=[];limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
 STORE["#limc"].value="1.5";
 const send=async b=>{sent.push(b);return b.cap==="1.5"?{err:"token cap must be a positive whole number"}:{diff:[],state:{...limS,guard:"off"}}};
-(async()=>{await limWrite("cap",send);STORE["#limg"].checked=false;await limWrite("guard",send);
-  console.log(JSON.stringify({sent:sent.length,guard:sent[1]&&sent[1].guard}))})();'
+(async()=>{await limWrite("cap",send);STORE["#limg"]={checked:false};await limWrite("guard",send);
+  console.log(JSON.stringify({sent:sent.length,guard:sent[1]&&sent[1].guard,cap:sent[1]&&sent[1].cap}))})();'
 
 # --- a refused field keeps the typed value and its error mark
 
