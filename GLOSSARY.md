@@ -235,7 +235,7 @@ The one module (`squad/outcomes.py`) that records an outcome: the `outcome` even
 _Avoid_: outcome ledger
 
 **Verdict**:
-The single result of a run, owned by one module: completed, needs-human, conflict, failed, or stopped. A `dispatch` folds like `each`, and a dispatch entry with no accepted child is `fail`, reason `no_dispatch`. The module folds the run record and the target: a run truncated by `--stop-after` whose nodes all passed is stopped (exit 30), root pass is completed, root fail or deadline is failed, root needs-human is needs-human, and conflict comes from the target. No graph field sets it.
+The single result of a run, owned by one module: completed, needs-human, conflict, failed, stopped, or no-repro. A `dispatch` folds like `each`, and a dispatch entry with no accepted child is `fail`, reason `no_dispatch`. The module folds the run record and the target: a run truncated by `--stop-after` whose nodes all passed is stopped (exit 30), root pass is completed, root fail or deadline is failed, root needs-human is needs-human, and conflict comes from the target. No graph field sets it.
 _Avoid_: status, exit status, result
 
 **Work item**:

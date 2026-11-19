@@ -172,6 +172,14 @@ def test_the_phone_run_row_draws_the_shared_state_word_and_mark(hub):
     assert "dataset.tone" not in mobile and "dataset.mk" not in mobile, "the phone keeps a second paint table of its own"
 
 
+def test_a_no_repro_run_is_painted_neutral_not_failure_red(hub):
+    """The Runs page paints a run that found no bug in a neutral tone, apart from the failure red (ADR-0029)."""
+    rows = {r["state"]: r for r in hub.RUN_STATES}
+    assert "no-repro" in rows
+    assert rows["no-repro"]["color"] == "none" and rows["no-repro"]["color"] != rows["failed"]["color"]
+    assert hub.state_of({"verdict": "no-repro", "reasons": [], "land": False}, 0) == "no-repro"
+
+
 def test_the_dashboard_chip_draws_its_row_mark_and_reads_the_class_from_the_table(hub):
     src = PAGE_SRC()
     for mark in ("filled", "hollow", "bar"):
