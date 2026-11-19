@@ -66,6 +66,21 @@ def test_the_partition_is_derived_from_the_tree_at_run_time(tmp_path):
     listed = _shards(ROOT)
     on_disk = sorted(f"tests/{p.name}" for p in (ROOT / "tests").glob("test_*.py"))
     assert sorted(listed) == on_disk, f"the partition does not hold each test file once: {sorted(listed)} against {on_disk}"
+    empty = [k for k in range(1, SHARD_COUNT + 1) if not ci_shards.shard_paths(k)]
+    assert empty == [], f"shard(s) {empty} are empty, so their jobs prove nothing"
+
+
+def test_a_second_query_reads_a_tree_that_changed(tmp_path):
+    """The partition is derived at run time from the tree, so a query after the tree gained a test file holds that file:
+    one process that asks twice never answers for an older tree."""
+    root = tmp_path / "tree"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests" / "test_a.py").write_text("def test_a():\n    pass\n")
+    first = _shards(root)
+    (root / "tests" / "test_b.py").write_text("def test_b():\n    pass\n")
+    second = _shards(root)
+    assert "tests/test_b.py" not in first, f"the first query already held a file the tree did not carry: {first}"
+    assert "tests/test_b.py" in second, f"the second query answered for the older tree: {second}"
 
 
 def test_the_partition_names_no_test_path():
