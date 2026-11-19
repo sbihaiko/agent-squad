@@ -104,7 +104,7 @@ for _ in $(seq 1 150); do /usr/bin/grep -q 'BOARD MOVE' "$ST/reconcile.log" 2>/d
 /usr/bin/grep -q 'BOARD' "$ST/cycle.log" 2>/dev/null && ko "reconcile output still lands in cycle.log" || ok "cycle.log no longer carries the reconcile pass"
 
 # 5) the fast lane dispatches, and a second pass does not overlap the first
-F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$S/loopbug.sh" "$F2/"
+F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$S/columnlimit.sh" "$S/loopbug.sh" "$F2/"
 : > "$STEPS"; rm -f "$ST/fastloop.pid"
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast.out" 2>&1
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast2.out" 2>&1
@@ -360,7 +360,7 @@ awk -F'\t' '$1 == "start" && $3 == "heartbeat.sh" { s = $4 } $1 == "end" && $3 =
 /usr/bin/grep -q heartbeat "$ST/cycle.log" 2>/dev/null && ko "19 a step under 5 s took a cycle.log line" || ok "19 cycle.log keeps its 5 s rule, so the record is the only account of that step"
 # a pass the fast lane starts detached: its start lands before the pass ends, and its finish lands when it really ends
 rm -f "$ST/steps.tsv"; : > "$STEPS"; F3=$T/fastrec; mkdir -p "$F3"
-cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F3/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$F3/"
+cp "$d/fastloop.sh" "$d/single.sh" "$d/steprec.sh" "$F3/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$S/columnlimit.sh" "$F3/"
 rm -f "$ST/fastloop.pid"
 AF_HOLD=5 SG_FASTLOOP_ONCE=1 bash "$F3/fastloop.sh" > "$T/fastrec.out" 2>&1 & rp=$!
 for _ in $(seq 1 150); do [ "$(recs start autofrontier)" = 1 ] && break; /bin/sleep 0.1; done
