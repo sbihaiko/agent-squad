@@ -94,6 +94,7 @@ def conflicting_actor():
     return {"output": {"diff": {"files": [{"path": "base.txt"}], "added_lines": 1}}, "spend": 0.1, "effect": effect}
 
 
+@pytest.mark.heavy     # 1.2 to 1.4 s here, over the one-second line for an unmarked call
 async def test_the_manual_merge_wait_stops_at_exit_10_and_a_resume_finishes_the_run(tmp_path):
     repo = make_repo(tmp_path / "repo")
     eng = engine(tmp_path, repo, script(MEDIUM, actor=conflicting_actor()))
