@@ -6,7 +6,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"
 : > "$T/st/active-runs.txt"
-cp "$d"/{autobug.sh,loopbug.sh,cluster.py,startability.sh,skiplabels.sh,ghcall.sh,drainpolicy.py,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py,refusal-names.sh,workbranches.sh,issue_ledger.py} "$T/s/"
+cp "$d"/{autobug.sh,loopbug.sh,columnlimit.sh,cluster.py,startability.sh,skiplabels.sh,ghcall.sh,drainpolicy.py,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py,refusal-names.sh,workbranches.sh,issue_ledger.py} "$T/s/"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"   # the blocker gate (#479): #65 has no blocker
 printf '#!/bin/bash\nexit 0\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"   # the card door lands: a dispatch writes its card before its launch, and a pending write holds the next pass (ADR-0165)
 printf 'import sys\nif sys.argv[1:]: sys.exit(1)\nprint("65\\tTodo")\n' > "$T/s/issue_state.py"   # the seam's door, stubbed: #65's card sits in Todo (#550)
