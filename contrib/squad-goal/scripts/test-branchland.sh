@@ -111,14 +111,15 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*"local gate"*) ok "gate fail: says why";
   *"asked for changes"*) ok "gate fail: one gate, and the fix round it opened owns the tip (#1396)";;
   *) ko "gate fail reran: $(cat "$T/gate.log") '$r2'";; esac
 # A failed gate reruns only what failed, once (SG_LOCAL_GATE_RERUN_CMD stubs it): a red that machine load caused passes alone and the
-# branch lands; a red that is real fails again and the branch waits.
+# branch lands; a red that is real fails again and the branch waits. The rerun takes the node ids the gate named (#2452), so the
+# red these two cases prove is a failed test, as a load flake is.
+GATE_KO_IDS="echo 'FAILED tests/test_a.py::test_one - boom'; echo 'FAILED tests/test_b.py::test_two'; exit 1"
 RERUN_OK="echo \"rerun \$SG_GATE_FAILED\" >> $T/rerun.log; exit 0"; RERUN_KO="echo rerun >> $T/rerun.log; echo 'still red'; exit 1"
-reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
 [ -s "$T/rerun.log" ] && case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a red that passes on its rerun: the branch lands";; *) ko "a load red did not land: '$r'";; esac || ko "a failed gate ran no rerun: '$r'"
-reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_KO" CHECKS='{"check_runs":[]}' bl)
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_KO" CHECKS='{"check_runs":[]}' bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*"still red"*) ok "a red that fails its rerun: nothing lands, and the rerun says why";; *) ko "a real red: '$r'";; esac || ko "a real red landed"
 # The rerun is handed the node ids that failed (the suite runs with no cache provider, so --lf has nothing to read).
-GATE_KO_IDS="echo 'FAILED tests/test_a.py::test_one - boom'; echo 'FAILED tests/test_b.py::test_two'; exit 1"
 reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
 [ "$(cat "$T/rerun.log" 2>/dev/null)" = "rerun tests/test_a.py::test_one tests/test_b.py::test_two" ] && ok "the rerun gets exactly the failed node ids" || ko "the rerun ids: '$(cat "$T/rerun.log" 2>&1)'"
 # (#699) An inconclusive gate (exit 4: fast-gate ran its one retry, and that failed too) never lands and gets no second rerun:
@@ -142,7 +143,7 @@ reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_CAP" CHE
 [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "a full budget writes no wait marker: the next pass gates the branch again" || ko "the branch waited on a marker a full budget wrote: '$(cat "$T/gate.log" 2>&1)'"
 # A measured red is never cleared by a retry that never ran: the rerun meets the full budget, and the red keeps its fix round.
 RERUN_CAP="echo 'caps: caps.gates is full (6 slots), held by gate-1: gate-2 skipped, not queued (try)'; exit 73"
-reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_CAP" CHECKS='{"check_runs":[]}' bl)
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_CAP" CHECKS='{"check_runs":[]}' bl)
 ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ok "a red whose rerun met a full budget keeps its fix round" || ko "a rerun that never ran cleared the red: '$r'"
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*failed*) ok "the line still names the red, never the budget";; *) ko "the red's line: '$r'";; esac
 # (#2330) A landing gate whose slot wait ran out answers 75 with the budget's waited-out line. It read the tree not at all, as a
@@ -157,8 +158,32 @@ ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ko "2330 a gate that 
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_WAIT" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_WAIT" CHECKS='{"check_runs":[]}' bl)
 [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "2330 a waited-out slot wait writes no wait marker: the next pass gates again" || ko "2330 the branch waited on a marker: '$(cat "$T/gate.log" 2>&1)'"
 GATE_HOLD="echo gate >> $T/gate.log; echo 'serial: holder past its deadline'; exit 75"
-reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_HOLD" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
-[ -e "$T/rerun.log" ] && ok "2330 a 75 with no waited-out line keeps the failed path and its rerun" || ko "2330 a bare 75 read as a wait: '$r'"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_HOLD" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/rerun.log" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*failed*) ok "2330 a 75 with no waited-out line keeps the failed path, and nothing named is rerun";; *) ko "2330 the bare 75 line: '$r'";; esac || ko "2330 a bare 75 read as a wait: '$r'"
+# (#2452) A gate stopped during its slot wait exits 75 with the live wait line and no waited-out line. It proved nothing about
+# the tree, so it is a wait: nothing lands, no fix round opens, no wait marker is written, and its review stays the one it had.
+GATE_SLOTSTOP="echo gate >> $T/gate.log; echo 'caps: gate-2 is waiting for 3 slot(s): caps.gates is full (3 slots), held by gate-1 (lease pid 1, live, since 10:32:11)'; exit 75"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_SLOTSTOP" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND WAIT gui/7-x: the local gate did not run"*) ok "2452 a gate stopped during its slot wait is a wait, not a red";; *) ko "2452 the stopped slot wait: '$r'";; esac
+[ ! -e "$T/rerun.log" ] && ok "2452 a gate stopped during its slot wait runs no rerun" || ko "2452 the stopped gate reran: $(cat "$T/rerun.log" 2>&1)"
+ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ko "2452 a stopped slot wait opened a fix round" || ok "2452 a stopped slot wait opens no fix round"
+/usr/bin/grep -q '## Blocking' "$T/st/review-gui_7-x.md" 2>/dev/null && ko "2452 the slot wait became a Blocking finding: $(cat "$T/st/review-gui_7-x.md")" || ok "2452 the slot wait writes no Blocking finding"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_SLOTSTOP" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_SLOTSTOP" CHECKS='{"check_runs":[]}' bl)
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 2 ] && ok "2452 a stopped slot wait writes no wait marker: the next pass gates again" || ko "2452 a stopped gate wrote a wait marker: '$(cat "$T/gate.log" 2>&1)'"
+# (#2452) A rerun that only waited for a slot proves nothing about the tree. The finding keeps the red the first gate
+# measured, and no gate slot wait reaches a review.
+RERUN_WAIT="echo 'caps: gate-92719 is waiting for 3 slot(s): caps.gates is full (3 slots), held by gate-97970 (lease pid 97718, live)'; echo 'All checks passed!'; exit 1"
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_WAIT" CHECKS='{"check_runs":[]}' bl)
+/usr/bin/grep -q 'mypy: 3 errors' "$T/st/review-gui_7-x.md" 2>/dev/null && ok "2452 a red keeps the evidence that named it in the finding" || ko "2452 the finding lost the red: $(cat "$T/st/review-gui_7-x.md" 2>&1)"
+/usr/bin/grep -q 'waiting for 3 slot' "$T/st/review-gui_7-x.md" 2>/dev/null && ko "2452 a gate slot wait became a Blocking finding: $(cat "$T/st/review-gui_7-x.md")" || ok "2452 a gate slot wait writes no Blocking finding"
+ls "$T/st/auto/"branchland-fixpending-* >/dev/null 2>&1 && ok "2452 the real red still opens its fix round" || ko "2452 the real red lost its fix round: '$r'"
+# (#2452) The real budget: another gate holds every caps.gates slot, so the landing gate's own bounded slot wait runs out.
+reset; rm -f "$T/gate.log" "$T/rerun.log" "$T/st/auto/"branchland-fixpending-*
+PYTHONPATH="$SG_SQUAD" python3 -m squad.caps take gates blocker-2452 --count 99 --pid $$ --target "$T/co" >/dev/null 2>&1
+r=$(SG_GATE_SLOT_WAIT_SECONDS=1 SG_LOCAL_GATE_CMD="echo gate >> $T/gate.log" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+PYTHONPATH="$SG_SQUAD" python3 -m squad.caps release gates blocker-2452 --target "$T/co" >/dev/null 2>&1
+case "$r" in *"BRANCHLAND WAIT gui/7-x: the local gate did not run"*) ok "2452 a full caps.gates: the slot wait is a wait, not a red";; *) ko "2452 the real slot wait: '$r'";; esac
+/usr/bin/grep -q '## Blocking' "$T/st/review-gui_7-x.md" 2>/dev/null && ko "2452 the real slot wait became a Blocking finding" || ok "2452 the real slot wait writes no Blocking finding"
 # The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and at the
 # project's own line: the parallel pass lifts no cap, so it records every unmarked call at or over 2 s and only those run
 # again, serially (#1726).
