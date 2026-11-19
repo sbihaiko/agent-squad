@@ -6,7 +6,8 @@
 # run on the same branch: the request is branchfix.sh's text, sent through mkreq.sh and launch.py as every pass sends a run.
 # The fix run pushes a new tip; the review pass reviews it; an APPROVE lets branchland.sh land it.
 # Once per reviewed tip: auto/branchfix-<key>-<sha9> holds the run id. A launch that starts no run keeps no marker, so the next pass
-# retries the tip.
+# retries the tip; a round that pushes nothing drops its marker too (#2345), because the next tip is never coming, and so does a
+# round that is gone with no verdict and a still record (#2346). The stall rule below bounds those retries.
 # Stop (ADR-0134): a round fails when the review of the next tip has the same findings (line numbers, shas and whitespace removed).
 # auto/branchfix-fp-<key> keeps the findings of the last dispatched round and auto/branchfix-same-<key> the count of failed rounds in
 # a row. At SG_BRANCHFIX_STALLS (default 2) the branch is stalled and its rounds stop: one status line on the issue and the label frozen:owner, once. Changed
@@ -29,10 +30,10 @@ A="$SG_STATE/auto"; mkdir -p "$A"
 for m in "$A"/branchfix-push-*; do
   [ -f "$m" ] || continue
   run=${m##*/branchfix-push-}; read -r br dsha < "$m"   # dsha: the sha the round was dispatched for, the one its lease is on
-  rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); rd=${rd:-$SG_CHECKOUT/runs/$run}
+  rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); liv=${rd:+1}; rd=${rd:-$SG_CHECKOUT/runs/$run}
   # (#1960) A kept round's heads are those of every outcome that is not fail: a round whose proof ended unproven (ADR-0164) still
   # made its rebase, and only the work branch takes it; branchland's gate and review still decide. An ordinary round reads pass only.
-  kept="$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"; oc=pass; [ -s "$kept" ] && oc=nonfail
+  kx=$(printf '%s' "$br" | tr / _); kept="$SG_STATE/auto/kept-$kx"; oc=pass; [ -s "$kept" ] && oc=nonfail
   t=$(python3 -c 'import json,sys
 s=v=None; h=[]
 for l in open(sys.argv[1]):
@@ -42,7 +43,16 @@ for l in open(sys.argv[1]):
     elif d.get("event")=="verdict": v=d
     elif d.get("event")=="outcome" and (d.get("outcome")=="pass" if sys.argv[2]=="pass" else d.get("outcome")!="fail") and (d.get("workspace") or {}).get("head"): h.append(d["workspace"]["head"])
 if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s["target_branch"], *reversed(h))' "$rd/record.jsonl" "$oc" 2>/dev/null)
-  [ -n "$t" ] || continue
+  # (#2346) A round with no run_start and no verdict is read from its record alone. A live round keeps both markers: it may still
+  # end with a head, and a run that has just started holds no verdict for a while. A round that is gone (no line in
+  # active-runs.txt) and whose record has not moved for SG_BRANCHFIX_DEAD_MIN minutes ended without a verdict, so it pushed
+  # nothing and its tip needs a fresh round: its markers go, or the branch freezes with no stop and no alert. A kept branch
+  # keeps them, because branchland's round_empty reads the dispatch marker (#1960).
+  [ -n "$t" ] || {
+    if [ -z "$liv" ] && [ ! -s "$kept" ] && [ -n "$(/usr/bin/find "$rd/record.jsonl" -mmin +${SG_BRANCHFIX_DEAD_MIN:-20} 2>/dev/null)" ]; then
+      echo "BRANCHFIX PUSH $br: run $run ended with no verdict, so the tip ${dsha:0:9} is dispatched again"
+      rm -f "$m" "$A/branchfix-$kx-${dsha:0:9}"
+    fi; continue; }
   read -r tg tb ch <<< "$t"
   # The head (#779): on a work branch the land into the target branch can be a no-op, so that branch stays at the base. The
   # child's own heads (pass outcomes' workspace heads, last first) come first, then the target branch: the first one that is a
@@ -68,7 +78,12 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   # the round rebased on: a head that adds nothing is no round.
   kre=$(head -1 "$kept" 2>/dev/null)
   [ -s "$kept" ] && [ -n "$ff" ] && [ -n "$kre" ] && [ "$(/usr/bin/git -C "$tg" rev-list --count "$kre..$ff" 2>/dev/null)" != 0 ] && head=$ff
-  if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit"
+  # (#2345) A round that pushes nothing is no fix round for the tip it was dispatched for. Its once-per-tip marker goes, so the
+  # next pass dispatches a fresh round at the same tip: the tip never moves on its own, and a marker that stays freezes the
+  # branch with no stop and no alert. The stall rule below bounds those retries. A kept landing round keeps its marker,
+  # because branchland.sh reads it (#1960).
+  if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit, so no round is pushed"
+    [ -s "$kept" ] || rm -f "$A/branchfix-$kx-${dsha:0:9}"
   elif [ -s "$kept" ] && [ -z "$ff" ]; then echo "BRANCHFIX PUSH $br: run $run added no head of its own, so no round is pushed"
   elif [ -s "$kept" ] && ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
     # The lease is on the sha the round was dispatched for, never on what the branch holds now: a writer that pushed after the
@@ -77,7 +92,9 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
     elif /usr/bin/git -C "$tg" push -q --force-with-lease="refs/heads/$br:$dsha" "$remote" "$head:refs/heads/$br" 2>/dev/null
     then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (rebase round, run $run)"
     else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
-  elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then echo "BRANCHFIX PUSH $br: the head of run $run is no fast-forward of the branch, so it is not pushed"
+  elif ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
+    echo "BRANCHFIX PUSH $br: the head ${head:0:9} of run $run is no fast-forward of the branch tip ${old:0:9}, so it is not pushed"
+    [ -s "$kept" ] || rm -f "$A/branchfix-$kx-${dsha:0:9}"
   elif /usr/bin/git -C "$tg" push -q "$remote" "$head:refs/heads/$br" 2>/dev/null; then echo "BRANCHFIX PUSH $br: ${old:0:9} -> ${head:0:9} (run $run)"
   else echo "BRANCHFIX PUSH $br: the push of run $run was refused; the next pass retries"; continue; fi
   rm -f "$m"
