@@ -4,7 +4,6 @@ A git hook or a gate exports GIT_DIR. A fixture that runs `git init --bare` in i
 writes GIT_DIR instead, and sets `core.bare = true` on the checkout that runs the tests.
 """
 import json
-import os
 import re
 import subprocess
 import sys
@@ -56,7 +55,7 @@ def test_a_fresh_conftest_import_drops_the_hook_variables(tmp_path):
 
 
 def _caps_names():
-    line = next(l for l in (SCRIPTS / "caps.sh").read_text().splitlines() if l.startswith("sg_git_env_scrub()"))
+    line = next(row for row in (SCRIPTS / "caps.sh").read_text().splitlines() if row.startswith("sg_git_env_scrub()"))
     return set(NAME.findall(line))
 
 
