@@ -48,7 +48,7 @@ SHARDS: tuple[tuple[str, ...], ...] = (
         "tests/test_hub_mobile_grab_handle.py", "tests/test_hub_mobile_list_states.py",
         "tests/test_hub_mobile_filters_search.py", "tests/test_hub_mobile_move.py", "tests/test_hub_mobile_overlay_clearance.py", "tests/test_hub_mobile_profiler.py", "tests/test_hub_mobile_page_fills.py",
         "tests/test_hub_mobile_run_detail.py", "tests/test_hub_mobile_run_overview.py", "tests/test_hub_mobile_safe_area.py", "tests/test_hub_monitor_throughput_first.py",
-        "tests/test_hub_no_alert_strip.py", "tests/test_hub_overlay_stream.py", "tests/test_hub_pr_review_chip.py", "tests/test_hub_process_lock.py", "tests/test_hub_procscan_cache.py", "tests/test_hub_quota_probe.py",
+        "tests/test_hub_no_alert_strip.py", "tests/test_hub_overlay_stream.py", "tests/test_hub_pr_review_chip.py", "tests/test_hub_process_lock.py", "tests/test_hub_procscan_cache.py", "tests/test_hub_squad_resolution.py", "tests/test_hub_quota_probe.py",
         "tests/test_hub_run_groups.py", "tests/test_hub_run_liveness.py", "tests/test_hub_runs_active.py", "tests/test_hub_runs_scope.py", "tests/test_hub_settings_view.py", "tests/test_hub_slack_settings.py",
         "tests/test_hub_state_default.py", "tests/test_hub_switcher.py", "tests/test_hub_tailnet.py", "tests/test_hub_token_burn.py", "tests/test_hubmux_profiles.py",
         "tests/test_issue_ledger.py", "tests/test_issue_state_gate_tries.py", "tests/test_issue_state_priority.py", "tests/test_issue_state_repo_cache.py",

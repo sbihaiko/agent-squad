@@ -669,6 +669,12 @@ def _squad_names():
     "the terminal supervisor is not running"."""
     return [m for m in sys.modules.copy() if m == "squad" or m.startswith("squad.")]
 
+def _imported(names, mods):
+    """True when each module finished its import: the `squad` package binds a submodule only after its body has run, so a
+    module whose body is still running (its file already set) is not yet an answer (#2358)."""
+    pkg = sys.modules.get("squad")
+    return pkg is not None and all(getattr(pkg, n, None) is m for n, m in zip(names, mods))
+
 def _held_squad(roots, names):
     """The modules this process already holds, when the first of them lives under one of the asked roots: the answer needs
     no purge, so no other thread's import is disturbed. An empty answer sends the caller to the resolving path."""
@@ -677,7 +683,7 @@ def _held_squad(roots, names):
     except Exception:
         return ()
     here = getattr(mods[0], "__file__", None)
-    if not here: return ()
+    if not here or not _imported(names, mods): return ()
     if any(r and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(r).resolve()) for r in roots): return (mods,)
     return ()
 
@@ -703,7 +709,7 @@ def load_squad(roots, names=("caps", "run_caps")):
                 try:
                     mods = [importlib.import_module("squad." + n) for n in names]
                     here = getattr(mods[0], "__file__", None)   # the first module the import found: it must live under the root that was asked
-                    if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return tuple(mods)
+                    if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()) and _imported(names, mods): return tuple(mods)
                     err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
                 except Exception as e:
                     err = e
@@ -4206,8 +4212,12 @@ def _holder_fact_now(i, run, now):
     if moved is None: return f"held · run {run}, no record", "ended"
     # Only a run the loop's list names, or one still writing its record, is proven by the process table: a board carries four
     # hundred held cards over four hundred runs and most ended days ago, and `run_live` reads a whole record for each (#1790).
-    if (run in active_run_names() or now - moved < reaper().NO_PID_IDLE_S) and reaper().run_live(folder, now):
-        return holder_text(i), "running"
+    try:
+        live = (run in active_run_names() or now - moved < reaper().NO_PID_IDLE_S) and reaper().run_live(folder, now)
+    except Exception as e:
+        log_once(f"hub: the holder of run {run} is unknown: {type(e).__name__}: {' '.join(str(e).split())}")
+        return None, None
+    if live: return holder_text(i), "running"
     return f"held · run {run} ended " + dt.datetime.fromtimestamp(moved, dt.timezone.utc).strftime("%Y-%m-%d %H:%M") + " UTC", "ended"
 def board_read_overdue(t, now=None):
     """True when the board item read began more than BOARD_OVERDUE_SECS ago: a stalled pass is marked, never printed as normal
