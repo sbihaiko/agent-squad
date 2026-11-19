@@ -368,6 +368,15 @@ def test_the_cap_field_accepts_a_k_m_b_or_t_suffix(ctx):
     assert got == [6000000, 250000000, 1000000000000, 1500000, 2500, 1500000, None, None, None, None, None], got
 
 
+def test_the_pause_factor_row_shows_the_hourly_burn_it_pauses_at(ctx):
+    """The row states the arithmetic behind the pause line, so the number is never read as a bare multiple (#2434)."""
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "3 × (cap ÷ 24) = 188K tokens/h" in settings, settings
+    other = dict(LIM, cap=1000000000000, factor=2, pause_line=83333333332)
+    _, settings = lim_blocks(lim_draw(ctx["hub"], other))
+    assert "2 × (cap ÷ 24) = 83.33B tokens/h" in settings, settings
+
+
 def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
     out = lim_draw(ctx["hub"], dict(LIM, paused=True))
     now, _ = lim_blocks(out)

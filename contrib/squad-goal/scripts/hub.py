@@ -7416,6 +7416,8 @@ const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))re
  for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
 const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s*([KMBT])$/i);   // the field takes the same units back (#2434)
  const x=m?+m[1]*LIM_SCALE[m[2].toUpperCase()]:/^\d+$/.test(t)?+t:NaN;return Number.isInteger(x)&&x>0?x:null};
+const limLine=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
+ return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
 const limVals=()=>limPend||{guard:limG(),cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
@@ -7430,7 +7432,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  +setSettings("lim",[
   setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>`),
   setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"> <small class=kstop>Accepts 6M, 250M, 1T.</small>`),
-  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor">`,"the hourly burn that pauses dispatch, as a multiple of the cap's hourly share"),
+  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor"> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limLine(v.cap,v.factor,s.window_h)))} tokens/h.</small>`),
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
