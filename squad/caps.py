@@ -195,8 +195,10 @@ class Ceiling:
             return
         print(f"caps: reaping stale slot {p.name} in {p.parent.name}: holder pid {pid} is {why}", file=sys.stderr)
 
-    def _live(self, sub):
-        """The leases of one subfolder whose holder lives. A lease of a dead or zombie holder is removed here, with one line.
+    def _live(self, sub, reap=True):
+        """The leases of one subfolder whose holder lives. A lease of a dead or zombie holder is removed here, with one line,
+        unless `reap` is False: a reader that only observes the ceiling writes nothing, so the hub's slots read leaves the
+        dead lease for the next count (ADR-0162).
 
         The leases are read first and their holders asked about in one call, so a count costs one process however many
         leases stand (`started_at`): the per-lease `ps` was the fork storm that parked the runner.
@@ -213,12 +215,14 @@ class Ceiling:
         for p, lease in leases:
             pid = lease.get("pid", -1)
             if pid in found and DASHBOARD.search(found[pid][1] or ""):
-                self._reap(p, pid, "a run's page server")   # a page server idles: a lease that names one holds no slot (#1389)
+                if reap:
+                    self._reap(p, pid, "a run's page server")   # a page server idles: a lease that names one holds no slot (#1389)
                 continue
             if alive(pid, lease.get("since"), started, zombie=pid in found and found[pid][2] == "Z"):
                 out.append(lease)
                 continue
-            self._reap(p, pid, "a zombie" if pid in found and found[pid][2] == "Z" else "dead")
+            if reap:
+                self._reap(p, pid, "a zombie" if pid in found and found[pid][2] == "Z" else "dead")
         return out
 
     def occupancy(self):
@@ -233,7 +237,7 @@ class Ceiling:
     def waiting(self):
         return self.occupancy()["waiting"]
 
-    def run_holders(self, active_runs, root=".", now=None):
+    def run_holders(self, active_runs, root=".", now=None, reap=True):
         """The runs that hold a slot of `caps.runs`, each named once: every live lease machine-wide, and every run the loop's
         active list names whose last invocation has no final verdict. A run whose last verdict follows its last `run_start`
         or `resume` is over: it holds no slot, though its folder and record stay listed for the readers that close its issues
@@ -246,7 +250,8 @@ class Ceiling:
         A live lease always counts, even when its run is finished: the engine's admission counts raw leases, and a dispatcher
         that freed a lingering lease would start a run the engine refuses (ADR-0167). The engine releases its lease before it
         writes the verdict, so a finished run normally holds none.
-        `root` resolves a relative entry, as autofrontier.sh and autobug.sh do (`$SG_CHECKOUT/runs/<name>`)."""
+        `root` resolves a relative entry, as autofrontier.sh and autobug.sh do (`$SG_CHECKOUT/runs/<name>`). `reap=False`
+        counts the same holders and removes no dead lease: the hub's slots read observes the ceiling and never writes it."""
         now = time.time() if now is None else now
         try:
             rows = Path(active_runs).read_text().split()
@@ -272,7 +277,7 @@ class Ceiling:
             if proc is not None:   # a record that names no pid is no proof of death: the run keeps its slot
                 pending[name] = proc
         with self._lock():   # a writer holds this lock while it writes a lease, so a lease mid-write is never read as absent
-            leases = self._live("runs")
+            leases = self._live("runs", reap)
         holders = []
         for lease in leases:
             holder = lease.get("holder")
