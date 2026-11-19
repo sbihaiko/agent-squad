@@ -248,6 +248,19 @@ def test_held_back_reads_are_not_counted_against_the_snapshot(tmp_path, monkeypa
     assert not any(c.name == "gh-miss-rate" for c in ghspend.causes(tmp_path, now=clock.now()))
 
 
+def test_an_exhausted_pool_names_the_pass_with_the_largest_graphql_spend_in_the_hour(tmp_path):
+    (tmp_path / "gh-ratelimit.json").write_text(
+        json.dumps({"graphql": {"remaining": 0, "limit": 5000, "reset": T0 + 1800, "at": T0}}))
+    lines = [ghread.Call(T0 - 60 * i, "GraphQL", OPEN_PRS, ghread.MISS, ghread.ANSWER, "landing") for i in range(5)]
+    lines += [ghread.Call(T0 - 60, "GraphQL", OPEN_PRS, ghread.MISS, ghread.ANSWER, "autobug")]
+    lines += [ghread.Call(T0 - 7200, "GraphQL", OPEN_PRS, ghread.MISS, ghread.ANSWER, "reconcile")]  # outside the hour
+    (tmp_path / "api.log").write_text("".join(ghread.call_line(c) + "\n" for c in lines))
+    quota = [c for c in ghspend.causes(tmp_path, now=T0) if c.name == "gh-quota"]
+    assert quota, "a pool under its floor is a health cause"
+    assert "graphql" in quota[0].brief and "landing" in quota[0].brief, quota[0].brief
+    assert "reconcile" not in quota[0].detail, "a call older than the hour does not count"
+
+
 # ---------------------------------------------------------------- the operator surface
 
 

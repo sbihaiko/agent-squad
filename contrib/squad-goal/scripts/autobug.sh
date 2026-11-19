@@ -301,6 +301,9 @@ F=$(mktemp -d); trap 'rm -rf "$F"; ab_pass_end' EXIT   # the one pass line is wr
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json"; agg_rc=$?
 if [ "$agg_rc" -ne 0 ]; then
   if ab_rate_limit "$(cat "$F/issues.json")"; then ab_rate_limited; AB_REASON="rate limited"; exit 0; fi   # #847: named once, nothing filed
+  if /usr/bin/grep -q 'SG_GH_FLOOR' "$F/issues.json"; then   # #2355: a pool under its floor held the read before any request
+    AB_REASON="a quota pool is under its floor"; echo "AUTOBUG: $(sed 's/^failed: no verdict: //' "$F/issues.json" | head -1); nothing dispatched" >&2; exit 0
+  fi
   AB_REASON="the open issues are not readable"; echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0
 fi
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,

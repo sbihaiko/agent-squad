@@ -323,3 +323,57 @@ def test_the_cli_serves_a_second_process_from_the_cooldown_the_first_wrote(tmp_p
     assert second.returncode == 2, f"a cooldown written by a dead process still refuses: {second.stdout}"
     assert RATE_LIMIT_MESSAGE in second.stdout
     assert not (tmp_path / "gh-called").exists(), "the second process reached for the network while the cooldown held"
+
+
+# --- the quota: a pool under its floor holds the read before any request, and names its pool (#2355) -------------------
+
+OPEN_PULLS = "repos/o/r/pulls?state=open&per_page=100"  # an aggregate route: one GraphQL request
+
+
+def _quota(tmp_path: Path, clock: Clock, **left: int) -> None:
+    """The quota readings GitHub gave: one pool per keyword, each with its own remaining count and an hour to run."""
+    pools = {name: {"remaining": n, "limit": 5000, "reset": clock.now() + 1800, "at": clock.now()} for name, n in left.items()}
+    (tmp_path / "gh-ratelimit.json").write_text(json.dumps(pools))
+
+
+def test_a_graphql_pool_under_its_floor_holds_the_read_before_any_request(tmp_path, monkeypatch):
+    monkeypatch.delenv("SG_GH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=0, core=4909)
+    transport = stub("[]")
+    out = throttle(tmp_path, clock).read(OPEN_PULLS, transport=transport)
+    assert transport.seen == [], "a pool under its floor sends no request"
+    assert not out.is_answer and "graphql" in out.line(), "the line names the pool that holds the read"
+
+
+def test_a_core_pool_under_its_floor_holds_a_rest_read_before_any_request(tmp_path, monkeypatch):
+    monkeypatch.delenv("SG_GH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=4000, core=12)
+    transport = stub("[]")
+    out = throttle(tmp_path, clock).read("repos/o/r/labels", transport=transport)
+    assert transport.seen == [], "a pool under its floor sends no request"
+    assert not out.is_answer and "core" in out.line(), "the line names the pool that holds the read"
+
+
+def test_a_pool_above_its_floor_does_not_hold_the_read(tmp_path, monkeypatch):
+    monkeypatch.delenv("SG_GH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=4000, core=4909)
+    transport = stub("[]")
+    out = throttle(tmp_path, clock).read(OPEN_PULLS, transport=transport)
+    assert transport.seen == [OPEN_PULLS] and out.is_answer
+
+
+def test_a_refusal_on_a_graphql_route_names_the_graphql_pool_in_the_cooldown(tmp_path):
+    clock = Clock()
+    throttle(tmp_path, clock).read(OPEN_PULLS, transport=stub(RATE_LIMITED, rc=1))
+    cd = json.loads((tmp_path / "gh-cooldown.json").read_text())
+    assert cd["pool"] == "graphql", "a GraphQL refusal names its pool, not only the pass"
+
+
+def test_a_refusal_on_a_rest_route_names_the_core_pool_in_the_cooldown(tmp_path):
+    clock = Clock()
+    throttle(tmp_path, clock).read("repos/o/r/labels", transport=stub(RATE_LIMITED, rc=1))
+    cd = json.loads((tmp_path / "gh-cooldown.json").read_text())
+    assert cd["pool"] == "core"

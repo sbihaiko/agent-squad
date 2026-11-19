@@ -1541,4 +1541,21 @@ $G -q "AUTOBUG would dispatch" <<<"$r" && ko "2217 a does-not-reproduce freeze a
 r=$(fz '"bug","ready-for-agent"' '')
 $G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "2217 a gate failure, which freezes nothing, is dispatched" || ko "2217 a gate failure was not dispatched: '$r'"
 
+# 35) (#2355) a GraphQL pool under its floor holds the open-issue read before any request, and the line names the pool.
+# The quota reading says graphql is at 0 of 5000 while core has thousands left, so the pass must send no gh call at all.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/gh-cache"; mkdir -p "$T/st/auto" "$T/st/req"; rm -f "$T/st/cycle.log" "$T/st/gh-cooldown.json" "$T/st/gh-budget.json" "$T/gh35.calls"
+printf '{"graphql":{"remaining":0,"limit":5000,"reset":%s,"at":%s},"core":{"remaining":4909,"limit":5000,"reset":%s,"at":%s}}\n' \
+  "$(( $(date +%s) + 1800 ))" "$(date +%s)" "$(( $(date +%s) + 1800 ))" "$(date +%s)" > "$T/st/gh-ratelimit.json"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+echo "\$*" >> "$T/gh35.calls"
+echo '[]'
+J
+chmod +x "$T/bin/gh"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err35"); rc=$?
+[ "$rc" = 0 ] && ok "35 a held quota exits 0" || ko "35 the pass exited $rc: '$(cat "$T/err35")'"
+[ ! -s "$T/gh35.calls" ] && ok "35 a held quota sends no gh call" || ko "35 a gh call was sent: '$(cat "$T/gh35.calls")'"
+$G -qE "^AUTOBUG: quota pool graphql has 0 requests left, under SG_GH_FLOOR: no request sent; nothing dispatched$" "$T/err35" && ok "35 the line names the held pool" || ko "35 no pool line: '$(cat "$T/err35")'"
+rm -f "$T/st/gh-ratelimit.json" "$T/gh35.calls"
+
 rm -rf "$T"; exit $fail

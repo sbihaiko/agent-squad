@@ -8,6 +8,8 @@ they carry, so the next exhaustion is a diagnosis already written rather than an
 * `gh-cooldown`: the shared cooldown holds. It names WHEN it expires and WHICH PASS owns it -- the pass whose request GitHub
   refused. That is what separates "the loop is quiet" from "the loop has no quota left", and a second pass held back by the
   cooldown never takes the ownership.
+* `gh-quota`: a GraphQL or core pool is under `SG_GH_FLOOR`, so live reads are held unsent. It names the pool and the pass with the
+  most GraphQL requests in the hour (#2355).
 * `gh-miss-rate`: the snapshot is not answering the repeats. Of the reads in the window that the snapshot MAY answer
   (`ghthrottle.fact_class` is not `LIVE`), at least `SG_HEALTH_GH_MISS_RATE` missed it. The reads that gate a write are live by
   design (the liveness rule) and a read the cooldown held back sent no request, so neither says anything about the snapshot and
@@ -84,6 +86,7 @@ def _cooldown(state: Path, now: float) -> Cause | None:
     if not isinstance(held, dict) or until <= now:
         return None
     owner = held.get("pass") if isinstance(held.get("pass"), str) and held.get("pass") else ghread.UNATTRIBUTED
+    pool = f" on the {held['pool']} pool" if isinstance(held.get("pool"), str) and held.get("pool") else ""
     wrote = held.get("at")
     when = f", written {_clock(float(wrote))}" if isinstance(wrote, (int, float)) and not isinstance(wrote, bool) else ""
     return Cause(
@@ -91,8 +94,33 @@ def _cooldown(state: Path, now: float) -> Cause | None:
         _clean(f"until {_clock(until)[11:]}, owned by {owner}"),
         _clean(
             f"the shared GitHub cooldown holds until {_clock(until)} ({max(0, int(until - now))}s more), owned by the {owner} pass"
-            f"{when}: GitHub answered '{held.get('message', '')}'. No pass sends a request until it expires"
+            f"{pool}{when}: GitHub answered '{held.get('message', '')}'. No pass sends a request until it expires"
         ),
+    )
+
+
+def _quota(state: Path, now: float) -> Cause | None:
+    hold = ghthrottle.quota_hold(state, now)
+    if hold is None:
+        return None
+    pool, left = hold
+    spent = Counter(
+        c.pass_name
+        for c in _calls(state)
+        if c.transport == "GraphQL" and c.cache == ghread.MISS and c.outcome != ghread.COOLING and c.at >= now - 3600
+    )
+    top = spent.most_common(1)
+    if top:
+        who, n = top[0]
+        brief = f"{pool} pool at {left} left, top GraphQL spend {who} ({n} in the hour)"
+        spend = f"The {who} pass spent the most GraphQL requests in the last hour ({n})."
+    else:
+        brief = f"{pool} pool at {left} left, no GraphQL spend in the hour"
+        spend = "No GraphQL request spent in the last hour."
+    return Cause(
+        "gh-quota",
+        _clean(brief),
+        _clean(f"the {pool} pool has {left} requests left, under SG_GH_FLOOR, so every live read is held unsent. {spend}"),
     )
 
 
@@ -143,7 +171,7 @@ def causes(state: Path | str | None = None, now: float | None = None) -> list[Ca
     """The causes the cooldown and the call log carry right now; an empty list is a healthy spend."""
     base = Path(state) if state is not None else ghread.state_dir()
     at = time.time() if now is None else now
-    return [c for c in (_cooldown(base, at), _miss_rate(base, at)) if c is not None]
+    return [c for c in (_cooldown(base, at), _quota(base, at), _miss_rate(base, at)) if c is not None]
 
 
 def main(argv: list[str]) -> int:
