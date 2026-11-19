@@ -10,6 +10,7 @@
 #  (3) once the wave landed (its marker gone), the issue is free again.
 # Offline: stub gh, a temp state dir. usage: bash test-dispatch-hold-wave.sh [scripts dir]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps" GIT_TERMINAL_PROMPT=0 SG_GH_AGGREGATE_WINDOW=0
 unset SG_BOARD_VOCAB

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Regression test for redispatching a clean issue worktree (#65).
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"

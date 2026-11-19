@@ -2,6 +2,7 @@
 # Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 src=${1:-$(dirname "$0")/autohunt.sh}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0
 repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed

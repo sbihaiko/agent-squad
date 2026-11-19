@@ -15,6 +15,7 @@ G=/usr/bin/grep
 if [ ! -f "$src" ]; then echo "FAIL the request carries the run's envelope: $src not found"; rm -rf "$T"; exit 1; fi
 for v in $(compgen -e | $G '^SG_'); do unset "$v"; done
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps
 mkdir -p "$T/bin" "$T/scripts"
 cat > "$T/bin/gh" <<'GH'
@@ -45,7 +46,7 @@ cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src"
 printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,siblings.py,cluster.py,loopbug.sh,basered.sh,columnlimit.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,drainpolicy.py,ghread.py,ghthrottle.py,workbranches.sh,issue_ledger.py,liveholds.py,siblings.py,cluster.py,loopbug.sh,basered.sh,columnlimit.sh} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name>: fresh state, its own env.sh; no graph written here -- each case writes the one it needs
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"

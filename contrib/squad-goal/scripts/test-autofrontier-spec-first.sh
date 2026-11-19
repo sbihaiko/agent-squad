@@ -10,6 +10,7 @@ G=/usr/bin/grep
 if [ ! -f "$src" ]; then echo "FAIL the closing ticket goes first: $src not found"; rm -rf "$T"; exit 1; fi
 for v in $(compgen -e | $G '^SG_'); do unset "$v"; done
 export SG_MIN_FREE_GB=0 SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps
+export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour
 mkdir -p "$T/bin" "$T/scripts" "$T/co/docs/squad/workflows" "$T/st"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
