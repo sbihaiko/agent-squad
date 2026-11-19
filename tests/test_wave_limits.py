@@ -111,6 +111,16 @@ def test_the_wave_suite_proves_the_age_cap_and_the_red_tip() -> None:
         assert f"ok   {case}" in r.stdout, f"{case} did not pass in the aged wave suite:\n{r.stdout}"
 
 
+def test_the_testonly_suite_is_registered_with_the_gate() -> None:
+    """#2418: the suite that proves the test-only landing is selected by a wave.sh delta and carries its measured row."""
+    path = SCRIPTS / "test-wave-testonly.sh"
+    assert path.is_file(), "test-wave-testonly.sh is missing"
+    mirrors = re.search(r"^# mirrors: (.*)$", path.read_text(), re.MULTILINE)
+    assert mirrors, "test-wave-testonly.sh has no # mirrors: line, so a wave.sh delta never selects it"
+    assert "wave.sh" in mirrors.group(1).split(), f"test-wave-testonly.sh does not mirror wave.sh: {mirrors.group(1)}"
+    assert "test-wave-testonly.sh" in shell_suites.measured(), "test-wave-testonly.sh has no row in shell_suites_seconds.txt"
+
+
 def test_the_wave_cases_run_in_one_split_suite_each() -> None:
     """#2244: every case of the one wave suite runs in exactly one part, and each part is measured and mirrored by wave.sh."""
     assert not (SCRIPTS / "test-wave.sh").exists(), "the one wave suite is still there; it holds the gate lock for minutes"
