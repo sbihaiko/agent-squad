@@ -7,7 +7,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/co/runs"
-cp "$d/wave.sh" "$d/wavepause.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/child_issues.py" "$d/basecheck.sh" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/columnlimit.sh" "$d/wavepause.py" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/child_issues.py" "$d/basecheck.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_WAVE_MAX_AGE_SECONDS=1000\n' "$T/st" "$T/co" > "$T/s/env.sh"
 now=$(date +%s)
 # wave <run> <age>: the run cut its wave <age> seconds ago; its record holds the events given on stdin, `@-N` read as now-N.
