@@ -83,6 +83,11 @@ notif() { local n; n=$(/usr/bin/grep -c . "$T/notify.calls" 2>/dev/null); echo "
 liverun() { mkdir -p "$T/co/runs/$1"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #%s"}\n' "$2" > "$T/co/runs/$1/record.jsonl"
   echo x > "$T/co/runs/$1/request.txt"; touch -t 202001010000 "$T/co/runs/$1/request.txt"; echo "$1" >> "$T/st/active-runs.txt"; }
 reset() { : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/drift-prev" "$T/st/auto/health-runs-board-drift"; mkdir -p "$T/co/runs"; }
+# #2360: a pass that read an empty board primes the board snapshot; the card that lands inside its window must still count
+reset; bd; : > "$T/board.tsv"; bash "$T/s/health.sh" >/dev/null
+printf '10\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10
+bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
+echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "a primed snapshot answered the drift check: $o" || ok "the drift check reads the live board inside the snapshot window"
 reset; bd; printf '10\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10
 bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
 echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "equal counts alerted: $o" || ok "equal counts stay silent"

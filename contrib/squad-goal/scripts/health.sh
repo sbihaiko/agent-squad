@@ -7,7 +7,7 @@
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/startability.sh"; export SG_GH_PASS=health; export SG_BOARD_SNAPSHOT_S="${SG_BOARD_SNAPSHOT_S:-120}"   # the health check only reports, so it reads the window's snapshot (#1796); every caller that writes leaves this off
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/caps.sh" 2>/dev/null || : "${SG_PS:=ps}"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; . "$(dirname "$0")/startability.sh"; export SG_GH_PASS=health; export SG_BOARD_SNAPSHOT_S=0   # the checks compare live runs with the board now; a window's snapshot would name a card that just moved (#2360)
 A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
