@@ -52,10 +52,13 @@ sg_battery_run() {
   set -f   # one word per file or node id: a parametrized id such as t[a.sh] never globs
   case $line in all:*) set -- ;; *) set -- $files ;; esac
   out=$(mktemp "${TMPDIR:-/tmp}/sg-battery.XXXXXX" 2>/dev/null)
+  # (#2379) The tests never see the gate's record or clock (GATE_*, SG_GATE_FULL_*): a test that ran a battery of its own wrote
+  # the inherited scope file, and the gate's line then named `delta` for a full battery.
+  local nogate; nogate=$(compgen -e | /usr/bin/grep -E '^(GATE_|SG_GATE_FULL_)' | sed 's/^/-u /' | tr '\n' ' ')
   if [ -n "$out" ]; then
-    "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    env $nogate "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
   else
-    "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
+    env $nogate "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
   fi
   # (#1557, #1726) The serial 2 s line the CI complete tier enforces is proved on the calls that need it and on no others.
   # Under xdist the guard records an unmarked call at or over the project line and does not fail it; those calls and only
@@ -67,7 +70,7 @@ sg_battery_run() {
     if [ -n "$defs" ]; then
       set -- $defs
       echo "serial line: $(printf '%s ' "$@")run once more, serially, at the project line"
-      "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
+      env $nogate "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
     fi
   fi
   set +f

@@ -319,7 +319,7 @@ held=
 # over the count is listed twice and the length of the list counts the groups. `briefs` is keyed by cause name, so it carries the
 # ghspend causes only; a group's reason and count live in its alert line and its marker, not here.
 # A landing lock whose current gate round has run past the round's bounds is stuck, not queued (#1290): a round waits up to
-# SERIAL_WAIT_SECONDS (900 s) for the gate lock, then the gate is bounded at SG_GATE_BOUND_SECONDS (900 s), so a live holder whose
+# SERIAL_WAIT_SECONDS (900 s) for the gate lock, then the gate is bounded at the full bound (sg_full_bound), so a live holder whose
 # last round began past their sum has outlived both, and a person is told, once. A landing runs several rounds (a red tip, the child
 # that broke it leaves, the tip again), so wave.sh marks each round's start in the lock's round file: that mark is the progress, not
 # the landing's start. The lock's pid mtime is the instant the holder took it, which is what the alert names; a new holder restarts it.
@@ -327,6 +327,8 @@ lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
 if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
   lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
   lb=${SG_GATE_BOUND_SECONDS:-900}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
+  # (#2379) The landing gate runs the full battery, so its bound is the full bound (sg_full_bound, ADR-0169 rule 9).
+  lfb=$(sg_full_bound "$lb" 2>/dev/null); case $lfb in ''|*[!0-9]*|0) ;; *) [ "$lfb" -gt "$lb" ] && lb=$lfb;; esac
   ls=$(mtime "$lkd/pid"); rs=$(mtime "$lkd/round"); [ "$rs" -gt "$ls" ] && lp=$rs || lp=$ls   # the round mark, when a round has begun since the lock was taken
   la=$(( now - lp ))
   [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"

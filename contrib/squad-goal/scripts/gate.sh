@@ -3,7 +3,8 @@
 # The branchland local gate, the wave entry gate, the promotion gate and a hand-started gate all come through here. A second gate
 # waits for the first and then runs; it is never dropped, so the wait is long (SERIAL_WAIT_SECONDS, default 86400) and says so on one
 # line naming the holder. A gate holder that died, or that outlived its run, loses the lock to the next gate (serial.sh).
-# SERIAL_HOLD_SECONDS (default 7200) is the longest a gate may hold the lock. The exit code of the command is passed through.
+# SERIAL_HOLD_SECONDS (by default the full bound, the slot wait and 300 s, #2379) is the longest a gate may hold the lock.
+# The exit code of the command is passed through.
 # The hub reads the latest result from $SG_STATE/gate-status: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, and, when the
 # gate ran the test battery, a fifth field, its selection (`selected N files` or `all: <reason>`; GATE_SELECT_FILE carries it
 # out), and a sixth, the scope that selection names, `delta` or `full` (GATE_SCOPE_FILE carries it out). The reason in an
@@ -78,6 +79,9 @@
 # gate never overwrites the caller's copy.
 # One clock starts when the gate takes the lock (ADR-0163, #1171): SG_GATE_BOUND_SECONDS, else 900.
 # The command reads GATE_START_EPOCH, GATE_DEADLINE_EPOCH and GATE_BOUND_SECONDS, so its checks and its retry spend one budget.
+# A command that runs the full battery gets a second clock (#2379, ADR-0169 rule 9): GATE_FULL_BOUND_SECONDS, measured from this
+# machine's full-battery gates (sg_full_bound), and GATE_FULL_DEADLINE_EPOCH. The gate moves its stop there only once the
+# command wrote `full` to GATE_SCOPE_FILE, and a delta command keeps the delta bound.
 # A command that does not answer at the deadline is stopped with every
 # descendant, five seconds past it so a command that is writing its record is not cut in half, and the outcome is unproven
 # with a reason that says bounded. A defect the command already wrote is fail, and so is any red that stands for the tree.
@@ -105,6 +109,21 @@ write_status() {  # <path> <line>
 # makes -- its checks and its retry -- spends one clock.
 gate_bound() {
   local b=${SG_GATE_BOUND_SECONDS:-900}; case $b in ''|*[!0-9]*|0) b=900;; esac; printf '%s\n' "$b"
+}
+# (#2379, ADR-0169 rule 9) The full-battery bound: a gate whose command names the full scope (GATE_SCOPE_FILE) runs to it
+# instead of the delta bound. The outermost gate reads it once (sg_full_bound, measured from this machine's gate history) and
+# exports it as GATE_FULL_BOUND_SECONDS, so the lock hold, the clock and the command read one value. Never under the delta bound.
+gate_full_bound() {
+  local b f; b=$(gate_bound); f=${GATE_FULL_BOUND_SECONDS:-}
+  case $f in ''|*[!0-9]*|0) f=$(sg_full_bound "$b" 2>/dev/null);; esac
+  case $f in ''|*[!0-9]*|0) f=$b;; esac
+  [ "$f" -ge "$b" ] || f=$b; printf '%s\n' "$f"
+}
+# The longest a priority caller (tip, landing) waits for its slots: the gates that hold them end inside the longer of the gate
+# ceiling (SG_GATE_MAX_SECONDS) and the full bound, so the wait is that plus a margin (#2009, #2379).
+gate_slot_wait() {
+  local m=${SG_GATE_MAX_SECONDS:-900} f; case $m in ''|*[!0-9]*|0) m=900;; esac
+  f=$(gate_full_bound); [ "$f" -gt "$m" ] && m=$f; printf '%s\n' "$(( m + 60 ))"
 }
 # The orphan watch (#1576). gate_parent_gone <pid> is true when the system no longer answers for the process, or answers Z: a
 # killed process its own parent has not reaped yet is gone, as serial.sh reads it. A pid of 1 or of nothing names no caller, and
@@ -209,7 +228,8 @@ obligation() {  # <repository> <tree sha> <base> <checks> <scope> <finish epoch>
   [ "$checks" = - ] && checks=all
   [ -n "$scope" ] || scope=full
   case $fin in ''|*[!0-9]*) fin=$(date +%s);; esac
-  bound=$(gate_bound)
+  # (#2379) A full-scope obligation is settled by a full battery, so its deadline is the full bound; a delta one keeps the delta.
+  if [ "$scope" = full ]; then bound=$(gate_full_bound); else bound=$(gate_bound); fi
   dl=$((fin + bound))   # the deadline counts from the gate's finish, the epoch the history line carries
   mkdir -p "$dir" 2>/dev/null || return 0
   key=$(printf '%s\t%s\t%s' "$repo" "$sha" "$base" | cksum | cut -d' ' -f1)
@@ -323,7 +343,7 @@ case "${1:-}" in
     prio=() take=(--try)
     case ${SG_GATE_CALLER:-} in tip|landing)
       prio=(--priority "$SG_GATE_CALLER")
-      : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(( ${SG_GATE_MAX_SECONDS:-900} + 60 ))}";; esac
+      : "${SG_GATE_SLOT_WAIT:=1}"; : "${SG_GATE_SLOT_WAIT_SECONDS:=$(gate_slot_wait)}";; esac
     [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && take=(--wait "${SG_GATE_SLOT_WAIT_SECONDS:-120}")
     # (#2317) The two clocks the record needs to split the gate stint: when it asked for its slots inside the lock, and
     # when it held them. The run clock starts after this, so its seconds are the run, never the wait (ADR-0166).
@@ -363,11 +383,17 @@ case "${1:-}" in
       export SG_GATE_AID
     fi
     bound=$(gate_bound); deadline=$(( start + bound ))
+    # (#2379) The full clock beside the delta one: the command runs to it only once it named the full scope.
+    fbound=$(gate_full_bound); fdeadline=$(( start + fbound ))
     export GATE_START_EPOCH=$start GATE_DEADLINE_EPOCH=$deadline GATE_BOUND_SECONDS=$bound
+    export GATE_FULL_BOUND_SECONDS=$fbound GATE_FULL_DEADLINE_EPOCH=$fdeadline
+    # The watchdog's latch: it exists once the command named the full scope, and the record then names that scope.
+    latchf=$(mktemp "${TMPDIR:-/tmp}/gate-latch.XXXXXX" 2>/dev/null) || latchf=; [ -z "$latchf" ] || rm -f "$latchf"
     note() {  # <result> <outcome if the command wrote none> <reason if none>: one record, the red's precedence folded in
       note_rc=
       if [ "${SG_GATE_STATUS:-}" != self ]; then
         sha=$(git rev-parse HEAD 2>/dev/null); sel=$(cat "$GATE_SELECT_FILE" 2>/dev/null); scope=$(cat "$GATE_SCOPE_FILE" 2>/dev/null)
+        [ -z "$latchf" ] || [ ! -e "$latchf" ] || scope=full   # (#2379) the scope the watchdog latched, whatever the file says now
         oc= rs= ran= notran=
         [ -z "$GATE_OUTCOME_FILE" ] || IFS=$'\t' read -r oc rs ran notran < "$GATE_OUTCOME_FILE" 2>/dev/null
         [ -n "$oc" ] || { oc=$2; rs=$3; ran=-; notran=-; }
@@ -430,6 +456,7 @@ case "${1:-}" in
       [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
       [ -z "$GATE_BASE_FILE" ] || rm -f "$GATE_BASE_FILE"
       [ -z "$GATE_REUSE_FILE" ] || rm -f "$GATE_REUSE_FILE"
+      [ -z "$latchf" ] || rm -f "$latchf"
     }
     # stop_tree <pid>: every descendant as it stands now, TERM then KILL, so a child that ignores TERM still goes and a child
     # its parent leaves behind is in the list taken before the first signal.
@@ -457,12 +484,19 @@ case "${1:-}" in
     # finds a caller that died (#1576), which is a gate nobody waits for. A sleep cut short is no deadline: the bound is read
     # from the clock at every look (#392).
     set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
-    stopat=$(( start + bound + 5 ))
-    ( while :; do
+    # (#2379) The full scope moves the stop to the full clock: the watchdog reads GATE_SCOPE_FILE at every look and latches on
+    # `full`, so a later rewrite of the file never shortens the clock; until it reads `full`, the delta clock holds.
+    stopat=$(( start + bound + 5 )); fstopat=$(( start + fbound + 5 ))
+    ( full=0
+      while :; do
         sleep 2
         kill -0 $$ 2>/dev/null || exit 0
         if gate_orphaned; then [ -z "$orphfile" ] || : > "$orphfile"; break; fi
-        [ "$(date +%s)" -lt "$stopat" ] && continue
+        if [ "$full" = 0 ] && [ -n "$GATE_SCOPE_FILE" ] && [ "$(cat "$GATE_SCOPE_FILE" 2>/dev/null)" = full ]; then
+          full=1; [ -z "$latchf" ] || : > "$latchf"; fi
+        now=$(date +%s)
+        [ "$now" -lt "$stopat" ] && continue
+        [ "$full" = 1 ] && [ "$now" -lt "$fstopat" ] && continue
         [ -z "$timedout" ] || : > "$timedout"; break
       done
       stop_tree "$cpid" ) >/dev/null 2>&1 & wd=$!
@@ -480,11 +514,13 @@ case "${1:-}" in
       [ -z "$GATE_OUTCOME_FILE" ] || rm -f "$GATE_OUTCOME_FILE"
       [ -z "$GATE_BASE_FILE" ] || rm -f "$GATE_BASE_FILE"
       [ -z "$GATE_REUSE_FILE" ] || rm -f "$GATE_REUSE_FILE"
+      [ -z "$latchf" ] || rm -f "$latchf"
       echo "gate: orphan: the process that asked for this gate (pid ${SG_GATE_PARENT:-?}) is gone: the gate stops and releases its slots" >&2
       exit 143
     fi
     if [ -n "$timedout" ] && [ -e "$timedout" ]; then
       rm -f "$timedout"
+      [ -z "$latchf" ] || [ ! -e "$latchf" ] || bound=$fbound   # the line names the clock that ended the command
       note fail unproven "bounded: the gate passed its ${bound}s deadline and no check reported a defect"
       echo "gate: bounded: the gate passed its ${bound}s deadline and no check reported a defect"
       [ "$FOC" = fail ] && exit 1
@@ -510,14 +546,23 @@ SG_GATE_T0=$(date +%s); export SG_GATE_T0
 # own start: only the --inner that takes this gate's slots sets them, and a gate that takes none writes dashes.
 unset SG_GATE_SLOT_ASK SG_GATE_SLOT_GOT
 wave_wait=${SERIAL_WAIT_SECONDS:-1800}
-export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( $(gate_bound) + 300 ))}
+# (#2379) The hold outlives the longer gate: the full bound, read once here for the whole gate (an outermost gate never takes
+# an inherited value; a gate inside a gate keeps its holder's), plus the slot wait of a caller that waits for its slots inside
+# the lock (tip, landing, SG_GATE_SLOT_WAIT=1), plus the backstop.
+case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) unset GATE_FULL_BOUND_SECONDS;; esac
+GATE_FULL_BOUND_SECONDS=$(gate_full_bound); export GATE_FULL_BOUND_SECONDS
+hold_wait=0
+case ${SG_GATE_CALLER:-} in tip|landing) hold_wait=${SG_GATE_SLOT_WAIT_SECONDS:-$(gate_slot_wait)};;
+  *) [ "${SG_GATE_SLOT_WAIT:-0}" = 1 ] && hold_wait=${SG_GATE_SLOT_WAIT_SECONDS:-120};; esac
+case $hold_wait in ''|*[!0-9]*) hold_wait=0;; esac
+export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-86400} SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-$(( GATE_FULL_BOUND_SECONDS + hold_wait + 300 ))}
 case ":${SG_SERIAL_HELD:-}:" in
   *":gate:"*) exec bash "$here/gate.sh" --run "$@" ;;   # inside a gate holder: no slots of its own, it keeps the holder's count
 esac
 # A wave's gate is live from the request, queued or running (#1257): the marker names this process, which exec keeps as the
 # lock waiter and then the holder, so a dead pid is a gate that is gone. Its limit is the attempt bound plus the lock wait.
 if [ -n "${SG_GATE_WAVE:-}" ]; then
-  mkdir -p "$st" 2>/dev/null && printf '%s %s %s\n' "$$" "$(date +%s)" "$(( $(gate_bound) + wave_wait ))" > "$st/gate-wave-$SG_GATE_WAVE.$$.live.$$" 2>/dev/null \
+  mkdir -p "$st" 2>/dev/null && printf '%s %s %s\n' "$$" "$(date +%s)" "$(( GATE_FULL_BOUND_SECONDS + wave_wait ))" > "$st/gate-wave-$SG_GATE_WAVE.$$.live.$$" 2>/dev/null \
     && mv -f "$st/gate-wave-$SG_GATE_WAVE.$$.live.$$" "$st/gate-wave-$SG_GATE_WAVE.$$.live" 2>/dev/null
 fi
 exec bash "$here/serial.sh" gate bash "$here/gate.sh" --inner "$@"   # exec: the lock holder is this process, and --inner takes the slots inside it

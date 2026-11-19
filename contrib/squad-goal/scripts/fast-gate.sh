@@ -31,6 +31,9 @@
 # proof stays bounded where it was and a bounded gate never widens a proof (ADR-0163, the same rule at two layers). Past the
 # ceiling the battery's or a suite's whole tree is killed, one line names the bound and that tree, the outcome is unproven, and
 # the lease goes back as on any other exit.
+# A battery that runs the full scope takes the full bound instead (#2379, ADR-0169 rule 9): measured from this machine's
+# full-battery gates (sg_full_bound in caps.sh), and its own ceiling. The gate moves to it only once the battery wrote `full` to
+# GATE_SCOPE_FILE; a delta battery keeps the delta bound and SG_GATE_MAX_SECONDS, and a caller's own clock is never widened.
 here="$(cd "$(dirname "$0")" && pwd)"
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
 # The base battery is one definition (base-battery.sh), the one branchland.sh's landing check and wave.sh's tip check run
@@ -224,6 +227,29 @@ deadline=${GATE_DEADLINE_EPOCH:-$(( now0 + bound ))}
 gate_max=0
 if [ "$deadline" -gt $(( now0 + maxb )) ]; then deadline=$(( now0 + maxb )); gate_max=1; fi
 [ "$bound" -gt "$maxb" ] && bound=$maxb
+# (#2379, ADR-0169 rule 9) A battery that runs the full scope takes the full bound: the one gate.sh read (GATE_FULL_BOUND_SECONDS),
+# else sg_full_bound, measured from this machine's full-battery gates. The full clock is gate.sh's GATE_FULL_DEADLINE_EPOCH when it
+# hands one no earlier than the delta clock; a direct run starts its own; a caller that hands its own clock and no full one (a
+# proof) is never widened. The full bound is its own ceiling, as SG_GATE_MAX_SECONDS is the delta one (#1839). The gate moves to
+# the full clock only once the battery wrote `full` to GATE_SCOPE_FILE (wide), and a delta battery keeps every number above.
+fbound=${GATE_FULL_BOUND_SECONDS:-}; case $fbound in ''|*[!0-9]*|0) fbound=$(sg_full_bound "$bound");; esac
+case $fbound in ''|*[!0-9]*|0) fbound=$bound;; esac; [ "$fbound" -ge "$bound" ] || fbound=$bound
+fdl=${GATE_FULL_DEADLINE_EPOCH:-}
+if [ -z "${GATE_DEADLINE_EPOCH:-}" ]; then fdeadline=$(( now0 + fbound ))
+else case $fdl in ''|*[!0-9]*) fdeadline=$deadline;; *) if [ "$fdl" -ge "$GATE_DEADLINE_EPOCH" ]; then fdeadline=$fdl; else fdeadline=$deadline; fi;; esac; fi
+fgate_max=0
+if [ "$fdeadline" -gt $(( now0 + fbound )) ]; then fdeadline=$(( now0 + fbound )); fgate_max=1; fi
+[ "$fdeadline" -ge "$deadline" ] || fdeadline=$deadline
+maxname="SG_GATE_MAX_SECONDS"; wide=0
+# A gate run with no gate.sh above it names its own scope file, so the battery's scope still reaches the clock.
+if [ -z "${GATE_SCOPE_FILE:-}" ]; then GATE_SCOPE_FILE=$(mktemp "${TMPDIR:-/tmp}/fg-scope.XXXXXX" 2>/dev/null) || GATE_SCOPE_FILE=
+  [ -z "$GATE_SCOPE_FILE" ] || { export GATE_SCOPE_FILE; trap 'rm -f "$GATE_SCOPE_FILE"' EXIT; }; fi
+full_named() { [ -n "${GATE_SCOPE_FILE:-}" ] && [ "$(cat "$GATE_SCOPE_FILE" 2>/dev/null)" = full ]; }
+widen() {  # once the battery named the full scope, the rest of the gate -- its retry and its suites -- spends the full clock
+  [ "$wide" = 1 ] && return 0
+  [ "${latched:-0}" = 1 ] || full_named || return 0
+  wide=1; deadline=$fdeadline; bound=$fbound; maxb=$fbound; gate_max=$fgate_max; maxname="the full bound"
+}
 left() { local l=$(( deadline - $(date +%s) )); [ "$l" -lt 1 ] && l=1; echo "$l"; }
 tree_pids() {  # <pid>: the pid and every descendant it started, children first
   local c; for c in $(pgrep -P "$1" 2>/dev/null); do tree_pids "$c"; done; printf '%s\n' "$1"
@@ -241,25 +267,45 @@ stop_tree() {  # <pid>: the tree as it stands now, TERM then KILL, so a child th
 reap_wd() { local p; [ "$($SG_PS -o pgid= -p "$1" 2>/dev/null | tr -d ' ')" = "$1" ] && kill -- -"$1" 2>/dev/null
   for p in $(pgrep -P "$1" 2>/dev/null); do kill "$p" 2>/dev/null; done; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null; }
 bounded() {  # <seconds> <command...>: 124 says the deadline stopped it and its whole tree; 0 or less runs with no bound
-  local b=$1 p w mark s rc; shift; s=$(date +%s); BTREE=
+  local b=$1 p w mark latch s rc; shift; s=$(date +%s); BTREE=
   if [ "$b" -le 0 ] 2>/dev/null; then "$@"; return $?; fi
-  mark=$(mktemp "${TMPDIR:-/tmp}/fg-bound.XXXXXX" 2>/dev/null) || { "$@"; return $?; }; rm -f "$mark"
+  mark=$(mktemp "${TMPDIR:-/tmp}/fg-bound.XXXXXX" 2>/dev/null) || { "$@"; return $?; }; rm -f "$mark"; latch=$mark.full
   "$@" & p=$!
   set -m   # the watchdog leads its own process group, so reap_wd reaches the sleep it forks
   # (#1839) The mark carries the tree the deadline kills, so the line the gate answers can name it; its existence alone is the
   # flag that the deadline fired, as before.
-  ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; tree_pids "$p" > "$mark"
-    stop_tree "$p" ) >/dev/null 2>&1 & w=$!
+  if [ "$wide" = 1 ] || [ "$fdeadline" -le "$deadline" ]; then
+    ( sleep "$b"; kill -0 $$ 2>/dev/null || exit 0; [ $(( $(date +%s) - s )) -ge "$b" ] || exit 0; tree_pids "$p" > "$mark"
+      stop_tree "$p" ) >/dev/null 2>&1 & w=$!
+  else
+    # (#2379) The full clock is still open: the watchdog reads the scope file at every look and latches on `full`, so a later
+    # rewrite never shortens the clock; it stops the tree at the delta deadline when no `full` came, at the full one when it did.
+    ( full=0
+      while :; do
+        kill -0 $$ 2>/dev/null || exit 0
+        if [ "$full" = 0 ] && full_named; then full=1; : > "$latch"; fi
+        now=$(date +%s)
+        if [ "$full" = 1 ]; then [ "$now" -ge "$fdeadline" ] && break; else [ $(( now - s )) -ge "$b" ] && break; fi
+        sleep 1
+      done
+      tree_pids "$p" > "$mark"; stop_tree "$p" ) >/dev/null 2>&1 & w=$!
+  fi
   set +m
   wait "$p" 2>/dev/null; rc=$?
   reap_wd "$w"
+  [ -e "$latch" ] && { latched=1; rm -f "$latch"; }
   if [ -e "$mark" ]; then BTREE=$(tr '\n' ' ' < "$mark" 2>/dev/null | sed 's/ *$//'); rm -f "$mark"; return 124; fi
   rm -f "$mark"; return $rc
 }
+# (#2379) The battery's tests never see this gate's record or clock: a test that ran a battery of its own wrote the inherited
+# scope file, and every landing row read `delta`. The battery itself keeps them (it writes the selection and the scope), and
+# base-battery.sh drops them for its pytest; the retry and the suites below drop them here.
+nogate=$(compgen -e | /usr/bin/grep -E '^(GATE_|SG_GATE_FULL_)' | sed 's/^/-u /' | tr '\n' ' ')
 for try in 1 2; do
   lg=$log; [ $try = 1 ] || lg=${log%.log}-retry.log
-  bounded "$(left)" bash -c "$fastcmd" > "$lg" 2>&1 && break
-  rc=$?; tail -n 5 "$lg"
+  bounded "$(left)" bash -c "$fastcmd" > "$lg" 2>&1; rc=$?; widen
+  [ "$rc" = 0 ] && break
+  tail -n 5 "$lg"
   c=$(classify "$lg" "$rc"); cls=${c%% *}; detail=${c#* }
   if [ "$rc" = 124 ]; then
     case $cls in
@@ -275,7 +321,7 @@ for try in 1 2; do
         if [ "$gate_max" = 1 ]; then
           verdict unproven "bounded: the gate passed its ${maxb}s ceiling and killed the battery's tree (${BTREE:-unknown})" unknown unknown
           [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
-          echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling (SG_GATE_MAX_SECONDS) and killed the battery's tree (${BTREE:-unknown}); unproven (exit 4) ($lg)"; exit 4
+          echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling ($maxname) and killed the battery's tree (${BTREE:-unknown}); unproven (exit 4) ($lg)"; exit 4
         fi
         verdict unproven "bounded: the battery passed its ${bound}s deadline and named no defect" unknown unknown
         [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
@@ -294,7 +340,8 @@ for try in 1 2; do
     pytest)
       # The retry spends the same clock: a retry that outlives it never clears the red the battery named.
       # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
-      set -f; bounded "$(left)" bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; rrc=$?; set +f
+      # shellcheck disable=SC2086  # nogate is a list of -u options
+      set -f; bounded "$(left)" env $nogate bash -c "$retrycmd \"\$@\"" retry $(ids_of "$lg") >> "$lg" 2>&1; rrc=$?; set +f
       if [ $rrc = 0 ]; then
         echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($lg)"; break; fi
       verdict fail "$detail" "ruff mypy pytest" -
@@ -305,6 +352,7 @@ for try in 1 2; do
       verdict fail "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail ($lg)"; exit 1;;
   esac
 done
+[ "$wide" = 1 ] || fdeadline=$deadline   # (#2379) the battery named no full scope, so the suites keep the delta clock
 # (#885) The pytest tally and the code-quality reading print together; the pipe's status is tee's, so the reading never changes the exit.
 tally=$(/usr/bin/grep -E '[0-9]+ (passed|failed|errors?)' "$lg" | tail -n 1)
 { echo "fast-gate: pytest tally: ${tally:-none: no pytest count in the battery log}"; "$py" "$here/quality-reading.py" "$base"; } 2>&1 | tee -a "$lg"
@@ -334,7 +382,8 @@ failed=""; ranS=""; hitmax=
 run_suite() {  # <script> <home>: the suite in its own home, from the repository top, with no SG_* variable and no GATE_REUSE_FILE
   # (#1927) gate.sh --inner exports GATE_REUSE_FILE for the gate's own verdict; a fixture gate inside a suite that inherited it
   # would mark the outer gate's reuse from its own memo hit, and its own row would never land. The file belongs to this gate.
-  ( cd "$top" && env $(compgen -e | /usr/bin/grep '^SG_' | sed 's/^/-u /') -u GATE_REUSE_FILE HOME="$2" bash "$1" )
+  # (#2379) No GATE_* name either: a suite never writes this gate's record (the scope, the selection) or reads its clock.
+  ( cd "$top" && env $(compgen -e | /usr/bin/grep -E '^(SG|GATE)_' | sed 's/^/-u /') HOME="$2" bash "$1" )
 }
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
   echo "=== test-$n.sh"; ranS="$ranS test-$n.sh"
@@ -345,7 +394,7 @@ for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] |
 [ -z "$hitmax" ] || {
   if [ "$gate_max" = 1 ]; then
     verdict unproven "bounded: the gate passed its ${maxb}s ceiling and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
-    echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling (SG_GATE_MAX_SECONDS) and killed ${hitmax}'s tree (${BTREE:-unknown}); unproven (exit 4)"; exit 4
+    echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling ($maxname) and killed ${hitmax}'s tree (${BTREE:-unknown}); unproven (exit 4)"; exit 4
   fi
   verdict unproven "bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
   echo "fast-gate: bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown}), so the gate does not pass"; exit 4; }

@@ -341,7 +341,7 @@ fbrun() {  # <command>: one gate with a 1 s delta bound and a 30 s full bound on
   (cd "$T/w" && env $fbclean SG_STATE="$FB" SG_REPO=owner/repo SG_GATE_KIND=fast SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=30 \
     bash "$d/gate.sh" bash -c "$1" > "$T/fb.out" 2>&1)
 }
-s0=$(date +%s); fbrun 'echo "$GATE_START_EPOCH $GATE_FULL_DEADLINE_EPOCH $GATE_FULL_BOUND_SECONDS $SERIAL_HOLD_SECONDS" > "'"$T"'/fb.env"; printf "full\n" > "$GATE_SCOPE_FILE"; sleep 1; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 11'; rc=$?; el=$(( $(date +%s) - s0 ))
+s0=$(date +%s); fbrun 'echo "$GATE_START_EPOCH $GATE_FULL_DEADLINE_EPOCH $GATE_FULL_BOUND_SECONDS $SERIAL_HOLD_SECONDS" > "'"$T"'/fb.env"; printf "full\n" > "$GATE_SCOPE_FILE"; sleep 3; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 9'; rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 0 ] && [ "$el" -ge 12 ] && ok "2379 a command that named the full scope runs past the delta deadline, and a later delta never shortens it (${el}s)" \
   || ko "2379 full scope under gate.sh: rc $rc in ${el}s: $(tail -n 2 "$T/fb.out" | tr '\n' ' ')"
 read -r fbs fbd fbb fbh < "$T/fb.env" 2>/dev/null

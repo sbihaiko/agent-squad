@@ -676,7 +676,8 @@ printf '2000\tfast\tpass\tsha\t1000\tall: x\tfull\tpass\t-\t-\t-\t3\t-\n' > "$fb
 fbcase 1500 "a row from before the wall field measures finish minus start"
 # The gate widens its clock only once the battery named the full scope, and it keeps the wider clock once named: a battery
 # that writes `full` and then `delta` (the leak #2379 found) still finishes, and a delta battery keeps the delta bound.
-vstub fullthendelta 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep 1; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 10; exit 0'
+# The `full` stands 3 s before the rewrite, so the watchdogs' looks (1 s in fast-gate, 2 s in gate.sh) read it under load too.
+vstub fullthendelta 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep 3; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 8; exit 0'
 fbst=$T/fbst; mkdir -p "$fbst"   # its own state: a red an earlier case left on this tree would stand over these attempts
 s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=30 vfg fullthendelta); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 0 ] && [ "$el" -ge 11 ] && ok "2379 a full battery runs past the delta bound to the full bound, and a later delta never shortens it (${el}s)" \
