@@ -210,7 +210,7 @@ else ok "empty hunt: hunt-day still not incremented"; fi
 # 17) a hunt-filed bug starts cooldown and the day count when autobug dispatches it (Refs #1504)
 scene huntdisp
 d=$(cd "$(dirname "$src")" && pwd)
-cp "$d/autobug.sh" "$d/loopbug.sh" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghthrottle.py" "$S/"
+cp "$d/autobug.sh" "$d/loopbug.sh" "$d/columnlimit.sh" "$d/single.sh" "$d/startability.sh" "$d/skiplabels.sh" "$d/ghthrottle.py" "$S/"
 [ -f "$d/cluster.py" ] && cp "$d/cluster.py" "$S/"
 printf '#!/bin/bash\necho READY\n' > "$S/stack.sh"; chmod +x "$S/stack.sh"   # the blocker gate (#479): #42 has no blocker
 printf 'import sys\nif sys.argv[1:]: sys.exit(1)\nprint("42\\tTodo")\n' > "$S/issue_state.py"   # the seam's door, stubbed: #42's card sits in Todo (#550)
