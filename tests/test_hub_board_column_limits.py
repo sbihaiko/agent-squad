@@ -1,8 +1,8 @@
-"""The card limit per board column on the hub (#2287).
+"""The card limit of each board column on the hub (#2432).
 
-The Settings page carries a Board theme with one row per column and its limit, and saves a change to the project
-settings file. The Kanban page shows `n / max` in the header of each column that has a limit. The theme's pure rules
-and the header's one function run in node as they ship.
+Spend & limits holds a Kanban sub-group: one row for each active column, its limit, the cards in the column now and the
+pass that stops at the limit. The Settings theme list carries no Board theme. The Kanban page shows `n / max` in the
+header of each column that has a limit. The sub-group's pure rules and the header's one function run in node as they ship.
 """
 import importlib.util
 import json
@@ -18,6 +18,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
+
+ACTIVE = ["Backlog", "Todo", "Doing", "Reviewing", "Batching", "Testing"]
 
 
 @pytest.fixture
@@ -47,10 +49,10 @@ def _node(mod, body):
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     sett = page[page.index("// SETT{"):page.index("// }SETT") + len("// }SETT")]
     setv = page[page.index("// SETV{"):page.index("// }SETV") + len("// }SETV")]
-    brd = re.search(r"^// BRD\{.*?^// \}BRD$", page, re.M | re.S)
-    assert brd, "the page carries no BRD block"
+    kan = re.search(r"^// KAN\{.*?^// \}KAN$", page, re.M | re.S)
+    assert kan, "the page carries no KAN block"
     stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});function setBar(){}function setChip(){}'
-    out = subprocess.run(["node", "-"], input="\n".join([stub, esc, setv, sett, brd.group(0), body]),
+    out = subprocess.run(["node", "-"], input="\n".join([stub, esc, setv, sett, kan.group(0), body]),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
@@ -58,34 +60,69 @@ def _node(mod, body):
 
 # --- the settings route
 
-def test_the_route_answers_every_column_and_its_limit(hub):
+def test_the_route_answers_every_active_column_its_limit_and_its_count(hub):
     mod, _ = hub
     got = mod.columns_read()
-    assert [c["name"] for c in got["columns"]] == ["Todo", "Doing", "Reviewing", "Batching", "Testing"]
-    assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+    assert [c["name"] for c in got["columns"]] == ACTIVE
+    assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+    assert all(isinstance(c["count"], int) for c in got["columns"])
     assert got["file"].endswith("docs/squad/defaults.yaml")
+
+
+def test_each_column_count_comes_from_the_loop_board_cache(hub):
+    mod, _ = hub
+    mod.board_cache["items"] = [
+        {"n": 1, "st": "Doing", "s": "open", "l": []},
+        {"n": 2, "st": "Doing", "s": "open", "l": []},
+        {"n": 3, "st": "Todo", "s": "open", "l": []},
+        {"n": 4, "st": None, "s": "open", "l": []},
+        {"n": 5, "st": "Testing", "s": "open", "l": []},
+        {"n": 6, "st": "Closed", "s": "closed", "l": []},
+    ]
+    try:
+        got = {c["name"]: c["count"] for c in mod.columns_read()["columns"]}
+    finally:
+        mod.board_cache["items"] = []
+    assert got == {"Backlog": 1, "Todo": 1, "Doing": 2, "Reviewing": 0, "Batching": 0, "Testing": 1}, got
+
+
+def test_a_row_states_what_its_limit_stops_or_that_no_pass_reads_it(hub):
+    mod, _ = hub
+    stops = {c["name"]: c["stops"] for c in mod.columns_read()["columns"]}
+    assert "autofrontier" in stops["Doing"], stops["Doing"]
+    assert "branch review pass" in stops["Reviewing"], stops["Reviewing"]
+    for name in ("Backlog", "Todo", "Batching", "Testing"):
+        assert "no pass reads it yet" in stops[name], (name, stops[name])
 
 
 def test_a_save_asks_for_the_diff_before_it_writes(hub):
     mod, co = hub
     out = mod.columns_set({"columns": {"Doing": "2"}, "confirm": False})
-    assert out["diff"] == ["Board · Doing: 6 -> 2"]
+    assert out["diff"] == ["Kanban · Doing: 6 -> 2"]
     assert not (co / "docs" / "squad" / "defaults.yaml").exists()
 
 
 def test_a_confirmed_save_writes_the_project_settings_file(hub):
     mod, co = hub
-    out = mod.columns_set({"columns": {"Doing": "2", "Reviewing": "none"}, "confirm": True})
-    assert out["diff"] == ["Board · Doing: 6 -> 2", "Board · Reviewing: 4 -> none"]
+    out = mod.columns_set({"columns": {"Doing": "2", "Reviewing": "none", "Backlog": "100"}, "confirm": True})
+    assert out["diff"] == ["Kanban · Doing: 6 -> 2", "Kanban · Reviewing: 4 -> none", "Kanban · Backlog: none -> 100"]
     data = yaml.safe_load((co / "docs" / "squad" / "defaults.yaml").read_text())
     assert data["columns"]["Doing"]["max_cards"] == 2
     assert data["columns"]["Reviewing"]["max_cards"] is None
+    assert data["columns"]["Backlog"]["max_cards"] == 100
     assert {c["name"]: c["max_cards"] for c in mod.columns_read()["columns"]}["Doing"] == 2
 
 
 def test_a_limit_that_breaks_its_rule_is_refused_and_writes_nothing(hub):
     mod, co = hub
     out = mod.columns_set({"columns": {"Doing": "0"}, "confirm": True})
+    assert "err" in out
+    assert not (co / "docs" / "squad" / "defaults.yaml").exists()
+
+
+def test_a_limit_over_a_hundred_is_refused(hub):
+    mod, co = hub
+    out = mod.columns_set({"columns": {"Testing": "101"}, "confirm": True})
     assert "err" in out
     assert not (co / "docs" / "squad" / "defaults.yaml").exists()
 
@@ -108,28 +145,54 @@ def test_a_write_that_fails_on_a_later_column_leaves_no_partial_file(hub, monkey
     assert not (co / "docs" / "squad" / "defaults.yaml").exists(), "a failed save left a partial settings file"
 
 
-# --- the page
+# --- the Settings page
 
-def test_the_settings_page_carries_a_board_theme(hub):
+def test_the_settings_theme_list_has_no_board_theme(hub):
     mod, _ = hub
     page = mod.PAGE
     nav = re.search(r'<nav class=snav aria-label="Settings themes">(.*?)</nav>', page, re.S).group(1)
-    assert "data-sp=brd" in nav, "the theme list has no Board theme"
+    assert "data-sp=brd" not in nav, "the theme list still has a Board theme"
+    assert "Board" not in nav, "the theme list still names Board"
     sel = re.search(r"<select id=ssel[^>]*>(.*?)</select>", page, re.S).group(1)
-    assert "value=brd" in sel, "the phone select has no Board theme"
-    assert re.search(r'<details id=brd class=sp data-sp=brd>.*?id=brdb', page, re.S), "the Board panel has no body"
+    assert "value=brd" not in sel, "the phone select still has a Board theme"
+    assert not re.search(r'<details id=brd class=sp', page), "the Board panel is still on the page"
 
 
-@pytest.mark.heavy     # under 0.5 s here and 2.9 s on a loaded runner, over the two-second line for an unmarked call
-def test_the_board_theme_draws_one_row_per_column_with_its_limit(hub):
+def test_the_spend_and_limits_theme_loads_with_the_page(hub):
     mod, _ = hub
-    got = _node(mod, "brdS={file:'/p',columns:[{name:'Todo',max_cards:null},{name:'Doing',max_cards:6}]};brdDraft=brdClone(brdS.columns);"
-                      "brdRender();console.log(JSON.stringify({b:$('#brdb').innerHTML}))")
-    b = got["b"]
-    rows = re.findall(r'<span class=sl>(.*?)</span>', b)
-    assert rows == ["Todo", "Doing"], rows
-    assert 'data-col="Todo"' in b and 'data-col="Doing"' in b
-    assert 'value=""' in b and 'value="6"' in b
+    page = mod.PAGE
+    assert re.search(r'^if\(!\$\("#lim"\)\.open\)limLoad\(\);', page, re.M), "the Spend & limits data does not load with the page"
+    assert "setChip(\"lim\"" in page, "the Spend & limits render does not write its chip"
+
+
+def test_the_canban_sub_group_draws_one_row_per_active_column(hub):
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',columns:[{name:'Backlog',max_cards:null,count:2,stops:'no pass reads it yet'},"
+                      "{name:'Doing',max_cards:6,count:3,stops:'the dispatch pass (autofrontier) claims no card past this'}]};"
+                      "console.log(JSON.stringify({h:kanHtml()}))")
+    h = got["h"]
+    rows = re.findall(r'<span class=sl>(.*?)</span>', h)
+    assert rows == ["Backlog · 2 cards", "Doing · 3 cards"], rows
+    assert 'data-kan="Backlog"' in h and 'data-kan="Doing"' in h
+    assert "value=\"6\"" in h
+    assert "autofrontier" in h, "the Doing row does not state what its limit stops"
+    assert "Closed" not in h and "Abandoned" not in h, "a finished column carries a field"
+
+
+def test_an_empty_field_reads_unlimited_and_saves_as_none(hub):
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',columns:[{name:'Todo',max_cards:null,count:0,stops:'no pass reads it yet'}]};"
+                      "kanDraft=kanClone(kanS.columns);console.log(JSON.stringify({h:kanHtml(),limits:kanLimits()}))")
+    assert 'value=""' in got["h"] and "unlimited" in got["h"], got["h"]
+    assert got["limits"] == {"Todo": "none"}, got["limits"]
+
+
+def test_the_sub_group_chip_names_a_column_at_its_limit(hub):
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',columns:[{name:'Doing',max_cards:6,count:6,stops:''},{name:'Todo',max_cards:null,count:1,stops:''}]};"
+                      "const full=kanChip();kanS={file:'/p',columns:[{name:'Doing',max_cards:6,count:2,stops:''}]};"
+                      "console.log(JSON.stringify([full,kanChip()]))")
+    assert got == ["Doing at its limit", "under its limit"], got
 
 
 # --- the Kanban header
@@ -146,4 +209,4 @@ def test_the_kanban_draws_the_header_through_col_count(hub):
     assert "colCount(ccount(c),COLS[c])" in page, "the lane grid column header does not carry the limit"
     assert "colCount(g.n,COLS[g.name])" in page, "the column header does not carry the limit"
     assert "const COLS=b.limits||{}" in page, "the page does not read the limits the board payload carries"
-    assert mod.board_column_limits() == {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+    assert mod.board_column_limits() == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}

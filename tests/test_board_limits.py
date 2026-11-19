@@ -11,7 +11,7 @@ from squad import board_limits as B
 from squad import defaults as D
 from squad import project_settings as P
 
-TABLE = {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+TABLE = {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
 
 
 def _project(tmp_path, text):
@@ -55,8 +55,10 @@ def test_the_text_of_a_number_writes_an_integer(tmp_path):
 # --- the default values
 
 def test_the_plugin_defaults_hold_the_table():
-    cfg = D.load()
-    assert {n: cfg["columns"][n]["max_cards"] for n in TABLE} == TABLE
+    # The plugin file names the columns it limits; a column it leaves out answers the module's default, which is none
+    # (Backlog). Where the file names a column, its value is the store's.
+    cfg = D.load()["columns"]
+    assert {n: cfg[n]["max_cards"] for n in cfg} == {n: TABLE[n] for n in cfg}
 
 
 def test_the_plugin_defaults_pass_their_own_checker():
@@ -65,6 +67,22 @@ def test_the_plugin_defaults_pass_their_own_checker():
 
 def test_the_resolved_limits_are_the_table_with_no_project_file(tmp_path):
     assert B.limits(tmp_path) == TABLE
+
+
+# --- what a limit stops (#2432)
+
+def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
+    assert "autofrontier" in B.column_stop("Doing")
+    assert "branch review pass" in B.column_stop("Reviewing")
+
+
+@pytest.mark.parametrize("name", ["Backlog", "Todo", "Batching", "Testing"])
+def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
+    assert B.column_stop(name) == "no pass reads it yet"
+
+
+def test_a_column_the_store_does_not_carry_answers_the_no_reader_line():
+    assert B.column_stop("Closed") == "no pass reads it yet"
 
 
 # --- the project overlay

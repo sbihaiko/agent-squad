@@ -1,10 +1,10 @@
 """The card limit of each board column: `columns.<column>.max_cards` in the project settings over the plugin defaults.
 
 A limit is a whole number from 1 to 100, or `none` for no limit (`squad/project_settings.py` holds the parse). The
-defaults follow the present machine limits, so the first release changes no behaviour: Todo none, Doing 6, Reviewing 4,
-Batching none, Testing none. MACHINE names the machine cap that also bounds a column, and `effective` answers the lower of
-the two: a column limit never raises a machine cap. A column renamed by #2315 still answers under its old name (OLD), in
-a query and in a settings file, so a caller or a file the rename has not reached keeps its limit.
+defaults follow the present machine limits, so the first release changes no behaviour: Backlog none, Todo none, Doing 6,
+Reviewing 4, Batching none, Testing none. MACHINE names the machine cap that also bounds a column, and `effective` answers
+the lower of the two: a column limit never raises a machine cap. A column renamed by #2315 still answers under its old
+name (OLD), in a query and in a settings file, so a caller or a file the rename has not reached keeps its limit.
 
 The frontier, the review pass, the Settings page and the Kanban header read this one module, so the limit of a column
 has one resolution.
@@ -17,7 +17,7 @@ from squad import defaults as D
 from squad import project_settings as P
 
 COLUMNS = P.COLUMN_CARDS
-DEFAULTS = {"Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+DEFAULTS = {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
 # The caps entry that also bounds a column: a review column never holds more reviews than the machine allows.
 MACHINE = {"Reviewing": "reviews", "Testing": "gates"}
 OLD = P.OLD_COLUMN_CARDS   # the name each renamed column carried before #2315
@@ -55,6 +55,18 @@ def effective(column_limit, machine_cap):
     """The tighter of a column limit and the machine cap that bounds it. None on both is no bound."""
     values = [v for v in (column_limit, machine_cap) if v is not None]
     return min(values) if values else None
+
+
+# What a column's card limit stops, in the words of the pass that reads it (#2432). A column no pass reads yet says so,
+# so every field the Settings screen draws states its effect.
+COLUMN_STOP = {"Doing": "the dispatch pass (autofrontier) claims no card past this",
+               "Reviewing": "the branch review pass starts no review past this"}
+NO_STOP = "no pass reads it yet"
+
+
+def column_stop(name):
+    """The one pass that stops at a column's card limit, or the no-reader line for a column that has none yet."""
+    return COLUMN_STOP.get(name) or NO_STOP
 
 
 def main(argv=None):
