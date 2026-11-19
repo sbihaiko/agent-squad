@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import uuid
+from typing import Any
 
 import anyio
 
@@ -367,9 +368,9 @@ class SdkAdapter:
             self._reg = modelreg.load(self.registry) if self.registry else modelreg.default_registry()
         return modelreg.invocation(req.model, "sdk", reg=self._reg).wire
 
-    def options(self, req, tail=None, denies=None):
+    def options(self, req: CallRequest, tail: _Tail | None = None, denies: dict | None = None) -> Any:
         _, cls = self._sdk()
-        kw: dict[str, object] = dict(cwd=req.workspace, model=self._model(req), tools=list(req.tools),
+        kw: dict[str, Any] = dict(cwd=req.workspace, model=self._model(req), tools=list(req.tools),
                                      max_budget_usd=prices.sdk_budget(self.prices, req.model, req.max_spend), permission_mode="bypassPermissions",
                                      setting_sources=self.setting_sources, max_buffer_size=self.buffer_size)   # #2267: the reader's buffer above the ceiling
         kw.update(self.extra_options)   # the engine's defaults land first: the node's own pick has the last word
