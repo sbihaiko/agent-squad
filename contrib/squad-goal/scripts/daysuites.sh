@@ -19,8 +19,9 @@
 # Once a day: a completed pass writes $SG_STATE/auto/daysuites-<date>, and a later start that day exits at once. A pass the
 # lock bound stopped ($SG_DAYSUITES_LOCK_WAIT, 900 s by default) writes no marker, so the day is not spent unmeasured.
 #
-# Bugs: a red suite files one bug through the loop's one filer (autohunt.sh --file), which opens it in Todo; the bug names
-# the suite, its first FAIL line and the dev sha. $SG_STATE/auto/daysuites-red holds the reds of the last completed pass: a
+# Bugs: before a red files, the pass re-reads dev. A moved tip runs that suite on the new tip, and the bug files only when the
+# suite stays red there. A red suite files one bug through the loop's one filer (autohunt.sh --file), which opens it in Todo;
+# the bug names the suite, its first FAIL line and the sha of the last red run. $SG_STATE/auto/daysuites-red holds the reds of the last completed pass: a
 # suite red on two passes in a row files no second bug, and a suite green in between files again on a later red pass.
 #
 # Exit: 0 every suite green, 1 a suite red, 73 or 75 the pass was held (no day marker).
@@ -50,20 +51,30 @@ day=$st/auto/daysuites-$(date +%F)
 [ -e "$day" ] && exit 0
 # ---- the dev tip ----------------------------------------------------------------------------------------------
 tree=${SG_DAYSUITES_TREE:-$st/daysuites-tree}
+remote=${SG_DAYSUITES_REMOTE:-https://github.com/${SG_REPO:-}.git}; base=${SG_BASE:-dev}
 export GIT_TERMINAL_PROMPT=0
+# The tip as the tree reads it now: the default tree fetches origin first, a named tree is read as it stands.
+read_tip() {
+  if [ -n "${SG_DAYSUITES_TREE:-}" ]; then
+    /usr/bin/git -C "$tree" rev-parse HEAD 2>/dev/null || { echo "daysuites: $tree is not a git tree" >&2; return 1; }
+    return 0
+  fi
+  local o; o=$(/usr/bin/git -C "$tree" fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) \
+    || { echo "daysuites: fetch of $base failed: $(printf '%s' "$o" | tail -1)" >&2; return 1; }
+  /usr/bin/git -C "$tree" rev-parse "origin/$base" 2>/dev/null
+}
+# The default tree checks out the tip it reads; a named tree stays as it stands.
+move_tree() {  # <sha>
+  [ -n "${SG_DAYSUITES_TREE:-}" ] && return 0
+  /usr/bin/git -C "$tree" checkout -q -f --detach "$1" && /usr/bin/git -C "$tree" clean -q -ffdx
+}
 if [ -z "${SG_DAYSUITES_TREE:-}" ]; then
-  remote=${SG_DAYSUITES_REMOTE:-https://github.com/${SG_REPO:-}.git}; base=${SG_BASE:-dev}
   [ -d "$tree/.git" ] || { mkdir -p "$tree" && /usr/bin/git -C "$tree" init -q . \
     && /usr/bin/git -C "$tree" remote add origin "$remote"; } || { echo "daysuites: the tree $tree could not be created" >&2; exit 1; }
   /usr/bin/git -C "$tree" remote set-url origin "$remote" 2>/dev/null
-  o=$(/usr/bin/git -C "$tree" fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) \
-    || { echo "daysuites: fetch of $base failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
-  tip=$(/usr/bin/git -C "$tree" rev-parse "origin/$base") || exit 1
-  /usr/bin/git -C "$tree" checkout -q -f --detach "$tip" && /usr/bin/git -C "$tree" clean -q -ffdx \
-    || { echo "daysuites: the tree could not check out $tip" >&2; exit 1; }
-else
-  tip=$(/usr/bin/git -C "$tree" rev-parse HEAD 2>/dev/null) || { echo "daysuites: $tree is not a git tree" >&2; exit 1; }
 fi
+tip=$(read_tip) || exit 1
+move_tree "$tip" || { echo "daysuites: the tree could not check out $tip" >&2; exit 1; }
 sdir=$tree/contrib/squad-goal/scripts
 shopt -s nullglob; suites=("$sdir"/test-*.sh); shopt -u nullglob
 [ ${#suites[@]} -gt 0 ] || { echo "daysuites: the dev tip carries no suite under $sdir" >&2; exit 1; }
@@ -91,27 +102,55 @@ daysuites_file() {  # <suite path> <first FAIL line> <dev sha>
     bash "$here/autohunt.sh" --file "$title" "$body"
   rm -f "$body"
 }
-reds=0; filed=0
-for s in "${suites[@]}"; do
-  name=$(basename "$s"); out=$(mktemp) || continue
+hold() {  # <reason> <output file>: the pass stops with no day marker, so a later cycle runs the whole list again
+  rm -f "$2" "$cur"
+  echo "daysuites: held: $1; no day marker is written, the next cycle retries"
+  exit 75
+}
+run_suite() {  # <suite path> <output file> <name>: one suite under the gate lock and one slot; sets rc
   SERIAL_WAIT_SECONDS=${SG_DAYSUITES_LOCK_WAIT:-900} \
   SERIAL_HOLD_SECONDS=${SG_DAYSUITES_SUITE_HOLD:-1800} \
   SERIAL_POLL_SECONDS=${SERIAL_POLL_SECONDS:-3} \
-    bash "$here/serial.sh" gate bash "$0" --suite "$s" > "$out" 2>&1
+    bash "$here/serial.sh" gate bash "$0" --suite "$1" > "$2" 2>&1
   rc=$?
-  cat "$out"
-  # Held, never a red: serial.sh's own bound line, or the slot line the --suite run wrote, names the resource that was not
-  # free. The pass stops on it and writes no day marker, so a later cycle runs the whole list again.
-  if /usr/bin/grep -qE '^serial: waited [0-9]+s for lock|^daysuites: held: no caps\.gates slot' "$out"; then
-    rm -f "$out" "$cur"
-    echo "daysuites: held: the gate lock or its slot was not free for $name; no day marker is written, the next cycle retries"
-    exit 75
+  cat "$2"
+  # Held, never a red: serial.sh's own bound line, or the slot line the --suite run wrote, names the resource that was not free.
+  /usr/bin/grep -qE '^serial: waited [0-9]+s for lock|^daysuites: held: no caps\.gates slot' "$2" \
+    && hold "the gate lock or its slot was not free for $3" "$2"
+  return 0
+}
+first_fail() {  # <output file>: the suite's first FAIL line, else its last line
+  local f; f=$(/usr/bin/grep -m1 '^FAIL' "$1")
+  [ -n "$f" ] || f=$(awk 'NF { l = $0 } END { print l }' "$1")
+  [ -n "$f" ] || f="(the suite named no FAIL line; it exited $rc)"
+  printf '%s' "$f"
+}
+# A red is filed against the tip it is red on. When dev moved during the run, the suite runs on the new tip, and a tip that
+# moves again runs again, up to three moves; a tip that keeps moving holds the pass rather than file against a stale sha.
+settle_red() {  # <suite path> <name> <output file>: sets rc, fail and tip
+  local moves=0 now
+  while :; do
+    now=$(read_tip) || hold "dev could not be read for $2" "$3"
+    [ "$now" = "$tip" ] && return 0
+    moves=$((moves + 1)); [ "$moves" -le 3 ] || hold "dev kept moving during the re-runs of $2" "$3"
+    tip=$now
+    move_tree "$tip" || { echo "daysuites: the tree could not check out $tip" >&2; exit 1; }
+    [ -f "$1" ] || { rc=0; return 0; }
+    run_suite "$1" "$3" "$2"
+    [ "$rc" = 0 ] && return 0
+    fail=$(first_fail "$3")
+  done
+}
+reds=0; filed=0
+for s in "${suites[@]}"; do
+  name=$(basename "$s"); out=$(mktemp) || continue
+  run_suite "$s" "$out" "$name"
+  if [ "$rc" != 0 ]; then
+    fail=$(first_fail "$out")
+    settle_red "$s" "$name" "$out"
   fi
   if [ "$rc" != 0 ]; then
     reds=$((reds + 1)); printf '%s\n' "$name" >> "$cur"
-    fail=$(/usr/bin/grep -m1 '^FAIL' "$out")
-    [ -n "$fail" ] || fail=$(awk 'NF { l = $0 } END { print l }' "$out")
-    [ -n "$fail" ] || fail="(the suite named no FAIL line; it exited $rc)"
     if /usr/bin/grep -qxF "$name" "$prev" 2>/dev/null; then
       echo "daysuites: $name red on two passes in a row; no second bug"
     else

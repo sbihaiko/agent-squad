@@ -112,6 +112,52 @@ newday; suite "$tree" test-red.sh 'exit 0'; commit "$tree"; run "$tree" >/dev/nu
 newday; suite "$tree" test-red.sh 'echo "FAIL broken again"; exit 1'; commit "$tree"; run "$tree" >/dev/null
 [ "$(filed)" = 2 ] && ok "a suite green in between files again on a later red pass" || ko "a red pass after a green one filed no bug"
 
+# 6) dev moves between the run and the filing: the suite runs on the new tip, and green there files no bug
+# 7) dev moves and the suite is still red on the new tip: one bug, naming the new tip's sha
+# The dev tip comes from a bare origin, as the loop reads it. The first run of the suite lands a fix on dev, then fails.
+moving_world() {  # <exit code of the suite on the new tip>
+  newworld; rm -rf "$ST/daysuites-tree" "$T/moved" "$T/heads.log" "$T/feed" "$T/origin.git" "$T/land.sh"
+  local origin=$T/origin.git feed=$T/feed
+  /usr/bin/git init -q --bare "$origin"
+  mktree "$feed"; $GIT -C "$feed" remote add origin "$origin"
+  cat > "$feed/contrib/squad-goal/scripts/test-moved.sh" <<SUITE
+#!/bin/bash
+/usr/bin/git -C "\$(dirname "\$0")" rev-parse HEAD >> "$T/heads.log"
+if [ ! -e "$T/moved" ]; then : > "$T/moved"; bash "$T/land.sh"; echo "FAIL the old tip"; exit 1; fi
+exit $1
+SUITE
+  chmod +x "$feed/contrib/squad-goal/scripts/test-moved.sh"
+  cat > "$T/land.sh" <<LAND
+#!/bin/bash
+echo landed > "$feed/fix" && $GIT -C "$feed" add -A && $GIT -C "$feed" commit -q -m fix && $GIT -C "$feed" push -q "$origin" HEAD:refs/heads/dev
+LAND
+  chmod +x "$T/land.sh"
+  commit "$feed"; $GIT -C "$feed" push -q "$origin" HEAD:refs/heads/dev
+}
+run_from_origin() {  # the pass with the dev tip read from the bare origin, and no tree override
+  env SG_STATE="$ST" SG_DAYSUITES_REMOTE="$T/origin.git" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
+    SG_SQUAD="$SG_SQUAD" SQUAD_CAPS_DIR="$SQUAD_CAPS_DIR" GHLOG="$T/gh.log" SERIAL_POLL_SECONDS=0.05 \
+    bash "$S/daysuites.sh" 2>&1
+}
+
+moving_world 0; : > "$T/gh.log"
+out=$(run_from_origin); rc=$?
+new=$(/usr/bin/git -C "$T/origin.git" rev-parse dev); old=$(head -1 "$T/heads.log" 2>/dev/null)
+[ "$rc" = 0 ] && ok "a suite green on the new tip exits 0" || ko "a pass whose suite is green on the new tip exited $rc: $out"
+[ "$(filed)" = 0 ] && ok "dev moved and the suite is green on the new tip: no bug is filed" \
+  || ko "dev moved and the suite is green on the new tip, yet $(filed) bug(s) were filed"
+[ -n "$old" ] && [ "$old" != "$new" ] && ok "the old tip ran first" || ko "the first run did not run on the old tip"
+[ "$(tail -1 "$T/heads.log" 2>/dev/null)" = "$new" ] && [ "$(wc -l < "$T/heads.log" | tr -d ' ')" = 2 ] \
+  && ok "the suite ran again on the new tip" || ko "the suite did not run on the new tip: $(cat "$T/heads.log" 2>/dev/null)"
+
+moving_world 1; : > "$T/gh.log"
+out=$(run_from_origin); rc=$?
+new=$(/usr/bin/git -C "$T/origin.git" rev-parse dev); old=$(head -1 "$T/heads.log" 2>/dev/null)
+[ "$rc" = 1 ] && ok "a suite red on the new tip fails the pass" || ko "a suite red on the new tip exited $rc: $out"
+[ "$(filed)" = 1 ] && ok "a suite red on the new tip files one bug" || ko "a suite red on the new tip filed $(filed) bugs"
+$G -qF "$new" "$T/gh.log" && ok "the bug names the sha of the last red run" || ko "the bug does not name the new tip's sha"
+$G -qF "$old" "$T/gh.log" && ko "the bug names the old tip's sha" || ok "the bug does not name the old tip's sha"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "daysuites: every case green"
 exit "$fail"
