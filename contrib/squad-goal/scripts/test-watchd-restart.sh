@@ -12,7 +12,7 @@ trap 'bash "$T/watchd.sh" stop >/dev/null 2>&1; kill -9 $sup $pids $gp 2>/dev/nu
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME" "$SG_STATE/locks/gate"
 . "$d/caps.sh"   # SG_PS: the process table read through squad.procs, the reader the shipped script uses (#1508)
-cp "$d/watchd.sh" "$T/watchd.sh"
+cp "$d/watchd.sh" "$T/watchd.sh"; cp "$d/drainpolicy.py" "$T/drainpolicy.py"
 python3 - "$T/watchd.sh" "$SG_STATE" "$d" <<'PY'
 import pathlib,sys
 f,st=sys.argv[1],sys.argv[2]
