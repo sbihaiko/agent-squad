@@ -92,7 +92,7 @@
 # Exit: 0 entered (or the wave branch was cut, or the wave landed), 1 not entered (requeued after a failed gate, a conflict or a
 # refused push; held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
 # Guards: `test-wave-entry.sh`, `test-wave-land.sh`, `test-wave-retry.sh`, `test-wave-aged.sh`, `test-wave-entrywait.sh`, `test-wave-obligation.sh`,
-# `test-wave-issue.sh`, `test-wave-tipcheck.sh`, `test-wave-conflict.sh`, `test-wave-eviction.sh`.
+# `test-wave-issue.sh`, `test-wave-tipcheck.sh`, `test-wave-conflict.sh`, `test-wave-eviction.sh`, `test-wave-testonly.sh`.
 here="$(cd "$(dirname "$0")" && pwd)"   # fixed at the start: a relative $0 means nothing once the work moves to a child's worktree
 . "$here/env.sh" 2>/dev/null || exit 0
 . "$here/ghcall.sh"   # the close and the board write go through the doors beside this script
@@ -1457,17 +1457,75 @@ issue_text() {
   printf '%s' "$o" | jq -er 'select((.number|type) == "number") | [(.title // ""), (.body // "")] | join("\n")' 2>/dev/null
 }
 
-# asks_test_only <text> (#2418): 0 when the text names at least one repository path, and every path it names is a test path
-# or a `.md` note. Such an issue asks for a test change, and a wave of tests alone answers it. A text that names a code path
-# asks for more than a test, and a text that names no path cannot be shown to ask for a test alone: both keep the issue open.
+# is_md_note <path>: 0 when the path is a Markdown note, whatever the case of its extension, so the note a text names is
+# never read as the code a landing must change.
+is_md_note() {
+  case "$(printf '%s' "$1" | /usr/bin/tr '[:upper:]' '[:lower:]')" in *.md) return 0;; esac
+  return 1
+}
+
+# paths_nonnote <text>: the paths an issue's text names that are no Markdown note, one per line.
+paths_nonnote() {
+  local p
+  for p in $(paths_of "$1"); do is_md_note "$p" || printf '%s\n' "$p"; done
+}
+
+# paths_nontest <text> (#2418): the paths an issue's text names that are neither a test path nor a Markdown note, one per
+# line: the code the text asks for. It is empty when the text names test paths and notes only, and empty when it names no
+# path at all. The two decisions of a text -- whether it asks for a test alone, and the code it names -- both derive from
+# this one classification, so they never disagree about a path.
+paths_nontest() {
+  local p
+  for p in $(paths_nonnote "$1"); do is_test_path "$p" || printf '%s\n' "$p"; done
+}
+
+# asks_test_only <text> (#2418): 0 when the text names at least one path that is no note, and every such path is a test
+# path. Such an issue asks for a test change, and a wave of tests alone answers it. A text that names a code path asks for
+# more than a test, and a text that names no path cannot be shown to ask for a test alone: both keep the issue open.
 asks_test_only() {
-  local p n=0
-  for p in $(paths_of "$1"); do
-    case "$p" in *.md) continue;; esac
-    is_test_path "$p" || return 1
-    n=$((n + 1))
-  done
-  [ "$n" -gt 0 ]
+  local all code
+  all=$(paths_nonnote "$1"); [ -n "$all" ] || return 1
+  code=$(paths_nontest "$1"); [ -z "$code" ]
+}
+
+# testonly_read <from> <to> (#2418): the one issue a wave that changes test files only names in its Refs, read against the
+# range of the landing. It reads the caller's issues, amb, rfs and nontest. When the issue's text names test paths and no
+# code path, the issue asks for a test change, and the landing delivers it: this adds it to `issues`, so land_books closes it.
+# Otherwise `testmiss` names the issue and `testpaths` the code its text asks for, and testonly_book records both on it.
+# It reads no issue when the wave changes code, names no issue, or names several.
+testonly_read() {
+  local only txt
+  testmiss=""; testpaths=""
+  [ -z "$issues" ] && [ -z "$amb" ] && [ -z "$nontest" ] || return 0
+  [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ] || return 0
+  only=$(printf '%s' "$rfs" | tr -d ' ')
+  txt=$(issue_text "$only" 2>/dev/null) || txt=""
+  if [ -n "$txt" ] && asks_test_only "$txt"; then
+    issues=$only
+    echo "WAVE-NOTE $w: the wave changes test files only, and issue #$only asks for a test change (its text names test paths and no code path); the landing closes #$only"
+  else
+    testmiss=$only
+    testpaths=$(paths_nontest "$txt" | while IFS= read -r f; do printf '%s' "${testpaths:+$testpaths, }$f"; done)
+  fi
+}
+
+# testonly_book <run> (#2418): what the landing records when testonly_read found an issue that asks for more than a test
+# change. One comment names the code the wave does not change, and the issue's ledger carries the cause (ADR-0149). Its
+# dispatch marker stays, so the frontier's own claim read takes the issue in no later pass of this cycle. The landing itself
+# requeues nothing: the issue's next run comes from a later decision, never from a lost cause. It reads `w`, `run` and the
+# two variables testonly_read sets, so `land` and `land_batch` share one path, and it runs after the push, never before.
+testonly_book() {
+  [ -n "$testmiss" ] || return 0
+  local run=$1 tmc f
+  if [ -n "$testpaths" ]; then
+    tmc="the wave $w changes test files only, and issue #$testmiss asks for $testpaths, which this landing does not change: the issue stays open, and a later run must change $testpaths"
+  else
+    tmc="the wave $w changes test files only, and the text of issue #$testmiss names no test path, so the landing cannot read it as a request for a test change: the issue stays open, and a later run must make the change its text asks for"
+  fi
+  wave_fact "$run" "$testmiss" refused "$tmc"
+  f=$(sg_cq_file "$testmiss-testonly$$.md" 2>/dev/null) && printf '%s\n' "$tmc" > "$f" \
+    || echo "WAVE-NOTE #$testmiss: the comment naming the missing part could not be queued"
+  echo "WAVE-NOTE $w: the test-only wave does not deliver #$testmiss; it stays open and the landing records why on it"
 }
 
 # commit_refs <clone> <range> (#869, #1474): one line per commit of the range that names an issue. `D <sha> <n>`: the commit
@@ -2035,24 +2093,8 @@ land_read() {
     # (#2418) A wave that changes test files only delivers the one issue its Refs name when that issue asks for a test
     # change: its text names test paths and no code path. A wave of tests alone then answers the issue (#533 held that it
     # delivers nothing when the issue asks for more). The issue whose text asks for code, or names no path, keeps open:
-    # `testmiss` names it and `testpaths` the code it asks for, and land_books records why on it.
-    testmiss=""; testpaths=""
-    local only txt
-    if [ -z "$issues" ] && [ -z "$amb" ] && [ -z "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
-      only=$(printf '%s' "$rfs" | tr -d ' ')
-      txt=$(issue_text "$only" 2>/dev/null) || txt=""
-      if [ -n "$txt" ] && asks_test_only "$txt"; then
-        issues=$only
-        echo "WAVE-NOTE $w: the wave changes test files only, and issue #$only asks for a test change (its text names test paths and no code path); the landing closes #$only"
-      else
-        testmiss=$only
-        for f in $(paths_of "$txt"); do
-          case "$f" in *.md) continue;; esac
-          is_test_path "$f" && continue
-          testpaths="${testpaths:+$testpaths, }$f"
-        done
-      fi
-    fi
+    # `testmiss` names it and `testpaths` the code it asks for, and testonly_book records why on it.
+    testonly_read "$1" "$2"
     if [ -z "$issues" ] && [ -z "$amb" ] && [ -n "$nontest" ] && [ "$(printf '%s' "$rfs" | wc -w | tr -d ' ')" = 1 ]; then
       issues=$(printf '%s' "$rfs" | tr -d ' ')
       echo "WAVE-NOTE $w: the only Refs of the wave name #$issues, on a test-only RED commit, and its fix commit names none; the landing closes #$issues"
@@ -2142,22 +2184,9 @@ land_books() {
       echo "WAVE-NOTE $w: no commit names an issue (no Refs), and no issue of run $run has an entered child it did not requeue, so the landing closes nothing"
     fi
   fi
-  # (#2418) A test-only wave whose issue asks for more than a test change keeps the issue open, and the landing records why
-  # on the issue: one comment names the code the wave does not change, and the issue's ledger carries the cause (ADR-0149).
-  # Its dispatch marker stays, so the frontier's own claim read takes the issue in no later pass of this cycle. The landing
-  # itself requeues nothing: the issue's next run comes from a later decision, never from a lost cause.
-  if [ -n "$testmiss" ]; then
-    local tmc
-    if [ -n "$testpaths" ]; then
-      tmc="the wave $w changes test files only, and issue #$testmiss asks for $testpaths, which this landing does not change: the issue stays open, and a later run must change $testpaths"
-    else
-      tmc="the wave $w changes test files only, and the text of issue #$testmiss names no test path, so the landing cannot read it as a request for a test change: the issue stays open, and a later run must make the change its text asks for"
-    fi
-    wave_fact "$run" "$testmiss" refused "$tmc"
-    f=$(sg_cq_file "$testmiss-testonly$$.md" 2>/dev/null) && printf '%s\n' "$tmc" > "$f" \
-      || echo "WAVE-NOTE #$testmiss: the comment naming the missing part could not be queued"
-    echo "WAVE-NOTE $w: the test-only wave does not deliver #$testmiss; it stays open and the landing records why on it"
-  fi
+  # (#2418) A test-only wave whose issue asks for more than a test change keeps the issue open, and testonly_book records
+  # why on the issue. A batch landing reaches it for each of its runs, from that run's own range.
+  testonly_book "$run"
   # (#1474) A wave whose commits name an issue and that closes none says why, in place of "no Refs": the Refs of a test-only RED
   # commit deliver nothing (#533), a commit that names several issues closes none of them (#869), and the rest are Refs outside
   # the dispatch set or dropped by the tip check.
