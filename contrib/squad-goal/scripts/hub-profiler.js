@@ -54,9 +54,9 @@ const profTripTitle=c=>profTripRead(c.label,c);
 // label and the table print both numbers, so no width is a figure the page never shows.
 const profTripPar=p=>p==null?"&#8212;":"×"+Number(p).toFixed(1);
 const profTripTime=c=>`${profTripNum(c.effective_s)} · ${profTripPar(c.parallelism)}`;
-// The Gating segment's split (#2317): the slot wait and the gate run the fold emits. A column that is no gate, or a
-// Gating column whose window ran no linked gate, holds no split and draws one segment as it always did.
-const profGatingSplit=c=>{if(c.column!=="gating")return null;
+// The gating segment's split (#2317): the slot wait and the gate run the fold emits. A column that is no gate, or a
+// gating column whose window ran no linked gate, holds no split and draws one segment as it always did.
+const profGateSplit=c=>{if(c.column!=="gating")return null;
  const w=c.slot_wait_s,r=c.gate_run_s,total=w+r;
  return typeof w==="number"&&typeof r==="number"&&isFinite(w)&&isFinite(r)&&w>0&&r>0?{wait:w/total,run:r/total}:null};
 // The gates whose record states no slot (#2317): their whole stint stands as a gate run, so the page names them and
@@ -173,10 +173,10 @@ function profTripChart(t,cols){
  // The trip bar is thin, it has the plot's width and it sits under the Machine lane (#2255): one segment a column, each
  // under its band, and a column with no median paints no colour.
  const barBands=bands.map(b=>{const painted=(b.c.median_s||0)>0;
-  const w=Math.max(0,b.x1-b.x0),y=barY.toFixed(1),sp=painted?profGatingSplit(b.c):null;
-  // #2317: the Gating segment splits into its slot wait and its gate run, each in its own shade of the Gating colour.
-  if(sp)return `<rect class="ptb-seg ptc pts-gating ptb-wait" x="${b.x0.toFixed(1)}" y="${y}" width="${(w*sp.wait).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`Gating: slot wait ${profTripNum(b.c.slot_wait_s)}`)}</title></rect>`
-   +`<rect class="ptb-seg ptc pts-gating ptb-run" x="${(b.x0+w*sp.wait).toFixed(1)}" y="${y}" width="${(w*sp.run).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`Gating: gate run ${profTripNum(b.c.gate_run_s)}`)}</title></rect>`;
+  const w=Math.max(0,b.x1-b.x0),y=barY.toFixed(1),sp=painted?profGateSplit(b.c):null;
+  // #2317: the gating segment splits into its slot wait and its gate run, each in its own shade of the column colour.
+  if(sp)return `<rect class="ptb-seg ptc pts-gating ptb-wait" x="${b.x0.toFixed(1)}" y="${y}" width="${(w*sp.wait).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`${b.c.label}: slot wait ${profTripNum(b.c.slot_wait_s)}`)}</title></rect>`
+   +`<rect class="ptb-seg ptc pts-gating ptb-run" x="${(b.x0+w*sp.wait).toFixed(1)}" y="${y}" width="${(w*sp.run).toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(`${b.c.label}: gate run ${profTripNum(b.c.gate_run_s)}`)}</title></rect>`;
   return `<rect class="ptb-seg ptc${painted?` pts-${esc(b.c.column)}`:" ptb-none"}" x="${b.x0.toFixed(1)}" y="${y}" width="${w.toFixed(1)}" height="${PROF_TRIP_BAR}"><title>${esc(profTripTitle(b.c))}</title></rect>`}).join("");
  const bar=`<rect class=ptbbar x="${G}" y="${barY.toFixed(1)}" width="${W}" height="${PROF_TRIP_BAR}"></rect>`+barBands;
  // One line joins the points of the columns it crosses (#2253): a column with no point ends the run, and that stretch
@@ -279,8 +279,8 @@ function profTripLanes(t){
  const mach=`<div class=ptlh>Machine &middot; min-max per line <span class=ptlkey><i class="ptkey ptkey-cpu"></i>CPU ${span(cpu)} <i class="ptkey ptkey-ram"></i>RAM ${span(ram)}</span></div>`
   +`<svg class="ptlane ptlane-mach" viewBox="0 0 ${PROF_LANE_W} ${PROF_MACH_H}" role=img aria-label="CPU and RAM as a percent of the whole machine over the trip's columns, each scaled from its own lowest to its own highest reading, or at mid height when it holds one reading" preserveAspectRatio=none>`
   +`${profTripBands(parts,PROF_MACH_H)}${profTripLine(parts,"cpu",PROF_MACH_H,cpu,"ptl-cpu",(c,v)=>v==null?"CPU: no reading":`CPU ${profTripPct(v)} of the whole machine`)}${profTripLine(parts,"ram",PROF_MACH_H,ram,"ptl-ram",(c,v)=>v==null?"RAM: no reading":`RAM ${profTripPct(v)} of ${gb==null?"the machine":Number(gb).toFixed(0)+" GB"}`)}</svg>`;
- // #2317: the Gating segment splits into its slot wait and its gate run, in the same two shades the desktop bar draws.
- const strip=`<div class=ptstrip>${parts.map(({c,w})=>{const sp=(c.median_s||0)>0?profGatingSplit(c):null;
+ // #2317: the gating segment splits into its slot wait and its gate run, in the same two shades the desktop bar draws.
+ const strip=`<div class=ptstrip>${parts.map(({c,w})=>{const sp=(c.median_s||0)>0?profGateSplit(c):null;
   if(sp)return `<i class="ptseg pts-gating ptb-wait" style="flex:${(w*sp.wait).toFixed(1)} 1 0"></i><i class="ptseg pts-gating ptb-run" style="flex:${(w*sp.run).toFixed(1)} 1 0"></i>`;
   return `<i class="ptseg pts-${esc(c.column)}${c.median_s>0?"":" ptb-none"}" style="flex:${w.toFixed(1)} 1 0"></i>`}).join("")}</div>`;
  const labels=`<div class=ptlabels>${cols.map(c=>`<span class=ptlab><i class="ptk ptk-${esc(c.column)}${c.median_s>0?"":" ptk-none"}" aria-hidden=true></i>${esc(c.label)} ${profTripTime(c)}</span>`).join("")}</div>`;
