@@ -648,7 +648,8 @@ for r in names:
         # #2144: the line leaves now, but this pass still reads the run for its card and its markers. The card pass and rule
         # Q read `keep`, so a run dropped before that read left its issue at no column, unfrozen and never requeued: the
         # pass adds it to `keep` and to `dropped`, and the rewritten list leaves it out.
-        if i["idle"] > 300 and not open_wave(n, i["run_id"]) \
+        reap_ended = i["failed"] and any(str(x).startswith("killed/") for x in i["reasons"])   # the reap-ended block below names these runs (#1854)
+        if i["idle"] > 300 and not reap_ended and not open_wave(n, i["run_id"]) \
                 and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not holds_lease(n):
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
             drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
@@ -669,8 +670,7 @@ for r in names:
         # carries its issues to the card pass, as a rule-C zombie's do. So a run the reap ended (a killed verdict), with no
         # process and no lease naming it any more, is gone from the leases: its line leaves here, and the line says so. An
         # open wave holds it (its children still land through it) and so does a live lease (the run is not gone from them).
-        if i["failed"] and any(str(x).startswith("killed/") for x in i["reasons"]) \
-                and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not open_wave(n, i["run_id"]) \
+        if reap_ended and not any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(f)) and not open_wave(n, i["run_id"]) \
                 and not holds_lease(n):
             say(f"killed run {n} (its process and its leases are gone) dropped from active-runs")
             drop_line(r)
