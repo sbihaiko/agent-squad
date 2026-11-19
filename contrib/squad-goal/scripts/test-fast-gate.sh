@@ -459,6 +459,27 @@ $G -C "$R" add -A; $G -C "$R" commit -q -m unrelated
 out=$(fg); rc=$?
 /usr/bin/grep -q "test-hub-caps.sh" "$T/ran.log" 2>/dev/null && ko "an unlisted module ran the fixture suite" || ok "a module the mirror statement does not name runs no fixture suite"
 
+# (#2373) A fixture suite that copies or sources a changed script names it in its own text, so the gate selects it from that
+# text with no `# mirrors:` line. The copy forms in use today are "$d/<script>", $(dirname "$src")/<script> and a brace list
+# {a.sh,b.sh}; a bare name in prose is no copy and selects nothing. A selected suite that goes red fails the gate.
+$G -C "$R" checkout -q dev
+printf '#!/bin/bash\n# a\n' > "$S/copy-a.sh"; printf '#!/bin/bash\n# b\n' > "$S/copy-b.sh"; printf '#!/bin/bash\n# c\n' > "$S/copy-c.sh"
+printf '#!/bin/bash\nd=$(cd "$(dirname "$0")" && pwd); H=$(mktemp -d); cp "$d/copy-a.sh" "$H/" || exit 1\necho "test-copy-d.sh" >> "%s/ran.log"\n' "$T" > "$S/test-copy-d.sh"
+printf '#!/bin/bash\nsrc=${1:-$(dirname "$0")/copy-b.sh}; H=$(mktemp -d); cp "$src" "$H/copy-b.sh" || exit 1\necho "test-copy-src.sh" >> "%s/ran.log"\n' "$T" > "$S/test-copy-src.sh"
+printf '#!/bin/bash\n[ "$COPY_FAIL" = test-copy-brace.sh ] && exit 1\nH=$(mktemp -d); cp "$(dirname "$0")"/{copy-b.sh,copy-c.sh} "$H/" || exit 1\necho "test-copy-brace.sh" >> "%s/ran.log"\n' "$T" > "$S/test-copy-brace.sh"
+printf '#!/bin/bash\n# this suite mentions copy-a.sh in prose only\necho "test-copy-none.sh" >> "%s/ran.log"\n' "$T" > "$S/test-copy-none.sh"
+$G -C "$R" add -A; $G -C "$R" commit -q -m copy-base
+$G -C "$R" checkout -q -b gui/copy dev && printf '# changed\n' >> "$S/copy-a.sh" && printf '# changed\n' >> "$S/copy-b.sh" && printf '# changed\n' >> "$S/copy-c.sh"
+$G -C "$R" add -A; $G -C "$R" commit -q -m copy-work
+out=$(fg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx "test-copy-d.sh" "$T/ran.log" && ok "a suite that copies a changed script by \"\$d/<script>\" runs, with no mirror statement" || ko "copy \$d: rc $rc ran '$(cat "$T/ran.log" 2>/dev/null)': $out"
+/usr/bin/grep -qx "test-copy-src.sh" "$T/ran.log" 2>/dev/null && ok "a suite that copies a changed script by \$(dirname \"\$src\")/<script> runs, with no mirror statement" || ko "copy \$(dirname src): ran '$(cat "$T/ran.log" 2>/dev/null)': $out"
+/usr/bin/grep -qx "test-copy-brace.sh" "$T/ran.log" 2>/dev/null && ok "a suite that copies a changed script by a brace list runs, with no mirror statement" || ko "copy brace list: ran '$(cat "$T/ran.log" 2>/dev/null)': $out"
+/usr/bin/grep -qx "test-copy-none.sh" "$T/ran.log" 2>/dev/null && ko "a suite that only names a changed script in prose ran" || ok "a bare name in prose selects no suite"
+out=$(COPY_FAIL=test-copy-brace.sh fg); rc=$?
+[ $rc -ne 0 ] && case "$out" in *test-copy-brace.sh*) true;; *) false;; esac && ok "a suite selected by the script it copies that goes red fails the gate and is named" || ko "copy red suite: rc $rc: $out"
+$G -C "$R" checkout -q dev   # the red above belongs to the gui/copy tip; the cases below start from a tip no gate has marked
+
 # (spec 1163) The verdict: the history line carries the outcome, one reason, the checks that ran and the ones that did not. A tool
 # that is absent is unproven and names the tool, with no retry; a present check that reports a defect is fail; a clean battery passes.
 vstub() {  # <name> <body>: a battery stub that logs one line per call, then runs <body>
