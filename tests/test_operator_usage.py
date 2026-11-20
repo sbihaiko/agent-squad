@@ -92,6 +92,9 @@ def _setup(hub, tmp_path, monkeypatch):
     projects = tmp_path / "projects"
     checkout = tmp_path / "co"
     (checkout).mkdir()
+    # The hub resolves squad from SG_SQUAD and SG_CHECKOUT first: a gate that exports either names another tree's copy.
+    monkeypatch.delenv("SG_SQUAD", raising=False)
+    monkeypatch.delenv("SG_CHECKOUT", raising=False)
     monkeypatch.setattr(hub, "CLAUDE_PROJECTS", projects, raising=False)
     monkeypatch.setattr(hub, "CHECKOUT", checkout, raising=False)
     monkeypatch.setattr(hub, "OPERATOR", None, raising=False)

@@ -708,6 +708,7 @@ def load_squad(roots, names=("caps", "run_caps")):
     table gains none (#453). This module is read by a longer-lived interpreter too -- a suite that imports it into its own
     process -- and a purge that stayed there parted every class that process already held, so a raise it expected was a
     different class from the one it caught."""
+    roots = [str(r) for r in roots if r]   # a caller's CHECKOUT may be a Path: the message joins strings and sys.path holds them
     with _SQUAD_LOCK:
         for mods in _held_squad(roots, names):
             return mods
