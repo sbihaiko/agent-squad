@@ -521,3 +521,54 @@ async def test_a_regression_fix_entry_that_crashed_is_not_run_again_on_resume(tm
     third = lands(tmp_path)[-1]
     assert third["outcome"] == "fail" and "review_fix_failed" in third["reasons"] and "launched_no_outcome" in third["reasons"]
     assert [f["entry"] for f in third["effect"]["fixes"]] == [2] and not (tmp_path / "review.log").exists()
+
+
+def rebaser(name, base):
+    """A child step that rebases its worktree branch onto `base`, then writes one file: a fix run's REBASE ROUND (#2561)."""
+    step = writer(name)
+    inner = step["effect"]
+
+    def effect(r):
+        sh(Path(r.workspace), "git", "reset", "-q", "--hard", base)
+        inner(r)
+    return {**step, "effect": effect}
+
+
+def rebase_target(tmp_path):
+    """A target whose tip and a newer base both write `same.txt`: the rebased child's merge into the tip conflicts."""
+    repo = sibling_repo(tmp_path)
+    newer = tmp_path.parent / (tmp_path.name + "-newer")
+    sh(repo, "git", "worktree", "add", "-q", "-b", "newer", str(newer))
+    (newer / "same.txt").write_text("newer base\n")
+    sh(newer, "git", "add", "-A")
+    sh(newer, "git", "commit", "-q", "-m", "the newer base")
+    (repo / "same.txt").write_text("old tip\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "the work branch's old tip")
+    return repo
+
+
+@pytest.mark.anyio
+async def test_a_fix_run_whose_child_rebased_lands_its_branch(tmp_path):
+    """#2561: a fix run's child rebased the work branch onto a newer base. The engine merged it into the old tip, the merge
+    conflicted, and a delivered fix round ended `failed merge_conflict`. A fix run replaces its target with the child's branch."""
+    repo = rebase_target(tmp_path)
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": rebaser("fix.txt", "newer")}, target=repo,
+               options={"fix_run": True})
+    v = await eng.run()
+    [land] = lands(tmp_path)
+    assert land["outcome"] == "pass" and "merge_conflict" not in land["reasons"], land
+    assert land["effect"].get("rewritten") is True, land["effect"]
+    assert (repo / "fix.txt").read_text() == "x\n" and (repo / "same.txt").read_text() == "newer base\n"
+    assert v.verdict == "completed" and "merge_conflict" not in v.reasons, v.reasons
+
+
+@pytest.mark.anyio
+async def test_a_run_that_is_no_fix_run_still_fails_a_rebased_child_with_merge_conflict(tmp_path):
+    """#2561: only a fix run replaces its target; any other run keeps the merge, and a conflict fails the land."""
+    repo = rebase_target(tmp_path)
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": rebaser("fix.txt", "newer")}, target=repo)
+    v = await eng.run()
+    [land] = lands(tmp_path)
+    assert land["outcome"] == "fail" and land["reasons"] == ["merge_conflict"], land
+    assert (repo / "same.txt").read_text() == "old tip\n" and v.verdict == "failed"
