@@ -79,9 +79,10 @@ def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
     assert "Backlog for Todo" in B.column_stop("Todo")
     assert "autofrontier" in B.column_stop("Batching")
     assert "branch review pass" in B.column_stop("Reviewing")
+    assert "wave" in B.column_stop("Testing")
 
 
-@pytest.mark.parametrize("name", ["Testing"])
+@pytest.mark.parametrize("name", ["Closed"])   # every limited column has a pass now; a name outside the map has none
 def test_a_column_the_limit_stops_no_pass_yet_says_so(name):
     assert B.column_stop(name) == "no pass reads it yet"
 

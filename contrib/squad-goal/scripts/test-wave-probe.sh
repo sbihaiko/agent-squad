@@ -9,7 +9,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 exec 3>&2 2>>"$T.err"
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs"
-cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/"
+cp "$d/wave.sh" "$d/columnlimit.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/base-battery.sh" "$d/basecheck.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh SG_PREMISE_CHECK=${SG_PREMISE_CHECK-%s/pc}\n. %s/address.sh\n' \
   "$T/st" "$T/co" "$T" "$T/bin" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"

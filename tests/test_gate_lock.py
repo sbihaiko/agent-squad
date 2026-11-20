@@ -137,7 +137,7 @@ def _copy(d, names, to):
 
 WAVE_SCRIPTS = ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
                 "ghcall.sh", "ghread.py", "ghthrottle.py", "autohunt.sh", "basecheck.sh", "fast-gate.sh", "issue_ledger.py",
-                "revformat.py", "siblings.py", "wavepause.py")   # wave.sh sources ghcall.sh, which runs the two readers (#593)
+                "revformat.py", "siblings.py", "wavepause.py", "columnlimit.sh", "issue_state.py")   # wave.sh sources ghcall.sh, which runs the two readers (#593), and reads the Testing limit through columnlimit.sh and issue_state.py (#2439)
 
 
 @pytest.fixture

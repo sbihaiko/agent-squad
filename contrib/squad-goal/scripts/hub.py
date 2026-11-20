@@ -4711,42 +4711,58 @@ _sync_frontier = {}          # a capped spec's unread numbers, which its next pr
 def _has_subs(item):
     return bool((item.get("si") or {}).get("total"))
 
+def _link_parent(item, parent, parent_spec):
+    """Write the parent a press's walk knows as `pa` when that parent is a spec, as the board read does (ADR-0142)."""
+    item.pop("pau", None)
+    if parent_spec and isinstance(parent, int): item["pa"] = parent
+    else: item.pop("pa", None)
+
+def _link_root(root):
+    """A press on a ticket keeps the spec the cached row names; with none, the card is `pau` until a read names one."""
+    kept = next((i.get("pa") for i in board_cache.get("items") or [] if i.get("n") == root["n"]), None)
+    if isinstance(kept, int): root["pa"] = kept; root.pop("pau", None)
+    else: root.pop("pa", None); root["pau"] = True
+
 def sync_tree(root):
     """The root and, when it is a spec, every sub-issue under it, read to the depth, node and time bounds (#1670).
 
     Answers (items read, the cap that stopped the walk or None, a note). A press past a bound keeps the numbers it did not
     read, and the next press continues from them as fresh roots, so a wide tree is read across presses, never in one."""
     n = root["n"]
-    if _columns_module.SPEC_LABEL not in (root.get("l") or []): return [root], None, ""
+    if _columns_module.SPEC_LABEL not in (root.get("l") or []):
+        _link_root(root)
+        return [root], None, ""
     started = time.monotonic()
-    if n in _sync_frontier: pending = [(x, 0) for x in _sync_frontier.pop(n)]
+    if n in _sync_frontier: pending = [(x, 0, p, ps) for x, p, ps in _sync_frontier.pop(n)]
     else:
         subs, err = sub_issues(n, root.get("r") or REPO)
         if err: return [root], None, err
-        pending = [(s["number"], 1) for s in subs if isinstance(s.get("number"), int)]
+        pending = [(s["number"], 1, n, True) for s in subs if isinstance(s.get("number"), int)]
     items, seen, deferred, rest = [root], {n}, [], []
     capped, failed = None, 0
     while pending:
-        num, depth = pending.pop(0)
+        num, depth, parent, parent_spec = pending.pop(0)
         if num in seen: continue
         if len(items) >= SYNC_TREE_NODES:
-            capped, rest = "nodes", [num] + [x for x, _ in pending]
+            capped, rest = "nodes", [(num, parent, parent_spec)] + [(x, p, ps) for x, _, p, ps in pending]
             break
         if time.monotonic() - started >= SYNC_TREE_SECONDS:
-            capped, rest = "deadline", [num] + [x for x, _ in pending]
+            capped, rest = "deadline", [(num, parent, parent_spec)] + [(x, p, ps) for x, _, p, ps in pending]
             break
         seen.add(num)
         try: child = read_one_card(num)
         except Exception: failed += 1; continue
+        _link_parent(child, parent, parent_spec)
         items.append(child)
         if not _has_subs(child): continue
         if depth >= SYNC_TREE_DEPTH:
             capped = capped or "depth"
-            deferred.append(num)
+            deferred.append((num, parent, parent_spec))
             continue
         subs, err = sub_issues(num, child.get("r") or REPO)
         if err: failed += 1; continue
-        pending += [(s["number"], depth + 1) for s in subs if isinstance(s.get("number"), int)]
+        child_spec = _columns_module.SPEC_LABEL in (child.get("l") or [])
+        pending += [(s["number"], depth + 1, num, child_spec) for s in subs if isinstance(s.get("number"), int)]
     frontier = deferred + rest
     if frontier: _sync_frontier[n] = frontier
     else: _sync_frontier.pop(n, None)
