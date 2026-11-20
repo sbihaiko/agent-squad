@@ -408,6 +408,16 @@ salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; rm -f "$T/gh.log"; 
 case "$r" in *"label write failed"*) ok "2571 a failed label write is named";; *) ko "2571 the failed label write is silent: '$r'";; esac
 rm -f "$T/gh.log"; r=$(stubwave sbl)
 /usr/bin/grep -q 'issues/8/labels.*frozen:owner' "$T/gh.log" 2>/dev/null && [ -n "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 the next pass on the same base retries the stop" || ko "2571 the stop was not retried: '$r'"
+# a stopped tip stays stopped when dev moves: no round line, no round review (the stop is keyed to the tip, not to the base)
+salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; r=$(stubwave sbl); devmv 2; sapprove; r=$(stubwave sbl)
+[ "$(/usr/bin/grep -c '^salvage ' "$SKM")" = 1 ] && head -1 "$T/st/review-$SK.md" | /usr/bin/grep -q APPROVE && ok "2571 a stopped tip gets no round after dev moves" || ko "2571 a stopped tip got a round after dev moved: '$(cat "$SKM" | tr '\n' '|')' '$r'"
+# a stop whose label write failed stays a stop when dev moves, and the third failed write stops the retries with one status line
+salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; r=$(LABELFAIL=1 stubwave sbl); devmv 2; sapprove; rm -f "$T/st/cq"/*; r=$(LABELFAIL=1 stubwave sbl)
+[ "$(/usr/bin/grep -c '^salvage ' "$SKM")" = 1 ] && head -1 "$T/st/review-$SK.md" | /usr/bin/grep -q APPROVE && ok "2571 a failed stop gets no round after dev moves" || ko "2571 a failed stop got a round after dev moved: '$(cat "$SKM" | tr '\n' '|')' '$r'"
+r=$(LABELFAIL=1 stubwave sbl); s=$(cat "$T/st/cq/"x__y#8-status~* 2>/dev/null)
+case "$r" in *"BRANCHLAND ALERT"*) case "$s" in *"label write failed 3 times"*) ok "2571 the third failed label write alerts once with a status line";; *) ko "2571 no status after three failed writes: '$s'";; esac;; *) ko "2571 no alert after three failed writes: '$r'";; esac
+rm -f "$T/gh.log"; r=$(LABELFAIL=1 stubwave sbl)
+/usr/bin/grep -q 'issues/8/labels' "$T/gh.log" 2>/dev/null && ko "2571 a write past the try cap was sent again: '$r'" || ok "2571 a stop past the try cap sends no more label writes"
 # a salvage branch that ended with no landing (deleted by hand) leaves no marker; a kept wave marker is not the sweep's
 salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); : > "$T/st/auto/branchland-salvagestop-$SK-0123456789"; printf 'origin/dev\n' > "$T/st/auto/kept-fix_9-rebase-gone"
 $O update-ref -d "refs/heads/$SB"; python3 -c 'import os,sys,time; [os.utime(f,(time.time()-120,)*2) for f in sys.argv[1:]]' "$T/st/auto/"*"$SK"*; r=$(sbl)
