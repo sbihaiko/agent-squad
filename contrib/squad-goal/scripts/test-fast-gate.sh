@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 8.46
+# seconds: 196.13
 # (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
 # below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
 # by side then read each other's hang as a survivor, or ended it.
@@ -1020,7 +1020,7 @@ out=$(pheld 1); rc=$?
 
 pnew lo; psuite a "echo run >> $pm/aruns; exit 1"; psuite b 'sleep $HANG_NAP'; ptip
 out=$(pheld 2 SG_GATE_BOUND_SECONDS=3); rc=$?
-[ $rc = 4 ] && [ "$(pfield 1)" = unproven ] && [ "$(/usr/bin/wc -l < "$pm/aruns" | tr -d ' ')" = 1 ] && case "$(pfield 2)" in *test-a.sh*test-b.sh*) true;; *) false;; esac \
+[ $rc = 4 ] && [ "$(pfield 1)" = unproven ] && [ "$(/usr/bin/wc -l < "$pm/aruns" | tr -d ' ')" = 1 ] && case "$(pfield 2)" in *test-a.sh*) case "$(pfield 2)" in *test-b.sh*) true;; *) false;; esac;; *) false;; esac \
   && ok "2569 a suite red under the pool with no time left to run alone is unproven, and the reason names it" || ko "2569 no time to rerun: rc $rc, outcome '$(cat "$T/oc" 2>&1)'"
 pnohang || ko "2569 no time to rerun: a killed suite's tree survived"
 
