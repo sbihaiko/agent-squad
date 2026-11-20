@@ -354,6 +354,44 @@ def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
     assert same["self_s"] == pytest.approx(10.0) and same["events"] == 0
 
 
+HUBMUX = f"python3 {S}/hubmux.py"
+
+
+def hub_window(prof, scope, reads):
+    """A window of the hub process 40 whose sampler read the table for `reads` seconds between two readings, each of
+    which gained it 0.5 s beside the sampler."""
+    w = prof.Window()
+    w.add(1000.0, rd({10: (1, 5.0, f"/bin/bash {S}/watchd.sh supervise"), 40: (1, 3.0, HUBMUX)}), scope)
+    cpu = 3.0
+    for i, read_s in enumerate(reads, start=1):
+        cpu += 0.5
+        w.add(1000.0 + i, rd({10: (1, 5.0, f"/bin/bash {S}/watchd.sh supervise"), 40: (1, cpu, HUBMUX)}), scope,
+              sampler=(40, read_s))
+    return w
+
+
+def test_two_sampler_passes_show_under_hubmux_and_leave_its_self_time(prof, scope, monkeypatch):
+    """Two passes of known thread time, the fake clock charging each fold 0.05 s: hubmux.py keeps only the seconds it
+    spent beside the sampler, and its child row `cpu sampling` carries the sampler's seconds, split into the table read
+    and the window fold (#2581)."""
+    ticks = iter(range(10 ** 6))
+    monkeypatch.setattr(prof.time, "thread_time", lambda: next(ticks) * 0.05)
+    w = hub_window(prof, scope, [0.15, 0.1])
+    hubmux = node(w.tree(), "hubmux.py")
+    assert hubmux["self_s"] == pytest.approx(0.65), "the sampler's seconds stayed in hubmux.py's self time"
+    sampling = node(hubmux, "cpu sampling")
+    assert sampling["self_s"] == 0 and sampling["total_s"] == pytest.approx(0.35)
+    assert node(sampling, "table read")["total_s"] == pytest.approx(0.25)
+    assert node(sampling, "window fold")["total_s"] == pytest.approx(0.1)
+
+
+def test_a_window_with_no_sampler_pass_shows_no_cpu_sampling_row(prof, scope):
+    """With the sampler off there is no pass to record, so the row is absent (#2581)."""
+    w = hub_window(prof, scope, [])
+    w.add(1001.0, rd({10: (1, 5.0, f"/bin/bash {S}/watchd.sh supervise"), 40: (1, 4.0, HUBMUX)}), scope)
+    assert "cpu sampling" not in names(node(w.tree(), "hubmux.py"))
+
+
 def test_the_label_memo_answers_the_fold_the_plain_path_answers(prof, scope):
     """The memo is a cache over the same parser: one reading folds to the same tree with and without it, warm or cold."""
     plain = prof.fold(FIRST, SECOND, scope, memo=None)
@@ -673,6 +711,27 @@ def test_switching_on_starts_the_sampler_and_the_route_returns_the_tree(hub):
     assert [(a["action"], a["who"], a["from"], a["client"]) for a in audit(state)] == [("on", "owner", "loopback", "desktop")]
 
 
+def test_the_sampler_reads_its_thread_time_and_the_tree_carries_the_row(hub, monkeypatch):
+    """Each pass reads its own thread CPU time with `time.thread_time`, and the tree shows it as `cpu sampling` under the
+    hub process: no second of the process's measured CPU is both its own and the sampler's (#2581)."""
+    mod, port, _, _, table = hub
+    ticks = iter(range(10 ** 9))
+    monkeypatch.setattr(mod.time, "thread_time", lambda: next(ticks) * 0.25)
+    table.rows = {8: (1, f"bash {SCRIPTS}/watch.sh"), os.getpid(): (1, f"python3 {SCRIPTS}/hubmux.py")}
+    code, out = ask(port, "POST", {"on": True})
+    assert (code, out.get("on")) == (200, True)
+    wait(lambda: table.reads >= 4)
+    code, v = ask(port, "GET")
+    assert code == 200
+    hubmux = next(c for c in v["tree"]["children"] if c["name"] == "hubmux.py")
+    sampling = next(c for c in hubmux["children"] if c["name"] == "cpu sampling")
+    assert sampling["self_s"] == 0 and sampling["total_s"] > 0
+    assert hubmux["self_s"] + sampling["total_s"] == pytest.approx(hubmux["total_s"], abs=0.002), \
+        "the hub process kept the sampler's seconds"
+    reads = {c["name"]: c["total_s"] for c in sampling["children"]}
+    assert set(reads) == {"table read", "window fold"} and sum(reads.values()) == pytest.approx(sampling["total_s"])
+
+
 def test_the_root_follows_the_supervisor_the_state_folder_names(hub):
     """The supervisor's command names no folder of this profile here: only its pid, read from watchd.pid, puts it in the tree."""
     mod, port, _, state, table = hub
@@ -701,8 +760,8 @@ def test_two_readings_of_one_window_are_never_closer_than_one_period(hub, monkey
     window, calls, intervals = mod.PROFILER["window"], [], []
     add = window.add
 
-    def spy(now, reading, scope):
-        add(now, reading, scope)
+    def spy(now, reading, scope, sampler=None):
+        add(now, reading, scope, sampler=sampler)
         intervals.append(window.interval)
 
     def read():

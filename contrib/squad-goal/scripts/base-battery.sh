@@ -91,14 +91,20 @@ sg_base_battery() {
 
 # sg_shell_suites <top> <merge-base>: the shell suite names (`test-<n>.sh`, without prefix or suffix) a tree changes against
 # <merge-base>: every .sh or .py script under contrib/squad-goal/scripts the tree changes, every fixture suite whose
-# `# mirrors:` line names a changed file, and every fixture suite whose own text copies or sources a changed script (#2373).
+# `# mirrors:` line names a changed file, every fixture suite whose own text copies or sources a changed script (#2373), and
+# every suite whose leading comment block holds the line `# guards: every-script` when the tree changes any .sh or .py script
+# directly under contrib/squad-goal/scripts (#2583). Such a suite checks each script of the directory and names none. The
+# header is read from the leading comment block only, so the same text in a string or a fixture selects nothing.
 # One definition, so the fast gate and the promotion's tip gate read one selection.
 sg_shell_suites() {
-  local top=$1 mb=$2 changed suites t f n re
+  local top=$1 mb=$2 changed suites t f n re any
   changed=$(/usr/bin/git -C "$top" diff --name-only --diff-filter=d "$mb" HEAD 2>/dev/null) || { printf '\n'; return 0; }
+  any=$(printf '%s\n' "$changed" | /usr/bin/grep -E '^contrib/squad-goal/scripts/[^/]+\.(sh|py)$' | head -n 1)
   suites=$(printf '%s\n' "$changed" | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' \
     | /usr/bin/grep -v / | sed 's|^test-||')
   for t in "$top"/contrib/squad-goal/scripts/test-*.sh; do [ -f "$t" ] || continue
+    [ -n "$any" ] && sed -n '/^#/!q;p' "$t" | /usr/bin/grep -qxF '# guards: every-script' \
+      && suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"
     for f in $(sed -n 's/^# mirrors: //p' "$t" | head -n 1); do
       printf '%s\n' "$changed" | /usr/bin/grep -qxF "contrib/squad-goal/scripts/$f" \
         && { suites="$suites"$'\n'"$(basename "$t" .sh | sed 's/^test-//')"; break; }

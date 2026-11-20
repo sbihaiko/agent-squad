@@ -246,6 +246,17 @@ def test_a_hal9k_hold_line_names_its_carrier(hub):
     assert hold["id"] == "hold-1719" and hold["text"] == "#1719" and "HAL9k · #1719" in hold["title"], hold
 
 
+def test_the_hold_row_carries_its_carrier_and_the_icon_that_carrier_wears(hub):
+    """#2572: the server sends the carrier with each hold row, and the icon that carrier wears: a HAL9k hold the red eye,
+    a Manual hold the hand. The page reads no rule of its own (ADR-0137)."""
+    _closed(hub)
+    _hold(hub, 2572, by="hal9k")
+    _hold(hub, 2573)
+    rows = {r["issue"]: r for r in _answer(hub)["lines"] if r["kind"] == "hold"}
+    assert rows[2572]["carrier"] == "hal9k" and rows[2572]["icon"] == "eye", rows
+    assert rows[2573]["carrier"] == "manual" and rows[2573]["icon"] == "hand", rows
+
+
 def test_a_held_card_whose_row_carries_its_item_id_is_named_once(hub):
     """#1713: the registry keys a hold by the issue (`auto/hold-<n>`), while a board row also carries its Project item id;
     the panel matches the same card on either identifier, so one hold is one line."""
@@ -650,11 +661,12 @@ def test_a_hold_row_shows_the_five_delivery_stages_its_own_facts_reach(hub):
     assert [c["state"] for c in hold["stages"]] == ["done", "done", "done", "current", "later"], hold
 
 
-def test_a_fresh_hold_with_no_landing_and_no_gate_has_no_current_stage(hub):
-    """#2547: a hold the loop landed nothing for and no gate checks is still coded: no chip is current, every stage waits."""
+def test_a_fresh_hold_with_no_landing_and_no_gate_has_no_delivery_chips(hub):
+    """#2547, #2572: a hold the loop landed nothing for and no gate checks is still coded, so every stage waits; five
+    chips of `later` carry no information, so the row is served with no stages at all."""
     _closed(hub)
     _hold(hub, 2486)
-    assert [c["state"] for c in _row(_answer(hub), "hold")["stages"]] == ["later"] * 5
+    assert _row(_answer(hub), "hold")["stages"] == []
 
 
 def _gated_hold(hub, monkeypatch, tmp_path, n, gated):
@@ -679,9 +691,10 @@ def test_a_hold_whose_issue_has_a_live_gate_stands_at_the_gate(hub, monkeypatch,
         ("gate", "current"), ("dev", "later"), ("stg", "later"), ("main", "later"), ("publish", "later")]
 
 
-def test_a_gate_for_another_issue_leaves_the_hold_with_no_current_stage(hub, monkeypatch, tmp_path):
-    """#2547: a gate that checks another issue is no gate of this hold."""
-    assert [s for _, s in _stages(_gated_hold(hub, monkeypatch, tmp_path, 2548, 2549))] == ["later"] * 5
+def test_a_gate_for_another_issue_leaves_the_hold_with_no_delivery_chips(hub, monkeypatch, tmp_path):
+    """#2547, #2572: a gate that checks another issue is no gate of this hold, so every stage waits and the row is
+    served with no stages."""
+    assert _stages(_gated_hold(hub, monkeypatch, tmp_path, 2548, 2549)) == []
 
 
 def test_a_hand_landing_through_ffland_marks_gate_and_dev_done(hub, tmp_path):
@@ -792,6 +805,56 @@ def test_the_card_draws_a_hold_as_a_link_and_five_stage_chips(hub):
     assert "44m" in html, html
 
 
+def _card_hold(n, icon, age=600, stages=()):
+    """One hold row as the server sends it: its carrier's icon, its issue link and its age, with the stages it reached."""
+    carrier = "hal9k" if icon == "eye" else "manual"
+    names = ("gate", "dev", "stg", "main", "publish")
+    pairs = zip(names, stages, strict=True) if stages else ()
+    return {"kind": "hold", "id": f"hold-{n}", "icon": icon, "carrier": carrier, "issue": n,
+            "repo": "sbihaiko/agent-squad", "text": f"#{n}", "age": age,
+            "title": f"{'HAL9k' if carrier == 'hal9k' else 'Manual'} · #{n}",
+            "stages": [{"name": a, "state": b} for a, b in pairs]}
+
+
+def test_the_card_draws_no_chip_row_for_a_hold_with_no_stages(hub):
+    """#2572: a hold row served with no stages draws the hand icon, the issue link and the age, and no chip row."""
+    if NODE is None:
+        pytest.skip("node is required")
+    html = _card_html(hub, [_card_hold(2486, "hand")])
+    assert 'href="https://github.com/sbihaiko/agent-squad/issues/2486"' in html, html
+    assert "✋" in html and "10m" in html, html
+    assert "lchips" not in html and 'class="lch ' not in html, html   # no chip row for an empty stage list
+
+
+def test_a_hold_row_with_a_stage_done_keeps_its_five_chips(hub):
+    """#2572: a hold with at least one stage done or current keeps all five chips, as today."""
+    if NODE is None:
+        pytest.skip("node is required")
+    html = _card_html(hub, [_card_hold(2487, "hand", stages=("done", "done", "done", "current", "later"))])
+    assert html.count('class="lch ') == 5, html
+    assert "✓" in html and "⏳" in html, html
+
+
+def test_a_hal9k_hold_row_wears_the_red_eye_and_a_manual_hold_the_hand(hub):
+    """#2572: the row draws the icon the server sent: the red eye for a HAL9k hold, the hand for a Manual hold."""
+    if NODE is None:
+        pytest.skip("node is required")
+    eye_html = _card_html(hub, [_card_hold(2572, "eye")])
+    hand_html = _card_html(hub, [_card_hold(2573, "hand")])
+    assert "haleye" in eye_html and "✋" not in eye_html, eye_html
+    assert "✋" in hand_html and "haleye" not in hand_html, hand_html
+
+
+def test_the_red_eye_is_css_only(hub):
+    """#2572: the eye is a red radial gradient inside a dark ring, drawn in CSS, with no image file, at 14 px."""
+    rule = re.search(r"[^\n{}]*\.haleye\{[^}]*\}", hub.PAGE)
+    assert rule, "no CSS rule draws the eye"
+    css = rule.group(0)
+    assert "radial-gradient" in css and "rgb(255 74 24)" in css and "rgb(0 0 0)" in css, css   # a red gradient inside a dark ring
+    assert "url(" not in css and "background-image" not in css, css   # no image file
+    assert re.search(r"width:\s*14px", css) and re.search(r"height:\s*14px", css), css   # the size of the other row icons
+
+
 def test_the_card_draws_a_suite_with_its_name_slots_and_age(hub):
     """#2507: a suite row wears the microscope, its name, the slots it holds and its age; the pid and the script are only in
     its tooltip."""
@@ -847,6 +910,23 @@ def test_a_hold_on_both_lists_is_counted_once(hub):
     out = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:[' + json.dumps(hold_row) + ']};',
                      '[{id:"hold-2439",kind:"hold",age:600,spend:0}]')
     assert "✋ <b>1</b>" in out["head"], f"a hold on both lists is counted twice: {out['head']}"
+
+
+def test_the_header_counts_each_carrier_and_hides_a_zero_pill(hub):
+    """#2572: the summary counts HAL9k holds beside the red eye and Manual holds beside the hand, and a count of zero
+    hides its pill."""
+    if NODE is None:
+        pytest.skip("node is required")
+    eye = {"kind": "hold", "id": "hold-1", "icon": "eye", "carrier": "hal9k", "issue": 1, "age": 60, "stages": []}
+    hand = {"kind": "hold", "id": "hold-2", "icon": "hand", "carrier": "manual", "issue": 2, "age": 60, "stages": []}
+    both = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:' + json.dumps([eye, hand]) + '};')["head"]
+    assert "haleye" in both and "✋" in both and "✋ <b>1</b>" in both, both   # each carrier's own pill
+    assert re.search(r"haleye[^<]*(?:</span>)?\s*<b>1</b>", both), both
+    only_eye = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:' + json.dumps([eye]) + '};')["head"]
+    assert "haleye" in only_eye and "✋" not in only_eye, only_eye   # a Manual count of zero hides its pill
+    only_hand = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:' + json.dumps([hand]) + '};')["head"]
+    assert "✋ <b>1</b>" in only_hand and "haleye" not in only_hand, only_hand   # a HAL9k count of zero hides its pill
+
 
 
 def test_the_card_footer_shows_only_the_board_read_age(hub):

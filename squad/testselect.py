@@ -112,9 +112,22 @@ def _strings(node):
     return found
 
 
-def _listed(call):
-    """The directories a listing call names: its receiver and arguments, each as a whole path."""
+def _bound(tree):
+    """The values each module-level name is assigned, so a listing call through the name reads every path it may hold."""
+    bound = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bound.setdefault(target.id, []).append(node.value)
+    return bound
+
+
+def _listed(call, bound=None):
+    """The directories a listing call names: its receiver and arguments, each as a whole path. A module-level name stands
+    for the path it holds (#2583)."""
     exprs = list(call.args) + ([call.func.value] if isinstance(call.func, ast.Attribute) else [])
+    exprs = [v for e in exprs for v in ((bound or {}).get(e.id, [e]) if isinstance(e, ast.Name) else [e])]
     found = set()
     for expr in exprs:
         if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
@@ -142,10 +155,10 @@ def _scan(rel, text):
             if isinstance(node.value, (ast.Tuple, ast.List)):
                 declared |= {e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
     literals = _strings(tree)
-    lists = set()
+    lists, bound = set(), _bound(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and _callee(node) in LISTERS:
-            lists |= _listed(node)
+            lists |= _listed(node, bound)
         if isinstance(node, ast.Import):
             for alias in node.names:
                 names |= _with_ancestors(alias.name)

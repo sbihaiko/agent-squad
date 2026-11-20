@@ -50,6 +50,22 @@ def _hub_seam_defaults(tmp_path_factory):
         os.environ["SG_CLAUDE_PROJECTS"] = old_projects
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _one_dashboard_runner():
+    """One node process serves every run_node call of the session, started and answered here in setup, which no cap
+    measures. A call that starts its own node pays the binary's 89 MB cold start inside a measured call: the first node
+    user of a serial shard paid it whole, 3.1 s against the 2 s line (#1534, #2580). A start alone is not enough -- Popen
+    returns before node has loaded -- so setup takes one answer. No node on this runner means no start; the call that
+    needs node still says so.
+
+    Guards: tests/test_dashboard_record.py::test_the_session_starts_the_dashboard_runner_before_a_measured_call,
+    tests/test_dashboard.py::test_start_runner_takes_one_answer_before_the_first_call."""
+    from tests import dashboard_helpers
+    dashboard_helpers.start_runner()
+    yield
+    dashboard_helpers.stop_runner()
+
+
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 

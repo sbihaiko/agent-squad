@@ -1,5 +1,6 @@
 #!/bin/bash
 # seconds: 3.25
+# guards: every-script
 # A `case` never opens inside a command substitution. Bash closes `$(...)` at the first `)`, so `$(case "$2" in /*) ...)`
 # ends at the pattern's own `)` and the rest of the line runs as literal text: the substitution yields garbage and no
 # `bash -n` pass detects it. This guard scans every script of this directory for that shape (#2094).

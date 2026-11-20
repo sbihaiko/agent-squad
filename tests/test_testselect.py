@@ -324,6 +324,24 @@ def test_a_test_that_lists_the_directory_selects_a_script_under_it(tmp_path, lis
     assert select(repo) == ["tests/test_lists.py"]
 
 
+@pytest.mark.parametrize("lister", ["SCRIPTS.glob('*.sh')", "os.listdir(SCRIPTS)", "SCRIPTS.iterdir()"])
+def test_a_test_that_lists_the_directory_through_a_name_selects_a_script_under_it(tmp_path, lister):
+    """A listing call whose receiver is a module-level name lists the path that name holds (#2583)."""
+    lists = (
+        "import os\n"
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent.parent\n"
+        "SCRIPTS = ROOT / 'contrib/squad-goal/scripts'\n"
+        f"def test_every():\n    assert list({lister}) is not None\n"
+    )
+    repo = tip(
+        tmp_path,
+        {"contrib/squad-goal/scripts/check.sh": "changed\n"},
+        extra={"contrib/squad-goal/scripts/check.sh": "old\n", "tests/test_lists.py": lists, "tests/test_other.py": "X = 1\n"},
+    )
+    assert select(repo) == ["tests/test_lists.py"]
+
+
 def test_a_test_that_lists_a_sibling_directory_does_not_select_the_changed_script(tmp_path):
     lists = (
         "from pathlib import Path\n"
