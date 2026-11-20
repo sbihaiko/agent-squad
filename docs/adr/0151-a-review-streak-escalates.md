@@ -19,6 +19,8 @@ A child that the reviewer sends back again and again spends money and produces n
    names the premise the last fix rested on, and it tests that premise before it attempts a third fix. The repeat is the
    record's own rounds: a requeue cuts a fresh worktree where the last fix's commit is not, so a repeat that only the
    issue ledger holds moves the coder but adds no premise sentence.
+   The base rule of ADR-0172 acts first: a Blocking finding whose repro fails at the merge-base and at both heads with the
+   same text moves to Debt in the review itself, so it never reaches the identical-findings count or a coder change.
 3. **Reviewer severity is calibrated against labeled examples.** A finding that is only Debt or nit never counts as CHANGES.
 4. **An approval binds to the reviewed commit.** A new commit after the approval needs a new review.
 5. **A live run that reviews its own children owns them.** childcc never reviews or fixes them while their run is live, and

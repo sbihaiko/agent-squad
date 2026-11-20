@@ -25,6 +25,15 @@ check: a line that exits non-zero while the defect is present.
    Blocking. A refused write is a failed command, so
    a repro that makes one and then exits non-zero stays Blocking; a repro that swallows the refusal and exits 0 still
    moves its finding to Debt.
+   A repro that fails at the head also runs at the base: the merge-base of the head and the base ref, never the base tip,
+   in a throwaway worktree of it that is removed after the run; never in the checkout or the reviewed tree. A repro runs
+   once at the head in a review. The base runs share one budget per review, and each base run is capped at the budget
+   left. A repro that exits 0 at the base keeps its finding Blocking. A repro that fails at the base
+   too keeps its finding Blocking on its first round, marked with the base sha, because a missing behavior also fails at
+   the base. When the previous round's answer holds the same repro, its whitespace normalized, in its Blocking findings,
+   and the previous head is a strict ancestor of the head, the repro fails at every tree the branch has shown, so no fix can clear it: the finding moves to Debt, marked with the
+   base and both heads. A base run that proves nothing (no merge-base, no base tree, a timeout, a repro that cannot run, a
+   kill by a signal, a refused sandbox, a spent budget) keeps the finding Blocking and the loop names the reason.
 3. **A finding with no repro is Debt.** The parser moves it, so no reader sees a Blocking finding without a repro.
 4. **A markdown answer has no repro.** Its findings are read as before.
 5. **A plan review names no repro.** A plan reads no code, so its prompt asks for none, its answer is parsed with no
@@ -51,10 +60,14 @@ check: a line that exits non-zero while the defect is present.
 
 `contrib/squad-goal/scripts/test-revformat.sh`: a blank repro demotes its finding to Debt, a set repro renders as a fifth
 field, a finding with no repro key is refused, `--repro` keeps a failing repro Blocking and moves a passing or unrunnable
-one to Debt with its head, and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `contrib/squad-goal/scripts/test-review.sh`:
+one to Debt with its head; a repro red at the head runs at the base only then, keeps its finding Blocking with a base
+note on its first round, moves it to Debt naming the base and both heads when the previous answer holds the same repro,
+keeps it Blocking when reworded, and keeps it Blocking with a named reason when the base run proves nothing; and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `contrib/squad-goal/scripts/test-review.sh`:
 a review whose Blocking repro passes is saved with the finding in Debt, and a review whose every repro passes is an
 approval; the repro runs in the reviewed tree (a `--worktree` review), a throwaway worktree of the head, or not at all when
-no tree holds it, and never in the checkout of a `--branch` review. `test-loopbug-review.sh`:
+no tree holds it, and never in the checkout of a `--branch` review; the base repro runs in a throwaway worktree of the
+merge-base, in `--worktree` and `--branch` reviews, which is removed after; a fix round whose only Blocking finding fails
+at the base and at both heads is an approval; and a head with no merge-base keeps its finding Blocking and names the reason. `test-loopbug-review.sh`:
 a plan review with a blank repro stays CHANGES, and its prompt asks for no repro. `test-revformat.sh` also proves the
 round review classifies as changes, its repro fails on a conflict and passes once rebased, and no other script writes it.
 `test-branchfix-pass.sh`: an unproven kept round's head is pushed, a fail head never is. `test-branchland.sh`: a kept round
