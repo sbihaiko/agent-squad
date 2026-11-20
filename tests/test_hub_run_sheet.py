@@ -200,7 +200,7 @@ def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
     assert '"/dash/"+encodeURIComponent(id)+"/run/control"' in page
     assert '"/ended/"+encodeURIComponent(id)' in page
     src = HUB_PY.read_text()
-    assert 'self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slack", "/api/sync")' in src, "the write routes changed"   # /api/columns: the Spend & limits theme saves the column limits (#2432)
+    assert 'self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/sync")' in src, "the write routes changed"   # /api/columns: Spend & limits saves the column limits (#2432); /api/slots: its slots sub-group (#2435)
 
 
 def test_keyboard_and_clicks_go_through_the_sheet_controls(hub):

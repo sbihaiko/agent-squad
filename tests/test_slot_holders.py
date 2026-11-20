@@ -110,6 +110,14 @@ def test_a_claim_line_names_every_issue_of_its_child(tmp_path):
         "both issues of the claim line are the run's own"
 
 
+def test_the_claim_line_grammar_reads_only_its_own_separators():
+    """The claim line is the one line that names a run's issues: a number after the list, in the prose, is no claim."""
+    text = ("CHILD — GitHub issue(s) 31, 32 (both):\n"
+            "CHILD — GitHub issue(s) 44 45\n"
+            "issue #77 is cited here, never claimed\n")
+    assert SH.claim_issues(text) == [31, 32, 44, 45]
+
+
 def test_a_holder_is_classified_by_the_slot_it_holds():
     """#2286: a run waiting for a gate slot, an autobug run, a finished run waiting for its landing, a live run, and a
     holder the pass cannot explain, each answer their own kind, in that order of evidence."""

@@ -7428,6 +7428,40 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
   +`<p class=note>Project file: <code>${esc(kanS.file||"none")}</code>. The count comes from the loop's board cache, and an empty field means unlimited.</p></div>`
   +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")}
 // }KAN
+/* Settings > Spend & limits · Machine slots (#2435): the slots of this machine, across every project. The page renders
+   the read and asks; the hub validates, shows the diff and writes the project settings file on confirm (ADR-0137). The
+   runs cap and the gate-worker cap are editable; children and reviews stay in the file. */
+// SLOT{ the Machine slots sub-group's pure rules (#2435): its values, its dirty test, its chip, its gate line and its html. Run in node by tests.
+let slotS=null,slotDraft=null,slotMsg="",slotDiff=null;
+const slotClone=o=>JSON.parse(JSON.stringify(o));
+const slotNow=()=>slotDraft||slotS||{};
+const slotLabel=k=>k==="runs"?"Runs":"Gate workers";
+const slotMax=k=>{const c=slotS&&slotS.ceiling,n=c&&c[k];return typeof n==="number"&&n>=1?n:1000};   // the plugin ceiling the read names, else the catalog's high bound
+const slotWhy=(k,raw)=>{const t=String(raw==null?"":raw).trim(),n=/^\d+$/.test(t)?Number(t):0;
+ return n>=1&&n<=slotMax(k)?"":`the cap is an integer from 1 to ${slotMax(k)}`};
+const slotStage=(k,raw)=>{const why=slotWhy(k,raw);if(why){slotMsg="!"+slotLabel(k)+": "+why;slotSay();return false}
+ slotDraft[k].cap=Number(String(raw).trim());slotMsg="";slotDiff=null;slotSay();return true};   // a refused cap never reaches the draft the Save would write
+const slotVal=k=>String(slotNow()[k].cap);
+const slotCaps=()=>({runs:slotVal("runs"),gates:slotVal("gates")});
+const slotDirty=()=>!!slotS&&!!slotDraft&&(slotVal("runs")!==String(slotS.runs.cap)||slotVal("gates")!==String(slotS.gates.cap));
+const slotFull=a=>!!a&&a.in_use>=a.cap;
+const slotChip=(s=slotS)=>{s=s||{};return slotFull(s.runs)?["runs full","err"]:slotFull(s.gates)?["gate workers full","err"]:["under the caps","ok"]};
+const slotHeld=h=>h.issues&&h.issues.length?h.issues.map(n=>`<span class=chip>#${esc(n)}</span>`).join(" "):`<span class=chip>${esc(h.name)}</span>`;
+const slotRun=g=>g.gates_running?`${g.gates_running} gate${g.gates_running===1?"":"s"} running`:"none running";
+const slotGateLine=g=>`${g.cap} slots ÷ ${g.workers} workers per gate = ${g.gates_at_once} ${g.gates_at_once===1?"gate":"gates"} at a time · ${slotRun(g)}`;
+const slotCap=name=>`<input data-slot=${name} type=number min=1 max="${slotMax(name)}" step=1 inputmode=numeric value="${slotNow()[name].cap}" aria-label="${name==="runs"?"runs cap":"gate workers cap"}">`;
+const slotSay=()=>{const e=$("#slotmsg");if(!e)return;e.textContent=slotMsg.replace(/^!/,"");e.className="mx"+(slotMsg.startsWith("!")?" err":"")};
+function slotsHtml(){const t=slotChip();
+ if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
+ const s=slotNow(),r=s.runs,g=s.gates;
+ return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small> <small id=slotchip class=${t[1]}>${esc(t[0])}</small></h3>`
+  +setRow("Runs",`<span class=slotnow>${r.in_use} of ${r.cap}</span> ${slotCap("runs")} <span class=slothold>${r.holders.length?r.holders.map(slotHeld).join(" "):"<small class=m>none running</small>"}</span>`)
+  +setRow("Gate workers",`<span class=slotnow>${g.in_use} of ${g.cap}</span> ${slotCap("gates")} <span class=slothold>${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}</span>`)
+  +`<p class=note>A run carries one or more cards, so Runs and Doing count different things. Gate workers also serve child gates, day suites and hand gates.</p>`
+  +`<p class=note>File only: children ${esc(s.children)} · reviews ${esc(s.reviews)}, in <code>${esc(s.file_label||"docs/squad/defaults.yaml")}</code>. A resume refuses when this file changed.</p>`
+  +(slotDiff&&slotDiff.length?`<div class="mx" role=status>${slotDiff.map(l=>esc(l)).join(" · ")}</div>`:"")
+  +`<div class="mx${slotMsg.startsWith("!")?" err":""}" id=slotmsg role=status>${esc(slotMsg.replace(/^!/,""))}</div></div>`}
+// }SLOT
 const limN=v=>v==null?"—":tk(v);
 const LIM_UNITS=[["T",1e12],["B",1e9],["M",1e6],["K",1e3]],LIM_SCALE={K:1e3,M:1e6,B:1e9,T:1e12};
 const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))return String(n??"");   // a cap reads 1.5M, 250M or 1T, never a row of zeros (#2434)
@@ -7454,9 +7488,11 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  ]);
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
+ h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
+ try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
  limRender()}
 async function limPost(confirm){const vals=limVals(),cap=limCapParse(vals.cap),send={...vals,cap:cap==null?vals.cap:cap};   // the hub stores a plain integer whatever unit was typed (#2434)
  if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
@@ -7465,8 +7501,15 @@ async function limPost(confirm){const vals=limVals(),cap=limCapParse(vals.cap),s
  else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
  else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
  limRender()}
-$("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan;   // a Kanban row stages its value until Save (#2432)
- if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg=""}setBar()});
+async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slotCaps(),confirm})}),d=await r.json();
+ if(d.err){slotMsg="!"+d.err;slotDiff=null;if(slotS)slotDraft=slotClone(slotS)}   // a refused payload never stays staged, so the next Save sends the server's value
+ else if(confirm){slotS=d.state||slotS;slotDraft=slotClone(slotS);slotDiff=null;slotMsg=(d.diff||[]).length?"saved · the next run and gate read it":"nothing changed"}
+ else if((d.diff||[]).length)slotDiff=d.diff;else{slotDraft=slotClone(slotS);slotDiff=null;slotMsg="nothing changed"}}catch(x){slotMsg="!save failed"}
+ limRender()}
+$("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot;   // a Kanban row or a slot cap stages its value until Save (#2432, #2435)
+ if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg=""}
+ if(sp&&slotDraft)slotStage(sp,e.target.value);   // a cleared or out-of-range cap is refused here, never staged for a Save that the hub would refuse (#2435)
+ setBar()});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7541,7 +7584,7 @@ const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & cha
 const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
-const limDirty=()=>kanDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(limCapParse(v.cap)??v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows are this theme's too (#2432)
+const limDirty=()=>kanDirty()||slotDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(limCapParse(v.cap)??v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows, the slot caps and a cap typed in K, M, B or T are this theme's too (#2432, #2434, #2435)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
 const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
@@ -7565,7 +7608,8 @@ const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,
 $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
  if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"));
-  if(kanDirty())groups.push(await setAskOne("/api/columns",{columns:kanLimits()},"Kanban",(kanS&&kanS.file)||"(the project settings file)"))}
+  if(kanDirty())groups.push(await setAskOne("/api/columns",{columns:kanLimits()},"Kanban",(kanS&&kanS.file)||"(the project settings file)"));
+  if(slotDirty()){const g=await setAskOne("/api/slots",slotCaps(),"Machine slots",(slotS&&slotS.file)||"(the project settings file)");slotDiff=g.lines;groups.push(g)}}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
@@ -7573,10 +7617,10 @@ $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
 $("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
 $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
- if(d.includes("lim")){await limPost(true);if(kanDirty())await kanPost(true)}
+ if(d.includes("lim")){await limPost(true);if(kanDirty())await kanPost(true);if(slotDirty())await slotPost(true)}
  if(d.includes("slk"))await slPost(true);
  if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
- setBar();barSay([mdlMsg,kanMsg,slMsg,subMsg])};
+ setBar();barSay([mdlMsg,kanMsg,slotMsg,slMsg,subMsg])};
 // The verdict of a save belongs where the Save button is: the panel's own line sits at the end of a long scrolling
 // column, so a refusal read there as "nothing happened" (owner, 2026-11-01).
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
@@ -7584,7 +7628,8 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}setBar()};
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}
+ if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
@@ -9866,6 +9911,90 @@ def columns_set(body):
             return {"err": f"the settings file was not written: {e}", "diff": diff}
     return {"diff": diff, "state": columns_read()}
 
+
+# --- The machine slots of this machine (#2435). One read (squad/machine_slots.py): runs and gate workers, each with its
+# cap, the slots in use and the holder of each slot, and the children and reviews the file sets. The hub observes the
+# ceiling and writes nothing to it (ADR-0162). The two caps write the project settings file, where a project may only
+# lower the plugin value.
+_SLOTS = {}
+
+
+def _slots_parts():
+    """The two `squad` modules the Machine slots sub-group reads, loaded by the same rule as the tailnet block."""
+    if "mods" not in _SLOTS:
+        _SLOTS["mods"] = load_squad(tailnet_roots(), ("machine_slots", "project_settings"))
+    return _SLOTS["mods"]
+
+
+def _slots_error(why):
+    """The read's shape with the failure named: the page states it, and no row draws a guessed number."""
+    return {"file": "", "file_label": str(pathlib.Path("docs") / "squad" / "defaults.yaml"), "caps": {}, "ceiling": {},
+            "runs": {"cap": 0, "in_use": 0, "holders": []},
+            "gates": {"cap": 0, "in_use": 0, "holders": [], "workers": 0, "gates_at_once": 0, "gates_running": 0},
+            "children": 0, "reviews": 0, "err": why}
+
+
+def slots_read():
+    """The Machine slots sub-group's data: the runs and gate workers of this machine, across every project, each with
+    its cap, the slots in use and the holder of each slot, the gates that fit at once, and the children and reviews the
+    file sets."""
+    try:
+        ms, _ = _slots_parts()
+    except Exception as e:
+        return _slots_error(f"the slots reader did not load: {type(e).__name__}: {' '.join(str(e).split())}")
+    try:
+        got = ms.read(CHECKOUT or ".", active_runs=STATE / "active-runs.txt")
+    except Exception as e:
+        return _slots_error(f"the slots could not be read: {type(e).__name__}: {' '.join(str(e).split())}")
+    got["file_label"] = str(pathlib.Path("docs") / "squad" / "defaults.yaml")
+    return got
+
+
+SLOT_CAPS = (("runs", "Runs"), ("gates", "Gate workers"))
+
+
+def _slot_cap(raw):
+    """A slot cap as the page types it: a whole number from 1 to the catalog's high bound, or None."""
+    text = str(raw if raw is not None else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def slots_set(body):
+    """POST /api/slots: validate, diff, then write. With `confirm` false it answers the diff and writes nothing, as the
+    Spend & limits theme does. A cap above the plugin default is refused: a project may only lower the ceiling."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    try:
+        ms, ps = _slots_parts()
+    except Exception as e:
+        return {"err": f"the slots reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
+    try:
+        cur, top = slots_read(), ms.plugin()
+    except Exception as e:
+        return {"err": f"the caps could not be read: {e}"}
+    if cur.get("err"): return {"err": cur["err"]}
+    new = {}
+    for name, label in SLOT_CAPS:
+        if name not in body: continue
+        n = _slot_cap(body.get(name))
+        high = ps.CATALOG[f"caps.{name}"][2]
+        if n is None or not 1 <= n <= high:
+            return {"err": f"{label}: the cap is an integer from 1 to {high}"}
+        plugin_value = top.get(name)   # a plugin file that omits the key bounds the save at the catalog's high bound, never at no bound
+        ceiling = plugin_value if isinstance(plugin_value, int) and not isinstance(plugin_value, bool) else high
+        if n > ceiling:
+            return {"err": f"caps.{name}: {n} is above the machine-wide ceiling {ceiling}; a project may only lower it"}
+        new[name] = n
+    diff = [f"Machine slots · {label}: {cur[name]['cap']} -> {new[name]}"
+            for name, label in SLOT_CAPS if name in new and new[name] != cur[name]["cap"]]
+    if body.get("confirm") is not True: return {"diff": diff}
+    changes = [(f"caps.{name}", str(new[name])) for name, label in SLOT_CAPS if name in new and new[name] != cur[name]["cap"]]
+    if changes:   # both caps are staged and the file is written once: a failure leaves no partial save (#2287)
+        try:
+            ps.set_keys(CHECKOUT or ".", changes)
+        except Exception as e:
+            return {"err": f"the settings file was not written: {e}", "diff": diff}
+    return {"diff": diff, "state": slots_read()}
+
 class Access(NamedTuple):
     allowed: bool
     reason: str
@@ -10167,6 +10296,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
         elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
+        elif self.path.startswith("/api/slots"): body, ct = json.dumps(slots_read()).encode(), "application/json"   # Settings > Spend & limits · Machine slots (#2435)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
@@ -10427,7 +10557,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -10439,6 +10569,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
+                elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}

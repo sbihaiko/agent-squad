@@ -133,7 +133,7 @@ def _page_slices(page, stub=None):
     stub = stub or ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
                     'value:"",onclick:null,addEventListener(){},showModal(){},close(){},classList:{toggle(){}}});'
                     'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
-                    'let limS=null,slDraft=null,slS=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,'
+                    'let limS=null,slDraft=null,slS=null,slotS=null,slotDraft=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,slotDirty=()=>false,'
                     'mdlLoad=()=>{};limLoad=()=>{};'
                     'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};')
     return "\n".join([stub, esc, usd, iq, sett, gauges, state])
@@ -146,7 +146,7 @@ _LIVE = ('const STORE={},HANDLERS={},SENT=[];'
          'querySelector(){return null},querySelectorAll(){return[]},closest(){return null},showModal(){},close(){},'
          'classList:{toggle(){}}});'
          'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
-         'let limS=null,slDraft=null,slS=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,'
+         'let limS=null,slDraft=null,slS=null,slotS=null,slotDraft=null;const limVals=()=>({}),mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,slotDirty=()=>false,'
          'mdlLoad=()=>{};limLoad=()=>{};'
          'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};'
          'globalThis.fetch=(u)=>{SENT.push(u);return Promise.resolve({json:async()=>({})})};'
