@@ -255,6 +255,19 @@ out=$(selrun); rc=$?
   && ok "a selector that answers nothing is unproven with its own reason" || ko "bare empty selection: rc $rc: '$(last "$out")'"
 IFS=$'\t' read -r _ kind res _ < "$SG_STATE/gate-status" 2>/dev/null
 [ "$res" = fail ] && ok "a bare empty selection leaves no pass either" || ko "bare empty status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# (#2592, ADR-0169 rule 5) A change that needs no test is no empty delta: the selector answers `skip: <reason>`, no pytest runs,
+# and the gate ends a pass with pytest in the not-run list. An uncovered path outside the evidence folders keeps the rule above.
+echo "skip: the change needs no test: docs/evidence/2592/kanban-1000.png" > "$T/select.out"
+rm -f "$SG_STATE/gate-history"
+out=$(selrun); rc=$?
+[ $rc = 0 ] && ! /usr/bin/grep -q -- "-m pytest" "$T/argv.log" && ok "a change that needs no test passes the child's gate with no pytest" || ko "skip argv: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+case "$(last "$out")" in "fast-gate: pass "*) ok "a change that needs no test leaves a pass verdict line";; *) ko "skip verdict line: '$(last "$out")'";; esac
+sklg=$(printf '%s\n' "$(last "$out")" | sed -n 's/.*(log \(.*\))$/\1/p')
+[ -n "$sklg" ] && ! /usr/bin/grep -q "^no pytest ran" "$sklg" && ok "a change that needs no test logs no empty selection" || ko "skip log: '$sklg'; no pytest ran: '$(/usr/bin/grep -m 1 '^no pytest ran' "$sklg" 2>&1)'"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ "$kind $res $sel $scope" = "fast pass no test needed: the change needs no test: docs/evidence/2592/kanban-1000.png delta" ] && ok "the status line names the change that needs no test and the delta scope" || ko "skip status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+IFS=$'\t' read -r _ hk hres _ _ hsel _ hoc hrs hran hnot _ < "$SG_STATE/gate-history" 2>/dev/null
+[ "$hres $hoc $hran $hnot" = "pass pass ruff mypy pytest" ] && ok "the history keeps pytest in the not-run list of a pass that needed no test" || ko "skip history: '$(cat "$SG_STATE/gate-history" 2>&1)'"
 # A red shell suite still wins over the empty selection: a measured defect is fail, never unproven.
 echo "none: the tip changes no file against dev" > "$T/select.out"
 $G -C "$R" checkout -q gui/py
