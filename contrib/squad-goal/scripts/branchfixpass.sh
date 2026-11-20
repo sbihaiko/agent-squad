@@ -33,10 +33,15 @@ for m in "$A"/branchfix-push-*; do
   rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); liv=${rd:+1}; rd=${rd:-$SG_CHECKOUT/runs/$run}
   # (#1960) A kept round's heads are those of every outcome that is not fail: a round whose proof ended unproven (ADR-0164) still
   # made its rebase, and only the work branch takes it; branchland's gate and review still decide. An ordinary round reads pass only.
-  kx=$(printf '%s' "$br" | tr / _); kept="$SG_STATE/auto/kept-$kx"; oc=pass; [ -s "$kept" ] && oc=nonfail
-  # (#2571) keep: the dispatch marker stays on an empty or dead round. Only a wave or landing round keeps it (branchland reads
-  # it, #1960); a salvage round (`salvage` lines) drops it as an ordinary branch does, so the stall rule bounds its retries.
-  keep=; [ -s "$kept" ] && ! /usr/bin/grep -q '^salvage ' "$kept" && keep=1
+  # (#2571) kr: this round is a kept round. A salvage marker (`salvage <tip> <base>` lines) stays until the landing, so only the
+  # round dispatched at its last salvage tip is kept; a later round on that branch is an ordinary one.
+  # keep: the dispatch marker stays on an empty or dead round. Only a wave or landing round keeps it (branchland reads it,
+  # #1960); a salvage round drops it as an ordinary branch does, so the stall rule bounds its retries.
+  kx=$(printf '%s' "$br" | tr / _); kept="$SG_STATE/auto/kept-$kx"; kr=; keep=
+  kst=$(/usr/bin/grep '^salvage ' "$kept" 2>/dev/null | tail -1 | awk '{print $2}')
+  [ -s "$kept" ] && { [ -z "$kst" ] || [ "$kst" = "$dsha" ]; } && kr=1
+  [ -s "$kept" ] && [ -z "$kst" ] && keep=1
+  oc=pass; [ -n "$kr" ] && oc=nonfail
   t=$(python3 -c 'import json,sys
 s=v=None; h=[]
 for l in open(sys.argv[1]):
@@ -80,16 +85,16 @@ if s and v and s.get("target") and s.get("target_branch"): print(s["target"], s[
   # ordinary rule would drop it. Its head is the branch's new first pass head, and only when it carries a commit past the ref
   # the round rebased on: a head that adds nothing is no round.
   kre=$(head -1 "$kept" 2>/dev/null)
-  [ -s "$kept" ] && [ -n "$ff" ] && [ -n "$kre" ] && [ "$(/usr/bin/git -C "$tg" rev-list --count "$kre..$ff" 2>/dev/null)" != 0 ] && head=$ff
+  [ -n "$kr" ] && [ -n "$ff" ] && [ -n "$kre" ] && [ "$(/usr/bin/git -C "$tg" rev-list --count "$kre..$ff" 2>/dev/null)" != 0 ] && head=$ff
   # (#2345) A round that pushes nothing is no fix round for the tip it was dispatched for. Its once-per-tip marker goes, so the
   # next pass dispatches a fresh round at the same tip: the tip never moves on its own, and a marker that stays freezes the
   # branch with no stop and no alert. The stall rule below bounds those retries. A kept wave or landing round keeps its marker,
   # because branchland.sh reads it (#1960).
   if [ "$old" = "$head" ]; then echo "BRANCHFIX PUSH $br: run $run left no new commit, so no round is pushed"
     [ -n "$keep" ] || rm -f "$A/branchfix-$kx-${dsha:0:9}"
-  elif [ -s "$kept" ] && [ -z "$ff" ]; then echo "BRANCHFIX PUSH $br: run $run added no head of its own, so no round is pushed"
+  elif [ -n "$kr" ] && [ -z "$ff" ]; then echo "BRANCHFIX PUSH $br: run $run added no head of its own, so no round is pushed"
     [ -n "$keep" ] || rm -f "$A/branchfix-$kx-${dsha:0:9}"
-  elif [ -s "$kept" ] && ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
+  elif [ -n "$kr" ] && ! /usr/bin/git -C "$tg" merge-base --is-ancestor "$old" "$head"; then
     # The lease is on the sha the round was dispatched for, never on what the branch holds now: a writer that pushed after the
     # review is not clobbered, and the round is refused instead (#1344).
     if [ "$old" != "$dsha" ]; then echo "BRANCHFIX PUSH $br: the branch moved past the reviewed sha ${dsha:0:9}; the round of run $run is not pushed"; continue
