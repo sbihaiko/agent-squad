@@ -149,7 +149,7 @@ out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1
 cb="$T/closes"; mkdir -p "$cb/contrib/squad-goal/scripts" "$T/cbin"
 cat > "$T/cbin/gh" <<EOF
 #!/bin/bash
-case "\$*" in *state=open*) echo '[]'; exit 0;; esac
+case "\$*" in *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}'; exit 0;; esac   # the open-issue list is one GraphQL request (ghread)
 printf '%s\n' "\$*" >> "$T/gh.log"
 exit 0
 EOF
@@ -198,7 +198,7 @@ printf 'skill v7\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; gi
 mkdir -p "$T/fbin"
 cat > "$T/fbin/gh" <<EOF
 #!/bin/bash
-case "\$*" in *state=open*) echo '[]'; exit 0;; esac
+case "\$*" in *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}'; exit 0;; esac   # the open-issue list is one GraphQL request (ghread)
 printf '%s\n' "\$*" >> "$T/gh.log"
 case "\$*" in *state=closed*) exit 1;; esac
 exit 0
@@ -367,12 +367,14 @@ printf 'skill v0\n' > "$hl/SKILL.md"
 cat > "$hbin/gh" <<EOF
 #!/bin/bash
 case "\$*" in
-  *state=open*) [ -e "$hb/hold.fail" ] && exit 1; cat "$hb/hold.json"; exit 0;;
+  *"issues(states: OPEN"*) [ -e "$hb/hold.fail" ] && exit 1   # the open-issue list is one GraphQL request (ghread): the REST fixture is served in its shape
+    python3 -c 'import json,sys; n=[dict(i, labels={"nodes": i.get("labels", [])}) for i in json.load(open(sys.argv[1]))]; print(json.dumps({"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": False}, "nodes": n}}}}))' "$hb/hold.json"; exit 0;;
 esac
 printf '%s\n' "\$*" >> "$hb/gh.log"; exit 0
 EOF
 chmod +x "$hbin/gh"
-hrun() { env -u SG_SQUAD -u SG_REPO SG_STATE="$T/hst" PATH="$hbin:$PATH" bash "$src" "$hr/contrib/squad-goal" "$hl" 2>&1; }
+# Each hold case writes its own open-issue list, so the aggregate snapshot is off: a kept list would answer the next case.
+hrun() { env -u SG_SQUAD -u SG_REPO SG_GH_AGGREGATE_WINDOW=0 SG_STATE="$T/hst" PATH="$hbin:$PATH" bash "$src" "$hr/contrib/squad-goal" "$hl" 2>&1; }
 hset() { printf '%s\n' "$1" > "$hb/hold.json"; }
 hset '[{"number":596,"title":"a publish defect","body":"no sha line here","labels":[{"name":"loop-bug:publish"}]}]'
 out=$(hrun); rc=$?
