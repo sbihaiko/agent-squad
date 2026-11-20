@@ -34,7 +34,7 @@ G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 # The scripts a case runs: one copy of this checkout's scripts, by a list.
 for f in wave.sh issue_ledger.py ghread.py wavepause.py child_issues.py address.sh caps.sh serial.sh  \
   ghcall.sh drainpolicy.py base-battery.sh basecheck.sh fast-gate.sh quality-reading.py siblings.py  \
-  cluster.py autohunt.sh revformat.py gate.sh columnlimit.sh issue_state.py; do cp "$d/$f" "$T/s/"; done 2>/dev/null
+  cluster.py autohunt.sh revformat.py columnlimit.sh issue_state.py gate.sh; do cp "$d/$f" "$T/s/"; done 2>/dev/null
 # The board read of the wave's Testing bound (#2439) is the shipped one: the real issue_state.py beside the scripts, over the
 # hub cache the loop writes (SG_BOARD_CACHE). A case writes that cache in the hub's own shape (rows), so the wave's seam is the
 # one the loop runs, never a stub of it, and a case that writes none reads a board that carries no card.
