@@ -447,3 +447,20 @@ def test_the_gate_verb_is_a_cli_verb(env):
     assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
     assert H.main(["gate", "7", "--pid", str(PID)], state=env, now=NOW, procs=alive()) == 0
     assert H.gates(state=env, procs=alive()) == {"7"}
+
+
+def test_gate_refuses_a_process_with_no_start_time(env, capsys):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs={PID: RL.Proc(None, "bash")}) == 1
+    assert not (env / "auto" / "gate-7").exists()
+
+
+@pytest.mark.parametrize("text", ["pid 4242\nstart \n", "pid 4242\n", "pid 4242\nstart x\n"])
+def test_gates_drops_a_marker_whose_start_is_not_a_number(env, text):
+    (env / "auto" / "gate-7").write_text(text)
+    assert H.gates(state=env, procs=alive()) == set()
+
+
+def test_gates_drops_a_marker_when_the_process_has_no_start_time(env):
+    (env / "auto" / "gate-7").write_text(f"pid {PID}\nstart {int(GATE_START)}\n")
+    assert H.gates(state=env, procs={PID: RL.Proc(None, "bash")}) == set()
