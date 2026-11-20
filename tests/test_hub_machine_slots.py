@@ -278,3 +278,34 @@ def test_one_live_run_names_its_issue_chip_in_the_runs_row(hub):
     row = re.search(r"<tr><th scope=row>Runs</th>.*?</tr>", got["h"], re.S).group(0)
     assert ">#2534</a>" in row, row
     assert "no issue named" not in row, row
+
+
+def _tailnet_env_and_file(co, text):
+    f = co / "docs" / "squad" / "defaults.yaml"
+    f.write_text(text)
+    (co / ".env").write_text("SQUAD_TAILNET_HOST=box.example.ts.net\nSQUAD_TAILNET_ALLOW=owner@example.com\n")
+    return f
+
+
+def _assert_no_env_tailnet(text):
+    assert "tailnet" not in text and "box.example.ts.net" not in text and "owner@example.com" not in text
+
+
+def test_a_slots_save_keeps_comments_and_writes_no_tailnet_key_from_env(hub):
+    mod, co = hub
+    f = _tailnet_env_and_file(co, "caps:\n  runs: 5                   # owner ruling: five runs at once\n")
+    out = mod.slots_set({"runs": "4", "confirm": True})
+    assert "err" not in out
+    text = f.read_text()
+    assert "runs: 4                   # owner ruling: five runs at once" in text
+    _assert_no_env_tailnet(text)
+
+
+def test_a_columns_save_keeps_comments_and_writes_no_tailnet_key_from_env(hub):
+    mod, co = hub
+    f = _tailnet_env_and_file(co, "columns:\n  Doing:\n    max_cards: 5           # owner ruling: five Doing cards\n")
+    out = mod.columns_set({"columns": {"Doing": "9"}, "confirm": True})
+    assert "err" not in out
+    text = f.read_text()
+    assert "max_cards: 9           # owner ruling: five Doing cards" in text
+    _assert_no_env_tailnet(text)

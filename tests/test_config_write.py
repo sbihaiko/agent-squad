@@ -71,3 +71,65 @@ def test_role_key(tmp_path):
 def test_reset_unknown_key_refused(tmp_path):
     with pytest.raises(OptionError):
         P.reset_key(tmp_path, "limits.nope")
+
+
+COMMENTED = """# Project settings for the fixture repository.
+# Owner ruling: five runs live at once.
+caps:
+  runs: 5                           # owner ruling: five runs at once
+  children: 12
+  gates: 3                          # owner ruling: three gate slots
+limits:
+  max_budget_usd: 30                # owner ruling: a child may spend 30 USD
+"""
+TAILNET_ENV = "SQUAD_TAILNET_HOST=box.example.ts.net\nSQUAD_TAILNET_ALLOW=owner@example.com\n"
+
+
+def settings_file(tmp_path, text=COMMENTED):
+    f = P.path_for(tmp_path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text)
+    return f
+
+
+def test_a_save_of_one_cap_changes_only_the_line_it_sets(tmp_path):
+    f = settings_file(tmp_path)
+    assert P.set_key(tmp_path, "caps.runs", "4") is True
+    before, after = COMMENTED.splitlines(), f.read_text().splitlines()
+    assert len(after) == len(before)
+    assert [i for i, (a, b) in enumerate(zip(before, after)) if a != b] == [3]
+    assert after[3] == "  runs: 4                           # owner ruling: five runs at once"
+
+
+def test_a_save_keeps_every_comment_and_adds_a_new_key_at_the_end_of_its_section(tmp_path):
+    f = settings_file(tmp_path)
+    assert P.set_keys(tmp_path, [("caps.gates", "2"), ("options.model", "opus")]) is True
+    after = f.read_text()
+    for line in COMMENTED.splitlines():
+        if "#" in line:
+            assert line[line.index("#"):] in after
+    assert "  children: 12" in after.splitlines()
+    assert after.splitlines()[-2:] == ["options:", "  model: opus"]
+    assert yaml.safe_load(after) == {"caps": {"runs": 5, "children": 12, "gates": 2},
+                                     "limits": {"max_budget_usd": 30}, "options": {"model": "opus"}}
+
+
+def test_a_save_with_tailnet_keys_in_env_writes_no_tailnet_key_to_the_tracked_file(tmp_path):
+    f = settings_file(tmp_path)
+    (tmp_path / ".env").write_text(TAILNET_ENV)
+    assert P.set_key(tmp_path, "caps.runs", "4") is True
+    text = f.read_text()
+    assert "tailnet" not in text and "box.example.ts.net" not in text and "owner@example.com" not in text
+
+
+def test_a_first_save_with_tailnet_keys_in_env_creates_the_file_with_the_one_key(tmp_path):
+    (tmp_path / ".env").write_text(TAILNET_ENV)
+    P.set_key(tmp_path, "caps.runs", "4")
+    assert P.path_for(tmp_path).read_text() == "caps:\n  runs: 4\n"
+
+
+def test_a_reset_of_one_cap_removes_only_its_line_and_writes_no_env_tailnet_key(tmp_path):
+    f = settings_file(tmp_path)
+    (tmp_path / ".env").write_text(TAILNET_ENV)
+    assert P.reset_key(tmp_path, "caps.runs") is True
+    assert f.read_text().splitlines() == [line for i, line in enumerate(COMMENTED.splitlines()) if i != 3]
