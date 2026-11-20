@@ -99,7 +99,9 @@ def resolve(target=None, defaults_path=None):
     """Return {runs, children, gates, reviews, path, sha256, project}: the plugin values, lowered by the project file under `target`.
     A missing block raises CapsError; a project value above the plugin value raises OptionError.
     The answer is kept while the two files it reads are unchanged (#2582): every reader of the ceiling — the engine's
-    admission, the loop's free slots and the hub panel — asks it on every poll, and each ask read and hashed both files."""
+    admission, the loop's free slots and the hub panel — asks it on every poll, and each ask read and hashed both files.
+    The identity of a file is its path, mtime and size: a rewrite that preserves both is not seen, which no writer here
+    does."""
     path = Path(defaults_path or D.PATH)
     key = (_pair(path), _pair(P.path_for(target)) if target else None)
     kept = _RESOLVED.get(key)

@@ -158,7 +158,7 @@ def intervals(events, stamp=None):
     stamp answers the runs kept for it, so a chart built again folds only the cards whose record moved (#2582). The store
     only appends a record, so the stamp and the event count name one list of events."""
     key = None if stamp is None else (stamp, len(events))
-    if key is not None and key in _INTERVALS: return _INTERVALS[key]
+    if key is not None and key in _INTERVALS: return [dict(r) for r in _INTERVALS[key]]
     state = {"status": "", "status_t": None, "closed": False, "labels": set(), "spec": None, "on_board": False}
     out, seen = [], set()
     for _, e in sorted(enumerate(events), key=lambda p: (_instant(p[1]["t"]), p[0])):
@@ -177,8 +177,9 @@ def intervals(events, stamp=None):
         out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone",
                     "unknown": e["type"] == "added" and bool(state["status"]) and state["status_t"] < _instant(e["t"])})
     if key is not None:
-        if len(_INTERVALS) >= 4096: _INTERVALS.clear()   # the store of a long-lived process may name many records
+        if len(_INTERVALS) >= 4096: _INTERVALS.pop(next(iter(_INTERVALS)))   # the oldest record's runs go first, never another's
         _INTERVALS[key] = out
+        return [dict(r) for r in out]   # a caller's copy: a mutation never poisons the kept runs
     return out
 
 

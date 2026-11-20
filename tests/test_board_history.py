@@ -422,7 +422,20 @@ def test_2582_one_record_identity_folds_once_and_a_new_one_folds_again():
     events = _timeline((10, 0, "added", {}), (10, 5, "status", {"status": "In Progress"}))
     stamp = (234, T0)
     first = bh.intervals(events, stamp)
-    assert bh.intervals([dict(e) for e in events], stamp) is first, "an unchanged record folded its intervals again"
+    assert bh.intervals([dict(e) for e in events], stamp) == first, "an unchanged record folded its intervals again"
     moved = _timeline((10, 0, "added", {}), (10, 5, "status", {"status": "In Progress"}), (11, 0, "closed", {}))
     later = bh.intervals(moved, (234, T0 + 60))
-    assert later is not first and later[-1]["column"] != first[-1]["column"], "a changed record answered the runs before it"
+    assert later != first and later[-1]["column"] != first[-1]["column"], "a changed record answered the runs before it"
+
+
+def test_2582_a_callers_mutation_never_poisons_the_kept_intervals():
+    """The kept runs are the memo's: a caller that edits what it got reads a fresh fold next time, never the edit."""
+    events = _timeline((10, 0, "added", {}), (10, 5, "status", {"status": "In Progress"}))
+    stamp = (901, T0)
+    first = bh.intervals(events, stamp)
+    first.append({"from": T0, "to": None, "column": "invented"})
+    first[0]["column"] = "invented"
+    again = bh.intervals(events, stamp)
+    fresh = bh.intervals(events, (902, T0))   # another key folds the same events with no memo under it
+    assert again == fresh, "the caller's edit came back on the next read"
+    assert again != first and again[0]["column"] != "invented", again

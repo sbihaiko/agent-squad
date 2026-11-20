@@ -103,6 +103,19 @@ def test_a_changed_stats_input_builds_the_answer_again(served, hub):
     assert len(stats_calls) == 2, "the changed ledger is one change, so the read after it serves the build it made"
 
 
+def test_a_changed_operator_transcript_builds_the_answer_again(served, hub, monkeypatch):
+    """AC C of #2582: the operator fold is a named input beside the review ledger; a transcript that moved builds again."""
+    port, stats_calls, _, _ = served
+    monkeypatch.setattr(hub, "OPERATOR", None)
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 1
+    (hub.STATE / "operator-usage.json").write_text('{"files": {}}')
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, f"a changed operator transcript built the answer {len(stats_calls)} times"
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, "one transcript change is one rebuild"
+
+
 def test_the_spend_answer_is_kept_per_period_and_source(served):
     """The page asks for a period and a billing source: one pair's answer never serves another pair."""
     port, stats_calls, _, _ = served
