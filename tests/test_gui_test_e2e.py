@@ -19,7 +19,6 @@ from squad.gui_test import ScriptError, validate
 from squad.gui_test_adapter import FakeAdapter as TickingFake
 from squad.gui_test_render import render
 from squad.gui_test_run import run
-from tests import dashboard_helpers
 from tests import real_app_guard as guard
 from tests.dashboard_helpers import run_node
 from tests.gui_test_helpers import script, step
@@ -27,18 +26,8 @@ from tests.gui_test_helpers import script, step
 FORK = Path(__file__).resolve().parent.parent
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _one_dashboard_runner():
-    """One node process serves every run_node call of this file, started and answered here in setup, which is no measured
-    call: setup takes one answer, so the binary is loaded and the core built before the first call. A call that
-    starts its own node pays the binary's cold start, and this file's first node call is the diagram case: on a cold
-    runner that start took it over its 2 s line for work no assertion does (#1534).
-
-    Guards: tests/test_dashboard.py::test_two_node_calls_share_one_runner_process,
-    tests/test_dashboard.py::test_start_runner_takes_one_answer_before_the_first_call."""
-    dashboard_helpers.start_runner()
-    yield
-    dashboard_helpers.stop_runner()
+# The shared dashboard runner is started once per session by tests/conftest.py `_one_dashboard_runner`, never here: a
+# file-level teardown would stop the session's process, and the next file's first call would pay the cold start (#2580).
 
 
 def three_steps():

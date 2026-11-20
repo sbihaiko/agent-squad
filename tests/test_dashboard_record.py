@@ -19,6 +19,15 @@ def _applied_record(graph_hash):
     ]
 
 
+def test_the_session_starts_the_dashboard_runner_before_a_measured_call():
+    """#2580: this file is the first node user of full-serial-6, and its first measured call paid node's 89 MB cold start:
+    3.1 s, over the 2 s line. tests/conftest.py starts the shared runner in session setup, which no cap measures (#1534).
+    A runner started by an earlier lazy call would pass this too, so it asserts the start as this module finds it."""
+    from tests import dashboard_helpers
+    assert dashboard_helpers._NODE["proc"] is not None, (
+        "the session started no dashboard runner: the first measured run_node call of this file pays node's cold start")
+
+
 def test_the_overlay_rows_equal_the_engine_report():
     ev = _applied_record("h")
     assert run_node([{"op": "rows", "events": ev}])[0] == json.loads(json.dumps(report.build(ev)))
