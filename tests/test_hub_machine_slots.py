@@ -229,8 +229,8 @@ def test_the_sub_group_is_a_table_with_four_headers_a_bar_and_issue_chips(hub):
                       "slotDraft=slotClone(slotS);"
                       "console.log(JSON.stringify({h:slotsHtml()}))")
     h = got["h"]
-    for head in ("<th scope=col>Slot</th>", "<th scope=col>In use</th>", "<th scope=col>Slots</th>", "<th scope=col>Held by</th>"):
-        assert head in h, head
+    for head in ("Slot", "In use", "Slots", "Held by"):
+        assert re.search(rf"<th scope=col[^>]*>{head}</th>", h), head
     assert '<span class="slotbar"><i style="width:25%"></i></span>' in h, "the In use cell draws no bar"
     assert 'href="https://github.com/__REPO__/issues/2374"' in h, "the issue chip does not link to the issue"
     assert ">#2374</a>" in h and ">#2420</a>" in h, "the issue chips are missing"
@@ -265,7 +265,7 @@ def test_one_held_gate_slot_never_reads_none_running(hub):
     got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:0,holders:[]},"
                       "gates:{cap:3,in_use:1,holders:['daysuites-98836'],workers:6,slots_per_gate:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
                       "console.log(JSON.stringify({h:slotsHtml()}))")
-    row = re.search(r"<tr><th scope=row>Gate workers</th>.*?</tr>", got["h"], re.S).group(0)
+    row = re.search(r"<tr><th scope=row[^>]*>Gate workers</th>.*?</tr>", got["h"], re.S).group(0)
     assert "none running" not in row, row
     assert "held by daysuites-98836" in row, row
 
@@ -275,7 +275,7 @@ def test_one_live_run_names_its_issue_chip_in_the_runs_row(hub):
     got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:1,holders:[{name:'run-a',issues:[2534]}]},"
                       "gates:{cap:3,in_use:0,holders:[],workers:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
                       "console.log(JSON.stringify({h:slotsHtml()}))")
-    row = re.search(r"<tr><th scope=row>Runs</th>.*?</tr>", got["h"], re.S).group(0)
+    row = re.search(r"<tr><th scope=row[^>]*>Runs</th>.*?</tr>", got["h"], re.S).group(0)
     assert ">#2534</a>" in row, row
     assert "no issue named" not in row, row
 
@@ -311,8 +311,7 @@ SLOTS_FIXTURE = {
 
 RENDER_SLOTS = """
 (args) => {
-  const [fixture, width] = args;
-  document.documentElement.style.width = width + "px";
+  const [fixture] = args;
   location.hash = "#set-lim";
   slotS = fixture;
   slotDraft = JSON.parse(JSON.stringify(fixture));
@@ -329,13 +328,14 @@ MEASURE_SLOTS = """
                        const r = rg.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom,
                        lines: new Set(Array.from(rg.getClientRects()).map(q => Math.round(q.top))).size }; };
   const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
-  return [...document.querySelectorAll("#lbody table.stab tbody tr")].map(tr => ({
-    name: tr.querySelector("th").textContent,
-    label: text(tr.querySelector("th")),
-    bar: box(tr.querySelector(".slotbar")),
-    now: text(tr.querySelector(".slotnow")),
-    input: box(tr.querySelector("input")),
-  }));
+  return { innerWidth: window.innerWidth,
+           rows: [...document.querySelectorAll("#lbody table.stab tbody tr")].map(tr => ({
+             name: tr.querySelector("th").textContent,
+             label: text(tr.querySelector("th")),
+             bar: box(tr.querySelector(".slotbar")),
+             now: text(tr.querySelector(".slotnow")),
+             input: box(tr.querySelector("input")),
+           })) };
 }
 """
 
@@ -363,6 +363,40 @@ def _overlap(a, b):
     return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
 
 
+def _stab_decl(css, selector):
+    """The declarations of one CSS rule, as a property -> value map. No browser is involved."""
+    m = re.search(re.escape(selector) + r"\{([^}]*)\}", css)
+    assert m, f"the page carries no CSS rule for {selector}"
+    out = {}
+    for d in m.group(1).split(";"):
+        k, _, v = d.partition(":")
+        if k.strip():
+            out[k.strip()] = v.strip()
+    return out
+
+
+def test_the_slots_table_pins_its_columns_and_reserves_the_gap_before_each_cap(hub):
+    """A fixed table layout with a pinned width per column keeps the label from shrinking under a wide Slots cell, and
+    the Slots cell reserves a gap before its input so the 'N of M' text never touches the cap field. This check runs
+    with no browser, so the guard holds in the default gate."""
+    mod, _ = hub
+    css = mod.PAGE
+    assert _stab_decl(css, "#tab-set .stab").get("table-layout") == "fixed", \
+        "the slots table has no deterministic column layout, so a wide cell shrinks the label column"
+    for col in ("scol1", "scol2", "scol3", "scol4"):
+        width = _stab_decl(css, f"#tab-set .stab .{col}").get("width", "")
+        assert re.fullmatch(r"\d+%", width), f"the {col} column carries no pinned percentage width: {width!r}"
+    gap = _stab_decl(css, "#tab-set .stab td.scol3").get("padding-left", "")
+    assert re.fullmatch(r"\d+px", gap) and int(gap[:-2]) >= 6, f"no gap before the cap input: {gap!r}"
+    got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:1,holders:[]},"
+                      "gates:{cap:3,in_use:0,holders:[],workers:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
+                      "console.log(JSON.stringify({h:slotsHtml()}))")
+    h = got["h"]
+    for col in ("scol1", "scol2", "scol3", "scol4"):
+        assert len(re.findall(rf'class=("?)[^"]*\b{col}\b', h)) >= 2, \
+            f"the slots table markup does not carry {col} on its header and row cells"
+
+
 @pytest.mark.skipif(shutil.which("ego-browser") is None, reason="ego-browser is needed to render the Machine slots group")
 def test_no_machine_slots_label_overlaps_its_bar_and_the_gate_label_wraps_to_two_lines(hub, tmp_path):
     mod, _ = hub
@@ -378,10 +412,14 @@ def test_no_machine_slots_label_overlaps_its_bar_and_the_gate_label_wraps_to_two
     run = subprocess.run(["ego-browser", "nodejs"], input=head + EGO_SLOTS, capture_output=True, text=True, timeout=240)
     seen = [line for line in (run.stdout + run.stderr).splitlines() if line.startswith("EGO_SLOTS:")]
     assert seen, f"ego-browser rendered no frame: {(run.stdout + run.stderr)[-2000:]}"
-    rows = json.loads(seen[-1][len("EGO_SLOTS:"):])
+    frames = json.loads(seen[-1][len("EGO_SLOTS:"):])
     for width in ("1000", "1440"):
-        for row in rows[width]:
+        frame = frames[width]
+        assert frame["innerWidth"] == int(width), \
+            f"the viewport is {frame['innerWidth']} px, not the emulated {width} px"
+        for row in frame["rows"]:
             assert not _overlap(row["label"], row["bar"]), f"{width} px: {row['name']} label overlaps its bar: {row}"
-    gate = next(r for r in rows["1000"] if r["name"] == "Gate workers")
-    assert gate["label"]["lines"] <= 2, f"1000 px: Gate workers text wraps to {gate['label']['lines']} lines: {gate}"
-    assert gate["input"]["l"] - gate["now"]["r"] >= 6, f"1000 px: 'N of M' touches the Slots field: {gate}"
+            assert row["input"]["l"] - row["now"]["r"] >= 6, \
+                f"{width} px: {row['name']} 'N of M' touches the Slots field: {row}"
+            assert row["label"]["lines"] <= 2, \
+                f"{width} px: {row['name']} text wraps to {row['label']['lines']} lines: {row}"
