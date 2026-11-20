@@ -1541,6 +1541,39 @@ $G -q "AUTOBUG would dispatch" <<<"$r" && ko "2217 a does-not-reproduce freeze a
 r=$(fz '"bug","ready-for-agent"' '')
 $G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "2217 a gate failure, which freezes nothing, is dispatched" || ko "2217 a gate failure was not dispatched: '$r'"
 
+# 36) (#2423) the Doing column limit bounds the bug lane. A bug waits while Doing holds its effective limit, each card in Doing
+# counts once (a card under a hand hold too), and a batch dispatches only the bugs the free cards fit.
+printf 'caps:\n  runs: 4\ncolumns:\n  Doing:\n    max_cards: 3\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[
+  {"number":2401,"title":"Core: crash one","body":"step zz/q.py","created_at":"2026-09-01T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":2402,"title":"Core: crash two","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":2404,"title":"Slice: a frontier ticket","body":"UI/Logic/Foo.cs","created_at":"2026-10-12T15:00:00Z","labels":["ready-for-agent"]},
+  {"number":2415,"title":"Slice: held by a person","body":"UI/Logic/Bar.cs","created_at":"2026-10-12T16:00:00Z","labels":["ready-for-HAL9K"]}
+]
+JSON
+board36() {   # <doing issues> -- <todo issues>: the board rows of this case
+  local n; local -a doing=(); while [ "$1" != -- ]; do doing+=("$1"); shift; done; shift
+  : > "$T/cards.tsv"
+  for n in "${doing[@]}"; do printf '%s\tDoing\n' "$n" >> "$T/cards.tsv"; done
+  for n in "$@"; do printf '%s\tTodo\n' "$n" >> "$T/cards.tsv"; done
+}
+board36 2410 2411 2412 -- 2401 2404   # Doing holds its limit of three
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "36a a full Doing column exits 0" || ko "36a a full Doing column exited $rc: '$r'"
+case "$r" in *"would dispatch"*) ko "36a a bug was dispatched while Doing held its limit: '$r'";; *) ok "36a a full Doing column dispatches no bug";; esac
+[ "$($G -c 'Doing column limit' <<<"$r")" = 1 ] && ok "36a one line names the Doing column limit" || ko "36a no single limit line: '$r'"
+board36 2410 2411 -- 2401 2404   # one card frees
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"cluster(s): [2401] "*) ok "36b the next pass dispatches the bug into the free card";; *) ko "36b the bug was not dispatched: '$r'";; esac
+board36 2410 2411 -- 2401 2402 2404   # two bugs wait for one free card
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"cluster(s): [2401] "*) ok "36c the bug that fits is dispatched";; *) ko "36c the fitting bug was not dispatched: '$r'";; esac
+case "$r" in *"[2402]"*) ko "36c a bug past the free cards was dispatched: '$r'";; *) ok "36c the bug past the free cards waits";; esac
+board36 2410 2411 2415 -- 2401 2404   # the third card is under a hand hold
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch"*) ko "36d a card under a hand hold did not count against the limit: '$r'";; *) ok "36d a card under a hand hold counts against the limit";; esac
+
 # 35) (#2355) a GraphQL pool under its floor holds the open-issue read before any request, and the line names the pool.
 # The quota reading says graphql is at 0 of 5000 while core has thousands left, so the pass must send no gh call at all.
 rm -rf "$T/st/auto" "$T/st/req" "$T/st/gh-cache"; mkdir -p "$T/st/auto" "$T/st/req"; rm -f "$T/st/cycle.log" "$T/st/gh-cooldown.json" "$T/st/gh-budget.json" "$T/gh35.calls"
