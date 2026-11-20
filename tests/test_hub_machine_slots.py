@@ -394,12 +394,13 @@ def _split_top(text, sep):
 
 
 def _decls(body):
-    """A rule body's declarations as a property -> value map. No browser is involved."""
+    """A rule body's declarations as a property -> value map. A ':' or ';' inside a parenthesized or quoted value
+    stays in the value, so url("data:image/svg+xml;utf8,…") reads as one declaration. No browser is involved."""
     out = {}
-    for d in body.split(";"):
-        k, _, v = d.partition(":")
-        if k.strip():
-            out[k.strip().lower()] = v.strip()
+    for part in _split_top(body, ";"):
+        bits = _split_top(part, ":")
+        if len(bits) >= 2 and bits[0].strip():
+            out[bits[0].strip().lower()] = ":".join(bits[1:]).strip()
     return out
 
 
@@ -550,18 +551,19 @@ def _slots_layout(mod, viewport):
     pad_r = _pads_right(cell.get("padding"))
     base_cols = [_pcts(_style(css, f"#tab-set .stab .{c}").get("width")) for c in ("scol1", "scol2", "scol3", "scol4")]
     base_cols = [c[0] for c in base_cols if c]
-    row_rule = _style(css, "#tab-set .stab tbody tr", viewport=viewport, container=container)
+    row_rule = _style(css, "#tab-set .stab tr", viewport=viewport, container=container)
     narrow = bool(re.search(r"1\s*/\s*-1", _style(css, "#tab-set .stab tbody td.scol4", viewport=viewport,
                                                     container=container).get("grid-column", "")))
     cols = _pcts(row_rule.get("grid-template-columns")) if narrow else []
+    wide_label = bool(re.search(r"1\s*/\s*-1", cell.get("grid-column", "")))   # a very narrow column: the label takes the row
+    input_max = _px(_style(css, "#tab-set .stab input").get("max-width"), 96)
     label_ws = cell.get("white-space", "normal")
     wrap_any = cell.get("overflow-wrap", "normal") in ("anywhere", "break-word")
     use = _style(css, "#tab-set .stab .slotuse", viewport=viewport, container=container)
     bar = _style(css, "#tab-set .stab .slotbar", viewport=viewport, container=container)
-    now = _style(css, "#tab-set .stab .slotnow", viewport=viewport, container=container)
     use_gap = _px(use.get("gap"), 8)
     bar_min = _px(bar.get("min-width"))
-    held_cell = _style(css, "#tab-set .stab td.scol4", viewport=viewport, container=container)
+    held_cell = _style(css, "#tab-set .stab tbody td.scol4", viewport=viewport, container=container)
     held_wrap = _style(css, "#tab-set .stab tbody td", viewport=viewport, container=container).get(
         "overflow-wrap", "normal") in ("anywhere", "break-word")
     gates = SLOTS_FIXTURE["gates"]
@@ -570,8 +572,8 @@ def _slots_layout(mod, viewport):
     for name, label, use_txt, held_txt in (
             ("Runs", "Runs", f"{SLOTS_FIXTURE['runs']['in_use']} of {SLOTS_FIXTURE['runs']['cap']}", "#2534"),
             ("Gate workers", "Gate workers", f"{gates['in_use']} of {gates['cap']}", gate_line)):
-        w1 = (cols[0] if narrow else base_cols[0]) * table
-        w2 = (cols[1] if narrow else base_cols[1]) * table
+        w1 = table if wide_label else (cols[0] if narrow else base_cols[0]) * table
+        w2 = (table - input_max) if (narrow and not cols) else (cols[1] if narrow else base_cols[1]) * table
         avail1 = w1 - pad_r
         needed = _text_px(label)
         overflow = label_ws == "nowrap" and needed > avail1 + 0.5
@@ -581,7 +583,7 @@ def _slots_layout(mod, viewport):
         rows.append({
             "name": name,
             "label_needed": round(needed, 1), "label_width": round(avail1, 1),
-            "label_right": round(w1 if overflow else needed, 1), "bar_left": round(w1, 1),
+            "label_right": round(w1 if overflow else min(needed, w1), 1), "bar_left": round(w1, 1),
             "label_overflow": overflow, "label_lines": lines,
             "use_needed": round(bar_min + use_gap + _text_px(use_txt), 1), "use_width": round(w2 - pad_r, 1),
             "use_overflow": bar_min + use_gap + _text_px(use_txt) > w2 - pad_r + 0.5,
@@ -590,7 +592,7 @@ def _slots_layout(mod, viewport):
             "held_own_row": narrow and "grid-column" in held_cell,
         })
     return {"viewport": viewport, "container": round(container, 1), "table": round(table, 1),
-            "narrow": narrow, "cols": cols, "base_cols": base_cols, "rows": rows}
+            "narrow": narrow, "wide_label": wide_label, "cols": cols, "base_cols": base_cols, "rows": rows}
 
 
 def _pads_right(value):
@@ -646,17 +648,28 @@ def test_the_slots_table_puts_held_by_on_its_own_row_at_a_narrow_column(hub):
 
 
 def test_no_slots_label_clips_its_cell_and_the_gate_line_wraps_inside_its_own(hub):
-    """#2540: at 1000, 900 and 768 px the label of each row stays inside its 25% cell (a nowrap label spills over the
-    bar) and wraps to at most two lines, and the gate line wraps inside the Held by cell. Browser-free, so it runs in
-    the default gate."""
+    """#2540: at 1000 and 900 px the label of each row stays inside its 25% cell (a nowrap label spills over the bar)
+    and wraps to at most two lines, and the gate line wraps inside the Held by cell. Browser-free, so it runs in the
+    default gate."""
     mod, _ = hub
-    for vw in (1000, 900, 768):
+    for vw in (1000, 900):
         lay = _slots_layout(mod, vw)
         for row in lay["rows"]:
             assert row["label_overflow"] is False, (vw, row)
             assert row["label_right"] <= row["bar_left"], (vw, row)
             assert row["label_lines"] is not None and row["label_lines"] <= 2, (vw, row)
             assert row["held_cut"] is False, (vw, row)
+
+
+def test_the_label_takes_the_whole_row_under_a_very_narrow_column(hub):
+    """#2540: at 768 px the table is 214 px, too narrow for three cells on one line: the label takes the row and the
+    bar and the cap field share the line below, so the field keeps its 96 px and the label stays on one line."""
+    mod, _ = hub
+    lay = _slots_layout(mod, 768)
+    assert lay["table"] == 214 and lay["wide_label"] is True, lay
+    for row in lay["rows"]:
+        assert row["label_lines"] == 1, row
+        assert row["use_width"] >= 96, row
 
 
 def test_the_in_use_bar_keeps_its_gap_before_the_cap_field_at_an_intermediate_width(hub):

@@ -7170,7 +7170,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #ispeed .spd{border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;margin-bottom:8px;background:var(--card)}#ispeed .spdh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}#ispeed .spdt{font-size:var(--fs-caption);font-weight:600}#ispeed .spdt.up{color:var(--ok)}#ispeed .spdt.down{color:var(--err)}#ispeed .spdt.flat{color:var(--mute)}#ispeed .spdt.wait{color:var(--mute)}#ispeed .spr{position:relative;height:6px;border-radius:var(--radius-lg);background:var(--raise);margin-top:6px}#ispeed .spr i{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--fg)}#ispeed .spr .spt{left:0;top:0;bottom:0;width:0;border-radius:var(--radius-lg);background:var(--mute)}#ispeed .spr .spt.up{background:var(--ok)}#ispeed .spr .spt.down{background:var(--err)}#ispeed .spl{display:flex;justify-content:space-between;font-size:var(--fs-caption);color:var(--mute);margin-top:3px}#ispeed .spn{font-size:var(--fs-caption);color:var(--mute);margin-top:4px}#ispeed .spn b{color:var(--fg);font-size:var(--fs-body)}#ispeed .spw{display:grid;grid-template-columns:minmax(0,auto) minmax(0,1fr);gap:2px 8px;align-items:baseline;margin-top:6px;font-size:var(--fs-caption);min-width:0}#ispeed .spwl{font-weight:600;color:var(--mute)}#ispeed .spwv{color:var(--fg);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}#ispeed .spw.ok .spwl{color:var(--ok)}#ispeed .spw.warn .spwl{color:var(--warn)}#ispeed .spw.err .spwl{color:var(--err)}#ispeed .spwt{grid-column:1/-1;display:block;height:4px;border-radius:var(--radius-lg);background:var(--raise);overflow:hidden}#ispeed .spwt i{display:block;height:100%;background:var(--ok)}#ispeed .spw.warn .spwt i{background:var(--warn)}#ispeed .spw.err .spwt i{background:var(--err)}#ispeed .spw.mute .spwt i{background:var(--mute)}#ispeed .spw.spec .spwl{color:var(--acc)}#ispeed .spw.spec .spwt i{background:var(--acc)}#ispeed .spws{grid-column:1/-1;font-size:calc(var(--fs-caption) - 2px);color:var(--mute)}#ispeed .spage{font-size:var(--fs-caption);color:var(--warn);margin-top:6px}.isub{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;margin:0 0 10px}.isub .srow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "b r";align-items:center;gap:3px 8px;padding:5px 0;font-size:var(--fs-caption);border-bottom:1px solid var(--line)}.isub .srow:last-child{border-bottom:0}.isub .sn{grid-area:n;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.isub .sp2{grid-area:p;text-align:right;font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}.isub .sb2{grid-area:b;height:6px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}.isub .sb2 i{display:block;height:100%;border-radius:var(--radius-sm);background:var(--ok)}.isub .srow.warn .sb2 i{background:var(--warn)}.isub .srow.red .sb2 i{background:var(--err)}.isub .srow.na .sb2{background:repeating-linear-gradient(90deg,var(--line) 0 3px,transparent 3px 7px)}.isub .srow.na .sp2{color:var(--mute)}.isub .srow.na{grid-template-areas:"n p" "b b" "r r"}.isub .srow.na .sr2{white-space:normal;text-align:left;overflow-wrap:anywhere}.isub .sr2{grid-area:r;text-align:right;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}
 #tab-set .sp .sb{padding:0 12px 12px}
 /* Settings (#913): a left theme list, one theme at a time, one Save bar; on the phone a select replaces the list and rows stack. */
-#tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0}
+#tab-set .swrap{display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px;max-width:1120px;align-items:start}#tab-set .spanels{min-width:0;container-type:inline-size}   /* #2540: the themes answer their own column width with a container query */
 #tab-set .snav{display:flex;flex-direction:column;gap:4px;position:sticky;top:6px;max-height:calc(100vh - 130px);overflow:auto}#tab-set .snav button{text-align:left;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel);color:var(--fg);min-height:44px}
 #tab-set .snav button small{display:block;color:var(--mute);font-size:var(--fs-caption)}#tab-set .snav button.on{border-color:var(--acc);background:var(--bubble)}
 #tab-set .snav button small.err,.sp>summary .sr.err{color:var(--err);font-weight:600}   /* a state that needs a look: the same err tone in both places (#1282) */
@@ -7214,17 +7214,36 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .stab .scol1{width:25%}#tab-set .stab .scol2{width:23%}#tab-set .stab .scol3{width:24%}#tab-set .stab .scol4{width:28%}
 #tab-set .stab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .stab tbody th,#tab-set .stab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0;overflow-wrap:anywhere}
-#tab-set .stab tbody th{white-space:nowrap;color:var(--fg)}
+#tab-set .stab tbody th{white-space:normal;overflow-wrap:anywhere;color:var(--fg)}
 #tab-set .stab td.scol3{padding-left:10px}
 #tab-set .stab .slotnone{white-space:nowrap}
 #tab-set .stab input{width:100%;max-width:96px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
 #tab-set .stab .slotuse{display:flex;align-items:center;gap:8px;min-width:0}
-#tab-set .stab .slotbar{display:block;flex:0 1 96px;min-width:28px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+#tab-set .stab .slotbar{display:block;flex:0 1 96px;min-width:0;height:8px;border-radius:4px;background:var(--line);overflow:hidden}   /* #2540: the bar yields before the "N of M" text reaches the cap field */
 #tab-set .stab .slotbar i{display:block;height:100%;background:var(--acc)}
 #tab-set .stab .slotbar.full i{background:var(--warn)}
-#tab-set .stab .slotnow{white-space:nowrap;font-variant-numeric:tabular-nums}
+#tab-set .stab .slotnow{flex:none;min-width:0;white-space:nowrap;font-variant-numeric:tabular-nums}   /* the bar yields, never the text: a shrunk text box would spill into the cap field */
 #tab-set .stab .slothold{line-height:1.6}
 #tab-set .stab .slothold .chip{display:inline-block;text-decoration:none;color:var(--acc);white-space:nowrap;margin:0 4px 2px 0}
+/* #2540: at a narrow Settings column the Held by cell takes its own row below the first three cells, so the gate line
+   wraps in the full table width. The three pinned widths stay, and no label clips its cell. */
+@container (max-width:700px){
+#tab-set .stab{display:block}
+#tab-set .stab thead,#tab-set .stab tbody{display:block}
+#tab-set .stab tr{display:grid;grid-template-columns:25% 23% 24%;align-items:center}
+#tab-set .stab .scol1,#tab-set .stab .scol2,#tab-set .stab .scol3,#tab-set .stab .scol4{width:auto}   /* the track names the width, so a cell never takes 25% of its own track */
+#tab-set .stab thead th.scol4{display:none}
+#tab-set .stab tbody th,#tab-set .stab tbody td{border-bottom:0}
+#tab-set .stab tbody tr{border-bottom:1px solid var(--line)}
+#tab-set .stab tbody td.scol4{grid-column:1/-1;padding-top:2px}
+}
+/* #2540: under 340 px of column the three cells no longer fit one line: the label takes the row, and the bar and the
+   cap field share the line below it, so the cap field never shrinks under its value. */
+@container (max-width:340px){
+#tab-set .stab tr{grid-template-columns:minmax(0,1fr) auto}
+#tab-set .stab thead{display:none}
+#tab-set .stab tbody th{grid-column:1/-1}
+}
 #tab-set .kbar{display:inline-block;vertical-align:middle;width:calc(100% - 58px);min-width:24px;max-width:120px;height:8px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}
 #tab-set .kbar .kfill{display:block;height:100%;background:var(--ok)}
 #tab-set .kbar .kfill.full{background:var(--warn)}
