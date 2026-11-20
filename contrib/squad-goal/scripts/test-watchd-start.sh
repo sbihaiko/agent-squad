@@ -11,7 +11,7 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
 . "$d/watchd-fixture.sh"   # the process reader a fake env.sh needs (#1514)
 reader=$(fake_reader "$(cd "$d/../../.." && pwd)")
-cp "$d/watchd.sh" "$T/watchd.sh"
+cp "$d/watchd.sh" "$d/drainpolicy.py" "$T/"   # the start reads the label policy beside the script it runs (#1980)
 python3 - "$T/watchd.sh" "$SG_STATE" "$d" "$reader" <<'PY'
 import pathlib,sys
 f,st,d,reader=sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
