@@ -7208,13 +7208,12 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .ktab .kl input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px;text-align:left}
 #tab-set .ktab .kn{white-space:nowrap}
 #tab-set .ktab .ks{color:var(--fg);font-size:var(--fs-body);line-height:1.35;overflow-wrap:anywhere}
-#tab-set .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);margin:6px 0 4px}
-#tab-set .stab .scol1{width:15%}#tab-set .stab .scol2{width:17%}#tab-set .stab .scol3{width:10%}#tab-set .stab .scol4{width:58%}
+#tab-set .stab{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:6px 0 4px}
 #tab-set .stab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .stab tbody th,#tab-set .stab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0;overflow-wrap:anywhere}
 #tab-set .stab tbody th{white-space:nowrap;color:var(--fg)}
 #tab-set .stab .slotnone{white-space:nowrap}
-#tab-set .stab input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
+#tab-set .stab input{width:100%;min-width:64px;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
 #tab-set .stab .slotuse{display:flex;align-items:center;gap:8px;min-width:0}
 #tab-set .stab .slotbar{display:block;flex:0 1 96px;min-width:40px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
 #tab-set .stab .slotbar i{display:block;height:100%;background:var(--acc)}
@@ -7814,7 +7813,7 @@ function slotsHtml(){const t=slotChip();
  if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class="blkh khead"><span>Machine slots <small class=ksub>· this machine · all projects</small></span></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  const s=slotNow(),r=s.runs,g=s.gates;
  return `<div class=setblk data-blk=slots data-theme=lim><h3 class="blkh khead"><span>Machine slots <small class=ksub>· this machine · all projects</small></span> <small id=slotchip class=${t[1]}>${esc(t[0])}</small></h3>`
-  +`<table class=stab><colgroup><col class=scol1><col class=scol2><col class=scol3><col class=scol4></colgroup><thead><tr><th scope=col>Slot</th><th scope=col>In use</th><th scope=col>Slots</th><th scope=col>Held by</th></tr></thead><tbody>`
+  +`<table class=stab><thead><tr><th scope=col>Slot</th><th scope=col>In use</th><th scope=col>Slots</th><th scope=col>Held by</th></tr></thead><tbody>`
   +slotRow("runs","Runs",r.in_use,r.cap,r.holders.length?r.holders.map(slotHeld).join(" "):`<small class=m>none running</small>`)
   +slotRow("gates","Gate workers",g.in_use,g.cap,`${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}`)
   +`</tbody></table>`

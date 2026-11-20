@@ -301,3 +301,87 @@ def test_a_cap_save_never_copies_a_tailnet_key_from_the_env_file(hub):
     assert "err" not in out, out
     text = (co / "docs" / "squad" / "defaults.yaml").read_text()
     assert "tailnet" not in text and "my-mac" not in text and "owner@example.com" not in text, text
+SLOTS_FIXTURE = {
+    "file_label": "docs/squad/defaults.yaml",
+    "runs": {"cap": 10, "in_use": 1, "holders": [{"name": "run-a", "issues": [2534]}]},
+    "gates": {"cap": 12, "in_use": 6, "holders": ["gate-11"], "workers": 6, "slots_per_gate": 6,
+              "gates_at_once": 2, "gates_running": 1},
+    "children": 20, "reviews": 4, "ceiling": {"runs": 10, "children": 20, "gates": 12, "reviews": 4},
+}
+
+RENDER_SLOTS = """
+(args) => {
+  const [fixture, width] = args;
+  document.documentElement.style.width = width + "px";
+  location.hash = "#set-lim";
+  slotS = fixture;
+  slotDraft = JSON.parse(JSON.stringify(fixture));
+  setTab("set");
+  document.getElementById("lim").open = true;
+  document.getElementById("lbody").innerHTML = slotsHtml();
+  return true;
+}
+"""
+
+MEASURE_SLOTS = """
+() => {
+  const text = el => { const rg = document.createRange(); rg.selectNodeContents(el);
+                       const r = rg.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom,
+                       lines: new Set(Array.from(rg.getClientRects()).map(q => Math.round(q.top))).size }; };
+  const box = el => { const r = el.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; };
+  return [...document.querySelectorAll("#lbody table.stab tbody tr")].map(tr => ({
+    name: tr.querySelector("th").textContent,
+    label: text(tr.querySelector("th")),
+    bar: box(tr.querySelector(".slotbar")),
+    now: text(tr.querySelector(".slotnow")),
+    input: box(tr.querySelector("input")),
+  }));
+}
+"""
+
+EGO_SLOTS = """
+import fs from "node:fs";
+const task = await taskSpace(SPACE_NAME);
+const out = {};
+try {
+  const page = task.page("p1");
+  for (const width of [1000, 1440]) {
+    await page.cdp("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    await page.goto(URL);
+    await page.evaluate(RENDER_SLOTS, [FIXTURE, width]);
+    out[width] = await page.evaluate(MEASURE_SLOTS);
+    await page.screenshot({ path: SHOT_DIR + "/slots-" + width + ".png" });
+  }
+  console.log("EGO_SLOTS:" + JSON.stringify(out));
+} finally {
+  await task.finish({ keep: [] });
+}
+"""
+
+
+def _overlap(a, b):
+    return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
+
+
+@pytest.mark.skipif(shutil.which("ego-browser") is None, reason="ego-browser is needed to render the Machine slots group")
+def test_no_machine_slots_label_overlaps_its_bar_and_the_gate_label_wraps_to_two_lines(hub, tmp_path):
+    mod, _ = hub
+    page = tmp_path / "hub.html"
+    page.write_text(mod.PAGE)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    head = (f"const SPACE_NAME = {json.dumps(f'agent-squad slots {os.getpid()} {time.time_ns()}')};\n"
+            f"const URL = {json.dumps(page.as_uri())};\n"
+            f"const SHOT_DIR = {json.dumps(str(shots))};\n"
+            f"const FIXTURE = {json.dumps(SLOTS_FIXTURE)};\n"
+            f"const RENDER_SLOTS = {RENDER_SLOTS};\nconst MEASURE_SLOTS = {MEASURE_SLOTS};\n")
+    run = subprocess.run(["ego-browser", "nodejs"], input=head + EGO_SLOTS, capture_output=True, text=True, timeout=240)
+    seen = [line for line in (run.stdout + run.stderr).splitlines() if line.startswith("EGO_SLOTS:")]
+    assert seen, f"ego-browser rendered no frame: {(run.stdout + run.stderr)[-2000:]}"
+    rows = json.loads(seen[-1][len("EGO_SLOTS:"):])
+    for width in ("1000", "1440"):
+        for row in rows[width]:
+            assert not _overlap(row["label"], row["bar"]), f"{width} px: {row['name']} label overlaps its bar: {row}"
+    gate = next(r for r in rows["1000"] if r["name"] == "Gate workers")
+    assert gate["label"]["lines"] <= 2, f"1000 px: Gate workers text wraps to {gate['label']['lines']} lines: {gate}"
+    assert gate["input"]["l"] - gate["now"]["r"] >= 6, f"1000 px: 'N of M' touches the Slots field: {gate}"
