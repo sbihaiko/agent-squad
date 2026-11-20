@@ -451,14 +451,26 @@ if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.p
 lim=$pack; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$lim" ] && lim=$fr;; esac
 [ "$lim" -gt 0 ] || { AB_REASON="one run funds no child"; echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
+ab_waiting() {   # the startable bugs this pass leaves with no run (#616): the candidates less the ones it takes
+  local w=${nb:-0} p
+  [ "$w" -gt 0 ] && for p in ${pick[@]+"${pick[@]}"}; do case " ${cand[*]} " in *" $p "*) w=$((w - 1));; esac; done
+  echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
+}
 # The run takes no more cards than the Doing column has free (#2423): the pack never carries a card past the limit. Each
-# issue of a cluster is one card, and a cluster that does not fit waits whole for a later pass.
+# issue of a cluster is one card. A cluster larger than the free cards splits and never drops (ADR-0158): the run takes
+# its first issues up to the free cards, and the rest wait for a later pass.
 room=; case "${doing_max:-}" in ''|*[!0-9]*) ;; *) room=$((doing_max - doing_n));; esac
+if [ -n "$room" ] && [ "$room" -lt 1 ]; then
+  pick=(); AB_REASON="column Doing full: $doing_n of $doing_max card(s) in Doing"; ab_waiting; exit 0
+fi
 clusters=(); ncards=0
 while read -r c; do
   [ -n "$c" ] || continue; read -ra cw <<<"$c"
-  [ -z "$room" ] || [ $((ncards + ${#cw[@]})) -le "$room" ] || continue
+  if [ -n "$room" ] && [ $((ncards + ${#cw[@]})) -gt "$room" ]; then
+    c="${cw[*]:0:$((room - ncards))}"; clusters+=("$c"); break   # the Doing cards are full now: the rest of the cluster waits
+  fi
   clusters+=("$c"); ncards=$((ncards + ${#cw[@]})); [ ${#clusters[@]} -ge "$lim" ] && break
+  [ -n "$room" ] && [ "$ncards" -ge "$room" ] && break
 done <<<"$cl"
 # a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
 # and a cluster whose numbers are not all valid is dropped (#1855).
@@ -470,11 +482,6 @@ for c in "${clusters[@]}"; do
   pick+=("${parts[@]}")
 done
 [ ${#pick[@]} -gt 0 ] || exit 0
-ab_waiting() {   # the startable bugs this pass leaves with no run (#616): the candidates less the ones it takes
-  local w=${nb:-0} p
-  [ "$w" -gt 0 ] && for p in "${pick[@]}"; do case " ${cand[*]} " in *" $p "*) w=$((w - 1));; esac; done
-  echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
-}
 ab_waiting
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots, $lim a run with $gates gate lease(s) live)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"

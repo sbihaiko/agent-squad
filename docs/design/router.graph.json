@@ -5,7 +5,7 @@
   "run": {
     "deadline": 21600,
     "max_parallel": 2,
-    "spend_cap": 75
+    "spend_cap": 86
   },
   "facts": [
     {
