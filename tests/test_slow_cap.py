@@ -285,6 +285,14 @@ def test_a_no_progress_window_wait_carries_the_heavy_mark():
     assert _heavy_marked(waits), "this test waits out a no-progress window and carries no heavy mark"
 
 
+def test_a_node_render_that_paints_the_live_card_carries_the_heavy_mark():
+    """#2550: this case starts node to render the card, and a loaded serial runner pushed the call to 3.5 s, past the 2 s
+    line an unmarked call is held to. The node start is the work the call does, so the case carries the heavy mark."""
+    from tests.test_hub_live_work import test_the_card_paints_the_holder_name_the_row_carries as paints
+
+    assert _heavy_marked(paints), "this test starts node for the card render and carries no heavy mark"
+
+
 def test_nested_pytest_checks_explain_their_slow_marker():
     checks = NESTED_CHECKS
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {
