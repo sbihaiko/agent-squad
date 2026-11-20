@@ -995,7 +995,10 @@ out=$(pgate SG_GATE_CALLER=tip SG_GATE_WORKERS=2); rc=$?
 conc='mkdir -p CM; touch CM/$$; /usr/bin/wc -l < <(ls CM) | tr -d " " >> CK; sleep 0.7; rm -f CM/$$'
 pnew gr; for n in w x y z; do psuite $n "$(printf '%s' "$conc" | sed "s|CM|$pm/c|g; s|CK|$pm/conc|")"; done; ptip
 out=$(pheld 2 SG_GATE_WORKERS=6); rc=$?; mx=$(sort -n "$pm/conc" 2>/dev/null | tail -n 1)
-[ $rc = 0 ] && [ "$mx" = 2 ] && ok "2569 the pool holds the granted count of 2, never the asked 6" || ko "2569 granted count: rc $rc, most at once '$mx': $out"
+[ $rc = 0 ] && [ "$mx" = 4 ] && ok "2598 the wave tip gate's pool is four, whatever count it was granted" || ko "2598 tip pool: rc $rc, most at once '$mx': $out"
+rm -rf "$pm/c" "$pm/conc"
+out=$(pheld 2 SG_GATE_WORKERS=6 SG_TIP_SUITE_POOL=2); rc=$?; mx=$(sort -n "$pm/conc" 2>/dev/null | tail -n 1)
+[ $rc = 0 ] && [ "$mx" = 2 ] && ok "2598 SG_TIP_SUITE_POOL names the tip gate's pool" || ko "2598 named tip pool: rc $rc, most at once '$mx': $out"
 rm -rf "$pm/c" "$pm/conc"
 out=$(pgate); rc=$?; mx=$(sort -n "$pm/conc" 2>/dev/null | tail -n 1)
 [ $rc = 0 ] && [ "$mx" = 1 ] && ok "2569 a child's gate (count 1) stays serial" || ko "2569 child count: rc $rc, most at once '$mx': $out"
