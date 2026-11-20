@@ -615,8 +615,8 @@ def test_a_dialog_border_reads_the_edge_role(surfaces):
 def test_the_switch_track_reads_the_edge_role(surfaces, tokens):
     """The off track is the one control mark a switch carries; the on track is `ok` (#1133)."""
     css = _served_css(surfaces["hub"])
-    off = _rule(css, "#lopb .lsw").get("background")
-    on = _rule(css, "#lopb .lsw[aria-checked=true]").get("background")
+    off = _rule(css, "#inst .lsw").get("background")
+    on = _rule(css, "#inst .lsw[aria-checked=true]").get("background")
     assert off == "var(--edge)", "the switch's off track is not the edge role"
     assert on == "var(--ok)", "the switch's on track is not `ok`"
     for role in (off, on):

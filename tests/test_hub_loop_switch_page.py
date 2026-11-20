@@ -243,18 +243,11 @@ def section(src, sid):
     return m.group(0)
 
 
-def test_settings_holds_a_loop_theme_and_an_access_theme():
+def test_settings_holds_an_access_theme_and_no_loop_theme():
     src = page()
     tab = src.split("<section id=tab-set", 1)[1].split("</section>", 1)[0]
-    assert "<summary>Loop<" in section(tab, "lop")
+    assert "<details id=lop " not in tab and "data-sp=lop" not in tab, "Settings still holds a Loop theme"
     assert "<summary>Access<" in section(tab, "acc")
-
-
-def test_the_loop_theme_has_no_save():
-    src = page()
-    assert not re.search(r"save", section(src, "lop"), re.I)
-    fn = re.search(r"const loopSetHtml=.*?;\n", src, re.S)
-    assert fn and not re.search(r"save", fn.group(0), re.I)
 
 
 def test_the_page_draws_no_dead_start_button():
@@ -310,9 +303,9 @@ def test_the_theme_opens_on_its_state_line():
     The four states are read in one node call: four calls of about a second each crossed the 2 s line on a loaded runner,
     and one call answers the same four lines (#2475)."""
     states = ("on", "off", "draining", "starting")
-    out = run_js("[" + ",".join(f"loopLogHtml({js_view(state=s)})" for s in states) + "].join('\\u0000')")
+    out = run_js("[" + ",".join(f"loopSetHtml({js_view(state=s)})" for s in states) + "].join('\\u0000')")
     for state, one in zip(states, out.split("\u0000"), strict=False):
-        m = re.match(r'<div class="lstate (\w+)">Loop \w+</div>', one)
+        m = re.search(r'<span class="ls (\w+)">Loop \w+', one)
         assert m and m.group(1) == state, one[:140]
 
 
@@ -322,36 +315,15 @@ def test_a_draining_loop_turns_the_switch_itself_warn_coloured():
         out = run_js(f"loopSw({js_view(state=state)})")
         assert (" dra" in out) is (state == "draining"), f"{state}: {out}"
     src = page()
-    for panel in ("#lopb", "#inst"):
-        rule = re.search(rf"{panel} \.lsw\.dra\[aria-checked=true\]\{{([^}}]*)\}}", src)
-        assert rule and "var(--warn)" in rule.group(1), f"{panel} paints a draining switch warn"
+    rule = re.search(r"#inst \.lsw\.dra\[aria-checked=true\]\{([^}]*)\}", src)
+    assert rule and "var(--warn)" in rule.group(1), "#inst paints a draining switch warn"
 
 
-def test_the_live_tile_states_the_run_and_gate_counts_in_every_state():
-    """A stop never touches work the owner could not see: the counts show in every state, not only while draining (#1280)."""
-    for state in ("on", "off", "draining", "starting"):
-        out = run_js(f"loopLogHtml({js_view(state=state)})")
-        assert "2 runs · 1 gate" in out, f"{state}: {out}"
-
-
-def test_the_last_change_tile_names_the_action_who_from_and_when():
+def test_the_change_list_names_the_action_who_from_and_when():
     out = run_js(f"loopLogHtml({js_view()})")
-    assert "start · owner · loopback · 2026-10-31 16:02" in out, out
-    empty = run_js(f"loopLogHtml({js_view(log=[], who='', when='')})")
-    assert "none recorded" in empty, empty
-    lost = run_js(f"loopLogHtml({js_view(log=[], who='owner', when='2026-10-31T16:02:00-03:00')})")
-    assert "none recorded" in lost and "16:02" not in lost, "a truncated log still names no action or source, so it says none recorded"
-
-
-def test_the_health_tile_reads_the_hubs_values_and_formats_only_the_span():
-    """The hub hands the cycle age and the seconds left; the page writes the span and names the state (ADR-0137, #1280)."""
-    age = run_js(f"loopLogHtml({js_view()})")
-    assert re.search(r'class="tile ok".*?cycle 45s ago', age, re.S), age
-    assert "late" not in age and "in 45s" not in age, "the page computed a value the hub did not hand it"
-    starting = run_js(f"loopLogHtml({js_view(health={'live_runs': 2, 'live_gates': 1, 'cycle_age': 45, 'starting_left': 62})})")
-    assert re.search(r'class="tile warn".*?starting, 62s left', starting, re.S), starting
-    failed = run_js(f"loopLogHtml({js_view(state='off', failed='watchd did not start')})")
-    assert re.search(r'class="tile err".*?last start failed: watchd did not start', failed, re.S), failed
+    assert "<b>2026-10-31 16:02</b> · owner (loopback) · start" in out, out
+    empty = run_js(f"loopLogHtml({js_view(log=[])})")
+    assert "no change yet" in empty, empty
 
 
 def test_the_starting_switch_states_the_seconds_left():
@@ -391,13 +363,12 @@ def test_changes_is_a_disclosure_closed_by_default_with_its_count():
 
 
 def test_the_monitor_carries_the_one_loop_switch_and_no_loop_tile():
-    """The owner moved the switch into the Monitor: one switch there, no Loop tile, and the panel carries no button."""
+    """The owner moved the switch into the Monitor: one switch there and no Loop tile."""
     src = page()
     card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
     assert "id=iloop" in card, "the Monitor carries the loop slot"
     assert src.count('{k:"Loop",text:') == 0, "the Monitor carries no Loop tile"
-    panel = src.split("<details id=lop", 1)[1].split("</details>", 1)[0]
-    assert "role=switch" not in panel, "the Loop panel carries no second switch"
+    assert "<details id=lop" not in src, "the Settings page still carries a Loop panel"
 
 
 def test_the_loop_switch_shows_the_state_and_the_log_keeps_who_and_when():
@@ -601,13 +572,6 @@ def test_the_monitor_switch_is_styled_where_the_monitor_draws_it():
     assert any("#inst .lsw" in sels for sels, _ in rules), "the Monitor's switch is styled"
 
 
-def test_the_settings_panel_keeps_its_own_row_box():
-    """The Monitor's compact row never leaks into Settings > Loop, which keeps the inset box."""
-    src = page()
-    assert re.search(r"#lopb \.lnow\{[^}]*border:1px solid", src), "the Settings row keeps its box"
-    assert re.search(r"#inst \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"
-
-
 # ---- loops per project (SPEC 1596, rule 8; #1599) ----
 # A project is one profile the seam lists, and each project keeps its own state directory: its supervisor pid, its drain
 # mark, its live-run list, its change log, its board cache and its loop-bugs. The loop fact lists every one of them, so no
@@ -794,7 +758,7 @@ def test_the_page_names_the_loop_bug_beside_the_state():
     """Draining reads "for the loop-bug #N" and off reads "until the loop-bug #N closes", in the state line and the switch
     line; an owner stop and a loop that is on name no issue (#1708)."""
     cause = {"issue": 1699}
-    for fn in ("loopLogHtml", "loopSetHtml"):
+    for fn in ("loopSetHtml",):
         assert "Loop draining for the loop-bug #1699" in run_js(f"{fn}({js_view(state='draining', cause=cause)})"), fn
         assert "Loop off until the loop-bug #1699 closes" in run_js(f"{fn}({js_view(state='off', cause=cause)})"), fn
         assert "loop-bug" not in run_js(f"{fn}({js_view(state='off', cause={'owner': True}, log=[])})"), fn

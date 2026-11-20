@@ -58,8 +58,9 @@ def _desktop_tab_and_theme(hub, hash_):
     hash_map = re.search(r"^const HASH=[^\n]*", page, re.M).group(0)
     tab_fn = re.search(r"^function tabFromLocation\(.*$", page, re.M).group(0)
     boot = re.search(r"^const themeHash=[^\n]*", page, re.M).group(0)
+    initial = re.search(r"^let sTheme=[^\n]*", page, re.M).group(0)
     src = (
-        f"const location={{hash:{json.dumps(hash_)}}};\n{sth}\nlet sTheme='lop';\n{hash_map}\n{tab_fn}\n{boot}\n"
+        f"const location={{hash:{json.dumps(hash_)}}};\nconst ls={{}};\n{sth}\n{initial}\n{hash_map}\n{tab_fn}\n{boot}\n"
         "console.log(JSON.stringify([tabFromLocation(),sTheme]));"
     )
     return json.loads(_node(src))
@@ -77,19 +78,25 @@ def _node(src):
     [
         ('{"sth":"acc"}', "./#set-acc"),
         ('{"sth":"sub","pins":[]}', "./#set-sub"),
-        ("{}", "./#set-lop"),
-        ('{"sth":"bogus"}', "./#set-lop"),
-        ("not json", "./#set-lop"),
+        ("{}", "./#set-lim"),
+        ('{"sth":"bogus"}', "./#set-lim"),
+        ('{"sth":"lop"}', "./#set-lim"),
+        ("not json", "./#set-lim"),
     ],
 )
-def test_the_phone_settings_link_carries_the_last_theme_or_loop(stored, href):
+def test_the_phone_settings_link_carries_the_last_theme_or_the_first_one(stored, href):
     assert json.loads(_phone_link_href(stored)) == href
 
 
 @needs_node
 def test_the_desktop_opens_settings_on_the_themed_hash(hub):
     assert _desktop_tab_and_theme(hub, "#set-acc") == ["set", "acc"]
-    assert _desktop_tab_and_theme(hub, "#set-bogus") == ["set", "lop"]
+    assert _desktop_tab_and_theme(hub, "#set-bogus") == ["set", "lim"]
+
+
+@needs_node
+def test_an_old_loop_theme_link_opens_the_first_remaining_theme(hub):
+    assert _desktop_tab_and_theme(hub, "#set-lop") == ["set", "lim"]
 
 
 def _redirect_condition(hub):

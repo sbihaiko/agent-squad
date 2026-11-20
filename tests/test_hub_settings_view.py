@@ -67,13 +67,21 @@ def test_settings_has_a_theme_list_a_phone_select_and_one_page_save(hub):
     nav = re.search(r'<nav class=snav aria-label="Settings themes">(.*?)</nav>', view, re.S)
     assert nav, "Settings has no left theme list"
     themes = re.findall(r"data-sp=(\w+)", nav.group(1))
-    assert {"mdl", "slk", "lop", "acc"} <= set(themes)
+    assert themes == ["lim", "sub", "mdl", "slk", "acc"], "Settings lists a theme that only repeats other screens"
     sel = re.search(r"<select id=ssel[^>]*>(.*?)</select>", view, re.S)
     assert sel and re.findall(r"value=(\w+)", sel.group(1)) == themes, "the phone select does not list the same themes"
     assert view.count("id=ssave") == 1, "Settings needs exactly one page-level Save"
-    for sp in ("lop", "acc"):
+    assert "id=lop " not in view and "data-sp=lop" not in view, "the Loop theme is still in Settings"
+    for sp in ("lim", "acc"):
         panel = re.search(rf"<details id={sp} class=sp data-sp={sp}.*?</details>", view, re.S).group(0)
         assert "Save" not in panel, f"the {sp} theme carries a Save"
+
+
+def test_the_loop_change_list_is_in_the_loop_tab(hub):
+    _, port = hub
+    _, page = _get(port, "/")
+    loop_tab = _between(page, "<section id=tab-prof", "</section>")
+    assert 'id=lopaud' in loop_tab, "the loop change list is not in the Loop tab"
 
 
 def test_the_sidebar_carries_no_control_that_writes_a_chain_and_no_link_to_settings(hub):
