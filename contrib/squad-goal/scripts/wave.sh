@@ -2426,7 +2426,10 @@ land_queue() {
     red_read "$(wave_of "$r")" && continue                    # a wave held red lands alone, never in a batch (#1961, #2068)
     h=$(cat "$SG_STATE/auto/wland-$r.busy" 2>/dev/null)
     [ -n "$h" ] && kill -0 "$h" 2>/dev/null && continue   # a pass of its own lives: it lands the run or queues it again
-    printf '%s\n' "$$" > "$SG_STATE/auto/wland-$r.busy"; cr+=("$r"); crd+=("$(cat "$q")"); rm -f "$q"; n=$((n + 1))
+    # (#2607) Two passes claim at once, so the claim is one rename: the pass that loses it finds the marker gone and takes the
+    # next run, and no run ever lands in two batches.
+    mv "$q" "$q.$$" 2>/dev/null || continue
+    printf '%s\n' "$$" > "$SG_STATE/auto/wland-$r.busy"; cr+=("$r"); crd+=("$(cat "$q.$$")"); rm -f "$q.$$"; n=$((n + 1))
   done
   [ ${#cr[@]} -gt 0 ] || { land "$@"; return; }
   echo "WAVE BATCH ${self##*/}: it lands with ${cr[*]} behind one tip gate"

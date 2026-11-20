@@ -329,7 +329,11 @@ held=
 # last round began past their sum has outlived both, and a person is told, once. A landing runs several rounds (a red tip, the child
 # that broke it leaves, the tip again), so wave.sh marks each round's start in the lock's round file: that mark is the progress, not
 # the landing's start. The lock's pid mtime is the instant the holder took it, which is what the alert names; a new holder restarts it.
-lkd="$SG_STATE/locks/single-wland"; lhp=$(cat "$lkd/pid" 2>/dev/null)
+# (#2607) A landing takes one of SG_LAND_PARALLEL slots, so each slot is read and alerted on its own: a stuck slot is a stuck
+# landing whatever the other slot does.
+for lkd in "$SG_STATE/locks/single-wland" "$SG_STATE/locks/single-wland"-*; do
+[ -d "$lkd" ] || continue
+lhp=$(cat "$lkd/pid" 2>/dev/null)
 if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp" 2>/dev/null | cut -c1)" != Z ]; then
   lw=${SERIAL_WAIT_SECONDS:-900}; case $lw in ''|*[!0-9]*) lw=900;; esac
   lb=${SG_GATE_BOUND_SECONDS:-900}; case $lb in ''|*[!0-9]*|0) lb=900;; esac
@@ -339,6 +343,7 @@ if [ -n "$lhp" ] && kill -0 "$lhp" 2>/dev/null && [ "$($SG_PS -o stat= -p "$lhp"
   la=$(( now - lp ))
   [ "$ls" -gt 0 ] && [ "$la" -gt $(( lw + lb )) ] && add landing-held "the landing lock has been held by pid $lhp since $(date -r "$ls" '+%F %T' 2>/dev/null || date -d "@$ls" '+%F %T' 2>/dev/null || printf '%s' "$ls") (no gate round began for ${la}s, past the ${lw}s gate wait plus the ${lb}s gate bound): the landing is stuck, not queued"
 fi
+done
 # A janitor pass that holds its single-janitor lock past its own bound is stuck, not slow (#1775): the pass deadline lives
 # inside janitor.py (#1774) and fires only when the next call would start, so a hang in the shell wrapper, or in Python code
 # between calls, held the lock in silence. The bound is the pass deadline plus one call deadline, and a live holder past it

@@ -232,7 +232,8 @@ rm -f "$T/nosettle"; cp "$T/wave.stub" "$S/wave.sh"
 # 13) (#1290) a landing whose lock is held by a live holder says which fact it waits on: the holder's pid and the instant it
 # took the lock, never "the landing failed". The landing runs no second pass beside the holder, and it lands once the holder ends.
 run run-13 pass; printf 'wave/run-13\n' > "$ST/auto/wave-run-13"; printf '%s\n' "$T/run-13" > "$ST/active-runs.txt"
-/bin/sleep 60 & wh=$!; mkdir -p "$ST/locks/single-wland"; echo "$wh" > "$ST/locks/single-wland/pid"; touch -t 202001010000 "$ST/locks/single-wland/pid"
+# (#2607) A landing takes one of two slots, so a landing waits only while both are held: the two slots carry the one holder here.
+/bin/sleep 60 & wh=$!; for sd in "$ST/locks/single-wland" "$ST/locks/single-wland-2"; do mkdir -p "$sd"; echo "$wh" > "$sd/pid"; touch -t 202001010000 "$sd/pid"; done
 run_cycle 1
 [ -z "$(/usr/bin/grep -E '^wave land run-13' "$STEPS")" ] && ok "a landing waits while its lock is held" || ko "a landing ran beside the holder: '$(cat "$STEPS")'"
 /usr/bin/grep -E 'WATCH: run-13 waits' "$T/watch.out" | /usr/bin/grep -q "held by pid $wh" \
@@ -242,7 +243,7 @@ run_cycle 1
 /usr/bin/grep -E 'WATCH: run-13 waits' "$T/watch.out" | /usr/bin/grep -q 'landing failed' \
   && ko "a held landing reads as a failure: '$(/usr/bin/grep 'run-13' "$T/watch.out")'" || ok "a held landing does not read as a failure"
 /usr/bin/grep -q "run-13" "$ST/watch-seen.txt" 2>/dev/null && ko "a held landing marked the run seen" || ok "a held landing leaves the run unread"
-kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland"
+kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland" "$ST/locks/single-wland-2"
 run_cycle 1
 [ "$(/usr/bin/grep -cxE 'wave land run-13 /.*/run-13' "$STEPS")" = 1 ] && ok "the landing runs once the holder is gone" \
   || ko "run-13 not landed after the holder ended: '$(cat "$STEPS")'"
@@ -275,13 +276,13 @@ exit 0
 EOS
 chmod +x "$S/wave.sh"
 run run-15 pass; printf 'wave/run-15\n' > "$ST/auto/wave-run-15"; printf '%s\n' "$T/run-15" > "$ST/active-runs.txt"
-/bin/sleep 60 & wh=$!; mkdir -p "$ST/locks/single-wland"; echo "$wh" > "$ST/locks/single-wland/pid"
+/bin/sleep 60 & wh=$!; for sd in "$ST/locks/single-wland" "$ST/locks/single-wland-2"; do mkdir -p "$sd"; echo "$wh" > "$sd/pid"; done   # (#2607) a landing queues only when both slots are held
 run_cycle 1
 [ "$(cat "$ST/auto/wland-run-15.queued" 2>/dev/null)" = "$T/run-15" ] && ok "a held landing queues its run for the batch" || ko "no queue marker: '$(ls "$ST/auto")'"
 rm -f "$ST/auto/wland-run-15.queued"
 SG_LAND_BATCH=1 run_cycle 1
 [ -e "$ST/auto/wland-run-15.queued" ] && ko "SG_LAND_BATCH=1 queued the run" || ok "SG_LAND_BATCH=1 queues no run"
-kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland"
+kill "$wh" 2>/dev/null; wait "$wh" 2>/dev/null; rm -rf "$ST/locks/single-wland" "$ST/locks/single-wland-2"
 run_cycle 1
 /usr/bin/grep -qE "^wave land run-15 /.*/run-15 queue=1$" "$STEPS" && ok "the landing pass runs with SG_LAND_QUEUE=1" || ko "steps: '$(cat "$STEPS")'"
 [ -e "$ST/auto/wland-run-15.queued" ] && ko "a landed run keeps its queue marker" || ok "a run whose pass got the lock is not queued"

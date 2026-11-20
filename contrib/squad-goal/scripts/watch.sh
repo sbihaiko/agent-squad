@@ -124,6 +124,10 @@ land_fork() {
     # lock held queues its run. SG_LAND_BATCH=1 writes no queue marker, so each run lands in its own pass, as before.
     (
       export SG_LAND_QUEUE=1
+      # (#2607, ADR-0176) Two landings run at once: a wave whose tip check fails spends its ten minutes on one slot, and a healthy
+      # wave lands on the other. The push needs no lock of its own: git refuses one that is not a fast-forward, and the refused
+      # pass repeats from its fetch.
+      export SG_SINGLE_SLOTS=${SG_LAND_PARALLEL:-2}
       wout=$(tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1); wrc=$?
       [ -n "$wout" ] && printf '%s\n' "$wout"
       rm -f "$pass"
@@ -132,7 +136,11 @@ land_fork() {
         if [ -n "$c" ]; then echo "WATCH: ${run##*/} waits: its wave did not land, a rebase conflict (${c#WAVE CONFLICT }); the wave is retired, not retried"
         elif [ "$wrc" = 76 ]; then
           # The landing lock is held by a live holder: name that holder and the instant it took the lock, never a failure (#1290).
-          h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null); c=$(mtime "$SG_STATE/locks/single-wland/pid")
+          # (#2607) A landing takes one of two slots, so the holder it names is the one whose pid file reads in any slot.
+          h=""; c=0
+          for sd in "$SG_STATE/locks/single-wland" "$SG_STATE/locks/single-wland"-*; do
+            [ -s "$sd/pid" ] || continue; h=$(cat "$sd/pid" 2>/dev/null); c=$(mtime "$sd/pid"); [ -n "$h" ] && break
+          done
           echo "WATCH: ${run##*/} waits: its landing is held by pid ${h:-none}, held since $( [ "${c:-0}" -gt 0 ] && { date -r "$c" '+%F %T' 2>/dev/null || date -d "@$c" '+%F %T' 2>/dev/null || echo "$c"; } || echo 'an unreadable instant'), so it lands on a later cycle"
         else
           # The landing ran and failed: name its own reason, the last line the landing wrote, never a lock (#1290).
