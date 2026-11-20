@@ -229,6 +229,7 @@ redfix() { local br=$1 sha=$2 line=$3 b ref full tip
 # issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.
 # A `loop-bug:landing` issue names a defect in the landing path: no branch lands while it is open (#641, ADR-0146 decision 3).
 gh_land_stop && exit 0
+listed=$(date +%s)   # (#2571) before the list read: a marker written at or after it may name a branch pushed after the read
 sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
 # (#2571) A salvage branch that ends with no landing (deleted by hand, or its issue landed through another branch) leaves its
 # markers. They go once the remote has no such branch: a stale kept marker would hide the issue from janitor.py's STRANDED rule.
@@ -236,6 +237,8 @@ sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
 heads=" $(printf '%s\n' "$wb_heads" | tr / _ | tr '\n' ' ') "
 for m in "$A"/salvaged-*; do [ -e "$m" ] || continue; k=${m##*/salvaged-}
   case "$heads" in *" $k "*) continue;; esac
+  # A pusher pushes first and writes its marker after, so a marker older than the read names a push the list saw. A newer one waits.
+  [ "$(if stat --version >/dev/null 2>&1; then stat -c %Y "$m"; else stat -f %m "$m"; fi 2>/dev/null || echo "$listed")" -lt "$listed" ] || continue
   rm -f "$m" "$A/kept-$k" "$A"/branchland-salvagestop-"$k"-*; echo "BRANCHLAND SWEEP $k: the salvage branch is gone, so its markers go"
 done
 
