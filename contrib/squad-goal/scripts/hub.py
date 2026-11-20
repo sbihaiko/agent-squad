@@ -1650,9 +1650,21 @@ def limits_last():
         if isinstance(rec, dict) and rec.get("text"): return rec
     return None
 
+def limits_changes(limit=20):
+    """The changes the ledger records, newest first, at most `limit` of them: the Tokens group's Changes list (#2510)."""
+    try: lines = [ln for ln in (STATE / LIMIT_LEDGER).read_text().splitlines() if ln.strip()]
+    except OSError: return []
+    recs = []
+    for ln in reversed(lines):
+        try: rec = json.loads(ln)
+        except ValueError: continue
+        if isinstance(rec, dict) and rec.get("text"): recs.append(rec)
+        if len(recs) >= limit: break
+    return recs
+
 def limits_read():
     """The Spend & limits theme's data: the settings the guard will read on its next pass, the burn it measures, the pause
-    marker it writes and the last change recorded. Every value is a fact of one file or one marker; the page renders it."""
+    marker it writes and the changes recorded. Every value is a fact of one file or one marker; the page renders it."""
     path = profile_file()
     s = limits_settings(path)
     hour = burn_read(hours=1)
@@ -1661,7 +1673,7 @@ def limits_read():
             "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
             "window_h": s["window"], "pause_line": limit_line(s["cap"], s["factor"], s["window"]),
             "hour_burn": (hour or {}).get("total"), "window_burn": (window or {}).get("total"),
-            "paused": (STATE / "token-pause").exists(), "last_change": limits_last()}
+            "paused": (STATE / "token-pause").exists(), "changes": limits_changes(), "last_change": limits_last()}
 
 def limits_diff(old, new):
     """The diff a Save shows before it writes: one line per changed setting, in the order the theme reads them."""
@@ -7118,6 +7130,38 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set textarea{font-size:var(--fs-body);min-height:var(--ctl-h)}
 #tab-set .ro{color:var(--warn);background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);padding:6px 10px;margin:0 0 10px;max-width:1120px}#tab-set .ro[hidden]{display:none}
 @media (max-width:600px){#tab-set .now{grid-template-columns:1fr}}
+/* Settings > Spend & limits · Tokens (#2510): the spec mockup draws one heading with its state chip at the right, four
+   Now tiles in one row with the value larger than its label, fields in one column, and a toggle switch. These rules are
+   scoped to `#lbody`, so the other themes keep the shared shape above. */
+#tab-set #lbody .tokhead{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:var(--fs-heading);font-weight:600;text-transform:none;letter-spacing:0;color:var(--fg)}
+#tab-set #lbody .chip{display:inline-block;margin-left:auto;padding:0 7px;border-radius:var(--radius-lg);border:1px solid var(--line);color:var(--mute);font-size:var(--fs-caption);font-weight:600;letter-spacing:0;text-transform:none}
+#tab-set #lbody .chip.err{color:var(--err);border-color:var(--err)}
+#tab-set #lbody .now{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+#tab-set #lbody .tile .tv{font-size:var(--fs-heading);font-weight:600;line-height:1.25}
+#tab-set #lbody .setrow{grid-template-columns:minmax(120px,1fr) minmax(0,2.4fr);gap:12px}
+#tab-set #lbody .setrow .sc{justify-self:stretch;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+#lbody .setrow .lf{flex:0 0 auto;display:flex;align-items:center;gap:4px;min-width:104px}
+#lbody .setrow .lf input:not([type=checkbox]){width:104px}
+#lbody .setrow .lunit{flex:none;color:var(--mute);font-size:var(--fs-caption)}
+#lbody .setrow .kstop{flex:1 1 0;min-width:0}
+#lbody .swt{display:inline-flex;align-items:center;gap:8px}
+#lbody input[type=checkbox]{-webkit-appearance:none;appearance:none;margin:0;width:52px;height:32px;padding:0;border:1px solid var(--line);border-radius:var(--radius-full);cursor:pointer;flex:none;background-color:var(--edge);background-image:radial-gradient(circle at 16px 50%,var(--highlight) 0 12px,transparent 13px)}
+#lbody input[type=checkbox]:checked{background-color:var(--ok);background-image:radial-gradient(circle at calc(100% - 16px) 50%,var(--highlight) 0 12px,transparent 13px)}
+#lbody input[type=checkbox]:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#lbody .chg{margin:6px 0 0;padding-top:6px;border-top:1px solid var(--line)}
+#lbody .chg summary{display:flex;align-items:center;gap:6px;min-height:32px;cursor:pointer;font-size:var(--fs-body);color:var(--fg);list-style:none}
+#lbody .chg summary::-webkit-details-marker{display:none}
+#lbody .chg summary::before{content:"\25B8";color:var(--mute)}
+#lbody .chg[open] summary::before{content:"\25BE"}
+#lbody .chg summary .m{color:var(--mute)}
+#lbody .chg ul{list-style:none;margin:4px 0 0;padding:0;font-size:var(--fs-caption);color:var(--mute)}
+#lbody .chg li{padding:3px 0;border-bottom:1px solid var(--line)}
+#lbody .chg li:last-child{border-bottom:0}
+#lbody .chg .cat{font-variant-numeric:tabular-nums}
+#tab-set #lbody .tile{padding:6px 8px}
+@media (max-width:1200px){#tab-set #lbody .now{gap:6px}#tab-set #lbody .tile .tv{font-size:var(--fs-body)}}
+@media (max-width:820px){#tab-set #lbody .now{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){#tab-set #lbody .now{grid-template-columns:1fr}}
 .mtab{width:100%;border-collapse:collapse;font-size:var(--fs-caption);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
 .stc{display:inline-block;font-size:var(--fs-caption);border:1px solid var(--line);border-radius:var(--radius-sm);padding:0 5px;color:var(--mute)}.stc.off{color:var(--warn);border-color:var(--tint-warn-line)}.stc.lim{color:var(--err);border-color:var(--err)}.mr.off .mn{text-decoration:line-through}.mr.rmk .mn,.mr.rmk .pv{text-decoration:line-through;opacity:.55}
 .madd select{flex:1;min-width:0;height:var(--ctl-h);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
@@ -7551,6 +7595,12 @@ const limBadCls=k=>limBad===k?" class=bad":"";
 const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
 function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
  if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · <span id=limage>${limAgeTxt()}</span>`}
+/* The Tokens group's Changes list (#2510): one collapsed line that names the count, and the records the ledger holds
+   under it, newest first. The hub reads the ledger; the page only prints what it is given. */
+function limChangesHtml(cs){cs=Array.isArray(cs)?cs:[];
+ return `<details class=chg><summary>Changes <span class=m>${cs.length}</span></summary>`
+  +(cs.length?`<ul>${cs.map(r=>`<li><span class=cat>${esc(r.at||"")}</span> ${esc(r.text||"")}</li>`).join("")}</ul>`
+             :`<p class=m>No change recorded.</p>`)+`</details>`}
 function limTick(now){const el=$("#limage");if(el&&limOK)el.textContent=limAgeTxt(now)}   // the age moves on with the clock, with no new write
 let limAgeTmr=null;   // the age ticker runs only while a saved value is shown in a visible theme (#2433)
 const limShown=()=>{const p=$("#lim");return !p||p.open===undefined||!!p.open};   // a collapsed theme ticks nothing
@@ -7651,7 +7701,8 @@ function slotsHtml(){const t=slotChip();
   +(slotDiff&&slotDiff.length?`<div class="mx" role=status>${slotDiff.map(l=>esc(l)).join(" · ")}</div>`:"")
   +`<div class="mx${slotMsg.startsWith("!")?" err":""}" id=slotmsg role=status>${esc(slotMsg.replace(/^!/,""))}</div></div>`}
 // }SLOT
-const limN=v=>v==null?"—":tk(v);
+const limN=v=>{if(v==null)return "—";const t=tk(v);   // a reading under 1000 is whole; a unit reading never keeps a trailing zero: 125B, not 125.00B (#2510)
+ return /[KMBT]$/.test(t)&&t.includes(".")?t.replace(/0+([KMBT])$/,"$1").replace(/\.([KMBT])$/,"$1"):t};
 const LIM_UNITS=[["T",1e12],["B",1e9],["M",1e6],["K",1e3]],LIM_SCALE={K:1e3,M:1e6,B:1e9,T:1e12};
 const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))return String(n??"");   // a cap reads 1.5M, 250M or 1T, never a row of zeros (#2434)
  for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
@@ -7668,19 +7719,25 @@ function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k); 
  const st=$("#limstat");if(st)st.innerHTML=limLine()}   // and so does the saved line (#2433)
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
- setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ const chipTxt=off?"guard off · never pauses":s.paused?"paused":"on",chipCls=s.paused?"err":"";   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ setChip("lim",chipTxt,chipCls);
  if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
- let h=setNow("lim",[
+ // The Tokens group draws its own heading and state chip (#2510), then the four Now tiles on one row, then the fields.
+ let h=`<div class=setblk data-blk=tokens data-theme=lim><h3 class="blkh tokhead">Tokens <span id=limtok class="chip${chipCls?" "+chipCls:""}">${esc(chipTxt)}</span></h3></div>`
+ +setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
-  setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
+  setTile("Last "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
- ],`Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434); the last change stays data, never a fifth fact
+ ])
  +setSettings("lim",[
-  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
-  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
-  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
- ],`<span id=limstat>${limLine()}</span>`);   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
+  setRow("Token guard",`<span class=lf><label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}></label>${limMark("guard")}</span><small class=kstop>Off: dispatch never pauses on token burn.</small>`),
+  setRow("Daily token cap",`<span class=lf><input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}></span><small class=lunit>tokens</small>${limMark("cap")}<small class=kstop>Accepts 6M, 250M, 1T. Read only while the guard is on.</small>`),
+  setRow("Pause factor",`<span class=lf><input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}></span><small class=lunit>×</small>${limMark("factor")}<small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>`),
+ ])   // the settings block carries no note here: the profile line, the Changes list and the saved line follow it (#2510)
+ +`<p class=note>Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code></p>`   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434)
+ +limChangesHtml(s.changes)
+ +`<p class=note><span id=limstat>${limLine()}</span></p>`;   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
