@@ -35,9 +35,11 @@ def _applied(out, block):
 
 
 def limits(target="."):
-    """Every column's limit: the plugin defaults, then the project settings file under `target`. A file that cannot be
-    read leaves the defaults: a read that fails never raises a limit and never stops a pass."""
-    out = _applied(dict(DEFAULTS), (D.load() or {}).get("columns"))
+    """Every column's limit: the plugin defaults, then the project settings file under `target`. The key set is the
+    board table (COLUMNS), never the defaults dict, so a column the defaults leave out still answers with none. A file
+    that cannot be read leaves the defaults: a read that fails never raises a limit and never stops a pass."""
+    out = {name: DEFAULTS.get(name) for name in COLUMNS}
+    out = _applied(out, (D.load() or {}).get("columns"))
     try:
         data, _ = P.load(target)
     except (OSError, P.OptionError):    # an unreadable or unsound file leaves the defaults; it never raises a limit

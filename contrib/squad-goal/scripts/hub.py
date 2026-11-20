@@ -7388,8 +7388,8 @@ const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
 const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify(kanS.columns);
 const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
-const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
-const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>`);
+const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"No limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
+const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit">${c.max_cards==null?"<small class=kunl>unlimited</small>":""} <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>`);
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
   +kanCols().map(kanRow).join("")
@@ -7414,8 +7414,9 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
-async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
- try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
+async function limLoad(){let bad=[];try{limS=await (await fetch("/api/limits")).json();limDiff=null}catch(e){bad.push("limits")}   // the theme loads with the page, so its chip never reads a dash (#2432)
+ try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="";bad.push("columns")}
+ limMsg=bad.length?"!load failed: "+bad.join(" and "):"";   // one line names the resource that failed, never the same echo twice (#2432)
  limRender()}
 async function limPost(confirm){const vals=limVals();if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
  try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...vals,confirm})}),d=await r.json();
@@ -7975,7 +7976,7 @@ async function pollBoard(){lim.busy=1;try{const r=await fetch("/api/board",board
 all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
-const COLS=b.limits||{};   // the card limit of each column (#2287): the hub resolves it, and the header shows the count against it
+const COLS=b.limits||{};   // the card limit of every active board column in the table's order (Backlog, Todo, Doing, Reviewing, Batching, Testing): the hub resolves the map once (squad/board_limits.py), so the header shows each count against its limit, with no five-name copy (#2287, #2432)
 lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;lastBoardErr=b.err||"";$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items);   // every open card feeds the swimlane model and the spec colours (#969)
 const sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
@@ -9753,13 +9754,17 @@ def board_column_limits():
 
 def board_column_counts(names):
     """The cards now in each column, from the loop's board cache: no GitHub read, and a card in a finished column counts
-    nowhere. A cache row the vocabulary cannot place counts in no column, so the screen never invents one."""
+    nowhere. A cache row the vocabulary cannot place counts in no column, so the screen never invents one. A vocabulary
+    the hub cannot read raises, so the caller states one error rather than hiding it behind zero counts."""
+    view = getattr(_columns_module, "view_column", None)   # resolved once, so a missing rule fails here and not per row
+    if view is None:
+        raise RuntimeError("the board vocabulary carries no view_column")
     counts = {n: 0 for n in names}
     for i in board_cache.get("items") or []:
         if not isinstance(i, dict): continue
         closed = str(i.get("s") or "").lower() == "closed"
         try:
-            col = _columns_module.view_column(i.get("st"), closed, i.get("l"), i.get("cr"))[0]
+            col = view(i.get("st"), closed, i.get("l"), i.get("cr"))[0]
         except Exception:
             continue
         if col in counts: counts[col] += 1
@@ -9768,14 +9773,18 @@ def board_column_counts(names):
 
 def columns_read():
     """The Kanban sub-group's data: one row per active column with its limit, the cards now and what its limit stops, and
-    the file a Save writes."""
+    the file a Save writes. A count that cannot be read leaves every row at zero with one stated error, so the rows
+    always render."""
     try:
         bl, _ = _board_limit_parts()
     except Exception as e:
         return {"columns": [], "file": "", "err": f"the settings reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
     lim = bl.limits(CHECKOUT or ".")
-    counts = board_column_counts(bl.COLUMNS)
-    return {"file": str(pathlib.Path(CHECKOUT or ".") / "docs" / "squad" / "defaults.yaml"),
+    try:
+        counts, err = board_column_counts(bl.COLUMNS), ""
+    except Exception as e:
+        counts, err = {n: 0 for n in bl.COLUMNS}, f"the card counts could not be read: {type(e).__name__}: {' '.join(str(e).split())}"
+    return {"file": str(pathlib.Path(CHECKOUT or ".") / "docs" / "squad" / "defaults.yaml"), "err": err,
             "columns": [{"name": n, "max_cards": lim.get(n), "count": counts.get(n, 0),
                          "stops": bl.column_stop(n)} for n in bl.COLUMNS]}
 

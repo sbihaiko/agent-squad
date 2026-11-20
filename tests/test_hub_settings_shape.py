@@ -573,6 +573,7 @@ def test_an_opened_panel_loads_its_data_once_at_boot(hub):
     cases = {
         "mdl": ({"sth": "mdl"}, {"mdl": 1, "lim": 1, "slk": 0}),
         "lim": ({"sth": "lim"}, {"mdl": 1, "lim": 1, "slk": 0}),
+        "lim_open": ({"sth": "lim", "acc": ["lim"]}, {"mdl": 1, "lim": 1, "slk": 0}),
         "slk": ({"sth": "slk"}, {"mdl": 1, "lim": 1, "slk": 1}),
         "closed": ({"sth": "lop"}, {"mdl": 1, "lim": 1, "slk": 0}),
     }

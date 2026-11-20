@@ -183,8 +183,18 @@ def test_an_empty_field_reads_unlimited_and_saves_as_none(hub):
     mod, _ = hub
     got = _node(mod, "kanS={file:'/p',columns:[{name:'Todo',max_cards:null,count:0,stops:'no pass reads it yet'}]};"
                       "kanDraft=kanClone(kanS.columns);console.log(JSON.stringify({h:kanHtml(),limits:kanLimits()}))")
-    assert 'value=""' in got["h"] and "unlimited" in got["h"], got["h"]
+    assert 'value=""' in got["h"], got["h"]
+    assert "<small class=kunl>unlimited</small>" in got["h"], "an empty field shows no visible unlimited text"
     assert got["limits"] == {"Todo": "none"}, got["limits"]
+
+
+def test_the_no_limit_chip_is_sentence_case(hub):
+    # The Kanban chip sits beside the other nav chips, which all start with a capital: an empty sub-group reads
+    # "No limit", never the lower-case "no limit".
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',columns:[{name:'Todo',max_cards:null,count:0,stops:''}]};"
+                      "console.log(JSON.stringify(kanChip()))")
+    assert got == "No limit", got
 
 
 def test_the_sub_group_chip_names_a_column_at_its_limit(hub):
@@ -210,3 +220,29 @@ def test_the_kanban_draws_the_header_through_col_count(hub):
     assert "colCount(g.n,COLS[g.name])" in page, "the column header does not carry the limit"
     assert "const COLS=b.limits||{}" in page, "the page does not read the limits the board payload carries"
     assert mod.board_column_limits() == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+
+
+def test_the_header_limit_map_names_every_active_column(hub):
+    # The header reads one limit per column from `b.limits`, whose key set is the board table. The page states that
+    # table beside the read, so a limit on any active column (Backlog included) reaches its header cell and no
+    # five-name copy can drop one.
+    mod, _ = hub
+    at = mod.PAGE.index("const COLS=")
+    window = mod.PAGE[at:at + 400]
+    for name in ACTIVE:
+        assert name in window, f"the header limit map names no {name} column"
+    assert mod.board_column_limits() == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+
+
+def test_a_broken_vocabulary_leaves_zero_counts_and_states_the_error(hub, monkeypatch):
+    # The Settings rows must always render. A vocabulary the hub cannot read gives every column zero cards and one
+    # stated error, never a raised call and never an invented count.
+    mod, _ = hub
+    mod.board_cache["items"] = [{"n": 1, "st": "Doing", "s": "open", "l": []}]
+    monkeypatch.setattr(mod._columns_module, "view_column", None)
+    try:
+        got = mod.columns_read()
+    finally:
+        mod.board_cache["items"] = []
+    assert {c["name"]: c["count"] for c in got["columns"]} == {n: 0 for n in ACTIVE}
+    assert got["err"], "a broken vocabulary stated no error"

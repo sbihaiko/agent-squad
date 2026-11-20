@@ -70,6 +70,21 @@ def test_the_resolved_limits_are_the_table_with_no_project_file(tmp_path):
     assert B.limits(tmp_path) == TABLE
 
 
+def test_every_table_column_answers_a_limit_even_when_the_defaults_omit_it(tmp_path, monkeypatch):
+    # The key set is the board table, never the defaults dict: a column the plugin defaults leave out still answers
+    # (with none), so a limit on it reaches every reader instead of disappearing.
+    monkeypatch.setattr(B, "DEFAULTS", {"Doing": 6})
+    monkeypatch.setattr(B.D, "load", lambda: {"columns": {}})
+    assert set(B.limits(tmp_path)) == set(P.COLUMN_CARDS)
+
+
+def test_the_column_set_is_the_active_columns_and_excludes_the_finished_ones():
+    # AC7: Closed and Abandoned carry no limit field. The field set follows COLUMN_CARDS, so it must stay the six active
+    # columns and never gain a finished one.
+    assert set(B.COLUMNS) == set(TABLE)
+    assert not set(B.COLUMNS) & {"Closed", "Abandoned"}
+
+
 # --- what a limit stops (#2432)
 
 def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
