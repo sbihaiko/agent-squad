@@ -659,7 +659,7 @@ rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-$yday" "$ST/auto/n
 rm -f "$ST/nightly-result" "$ST/alerts.log"
 
 # 33) (#1975) The dispatch stops in the window until the nightly ran that day, and while the nightly runs in it.
-mark; out=$(export FAKE_HOUR=04; hold)
+mark; rm -f "$ST/auto/nightly-missed-$(date +%F)"; out=$(export FAKE_HOUR=04; hold)   # case 32 left today's missed record
 case "$out" in *"nightly window"*) ok "the dispatch holds in the open window before the nightly ran";;
   *) ko "the dispatch did not hold in the window: '$out'";; esac
 touch "$ST/auto/nightly-$(date +%F)"
@@ -674,6 +674,35 @@ out=$(export FAKE_HOUR=04; hold)
 kill "$np" 2>/dev/null; wait "$np" 2>/dev/null; rm -rf "$ST/locks/nightly"
 case "$out" in *"the nightly runs"*) ok "the dispatch holds while the nightly runs in its window";;
   *) ko "the dispatch did not hold while the nightly runs: '$out'";; esac
+
+# 33b) (#2527) The dispatch drains SG_NIGHTLY_DRAIN_MINUTES (40) before the hour, so the live runs end before it opens. The
+#      hold ends on the day's missed record, and once the hour has less time left than the suite needs (SG_NIGHTLY_NEED_MINUTES, 45).
+mark; rm -f "$ST/auto/nightly-missed-$(date +%F)"
+out=$(export FAKE_HOUR=03 FAKE_MS=30:00; hold)
+case "$out" in *"nightly drain"*) ok "the dispatch drains in the lead before the window";;
+  *) ko "the dispatch did not drain 30 min before the window: '$out'";; esac
+out=$(export FAKE_HOUR=03 FAKE_MS=10:00; hold)
+case "$out" in *nightly*) ko "the dispatch drains before its lead: '$out'";; *) ok "the dispatch runs before the drain lead";; esac
+out=$(export FAKE_HOUR=03 FAKE_MS=30:00 SG_NIGHTLY_DRAIN_MINUTES=20; hold)
+case "$out" in *nightly*) ko "the drain lead ignores its setting: '$out'";; *) ok "the profile's drain minutes move the lead";; esac
+out=$(export FAKE_HOUR=04 FAKE_MS=20:00; hold)
+case "$out" in *nightly*) ko "the dispatch holds with 40 min left, under the 45 the suite needs: '$out'";;
+  *) ok "the window hold ends once the time left is under the need";; esac
+out=$(export FAKE_HOUR=04 FAKE_MS=10:00; hold)
+case "$out" in *"nightly window"*) ok "the window still holds while the suite can finish";;
+  *) ko "the window released with 50 min left: '$out'";; esac
+touch "$ST/auto/nightly-missed-$(date +%F)"
+out=$(export FAKE_HOUR=04 FAKE_MS=05:00; hold)
+case "$out" in *"nightly window"*) ko "the window holds after the day's missed record: '$out'";;
+  *) ok "the day's missed record ends the window hold";; esac
+out=$(export FAKE_HOUR=03 FAKE_MS=30:00; hold)
+case "$out" in *"nightly drain"*) ko "the drain holds after the day's missed record: '$out'";;
+  *) ok "the day's missed record ends the drain";; esac
+rm -f "$ST/auto/nightly-missed-$(date +%F)"
+mark; rm -f "$T/ran.log"; out=$(ng FAKE_MS=20:00); rc=$?
+[ $rc = 0 ] && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && case "$out" in *"min left"*) true;; *) false;; esac \
+  && ok "the nightly never starts with less time left than it needs" \
+  || ko "the nightly started with 40 min left: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
 
 # 34) (#1975) The local half runs only what a Linux runner deselects: both default mode commands carry the conftest's own
 #     switch, SQUAD_NIGHTLY_LOCAL_HALF=1, so the one deselection rule (tests/conftest.py, ADR-0139) picks the tests, never a list here.
@@ -799,7 +828,7 @@ out=$(env SG_GATE_PY="$T/py" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_R
 # 39) (#1975) A nightly still running at its hour's end is stopped there: it records one bounded attempt, the alert names the
 #     bound, and the hour's close writes no second record. The dispatch hold ends with the hour.
 mark; rm -f "$ST/nightly-result" "$ST/alerts.log" "$ST/auto/nightly-missed-$(date +%F)"
-out=$(ng FAKE_MS=59:58 SLEEP_parallel=6); rc=$?; rec
+out=$(ng FAKE_MS=59:58 SLEEP_parallel=6 SG_NIGHTLY_NEED_MINUTES=0); rc=$?; rec   # the need gate (#2527) is off: this case measures the bound
 [ "$r_res" = bounded ] && /usr/bin/grep -q 'bound' "$ST/alerts.log" 2>/dev/null && [ -e "$ST/auto/nightly-missed-$(date +%F)" ] \
   && [ ! -e "$ST/auto/nightly-$(date +%F)" ] \
   && ok "a nightly past its hour's end is stopped and records one bounded attempt" \
