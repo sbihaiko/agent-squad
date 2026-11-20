@@ -237,3 +237,44 @@ def test_the_sub_group_is_a_table_with_four_headers_a_bar_and_issue_chips(hub):
     assert "run-a" not in h, "Held by names the run folder instead of its issues"
     assert "a gate takes 3 slots (6 asked, cap 3) = 1 gate at a time" in h, "the gate line hides the real arithmetic"
     assert "3 slots ÷ 6 workers" not in h, "the gate line still shows the wrong division"
+
+
+def _skeleton(h3):
+    """The heading's tags and attributes, with each text and each interpolated value removed, so two headings compare by shape."""
+    s = re.sub(r"\$\{[^}]*\}", "", h3)
+    s = re.sub(r">[^<]*<", "><", s)
+    s = re.sub(r'id=\w+', "id=X", s)
+    return re.sub(r'class=("[^"]*"|\S+)', "class=C", s)
+
+
+def test_the_machine_slots_heading_has_the_kanban_heading_structure(hub):
+    """#2534: the Machine slots heading is the Kanban group heading: a flex title with its scope, the status at its right."""
+    mod, _ = hub
+    kanban = re.search(r'<h3 class="blkh khead">.*?</h3>', mod.PAGE, re.S).group(0)
+    got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:0,holders:[]},"
+                      "gates:{cap:3,in_use:0,holders:[],workers:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
+                      "console.log(JSON.stringify({h:slotsHtml()}))")
+    slots = re.search(r"<h3.*?</h3>", got["h"], re.S).group(0)
+    assert "khead" in slots and "khead" in kanban, slots
+    assert "<span>Machine slots <small class=ksub>" in slots, slots
+    assert _skeleton(slots) == _skeleton(kanban), (slots, kanban)
+
+
+def test_one_held_gate_slot_never_reads_none_running(hub):
+    mod, _ = hub
+    got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:0,holders:[]},"
+                      "gates:{cap:3,in_use:1,holders:['daysuites-98836'],workers:6,slots_per_gate:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
+                      "console.log(JSON.stringify({h:slotsHtml()}))")
+    row = re.search(r"<tr><th scope=row>Gate workers</th>.*?</tr>", got["h"], re.S).group(0)
+    assert "none running" not in row, row
+    assert "held by daysuites-98836" in row, row
+
+
+def test_one_live_run_names_its_issue_chip_in_the_runs_row(hub):
+    mod, _ = hub
+    got = _node(mod, "slotS={file_label:'docs/squad/defaults.yaml',runs:{cap:4,in_use:1,holders:[{name:'run-a',issues:[2534]}]},"
+                      "gates:{cap:3,in_use:0,holders:[],workers:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
+                      "console.log(JSON.stringify({h:slotsHtml()}))")
+    row = re.search(r"<tr><th scope=row>Runs</th>.*?</tr>", got["h"], re.S).group(0)
+    assert ">#2534</a>" in row, row
+    assert "no issue named" not in row, row

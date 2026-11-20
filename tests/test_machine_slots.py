@@ -149,3 +149,14 @@ def test_the_read_names_the_plugin_ceiling_of_each_cap(world):
     proj, cfg, caps_dir = world
     got = _read(proj, cfg, caps_dir)
     assert got["ceiling"] == {"runs": 10, "children": 20, "gates": 12, "reviews": 4}
+
+
+def test_a_live_run_listed_by_its_own_folder_names_its_claimed_issue(world, tmp_path):
+    proj, cfg, caps_dir = world
+    folder = tmp_path / "worktree" / "runs" / "run-a"
+    folder.mkdir(parents=True)
+    (folder / "request.txt").write_text("CHILD — GitHub issue(s) 2534 (bug; one root cause, one branch):\n")
+    (proj / "active-runs.txt").write_text(f"{folder}\n")
+    _lease(caps_dir, "runs", "run-a", "run-a")
+    got = _read(proj, cfg, caps_dir, active_runs=proj / "active-runs.txt")
+    assert got["runs"]["holders"] == [{"name": "run-a", "issues": [2534]}]

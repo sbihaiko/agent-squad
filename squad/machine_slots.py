@@ -52,10 +52,23 @@ def gates_at_once(cap, per_gate):
     return cap // slot if slot >= 1 else 0
 
 
-def _issues(checkout, name):
+def _listed_folders(checkout, listing):
+    """The run folders the loop's active list names, by folder name: a child run lives in its own worktree, so its row
+    holds the path and the checkout's `runs/` does not hold it."""
+    try:
+        rows = Path(listing).read_text().split()
+    except OSError:
+        return {}
+    return {Path(r).name: (Path(r) if os.path.isabs(r) else Path(checkout) / "runs" / r) for r in rows}
+
+
+def _holder_folder(checkout, name):
+    return Path(name) if os.path.isabs(name) else Path(checkout) / "runs" / name
+
+
+def _issues(folder):
     """The issue numbers the run's claim line names, in the order the line gives them, or []: the one line a dispatch
     writes (`slot_holders.claim_issues`), so a number the request cites in its prose never reads as a claimed issue."""
-    folder = Path(name) if os.path.isabs(name) else Path(checkout) / "runs" / name
     try:
         text = (folder / "request.txt").read_text(errors="replace")
     except OSError:
@@ -76,8 +89,10 @@ def read(target=".", active_runs=None, folder=None, defaults_path=None, workers=
     `defaults_path` are the suites' seams: the leases folder and the plugin defaults.
     """
     c = C.ceiling(target, defaults_path, folder)
-    runs = c.run_holders(active_runs or Path(target) / "active-runs.txt", root=target, reap=False)
-    run_holders = [{"name": n, "issues": _issues(target, n)} for n in runs]
+    listing = active_runs or Path(target) / "active-runs.txt"
+    runs = c.run_holders(listing, root=target, reap=False)
+    listed = _listed_folders(target, listing)
+    run_holders = [{"name": n, "issues": _issues(listed.get(n) or _holder_folder(target, n))} for n in runs]
     gate_leases = _gate_leases(c)
     gate_holders = [lease.get("holder", "?") for lease in gate_leases]
     per_gate = gate_workers(workers)
