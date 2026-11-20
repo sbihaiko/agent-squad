@@ -29,5 +29,18 @@ install -u ANTHROPIC_BASE_URL
 if plist | grep -q ANTHROPIC_BASE_URL; then no "no gateway in the shell writes none"; else ok "no gateway in the shell writes none"; fi
 plist | grep -q '<key>SG_PROFILE</key><string>emu</string>' && ok "the plist keeps the profile" || no "the plist keeps the profile"
 
+# 3. A gateway with XML characters stays a valid plist, and the value survives the escape.
+rm -f "$T/home/Library/LaunchAgents/"*.plist
+install 'ANTHROPIC_BASE_URL=http://localhost:8016/?a=1&b=<2>'
+if plutil -lint "$T/home/Library/LaunchAgents/"*.plist >/dev/null 2>&1 \
+  && [ "$(plutil -extract EnvironmentVariables.ANTHROPIC_BASE_URL raw "$T/home/Library/LaunchAgents/"*.plist 2>/dev/null)" = 'http://localhost:8016/?a=1&b=<2>' ]; then
+  ok "a gateway with XML characters is escaped"
+else no "a gateway with XML characters is escaped"; fi
+
+# 4. The install says whether the plist carries a gateway.
+out=$(cd "$T/co" && env -u ANTHROPIC_BASE_URL PATH="$T/bin:$PATH" HOME="$T/home" SG_PROFILES_DIR="$T/profiles" SG_PROFILE=emu \
+  SG_STATE="$T/state" SG_CHECKOUT="$T/co" bash "$d/health-install.sh" 2>&1)
+case "$out" in *"names no model gateway"*) ok "an install with no gateway says so";; *) no "an install with no gateway says so";; esac
+
 echo "$pass ok, $fails failed"
 [ "$fails" -eq 0 ]
