@@ -40,6 +40,14 @@ rm -f "$T/st/py.log"
 r=$(SG_WAVE_TIP_GATES=true SG_WAVE_CHILD_PYTEST='echo ran >> "$SG_STATE/py.log"; exit 1' land2 run-95 2>&1); rc=$?
 [ $rc = 0 ] && [ ! -e "$T/st/py.log" ] && ok "W1409: a green tip runs no child pytest" || ko "W1409: exit $rc, py.log: '$(cat "$T/st/py.log" 2>/dev/null)': '$r'"
 
+# (#2592, ADR-0169 rule 5) A child whose change needs no test is no silent pass: the landing's own output says `no test needed`,
+# as the fast gate records it, so a reader of the wave sees why no pytest ran.
+W98=wave/run-98; start2 run-98 >/dev/null; child 1946 g1946 "origin/$W98"; en2 run-98 1946 >/dev/null
+printf 'run-98\n' > "$T/st/auto/disp-1946"; : > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_PYTEST='echo "no test needed: the change needs no test: docs/evidence/1/a.png"; exit 0' land2 run-98 2>&1); rc=$?
+case "$r" in *"no test needed: the change needs no test: docs/evidence/1/a.png"*) ok "W2592: a child that needs no test says why no pytest ran";; \
+  *) ko "W2592: skip line missing from the landing's output (exit $rc: '$r')";; esac
+
 # A default-style tip red (a measured fail naming pytest at this HEAD, recorded by gate.sh as fast-gate.sh does) never blames a child whose own pytest passes, and the child
 # gate writes no wave-level journal: the child runs with SG_GATE_STATUS=self and no SG_GATE_WAVE.
 W97=wave/run-97; start2 run-97 >/dev/null; child 1944 g1944 "origin/$W97"; en2 run-97 1944 >/dev/null; child 1945 g1945 "origin/$W97"; en2 run-97 1945 >/dev/null

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BASE_BATTERY = ROOT / "contrib/squad-goal/scripts/base-battery.sh"
 
 
-def battery_run(tmp_path, repo, stage, narrow="no"):
+def battery_run(tmp_path, repo, stage, narrow="no", select="yes"):
     """Run the shared battery at <stage> in <repo> with a stub python: ruff and mypy pass, the selector is the real one, and
     the pytest leg only records its argv. Return the selection line, the scope line, every argv the stub saw, and the
     battery's own stdout."""
@@ -40,7 +40,7 @@ def battery_run(tmp_path, repo, stage, narrow="no"):
            "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel), "GATE_SCOPE_FILE": str(scope)}
     env.pop("SG_TEST_SELECT", None)   # a gate that runs this suite may hold it; the case reads its own stage, never the live one
     env.pop("SG_GATE_STAGE", None)
-    cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes "{stage}" {narrow}'
+    cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 {select} "{stage}" {narrow}'
     done = subprocess.run(["bash", "-c", cmd], cwd=repo, env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stdout + done.stderr
     return sel.read_text().strip(), scope.read_text().strip(), log.read_text(), done.stdout
@@ -137,6 +137,16 @@ def test_a_path_outside_the_evidence_folders_still_runs_no_pytest_at_a_child_gat
     assert sel == "selected 0 files" and scope == "delta"
     assert "-m pytest" not in argv
     assert any(line.startswith("no pytest ran: the delta cannot cover the change: docs/notes.md") for line in out.splitlines())
+
+
+def test_a_gate_told_not_to_select_runs_the_full_battery_beside_a_change_that_needs_no_test(tmp_path):
+    """(#2592) `SG_TEST_SELECT=no` answers `all:` before the selector is asked, so a change that needs no test never narrows a
+    gate that was told to run the whole battery: the full scope, and no `no test needed` line."""
+    repo = tip(tmp_path, {"docs/evidence/2592/kanban-1000.png": "png\n"})
+    sel, scope, argv, out = battery_run(tmp_path, repo, "fast", select="no")
+    assert sel == "all: SG_TEST_SELECT=no" and scope == "full"
+    assert "tests/test_" not in pytest_line(argv)
+    assert not any(line.startswith("no test needed") for line in out.splitlines())
 
 
 def test_an_empty_selection_runs_no_pytest_and_logs_why(tmp_path):

@@ -251,8 +251,8 @@ def test_an_evidence_image_a_script_names_is_no_change_that_needs_no_test(tmp_pa
     """#2592: only a path that no test and no script names is placed with no reader (ADR-0169 rule 5). A script that names
     the image is a reader, so when no test reaches that script the delta cannot cover the change: it answers `all`."""
     path = "docs/evidence/2592/kanban-1000.png"
-    script = "contrib/squad-goal/scripts/render.sh"
-    repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", script: f'IMG="{path}"\n'})
+    script = "contrib/squad-goal/scripts/render_proof.py"
+    repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", script: f'IMG = "{path}"\n'})
     lines = select(repo)
     assert len(lines) == 1 and lines[0].startswith("all: ") and path in lines[0] and script in lines[0], lines
 
