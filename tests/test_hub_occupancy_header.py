@@ -30,16 +30,23 @@ def hub():
 
 
 def _with_checkout(checkout):
-    """Point the hub's caps lookup at `checkout` for one test, and give the environment back untouched."""
+    """Point the hub's caps lookup at `checkout` for one test, and give the environment back untouched.
+    The squad package resolves from this tree, never from an SG_SQUAD checked out elsewhere: the seed the answer
+    reads is the one under test (#2568)."""
     class _Ctx:
         def __enter__(self):
             self.old = os.environ.get("SG_CHECKOUT")
+            self.old_squad = os.environ.get("SG_SQUAD")
             os.environ["SG_CHECKOUT"] = str(checkout)
+            os.environ["SG_SQUAD"] = str(ROOT)
 
         def __exit__(self, *a):
             os.environ.pop("SG_CHECKOUT", None)
             if self.old is not None:
                 os.environ["SG_CHECKOUT"] = self.old
+            os.environ.pop("SG_SQUAD", None)
+            if self.old_squad is not None:
+                os.environ["SG_SQUAD"] = self.old_squad
     return _Ctx()
 
 
@@ -167,6 +174,46 @@ def test_loop_caps_names_the_seeds_per_run_ceilings_on_a_fresh_checkout(hub):
     with _with_checkout(co):
         got = hub.loop_caps()
     assert (got["runs"], got["children"]) == (10, 20)       # the machine-wide pair is untouched
+    assert got["per_run"]["max_parallel"] == seed["run"]["max_parallel"]
+    assert (got["per_run"]["dispatch"][0]["max_children"], got["per_run"]["dispatch"][0]["max_parallel"]) == (node["max_children"], node["max_parallel"])
+
+
+def _decoy_squad_root(path):
+    """A squad package that answers another tree's numbers: what an SG_SQUAD checked out elsewhere serves (#2568)."""
+    pkg = Path(path) / "squad"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "caps.py").write_text(
+        "class _C:\n"
+        "    caps = {'runs': 10, 'children': 20}\n"
+        "    folder = '/nonexistent'\n"
+        "def ceiling(target=None, defaults_path=None, where=None):\n"
+        "    return _C()\n"
+        "def started_at(pids):\n"
+        "    return {}\n"
+        "def alive(pid, since=None, started=None):\n"
+        "    return False\n")
+    (pkg / "run_caps.py").write_text(
+        "def read(checkout, run_dirs=(), seed=None):\n"
+        "    return {'source': 'decoy', 'max_parallel': 7,\n"
+        "            'dispatch': [{'name': 'route', 'max_children': 3, 'max_parallel': 1}], 'label': 'decoy'}\n")
+
+
+def test_loop_caps_reads_the_seed_of_this_tree_whatever_squad_root_the_run_holds(hub):
+    """The answer is this tree's seed, not the one an ambient SG_SQUAD checked out elsewhere carries (#2568)."""
+    decoy = tempfile.mkdtemp()
+    _decoy_squad_root(decoy)
+    seed = json.loads((ROOT / "docs/design/router.graph.json").read_text())
+    node = next(n for n in seed["nodes"] if n["kind"] == "dispatch")
+    old = os.environ.get("SG_SQUAD")
+    os.environ["SG_SQUAD"] = decoy
+    try:
+        with _with_checkout(tempfile.mkdtemp()):
+            got = hub.loop_caps()
+    finally:
+        os.environ.pop("SG_SQUAD", None)
+        if old is not None:
+            os.environ["SG_SQUAD"] = old
     assert got["per_run"]["max_parallel"] == seed["run"]["max_parallel"]
     assert (got["per_run"]["dispatch"][0]["max_children"], got["per_run"]["dispatch"][0]["max_parallel"]) == (node["max_children"], node["max_parallel"])
 
