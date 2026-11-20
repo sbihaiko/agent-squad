@@ -200,6 +200,46 @@ def test_1753_a_refused_task_info_read_keeps_none_as_the_cpu(monkeypatch):
     assert (p.pid, p.ppid, p.pgid, p.stat) == (4321, 1, 4321, "S")
 
 
+def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatch):
+    """#2591: /proc/stat `btime` is a whole second, so a start built on it reads up to 1 s early and the session's reap
+    takes a fresh leftover for an old process. /proc/uptime carries hundredths, so the boot time comes from there."""
+    now, uptime = 1_700_000_000.0, 1234.01   # the wall clock and the uptime at one instant
+    boot = now - uptime
+    hz = os.sysconf("SC_CLK_TCK")
+    starttime = int((uptime - 0.07) * hz)   # this process started 0.07 s ago
+    fields = ["0"] * 20
+    fields[0], fields[1], fields[2], fields[19] = "S", "1", "4242", str(starttime)
+    files = {
+        "/proc/uptime": f"{uptime:.2f} 99999.99\n",
+        "/proc/stat": f"cpu  0 0 0 0\nbtime {int(boot)}\n",   # whole seconds: up to 1 s behind the true boot
+        "/proc/4242/stat": f"4242 (sleep) {' '.join(fields)}\n",
+        "/proc/4242/cmdline": b"sleep\x0030\x00",
+    }
+
+    class _File:
+        def __init__(self, data):
+            self.data = data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def __iter__(self):
+            return iter(self.data.splitlines(True))
+
+        def read(self):
+            return self.data
+
+    monkeypatch.setattr(procs, "open", lambda path, *a, **k: _File(files[path]), raising=False)
+    monkeypatch.setattr(procs.time, "time", lambda: now)
+    p = procs._linux_proc(4242, procs._linux_boot_time())
+    assert p is not None
+    age = now - p.start
+    assert age < 0.1, f"a process started 0.07 s ago read as {age:.3f} s old"
+
+
 def test_2582_vis_prints_every_byte_as_the_listing_does():
     """AC E of #2582: the reader's own escaping answers every byte exactly as before, so the faster fold changes no text."""
     def reference(raw: bytes) -> str:
