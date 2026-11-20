@@ -149,7 +149,7 @@ out=$(env -u SG_SQUAD bash "$src" --check "$sq/contrib/squad-goal" "$live3" 2>&1
 cb="$T/closes"; mkdir -p "$cb/contrib/squad-goal/scripts" "$T/cbin"
 cat > "$T/cbin/gh" <<EOF
 #!/bin/bash
-case "\$*" in *state=open*) echo '[]'; exit 0;; esac
+case "\$*" in *graphql*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}'; exit 0;; esac
 printf '%s\n' "\$*" >> "$T/gh.log"
 exit 0
 EOF
@@ -198,7 +198,7 @@ printf 'skill v7\n' > "$cb/contrib/squad-goal/SKILL.md"; git -C "$cb" add -A; gi
 mkdir -p "$T/fbin"
 cat > "$T/fbin/gh" <<EOF
 #!/bin/bash
-case "\$*" in *state=open*) echo '[]'; exit 0;; esac
+case "\$*" in *graphql*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}'; exit 0;; esac
 printf '%s\n' "\$*" >> "$T/gh.log"
 case "\$*" in *state=closed*) exit 1;; esac
 exit 0
@@ -367,7 +367,7 @@ printf 'skill v0\n' > "$hl/SKILL.md"
 cat > "$hbin/gh" <<EOF
 #!/bin/bash
 case "\$*" in
-  *state=open*) [ -e "$hb/hold.fail" ] && exit 1; cat "$hb/hold.json"; exit 0;;
+  *graphql*) [ -e "$hb/hold.fail" ] && exit 1; jq -c '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[] | {number,title,body,state:"OPEN",labels:{nodes:(.labels // [])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$hb/hold.json"; exit 0;;
 esac
 printf '%s\n' "\$*" >> "$hb/gh.log"; exit 0
 EOF
