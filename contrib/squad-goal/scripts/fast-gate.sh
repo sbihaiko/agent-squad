@@ -383,29 +383,113 @@ if [ -n "$mcs" ]; then
     echo "fast-gate: FAILED: the mirror list disagrees with a fixture: $reason"; exit 1
   fi
 fi
-failed=""; ranS=""; hitmax=
+failed=""; ranS=""; kdesc=""; kdone=""; unconf=""; unstarted=""
 # (#1839) A suite spends the gate's clock too: past it its whole tree is killed, as the battery's, so a suite that parks holds the
 # gate slot no longer than the ceiling allows.
 run_suite() {  # <script> <home>: the suite in its own home, from the repository top, with no SG_* variable and no GATE_REUSE_FILE
   # (#1927) gate.sh --inner exports GATE_REUSE_FILE for the gate's own verdict; a fixture gate inside a suite that inherited it
   # would mark the outer gate's reuse from its own memo hit, and its own row would never land. The file belongs to this gate.
   # (#2379) No GATE_* name either: a suite never writes this gate's record (the scope, the selection) or reads its clock.
-  ( cd "$top" && env $(compgen -e | /usr/bin/grep -E '^(SG|GATE)_' | sed 's/^/-u /') HOME="$2" bash "$1" )
+  # (#2569) No SERIAL_* or SQUAD_* name either, as shell-suites.sh clears them: the granted count is no suite's to read.
+  ( cd "$top" && env $(compgen -e | /usr/bin/grep -E '^(SG|GATE|SERIAL|SQUAD)_' | sed 's/^/-u /') HOME="$2" bash "$1" )
 }
-for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
-  echo "=== test-$n.sh"; ranS="$ranS test-$n.sh"
-  hm=$(mktemp -d); bounded "$(left)" run_suite "$s" "$hm"; src=$?
-  if [ "$src" = 0 ]; then echo "--- ok: test-$n.sh"; else
-    [ "$src" != 124 ] || hitmax=test-$n.sh
-    echo "--- FAILED: test-$n.sh"; failed="$failed test-$n.sh"; fi; rm -rf "$hm"; done
-[ -z "$hitmax" ] || {
-  if [ "$gate_max" = 1 ]; then
-    verdict unproven "bounded: the gate passed its ${maxb}s ceiling and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
-    echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling ($maxname) and killed ${hitmax}'s tree (${BTREE:-unknown}); unproven (exit 4)"; exit 4
+# (#2569) The suites run in a pool of the count the gate was granted (SQUAD_GATE_WORKERS, never the asked count), else the
+# count the caller named. A child's count is one, so its pool is the serial loop it always was. /bin/bash is 3.2 and has no
+# `wait -n`: the pool polls, and each suite's rc passes through a file. The pool keeps one clock, `deadline`: past it no
+# suite starts and every running suite's whole tree is killed.
+pd=$(mktemp -d "${TMPDIR:-/tmp}/fg-pool.XXXXXX")
+workers=${SQUAD_GATE_WORKERS:-${SG_GATE_WORKERS:-1}}; case $workers in ''|*[!0-9]*|0) workers=1;; esac
+pool_emit() {  # <label> <index>: one suite's block, whole: header, its log, and the verdict line
+  local n=test-${pn[$2]}.sh
+  echo "=== $1$n"; cat "$pd/$tag.$2.log" 2>/dev/null
+  if [ "${pkl[$2]}" = 1 ]; then echo "--- KILLED: $n"
+  elif [ "${prc[$2]}" = 0 ]; then echo "--- ok: $n"
+  else echo "--- FAILED: $n"; fi
+}
+pool_stop() {  # the running suites' trees: TERM, then KILL; the trees are kept for the verdict line
+  local i x all=""
+  for ((i = 0; i < nxt; i++)); do [ "${pst[$i]}" = 1 ] || continue
+    ptr[$i]=$(tree_pids "${ppid[$i]}" | tr '\n' ' ' | sed 's/ *$//'); all="$all ${ptr[$i]}"; done
+  for x in $all; do kill -TERM "$x" 2>/dev/null; done; [ -z "$all" ] || sleep 2
+  for x in $all; do kill -KILL "$x" 2>/dev/null; done
+}
+pool_run() {  # <tag> <label> <workers> <name>...: the suites test-<name>.sh in order, <workers> at a time; blocks print in order
+  tag=$1; local label=$2 w=$3 i v printed=0 running=0 total
+  shift 3; pn=("$@"); total=$#; nxt=0; pst=(); ppid=(); pkl=(); ptr=(); prc=()
+  for ((i = 0; i < total; i++)); do pst[$i]=0; pkl[$i]=0; done
+  trap 'pool_stop; rm -rf "$pd"; exit 143' TERM; trap 'pool_stop; rm -rf "$pd"; exit 130' INT
+  while :; do
+    for ((i = 0; i < nxt; i++)); do [ "${pst[$i]}" = 1 ] || continue
+      if [ -e "$pd/$tag.$i.rc" ] || ! kill -0 "${ppid[$i]}" 2>/dev/null; then
+        v=$(cat "$pd/$tag.$i.rc" 2>/dev/null); prc[$i]=${v:-143}; pst[$i]=2; running=$((running - 1)); wait "${ppid[$i]}" 2>/dev/null; fi
+    done
+    if [ "$running" -gt 0 ] && [ "$(date +%s)" -ge "$deadline" ]; then
+      pool_stop
+      for ((i = 0; i < nxt; i++)); do [ "${pst[$i]}" = 1 ] || continue; pst[$i]=2; pkl[$i]=1; prc[$i]=124; wait "${ppid[$i]}" 2>/dev/null; done
+      running=0
+    fi
+    while [ "$running" -lt "$w" ] && [ "$nxt" -lt "$total" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+      i=$nxt; v=$(mktemp -d "$pd/hm.XXXXXX")
+      ( run_suite "$top/contrib/squad-goal/scripts/test-${pn[$i]}.sh" "$v"; echo $? > "$pd/$tag.$i.rc.t"; mv -f "$pd/$tag.$i.rc.t" "$pd/$tag.$i.rc" ) > "$pd/$tag.$i.log" 2>&1 &
+      ppid[$i]=$!; pst[$i]=1; nxt=$((nxt + 1)); running=$((running + 1))
+    done
+    while [ "$printed" -lt "$total" ] && [ "${pst[$printed]}" = 2 ]; do pool_emit "$label" "$printed"; printed=$((printed + 1)); done
+    [ "$printed" -ge "$total" ] && break
+    [ "$running" = 0 ] && [ "$(date +%s)" -ge "$deadline" ] && break   # the deadline is past and nothing else will start
+    sleep 0.2
+  done
+  trap - TERM INT
+}
+pool_sort() {  # the pool's result: ranS (every suite that started), kdone and kdesc (killed), unstarted, redl (red names)
+  local i n; redl=""
+  for ((i = 0; i < ${#pn[@]}; i++)); do n=test-${pn[$i]}.sh
+    case ${pst[$i]} in
+      0) [ "$1" = main ] && unstarted="$unstarted $n";;
+      *) [ "$1" = main ] && ranS="$ranS $n"
+         if [ "${pkl[$i]}" = 1 ]; then kdone="$kdone $n"; kdesc="${kdesc:+$kdesc, }$n's tree (${ptr[$i]:-unknown})"
+         elif [ "${prc[$i]}" != 0 ]; then redl="$redl ${pn[$i]}"; fi;;
+    esac
+  done
+}
+names=(); for n in $suites; do [ -f "$top/contrib/squad-goal/scripts/test-$n.sh" ] && names+=("$n"); done
+if [ ${#names[@]} -gt 0 ]; then
+  pool_run main "" "$workers" "${names[@]}"; pool_sort main
+  if [ "$workers" = 1 ]; then for n in $redl; do failed="$failed test-$n.sh"; done
+  elif [ -n "$redl" ]; then
+    # (#2569) A suite red beside others runs alone once more, on the same clock. Red alone is a defect; no time left to run it
+    # alone is unproven, never a red the load may have made.
+    for n in $redl; do echo "fast-gate: test-$n.sh failed beside other suites: it runs alone once more (#2569)"; done
+    rl=$redl; set -f; pool_run rerun "rerun alone: " 1 $rl; set +f; pool_sort rerun
+    for n in $rl; do
+      for ((i = 0; i < ${#pn[@]}; i++)); do [ "${pn[$i]}" = "$n" ] || continue
+        case ${pst[$i]} in
+          0) unconf="$unconf test-$n.sh";;
+          *) if [ "${pkl[$i]}" = 1 ]; then :
+             elif [ "${prc[$i]}" = 0 ]; then echo "fast-gate: test-$n.sh passed alone: saturation, not a defect"
+             else failed="$failed test-$n.sh"; fi;;
+        esac
+      done
+    done
   fi
-  verdict unproven "bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown})" "$bran$ranS" "$bnot"
-  echo "fast-gate: bounded: the gate passed its ${bound}s deadline and killed ${hitmax}'s tree (${BTREE:-unknown}), so the gate does not pass"; exit 4; }
+fi
+rm -rf "$pd"
+# The suites the deadline kept from starting are named in the not-run field, never as ran, killed or failed (#2569).
+[ -z "$unstarted" ] || { if [ "$bnot" = - ]; then bnot=${unstarted# }; else bnot="$bnot$unstarted"; fi; }
+# (ADR-0164) A real red wins over a kill: a suite red alone is a defect whatever else the deadline stopped.
 [ -z "$failed" ] || { verdict fail "failed suite:$failed" "$bran$ranS" "$bnot"; echo "fast-gate: FAILED:$failed"; exit 1; }
+if [ -n "$kdone$unconf$unstarted" ]; then
+  parts=""
+  [ -z "$kdesc" ] || parts="$parts and killed $kdesc"
+  [ -z "$unconf" ] || parts="$parts and had no time to run alone after a red beside other suites:$unconf"
+  [ -z "$unstarted" ] || parts="$parts and started no suite for:$unstarted"
+  parts=${parts# and }
+  if [ "$gate_max" = 1 ]; then
+    verdict unproven "bounded: the gate passed its ${maxb}s ceiling and $parts" "$bran$ranS" "$bnot"
+    echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling ($maxname) and $parts; unproven (exit 4)"; exit 4
+  fi
+  verdict unproven "bounded: the gate passed its ${bound}s deadline and $parts" "$bran$ranS" "$bnot"
+  echo "fast-gate: bounded: the gate passed its ${bound}s deadline and $parts, so the gate does not pass"; exit 4
+fi
 # A gate that ran no test is never a pass: the empty selection is unproven, with the selector's reason, and is never kept.
 if [ -n "$empty" ]; then
   verdict unproven "$empty" "$bran$ranS" "$bnot"

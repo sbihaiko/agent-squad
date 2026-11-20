@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 8.46
+# seconds: 196.13
 # (#1735) The hang a deadline case starts sleeps a length only this run names, so the survivor probe and the cleanup
 # below read this suite's own processes: `pgrep -f "sleep 2718"` read every suite on the machine, and two gates side
 # by side then read each other's hang as a survivor, or ended it.
@@ -951,6 +951,88 @@ $G -C "$sb" checkout -q -b gui/2032; printf 'def test_one():\n    assert True\n'
 mkdir -p "$sb/.scratch"; echo scratch > "$sb/.scratch/fast-gate-1983-2.log"
 sel=$(cd "$sb" && PYTHONPATH="$(cd "$d/../../.." && pwd)" "$pyreal" -m squad.testselect --stage fast --base dev 2>/dev/null)
 [ "$sel" = "tests/test_one.py" ] && ok "2032 the selector skips the scratch place even when git does not ignore it" || ko "2032 scratch log without .gitignore: '$sel', want the delta tests/test_one.py"
+
+# (#2569) The gate runs the selected suites in parallel, up to the count it was granted, and a suite red under the pool runs once
+# more alone. Overlap is proved from the work: two suites that each wait for the other's marker file pass only side by side.
+# A suite the deadline kills prints KILLED, a suite it never started is named not run, and a real red wins over a kill.
+pnew() {  # <case>: a throwaway repository with an empty base; pm is the case's marker directory
+  pr=$T/par-$1; pm=$T/pm-$1; PS=$pr/contrib/squad-goal/scripts; rm -rf "$pr" "$pm"; mkdir -p "$PS" "$pm"
+  git init -q -b dev "$pr"; echo base > "$pr/x"; $G -C "$pr" add -A; $G -C "$pr" commit -q -m base; }
+psuite() { printf '#!/bin/bash\n%s\n' "$2" > "$PS/test-$1.sh"; }   # <name> <body>
+ptip() { $G -C "$pr" checkout -q -b gui/p; $G -C "$pr" add -A; $G -C "$pr" commit -q -m suites; }
+pwait() {  # <marker>: wait up to 10 s for a marker file; the exit code says whether it came
+  echo "i=0; while [ ! -e $1 ] && [ \$i -lt 100 ]; do sleep 0.1; i=\$((i+1)); done; [ -e $1 ]"; }
+pgate() {  # <env>...: one gate through gate.sh, so the granted count is the one gate.sh takes
+  (cd "$pr" && env -u SG_SERIAL_HELD -u SG_GATE_CALLER -u SG_GATE_WORKERS -u GATE_DEADLINE_EPOCH -u GATE_BOUND_SECONDS SG_FAST_BASE=dev SG_FAST_CMD=true SG_FAST_RETRY_CMD=false SG_FAST_MEMO=0 "$@" bash "$d/fast-gate.sh" 2>&1); }
+pheld() {  # <granted> <env>...: the gate inside a held lock, with that granted count and its verdict in $T/oc
+  local g=$1; shift; rm -f "$T/oc"
+  (cd "$pr" && env -u GATE_DEADLINE_EPOCH -u GATE_BOUND_SECONDS SG_SERIAL_HELD=gate SQUAD_GATE_WORKERS="$g" GATE_OUTCOME_FILE="$T/oc" SG_FAST_BASE=dev SG_FAST_CMD=true SG_FAST_RETRY_CMD=false SG_FAST_MEMO=0 SG_GATE_CALLER=tip "$@" bash "$d/fast-gate.sh" 2>&1); }
+pfield() { cut -f"$1" "$T/oc" 2>/dev/null; }   # 1 outcome, 2 reason, 3 ran, 4 not run
+pnohang() { ! pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1; }
+
+pnew ov; psuite a "touch $pm/a; $(pwait "$pm/b")"; psuite b "touch $pm/b; $(pwait "$pm/a")"; ptip
+out=$(pgate SG_GATE_CALLER=tip SG_GATE_WORKERS=2); rc=$?
+[ $rc = 0 ] && ok "2569 two suites that wait for each other's marker pass: the granted count runs them side by side" || ko "2569 overlap: rc $rc: $out"
+
+conc='mkdir -p CM; touch CM/$$; /usr/bin/wc -l < <(ls CM) | tr -d " " >> CK; sleep 0.7; rm -f CM/$$'
+pnew gr; for n in w x y z; do psuite $n "$(printf '%s' "$conc" | sed "s|CM|$pm/c|g; s|CK|$pm/conc|")"; done; ptip
+out=$(pheld 2 SG_GATE_WORKERS=6); rc=$?; mx=$(sort -n "$pm/conc" 2>/dev/null | tail -n 1)
+[ $rc = 0 ] && [ "$mx" = 2 ] && ok "2569 the pool holds the granted count of 2, never the asked 6" || ko "2569 granted count: rc $rc, most at once '$mx': $out"
+rm -rf "$pm/c" "$pm/conc"
+out=$(pgate); rc=$?; mx=$(sort -n "$pm/conc" 2>/dev/null | tail -n 1)
+[ $rc = 0 ] && [ "$mx" = 1 ] && ok "2569 a child's gate (count 1) stays serial" || ko "2569 child count: rc $rc, most at once '$mx': $out"
+
+pnew ord; psuite a 'sleep 1; echo A-end'; psuite b 'echo B-end'; ptip
+out=$(pheld 2); rc=$?; got=$(printf '%s\n' "$out" | /usr/bin/grep -E '^(=== |--- |[AB]-end)' | tr '\n' '|')
+[ $rc = 0 ] && [ "$got" = "=== test-a.sh|A-end|--- ok: test-a.sh|=== test-b.sh|B-end|--- ok: test-b.sh|" ] \
+  && ok "2569 each suite's block prints whole, in selection order, though b ends first" || ko "2569 block order: rc $rc, '$got'"
+
+pnew kl; psuite a 'sleep $HANG_NAP'; psuite b 'sleep $HANG_NAP'; psuite c "touch $pm/late"; psuite d "touch $pm/late"; ptip
+out=$(pheld 2 SG_GATE_BOUND_SECONDS=3); rc=$?
+[ $rc = 4 ] && [ "$(pfield 1)" = unproven ] && ok "2569 a deadline that kills two suites is unproven (exit 4)" || ko "2569 kill: rc $rc, outcome '$(cat "$T/oc" 2>&1)': $out"
+printf '%s\n' "$out" | /usr/bin/grep -qx -- '--- KILLED: test-a.sh' && printf '%s\n' "$out" | /usr/bin/grep -qx -- '--- KILLED: test-b.sh' \
+  && ! printf '%s\n' "$out" | /usr/bin/grep -q 'FAILED' && ok "2569 a killed suite prints KILLED, never FAILED" || ko "2569 KILLED lines: $out"
+case "$(pfield 2)" in *test-a.sh*test-b.sh*) ok "2569 the reason names every killed suite";; *) ko "2569 reason: '$(pfield 2)'";; esac
+[ ! -e "$pm/late" ] && case "$(pfield 4)" in *test-c.sh*test-d.sh*) true;; *) false;; esac && case "$(pfield 3)" in *test-c.sh*|*test-d.sh*) false;; *) true;; esac \
+  && ok "2569 the suites the deadline kept from starting are named not run, never ran" || ko "2569 not run: late '$(ls "$pm" 2>&1)', ran '$(pfield 3)', not run '$(pfield 4)'"
+pnohang && ok "2569 no killed suite's tree survives" || ko "2569 a killed suite's tree survived"
+
+pnew k1; psuite a 'sleep $HANG_NAP'; psuite b "touch $pm/late"; ptip
+out=$(pheld 1 SG_GATE_BOUND_SECONDS=3); rc=$?
+[ $rc = 4 ] && [ ! -e "$pm/late" ] && printf '%s\n' "$out" | /usr/bin/grep -qx -- '--- KILLED: test-a.sh' && case "$(pfield 4)" in *test-b.sh*) true;; *) false;; esac \
+  && ok "2569 a count of 1 gains the KILLED line and starts no suite past the deadline" || ko "2569 count 1 kill: rc $rc, late '$(ls "$pm" 2>&1)', not run '$(pfield 4)': $out"
+pnohang || ko "2569 count 1: a killed suite's tree survived"
+
+pnew fl
+psuite a "echo run >> $pm/aruns; touch $pm/pa; i=0; while [ ! -e $pm/pb ] && [ \$i -lt 20 ]; do sleep 0.1; i=\$((i+1)); done; r=0; [ -e $pm/pb ] && r=1; : > $pm/adone; rm -f $pm/pa; exit \$r"
+psuite b "touch $pm/pb; $(pwait "$pm/adone"); rm -f $pm/pb"; ptip
+out=$(pheld 2); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/wc -l < "$pm/aruns" | tr -d ' ')" = 2 ] && printf '%s\n' "$out" | /usr/bin/grep -q 'rerun alone' \
+  && ok "2569 a suite red beside another and green alone is run alone once more, and the gate passes" || ko "2569 rerun alone: rc $rc, runs '$(cat "$pm/aruns" 2>&1)': $out"
+
+pnew rd; psuite c "echo run >> $pm/cruns; exit 1"; psuite d 'true'; ptip
+out=$(pheld 2); rc=$?
+[ $rc = 1 ] && [ "$(/usr/bin/wc -l < "$pm/cruns" | tr -d ' ')" = 2 ] && [ "$(pfield 1)" = fail ] && case "$(pfield 2)" in *test-c.sh*) true;; *) false;; esac \
+  && ok "2569 a suite red alone too fails the gate and is named" || ko "2569 red alone: rc $rc, runs '$(cat "$pm/cruns" 2>&1)', outcome '$(cat "$T/oc" 2>&1)'"
+rm -f "$pm/cruns"
+out=$(pheld 1); rc=$?
+[ $rc = 1 ] && [ "$(/usr/bin/wc -l < "$pm/cruns" | tr -d ' ')" = 1 ] && ok "2569 a count of 1 ran the red suite alone already, so it runs it once" || ko "2569 count 1 red: rc $rc, runs '$(cat "$pm/cruns" 2>&1)'"
+
+pnew lo; psuite a "echo run >> $pm/aruns; exit 1"; psuite b 'sleep $HANG_NAP'; ptip
+out=$(pheld 2 SG_GATE_BOUND_SECONDS=3); rc=$?
+[ $rc = 4 ] && [ "$(pfield 1)" = unproven ] && [ "$(/usr/bin/wc -l < "$pm/aruns" | tr -d ' ')" = 1 ] && case "$(pfield 2)" in *test-a.sh*) case "$(pfield 2)" in *test-b.sh*) true;; *) false;; esac;; *) false;; esac \
+  && ok "2569 a suite red under the pool with no time left to run alone is unproven, and the reason names it" || ko "2569 no time to rerun: rc $rc, outcome '$(cat "$T/oc" 2>&1)'"
+pnohang || ko "2569 no time to rerun: a killed suite's tree survived"
+
+pnew rw; psuite a 'exit 1'; psuite b 'sleep $HANG_NAP'; ptip
+out=$(pheld 1 SG_GATE_BOUND_SECONDS=3); rc=$?
+[ $rc = 1 ] && [ "$(pfield 1)" = fail ] && printf '%s\n' "$out" | /usr/bin/grep -qx -- '--- KILLED: test-b.sh' \
+  && ok "2569 a real red wins over a kill (ADR-0164)" || ko "2569 red over kill: rc $rc, outcome '$(cat "$T/oc" 2>&1)'"
+pnohang || ko "2569 red over kill: a killed suite's tree survived"
+
+pnew sc; psuite a "env | /usr/bin/grep -E '^(SG|GATE|SERIAL|SQUAD)_' > $pm/env; true"; ptip
+out=$(pheld 1 SERIAL_FOO=1 SQUAD_FOO=1 SG_FOO=1); rc=$?
+[ $rc = 0 ] && [ ! -s "$pm/env" ] && ok "2569 a suite sees no SG_, GATE_, SERIAL_ or SQUAD_ variable" || ko "2569 scrub: rc $rc, leaked '$(cat "$pm/env" 2>&1)'"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 pkill -f "sleep $HANG_NAP" 2>/dev/null   # a red run leaves the hang its case started
