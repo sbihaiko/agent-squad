@@ -259,6 +259,96 @@ def test_the_sub_group_chip_names_a_column_at_its_limit(hub):
     assert got == ["Doing at its limit", "under its limit"], got
 
 
+def test_the_kanban_group_shows_the_counts_once_the_board_is_read_with_no_reload(hub):
+    # Issue #2541: the page loads while the board is unread; a later board read fills the counts without a reload.
+    mod, _ = hub
+    page = mod.PAGE
+    assert re.search(r"setInterval\(\(\)=>\{if\(limShown\(\)\)kanPoll\(\)", page), "no timer re-reads the Kanban columns"
+    got = _node(mod, "kanS={file:'/p',read:false,columns:[{name:'Doing',max_cards:6,count:null,stops:''},"
+                      "{name:'Todo',max_cards:null,count:null,stops:''}]};kanDraft=kanClone(kanS.columns);"
+                      "(async()=>{const before=kanHtml();"
+                      "await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:2,stops:''},"
+                      "{name:'Todo',max_cards:null,count:1,stops:''}]}));"
+                      "console.log(JSON.stringify({before:before,after:kanHtml(),chip:kanChip()}))})()")
+    assert "cards not read yet" in got["before"], got["before"]
+    assert "cards not read yet" not in got["after"], got["after"]
+    assert "2 of 6" in got["after"] and "data-kanrow=\"Todo\"" in got["after"], got["after"]
+    assert "<b class=knum>1</b>" in got["after"], got["after"]
+    assert "Cards now: board items not read yet." not in got["after"]
+    assert got["chip"] == "under its limit", got["chip"]
+
+
+def test_a_refresh_keeps_an_unsaved_card_limit_edit(hub):
+    # Issue #2541: the owner's typed Card limit stays staged when a later board read moves the counts. The draft and
+    # the last snapshot start equal, so no refresh can infer the edit by comparing the two: the page tracks it.
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:3,stops:''}]};"
+                      "kanDraft=kanClone(kanS.columns);kanStage('Doing','2');"
+                      "(async()=>{await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:4,stops:''}]}));"
+                      "const once={limits:kanLimits(),dirty:kanDirty(),h:kanHtml(),staged:kanStaged.Doing};"
+                      "await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:5,stops:''}]}));"
+                      "const twice={limits:kanLimits(),dirty:kanDirty(),h:kanHtml()};"
+                      "await kanRefresh(async()=>({file:'/p',read:true,columns:[]}));"
+                      "console.log(JSON.stringify({once:once,twice:twice,third:{limits:kanLimits(),staged:kanStaged.Doing}}))})()")
+    # The third read carries no column at all: a staged row it omits still keeps its value.
+    for step in (got["once"], got["twice"]):
+        assert step["limits"] == {"Doing": "2"}, (step, got)
+        assert step["dirty"] is True, (step, got)
+        assert 'value="2"' in step["h"], (step, got)
+    assert got["once"]["staged"] is True, got["once"]
+    assert "5 of 2" in got["twice"]["h"], got["twice"]["h"]
+    assert got["third"] == {"limits": {"Doing": "2"}, "staged": True}, got["third"]
+
+
+def test_a_saved_card_limit_is_no_longer_staged(hub):
+    # Issue #2541: once the write lands, the column follows the server again, so another writer's change shows.
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:3,stops:''}]};"
+                      "kanDraft=kanClone(kanS.columns);kanStage('Doing','2');var RO=false;globalThis.limRender=()=>{};"
+                      "(async()=>{await kanWriteNow('Doing',async()=>({state:{file:'/p',read:true,columns:["
+                      "{name:'Doing',max_cards:2,count:3,stops:''}]}}));"
+                      "const staged=!!kanStaged.Doing;"
+                      "await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:4,stops:''}]}));"
+                      "console.log(JSON.stringify({staged:staged,limits:kanLimits(),dirty:kanDirty()}))})()")
+    assert got["staged"] is False, got
+    assert got["limits"] == {"Doing": "6"}, got
+    assert got["dirty"] is False, got
+
+
+def test_the_poll_rerenders_the_counts_from_a_later_board_read(hub):
+    # Issue #2541: the timer's tick runs kanPoll, and the page shows the counts of the read it took, not the old ones.
+    mod, _ = hub
+    got = _node(mod, "let drawn=0,html='';globalThis.limRender=()=>{drawn++;html=kanHtml()};"
+                      "globalThis.document={hidden:false,activeElement:null};var RO=false;"
+                      "globalThis.fetch=async()=>({json:async()=>({file:'/p',read:true,columns:["
+                      "{name:'Doing',max_cards:6,count:4,stops:''}]})});"
+                      "kanS={file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:1,stops:''}]};"
+                      "kanDraft=kanClone(kanS.columns);"
+                      "kanPoll().then(()=>console.log(JSON.stringify({drawn:drawn,html:html})))")
+    assert got["drawn"] == 1, got
+    assert "4 of 6" in got["html"], got["html"]
+    assert "1 of 6" not in got["html"], got["html"]
+
+
+def test_the_poll_updates_the_counts_while_a_limit_field_has_focus(hub):
+    # Issue #2541: a field the owner is typing in keeps its value and its focus; the Cards-now cells still follow
+    # the later board read, so the counts never freeze behind an open editor.
+    mod, _ = hub
+    got = _node(mod, "const cell={innerHTML:''};const row={dataset:{kanrow:'Doing'},querySelector:s=>(s==='.kn'?cell:null)};"
+                      "const field={tagName:'INPUT',value:'2',selectionStart:1,closest:s=>s==='#lbody'?{}:null};"
+                      "globalThis.document={hidden:false,activeElement:field,querySelectorAll:s=>(s==='#lbody tr[data-kanrow]'?[row]:[])};"
+                      "let drawn=0;globalThis.limRender=()=>{drawn++};var RO=false;"
+                      "globalThis.fetch=async()=>({json:async()=>({file:'/p',read:true,columns:["
+                      "{name:'Doing',max_cards:6,count:4,stops:''}]})});"
+                      "kanS={file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:1,stops:''}]};"
+                      "kanDraft=kanClone(kanS.columns);"
+                      "kanPoll().then(()=>console.log(JSON.stringify({drawn:drawn,cell:cell.innerHTML,"
+                      "value:field.value,sel:field.selectionStart})))")
+    assert "4 of 6" in got["cell"], got
+    assert got["drawn"] == 0, got
+    assert got["value"] == "2" and got["sel"] == 1, got
+
+
 # --- the Kanban header
 
 def test_the_column_header_shows_n_over_max_only_where_a_limit_exists(hub):

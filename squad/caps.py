@@ -435,6 +435,25 @@ def free_runs(c, active_runs, root="."):
     return max(c.caps["runs"] - len(c.run_holders(active_runs, root)), 0)
 
 
+PACK = {"SG_PACK_IDLE": 2, "SG_PACK_BUSY": 6}   # owner ruling (#2544): the children one run takes, by the gate load
+
+
+def pack(c):
+    """(children, gates): the children one dispatched run may take, and the live gate leases that chose it (#2544).
+    With no live gate lease a run takes at most SG_PACK_IDLE children (2), so the work lands fast while a gate slot is free.
+    With one or more live gate leases a run takes at most SG_PACK_BUSY (6), so one landing gate proves more work. The
+    dispatchers fill a run to this number before they open another; a pass never waits for more issues. A value that is not
+    a whole number of at least 1 is a named failure, never a default."""
+    gates = len(c.live_leases("gates"))
+    name = "SG_PACK_BUSY" if gates else "SG_PACK_IDLE"
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return PACK[name], gates
+    if not raw.isdigit() or int(raw) < 1:
+        raise CapsError(f"{name} must be a whole number of at least 1, not {raw!r}")
+    return int(raw), gates
+
+
 def ceiling(target=None, defaults_path=None, where=None):
     """The one Ceiling: the resolution and the machine-wide leases folder."""
     return Ceiling(resolve(target, defaults_path), where)

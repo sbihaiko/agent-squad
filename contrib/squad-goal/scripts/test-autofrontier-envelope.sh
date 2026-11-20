@@ -67,6 +67,8 @@ graph() { # <dir> <max_children> <spend_max>: one root loop holding one dispatch
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2,"budget":{"stalls":{"min":2,"max":5},"spend":{"min":0.05,"max":%s}}}]}]}' "$2" "$3" > "$1"
 }
 issues() { printf '%s' "$1" | jq -c '[.[]|if .unready then . else .labels=((.labels//[])+[{"name":"frontier"}]) end]' > "$GH_ISSUES"; }   # a fixture issue carries the frontier label (#485) unless it says "unready"
+seven() { issues '[{"number":41,"title":"a","body":"b"},{"number":42,"title":"a","body":"b"},{"number":43,"title":"a","body":"b"},{"number":44,"title":"a","body":"b"},{"number":45,"title":"a","body":"b"},{"number":46,"title":"a","body":"b"},{"number":47,"title":"a","body":"b"}]'; }
+busy() { mkdir -p "$T/caps/gates"; printf '{"holder":"gate-x","pid":%s,"since":%s}' "$$" "$(date +%s)" > "$T/caps/gates/gate-x.json"; }   # one live gate lease: a run takes up to six children (#2544)
 four() { issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":42,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'; }
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sleep 0.6; }
 spent() { sed -nE 's/.*spend ([0-9.]+).*/\1/p' "$MKLOG.body" | head -1; }
@@ -100,11 +102,12 @@ four; run
 $G -q 'spend 8' "$MKLOG.body" && ko "the request still carries the hardcoded spend 8" || ok "no hardcoded spend 8 survives"
 
 # 2) No project graph: the pass follows the file the engine will run, the seed squad/workflows.py falls back to. This is the
-#    layout of the tooling repository itself, where the path the pass built by hand held no file at all.
+#    layout of the tooling repository itself, where the path the pass built by hand held no file at all. A live gate lease
+#    lifts the pack to six (#2544), and seven issues fill the seed's envelope.
 scene seed
 rm -rf "$d/co/docs/squad/workflows"; seed=$(seedfield spend); seedk=$(seedfield max_children)
 [ -n "$seed" ] && [ -n "$seedk" ] || { ko "the seed graph carries no dispatch budget to read"; seed=unreadable; seedk=unreadable; }
-four; run
+busy; seven; run; rm -rf "$T/caps/gates"
 [ "$(asked)" = "$seedk" ] && ok "the seed's own envelope still bounds the request" || ko "the request asks for '$(asked)' children with the seed's envelope of '$seedk'"
 [ "$(spent)" = "$seed" ] && ok "the request names the seed's dispatch budget" || ko "the request names '$(spent)', not the seed's '$seed'"
 $G -q 'spend 8' "$MKLOG.body" && ko "the request still carries the hardcoded spend 8" || ok "no hardcoded spend 8 survives"

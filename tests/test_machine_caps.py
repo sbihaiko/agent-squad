@@ -971,3 +971,25 @@ def test_the_janitor_zombie_and_fix_run_rules_read_the_same_live_pattern_as_reap
     from squad import reap
     src = (Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts/janitor.py").read_text()
     assert f'LIVE = re.compile(r"{reap.LIVE_PROC.pattern}")' in src
+
+
+def test_a_run_packs_two_children_with_no_live_gate_and_six_with_one(tmp_path, monkeypatch):
+    """(#2544) The pack of one run follows the gate load: 2 while no gate lease is live, 6 while one or more is."""
+    monkeypatch.delenv("SG_PACK_IDLE", raising=False)
+    monkeypatch.delenv("SG_PACK_BUSY", raising=False)
+    c = caps.Ceiling({"runs": 10, "children": 20, "gates": 3}, tmp_path / "leases")
+    assert caps.pack(c) == (2, 0)
+    assert c.try_take("gates", "gate-1") is not None
+    assert caps.pack(c) == (6, 1)
+
+
+def test_the_pack_reads_its_two_numbers_from_the_environment(tmp_path, monkeypatch):
+    c = caps.Ceiling({"runs": 10, "children": 20, "gates": 3}, tmp_path / "leases")
+    monkeypatch.setenv("SG_PACK_IDLE", "1")
+    monkeypatch.setenv("SG_PACK_BUSY", "4")
+    assert caps.pack(c) == (1, 0)
+    c.try_take("gates", "gate-1")
+    assert caps.pack(c) == (4, 1)
+    monkeypatch.setenv("SG_PACK_BUSY", "0")
+    with pytest.raises(caps.CapsError, match="SG_PACK_BUSY"):
+        caps.pack(c)

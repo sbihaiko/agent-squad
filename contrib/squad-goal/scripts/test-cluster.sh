@@ -60,7 +60,10 @@ case "\$*" in
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+# One live gate lease lifts the pack of the run to six children (#2544), so the four clusters fit one run and no bug waits.
+mkdir -p "$T/caps/gates"; printf '{"holder":"gate-x","pid":%s,"since":%s}' "$$" "$(date +%s)" > "$T/caps/gates/gate-x.json"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); case "$r" in *"4 cluster(s)"*"[1228 1233]"*"[1301 1302]"*) ok "autobug: one child per cluster";; *) ko "autobug: '$r'";; esac
+rm -rf "$T/caps/gates"
 printf 'SG_REPO=x/y; SG_STATE=%s; SG_BASE=main; SG_CHECKOUT=%s; SG_FRONTIER_LABEL=ready-for-agent; SG_BUG_LABEL=nobug\n' "$T/st" "$T/co" > "$T/s/env.sh"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"[1301 1302]"*) case "$r" in *"[1228 1233]"*) ko "frontier: area rule applied: '$r'";; *) ok "frontier: shared-file issues share one child, area ignored";; esac;; *) ko "frontier: '$r'";; esac
 # One fork-only slice that shares a file with another fork-only pick is ONE child / ONE branch, exactly as the base-branch
@@ -80,8 +83,11 @@ case "$r" in *"2 child(ren): [1500 1501] [1502]"*) ok "frontier: an unrelated fo
 # child of that run holds the whole shared-file slice: the envelope bounds the CHILDREN, cluster.py decides them, and a
 # ticket that names a file a taken ticket already names costs no second child (#1521). Bounding the tickets instead cut
 # the pair in two, which is the conflict the clustering exists to stop.
+# A live gate lease lifts the pack of the run to six children (#2544), so the envelope, not the pack, bounds this run.
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+mkdir -p "$T/caps/gates"; printf '{"holder":"gate-x","pid":%s,"since":%s}' "$$" "$(date +%s)" > "$T/caps/gates/gate-x.json"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 2 child(ren): [1500 1501] [1502] (1 free slots, room for"*"in 1 run(s)"*) ok "caps: a project lowering caps.runs to 1 dispatches one run, its shared-file slice whole";; *) ko "caps.runs 1: '$r'";; esac
+rm -rf "$T/caps/gates"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; sleep 300 & held=$!
 (cd "$SG_SQUAD" && python3 -c 'import sys; from squad import caps; c = caps.ceiling(); [c.try_take("runs", f"other-repo-{i}", pid=int(sys.argv[1])) for i in range(2)]' "$held")
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; case "$rc:$r" in 0:*"FRONTIER idle:"*"no slot"*) case "$r" in *"would dispatch"*) ko "caps full: a full ceiling dispatched: '$r'";; *) ok "caps: a ceiling full of another repository's runs dispatches nothing, fails nothing, and names the reason (#733)";; esac;; *) ko "caps full: rc=$rc '$r'";; esac   # #733: the pass says why it started nothing

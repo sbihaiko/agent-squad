@@ -5,8 +5,9 @@
 # (a `Refs #N` commit the base carries, the issue still open) is no work and dispatches no run (#2416). The column Todo is the one go signal (#1672, #1676): a card in Todo
 # with no triage label is taken, and the pass writes $SG_FRONTIER_LABEL on its issue once, after the claim and every gate,
 # beside the request. A holder label (ready-for-human, ready-for-HAL9K) or any other hold still wins and costs no write.
-# A pass starts one run per free run slot, never more runs than children (#728):
-# the children are dealt over the runs in turn, so with fewer slots than children a run holds several.
+# A pass fills one run before it opens another (#2544), and never opens more runs than free run slots (#728). One run takes
+# at most 2 children while no gate lease is live and at most 6 while one is (squad.caps.pack, SG_PACK_IDLE, SG_PACK_BUSY).
+# One startable child is one run of one child at once: a pass never waits for more issues.
 # One run takes no more children than its envelope allows: the dispatch node's max_children and what one run can fund
 # (fundroom.py). The pass takes no more children than run.max_children and caps.children less the children the live runs
 # already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
@@ -113,7 +114,7 @@ if [ -z "${SG_SINGLE_AUTOFRONTIER:-}" ]; then
   [ "$rc" = 76 ] && rc=0
   exit $rc
 fi
-read -r free env room spend runs_cap < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
+read -r free env room spend runs_cap pack gates < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, os, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
@@ -125,6 +126,7 @@ from squad import caps as C
 from squad import workflows as W
 try:
     ceil = C.ceiling(".")
+    pack, gates = C.pack(ceil)   # the children one run takes by the gate load (#2544): 2 with no live gate lease, 6 with one
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
 held = 0   # the children the live runs of this repository already hold: the child ceilings below subtract these, and the run
@@ -184,7 +186,7 @@ run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in ((gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
 dash = lambda x: x if x is not None else "-"
-print(C.free_runs(ceil, sys.argv[2], root="."), dash(env), min(limits) if limits else "-", dash(spend), ceil.caps["runs"])   # the last is caps.runs, the run-slot cap the pass names in its refusal (#2430)
+print(C.free_runs(ceil, sys.argv[2], root="."), dash(env), min(limits) if limits else "-", dash(spend), ceil.caps["runs"], pack, gates)   # caps.runs is the run-slot cap the pass names in its refusal (#2430); pack and gates bound one run (#2544)
 PY
 )
 busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
@@ -197,12 +199,14 @@ case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allo
 # No free run slot stops the pass (#2430), and the line names the run slots: a card count is another unit, so a free slot is
 # never refused by cards, and a full set of slots is never hidden behind them.
 [ "$free" -gt 0 ] || { echo "FRONTIER the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass"; idle_noslot; exit 0; }
-# per: the children ONE run may take, its envelope; with no readable envelope, the free run slots. cap: the children the pass
-# may take, per for each free slot (only per when the envelope is unknown, as before), and never more than the room the child
-# ceilings leave (the tighter bound wins).
+# per: the children ONE run may take, its envelope; with no readable envelope, the free run slots. The pack bounds it too
+# (#2544): 2 children while no gate lease is live, 6 while one is (squad.caps.pack). cap: the children the pass may take, per
+# for each free slot (only per when the envelope is unknown, as before), and never more than the room the child ceilings
+# leave (the tighter bound wins).
 case "${env:--}" in -) per=$free;; *) per=$env;; esac
 fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)   # and never more children than one run can fund (#480)
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$per" ] && per=$fr;; esac
+case "${pack:-}" in ''|*[!0-9]*) ;; *) [ "$pack" -lt "$per" ] && per=$pack;; esac
 case "${env:--}" in -) cap=$per;; *) cap=$((free * per));; esac
 case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac
 [ "$per" -gt 0 ] && [ "$cap" -gt 0 ] || { idle_noslot; exit 0; }   # the live runs hold every child the machine allows
@@ -405,13 +409,15 @@ noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${n
 cutof() { local i=0 x; for x in ${cutp[@]+"${cutp[@]}"}; do [ "$x" = "$1" ] && { echo "${cutb[$i]}"; return; }; i=$((i+1)); done; }   # the branch the issue is stacked on, if it is
 stkof() { local i=0 x; for x in ${stkp[@]+"${stkp[@]}"}; do [ "$x" = "$1" ] && { echo "${stkv[$i]}"; return; }; i=$((i+1)); done; }   # "<tip> <branch>" of a blocker in Batching (#2260)
 all=(); while read -r c; do [ -n "$c" ] && all+=("$c"); done < <(cluster_of "${ready[@]}")
-# One run per free slot, never more runs than children (#728). The children are dealt over the runs in turn, so no run takes
-# more than per: the pass took at most free * per of them. Every run of the pass came out of one walk, so the sibling filter
-# above held across all of them: no two runs of one pass hold two tickets of one spec (ADR-0150).
-nruns=${#all[@]}; [ "$nruns" -gt "$free" ] && nruns=$free
-runkids() { local j=$1 k; for ((k=j; k<${#all[@]}; k+=nruns)); do echo "${all[$k]}"; done; }
+# A run fills before the pass opens another (#2544): run 1 takes the first per children, run 2 the next per, and so on, so
+# the pass opens ceil(children / per) runs and never more than the free slots. One child is one run of one child at once:
+# the pass never waits for more issues. The pass took at most free * per children, so every child has a run. Every run of
+# the pass came out of one walk, so the sibling filter above held across all of them: no two runs of one pass hold two
+# tickets of one spec (ADR-0150).
+nruns=$(( (${#all[@]} + per - 1) / per )); [ "$nruns" -gt "$free" ] && nruns=$free
+runkids() { local j=$1 k; for ((k=j*per; k<${#all[@]} && k<(j+1)*per; k++)); do echo "${all[$k]}"; done; }
 if [ -n "${AF_DRY:-}" ]; then
-  echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#all[@]} child(ren): $(printf '[%s] ' "${all[@]}")($free free slots, room for $cap children) in $nruns run(s)"
+  echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#all[@]} child(ren): $(printf '[%s] ' "${all[@]}")($free free slots, room for $cap children, $per a run with ${gates:-?} gate lease(s) live) in $nruns run(s)"
   for ((j=0; j<nruns; j++)); do kids=(); while read -r c; do kids+=("$c"); done < <(runkids $j)
     echo "FRONTIER would dispatch run $((j+1)) of $nruns: $(printf '[%s] ' "${kids[@]}")(room for $per children a run)"; done
   exit 0
