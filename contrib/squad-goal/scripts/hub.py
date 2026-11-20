@@ -7180,9 +7180,6 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 @media (max-width:1200px){#tab-set #lbody .now{gap:6px}#tab-set #lbody .tile .tv{font-size:var(--fs-body)}}
 @media (max-width:820px){#tab-set #lbody .now{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:600px){#tab-set #lbody .now{grid-template-columns:1fr}}
-/* A narrow window leaves the Settings column too small for a label and its control side by side (#2512): the control
-   moves under its label, so no label wraps and no control lands on the text beside it. */
-@media (max-width:1100px){#tab-set .setrow{grid-template-columns:minmax(0,1fr);gap:2px}#tab-set .setrow .sc{justify-self:start;max-width:100%}}
 .mtab{width:100%;border-collapse:collapse;font-size:var(--fs-caption);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
 .stc{display:inline-block;font-size:var(--fs-caption);border:1px solid var(--line);border-radius:var(--radius-sm);padding:0 5px;color:var(--mute)}.stc.off{color:var(--warn);border-color:var(--tint-warn-line)}.stc.lim{color:var(--err);border-color:var(--err)}.mr.off .mn{text-decoration:line-through}.mr.rmk .mn,.mr.rmk .pv{text-decoration:line-through;opacity:.55}
 .madd select{flex:1;min-width:0;height:var(--ctl-h);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
@@ -7662,6 +7659,9 @@ const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify
 const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
 const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
 const kanPct=c=>c.max_cards?Math.max(0,Math.min(100,Math.round(100*c.count/c.max_cards))):0;
+const kanFile=()=>{const f=(kanS&&(kanS.file_label||kanS.file))||"";   // the footer names the project file by its repository path, derived from the payload's own path when no label rides along (#2512)
+ const p=String(f).split(String.fromCharCode(92)).join("/"),i=p.lastIndexOf("/docs/");
+ return i>=0?p.slice(i+1):p.startsWith("docs/")?p:p.slice(p.lastIndexOf("/")+1)};
 const kanBar=c=>`<span class=kbar role=img aria-label="${c.count} of ${c.max_cards}"><span class="kfill${c.count>=c.max_cards?" full":""}" style="width:${kanPct(c)}%"></span></span><b class=knum>${c.count} of ${c.max_cards}</b>`;   // a limited column shows its bar and N of M (#2512)
 const kanRow=c=>`<tr data-kanrow="${esc(c.name)}"><th scope=row class=kc>${esc(c.name)}</th><td class=kn>${c.max_cards==null?`<b class=knum>${c.count}</b>`:kanBar(c)}</td>`
  +`<td class=kl><input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}></td>`
@@ -7689,7 +7689,7 @@ function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
   +`<table class=ktab><colgroup><col class=kcol1><col class=kcol2><col class=kcol3><col class=kcol4></colgroup><thead><tr><th scope=col>Column</th><th scope=col>Cards now</th><th scope=col>Card limit</th><th scope=col>What the limit stops</th></tr></thead><tbody>`
   +kanCols().map(kanRow).join("")+`</tbody></table>`
-  +`<p class=note>Empty field = unlimited. Closed and Abandoned hold finished cards and take no limit. File: <code>${esc(kanS.file_label||"docs/squad/defaults.yaml")}</code></p></div>`
+  +`<p class=note>Empty field = unlimited. Closed and Abandoned hold finished cards and take no limit. File: <code>${esc(kanFile())}</code></p></div>`
   +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")
   +(kanLine()?`<div class=klok role=status>${kanLine()}</div>`:"")}
 // }KAN

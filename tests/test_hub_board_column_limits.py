@@ -209,6 +209,36 @@ def test_the_kanban_group_is_the_table_the_spec_shows(hub):
     assert "/home/me/co" not in h, "the footer shows a home path"
 
 
+def test_the_visual_check_renders_ride_beside_the_test():
+    # The issue's acceptance criteria hold the two ego-browser renders and their README beside this test, so the proof
+    # of the layout travels with the change that makes it.
+    for rel in ("docs/evidence/2512/kanban-1440.png", "docs/evidence/2512/kanban-1000.png",
+                "docs/evidence/2512/README.md"):
+        path = ROOT / rel
+        assert path.is_file() and path.stat().st_size > 0, rel
+
+
+def test_the_footer_derives_the_repository_path_from_the_file(hub):
+    # An older columns payload carries no file_label: the footer names the file by the repository-relative suffix of
+    # its own path, never a hardcoded one and never the home path.
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/home/me/co/docs/squad/project.yaml',columns:[{name:'Doing',max_cards:6,count:1,stops:''}]};"
+                      "console.log(JSON.stringify({h:kanHtml()}))")
+    h = got["h"]
+    assert "docs/squad/project.yaml" in h, "the footer does not derive the repository path from the file"
+    assert "/home/me/co" not in h, "the footer shows a home path"
+    assert "docs/squad/defaults.yaml" not in h, "the footer names a hardcoded file the payload does not carry"
+
+
+def test_the_kanban_table_keeps_its_own_layout_and_the_settings_rows_stay_two_column(hub):
+    # Issue #2512 at 1000 px: the table aligns its own columns. The Settings rows keep the two-column layout main
+    # shipped down to the 600 px breakpoint, so the fix adds no rule that restacks every label and control.
+    mod, _ = hub
+    page = mod.PAGE
+    assert "max-width:1100px){#tab-set .setrow" not in page, "a rule restacks every Settings row at 1100 px"
+    assert re.search(r"#tab-set \.ktab tbody th\{[^}]*white-space:nowrap", page), "a table label wraps into its field"
+
+
 def test_an_empty_field_reads_unlimited_and_saves_as_none(hub):
     mod, _ = hub
     got = _node(mod, "kanS={file:'/p',columns:[{name:'Todo',max_cards:null,count:0,stops:'no pass reads it yet'}]};"
