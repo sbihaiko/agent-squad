@@ -278,3 +278,26 @@ def test_one_live_run_names_its_issue_chip_in_the_runs_row(hub):
     row = re.search(r"<tr><th scope=row>Runs</th>.*?</tr>", got["h"], re.S).group(0)
     assert ">#2534</a>" in row, row
     assert "no issue named" not in row, row
+
+
+# --- A cap save goes through the comment-keeping writer (#2543): the settings file is hand-edited, its comments hold the
+# owner's ruling, and a save of one cap must not rewrite, recomment or copy the personal `.env` tailnet block into it.
+def test_a_cap_save_keeps_the_comments_of_the_settings_file(hub):
+    mod, co = hub
+    f = co / "docs" / "squad" / "defaults.yaml"
+    f.write_text("# Owner ruling: four runs, because of the gate slots.\ncaps:\n  runs: 5    # five ran ahead of the gates\n  gates: 4\n")
+    out = mod.slots_set({"runs": "4", "confirm": True})
+    assert "err" not in out, out
+    text = f.read_text()
+    assert "# Owner ruling: four runs, because of the gate slots." in text, text
+    assert "  runs: 4" in text and "# five ran ahead of the gates" in text, text
+    assert yaml.safe_load(text) == {"caps": {"runs": 4, "gates": 4}}
+
+
+def test_a_cap_save_never_copies_a_tailnet_key_from_the_env_file(hub):
+    mod, co = hub
+    (co / ".env").write_text("SQUAD_TAILNET_HOST=my-mac.example-tailnet.ts.net\nSQUAD_TAILNET_ALLOW=owner@example.com\n")
+    out = mod.slots_set({"runs": "4", "confirm": True})
+    assert "err" not in out, out
+    text = (co / "docs" / "squad" / "defaults.yaml").read_text()
+    assert "tailnet" not in text and "my-mac" not in text and "owner@example.com" not in text, text

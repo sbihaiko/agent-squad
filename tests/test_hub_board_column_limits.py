@@ -404,3 +404,26 @@ def test_the_limit_value_sits_at_the_left_edge_of_its_field(hub):
     for width in (1000, 1440):
         for row in _render_rows(mod, width):
             assert row["inputAlign"] == "left", (width, row)
+
+
+# --- A column save goes through the comment-keeping writer (#2543): the settings file is hand-edited, its comments hold
+# the owner's ruling, and a save of one limit must not rewrite the file or copy the personal `.env` tailnet block into it.
+def test_a_column_save_keeps_the_comments_of_the_settings_file(hub):
+    mod, co = hub
+    f = co / "docs" / "squad" / "defaults.yaml"
+    f.write_text("# Owner ruling: Doing holds two cards.\ncolumns:\n  Doing:\n    max_cards: 6    # six was too many\n")
+    out = mod.columns_set({"columns": {"Doing": "2"}, "confirm": True})
+    assert "err" not in out, out
+    text = f.read_text()
+    assert "# Owner ruling: Doing holds two cards." in text, text
+    assert "max_cards: 2" in text and "# six was too many" in text, text
+    assert yaml.safe_load(text) == {"columns": {"Doing": {"max_cards": 2}}}
+
+
+def test_a_column_save_never_copies_a_tailnet_key_from_the_env_file(hub):
+    mod, co = hub
+    (co / ".env").write_text("SQUAD_TAILNET_HOST=my-mac.example-tailnet.ts.net\nSQUAD_TAILNET_ALLOW=owner@example.com\n")
+    out = mod.columns_set({"columns": {"Doing": "2"}, "confirm": True})
+    assert "err" not in out, out
+    text = (co / "docs" / "squad" / "defaults.yaml").read_text()
+    assert "tailnet" not in text and "my-mac" not in text and "owner@example.com" not in text, text
