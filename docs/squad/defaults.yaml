@@ -10,7 +10,8 @@ caps:
                                     # came back unproven. Owner 2026-11-19: the Doing card count carries cards the loop never
                                     # dispatches, so two idle cards cost half the dispatch at four runs.
   children: 12
-  gates: 3                          # owner 2026-11-19, measured: at five, two full gates ran at once and every suite ran
+  gates: 4                          # owner 2026-11-20: four slots, so the landing's two-slot gate runs beside a hand or child
+                                    # gate instead of waiting behind it. Owner 2026-11-19, measured: at five, two full gates ran at once and every suite ran
                                     # three to four times slower, so two gates in parallel delivered less than one gate alone.
                                     # The loop gate asks two slots (SG_GATE_WORKERS), never the whole budget, so three holds
                                     # one full gate and one child gate beside it: the landing no longer takes every slot, which
