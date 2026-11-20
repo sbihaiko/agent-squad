@@ -7137,6 +7137,20 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .ktab .kl input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
 #tab-set .ktab .kn{white-space:nowrap}
 #tab-set .ktab .ks{color:var(--fg);font-size:var(--fs-body);line-height:1.35;overflow-wrap:anywhere}
+#tab-set .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);margin:6px 0 4px}
+#tab-set .stab .scol1{width:18%}#tab-set .stab .scol2{width:24%}#tab-set .stab .scol3{width:14%}#tab-set .stab .scol4{width:44%}
+#tab-set .stab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+#tab-set .stab tbody th,#tab-set .stab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0;overflow-wrap:anywhere}
+#tab-set .stab tbody th{white-space:normal;color:var(--fg)}
+#tab-set .stab .slotnone{white-space:nowrap}
+#tab-set .stab input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
+#tab-set .stab .slotuse{display:flex;align-items:center;gap:8px;min-width:0}
+#tab-set .stab .slotbar{display:block;flex:0 1 96px;min-width:40px;height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+#tab-set .stab .slotbar i{display:block;height:100%;background:var(--acc)}
+#tab-set .stab .slotbar.full i{background:var(--warn)}
+#tab-set .stab .slotnow{white-space:nowrap;font-variant-numeric:tabular-nums}
+#tab-set .stab .slothold{line-height:1.6}
+#tab-set .stab .slothold .chip{display:inline-block;text-decoration:none;color:var(--acc);white-space:nowrap;margin:0 4px 2px 0}
 #tab-set .kbar{display:inline-block;vertical-align:middle;width:calc(100% - 58px);min-width:24px;max-width:120px;height:8px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}
 #tab-set .kbar .kfill{display:block;height:100%;background:var(--ok)}
 #tab-set .kbar .kfill.full{background:var(--warn)}
@@ -7709,17 +7723,20 @@ const slotCaps=()=>({runs:slotVal("runs"),gates:slotVal("gates")});
 const slotDirty=()=>!!slotS&&!!slotDraft&&(slotVal("runs")!==String(slotS.runs.cap)||slotVal("gates")!==String(slotS.gates.cap));
 const slotFull=a=>!!a&&a.in_use>=a.cap;
 const slotChip=(s=slotS)=>{s=s||{};return slotFull(s.runs)?["runs full","err"]:slotFull(s.gates)?["gate workers full","err"]:["under the caps","ok"]};
-const slotHeld=h=>h.issues&&h.issues.length?h.issues.map(n=>`<span class=chip>#${esc(n)}</span>`).join(" "):`<span class=chip>${esc(h.name)}</span>`;
+const slotHeld=h=>h.issues&&h.issues.length?h.issues.map(n=>`<a class=chip href="https://github.com/__REPO__/issues/${esc(n)}" target=_blank rel=noopener>#${esc(n)}</a>`).join(" "):`<small class="m slotnone">no issue named</small>`;
 const slotRun=g=>g.gates_running?`${g.gates_running} gate${g.gates_running===1?"":"s"} running`:"none running";
-const slotGateLine=g=>`${g.cap} slots ÷ ${g.workers} workers per gate = ${g.gates_at_once} ${g.gates_at_once===1?"gate":"gates"} at a time · ${slotRun(g)}`;
+const slotGateLine=g=>`a gate takes ${g.slots_per_gate} slots (${g.workers} asked, cap ${g.cap}) = ${g.gates_at_once} ${g.gates_at_once===1?"gate":"gates"} at a time · ${slotRun(g)}`;
+const slotRow=(name,label,use,cap,held)=>`<tr><th scope=row>${label}</th><td><span class=slotuse><span class="slotbar${use>=cap?" full":""}"><i style="width:${cap?Math.min(100,100*use/cap):0}%"></i></span><span class=slotnow>${use} of ${cap}</span></span></td><td>${slotCap(name)}</td><td class=slothold>${held}</td></tr>`;
 const slotCap=name=>`<input data-slot=${name} type=number min=1 max="${slotMax(name)}" step=1 inputmode=numeric value="${slotNow()[name].cap}" aria-label="${name==="runs"?"runs cap":"gate workers cap"}">`;
 const slotSay=()=>{const e=$("#slotmsg");if(!e)return;e.textContent=slotMsg.replace(/^!/,"");e.className="mx"+(slotMsg.startsWith("!")?" err":"")};
 function slotsHtml(){const t=slotChip();
  if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  const s=slotNow(),r=s.runs,g=s.gates;
  return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small> <small id=slotchip class=${t[1]}>${esc(t[0])}</small></h3>`
-  +setRow("Runs",`<span class=slotnow>${r.in_use} of ${r.cap}</span> ${slotCap("runs")} <span class=slothold>${r.holders.length?r.holders.map(slotHeld).join(" "):"<small class=m>none running</small>"}</span>`)
-  +setRow("Gate workers",`<span class=slotnow>${g.in_use} of ${g.cap}</span> ${slotCap("gates")} <span class=slothold>${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}</span>`)
+  +`<table class=stab><colgroup><col class=scol1><col class=scol2><col class=scol3><col class=scol4></colgroup><thead><tr><th scope=col>Slot</th><th scope=col>In use</th><th scope=col>Slots</th><th scope=col>Held by</th></tr></thead><tbody>`
+  +slotRow("runs","Runs",r.in_use,r.cap,r.holders.length?r.holders.map(slotHeld).join(" "):`<small class=m>none running</small>`)
+  +slotRow("gates","Gate workers",g.in_use,g.cap,`${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}`)
+  +`</tbody></table>`
   +`<p class=note>A run carries one or more cards, so Runs and Doing count different things. Gate workers also serve child gates, day suites and hand gates.</p>`
   +`<p class=note>File only: children ${esc(s.children)} · reviews ${esc(s.reviews)}, in <code>${esc(s.file_label||"docs/squad/defaults.yaml")}</code>. A resume refuses when this file changed.</p>`
   +(slotDiff&&slotDiff.length?`<div class="mx" role=status>${slotDiff.map(l=>esc(l)).join(" · ")}</div>`:"")
@@ -10201,7 +10218,7 @@ def _slots_error(why):
     """The read's shape with the failure named: the page states it, and no row draws a guessed number."""
     return {"file": "", "file_label": str(pathlib.Path("docs") / "squad" / "defaults.yaml"), "caps": {}, "ceiling": {},
             "runs": {"cap": 0, "in_use": 0, "holders": []},
-            "gates": {"cap": 0, "in_use": 0, "holders": [], "workers": 0, "gates_at_once": 0, "gates_running": 0},
+            "gates": {"cap": 0, "in_use": 0, "holders": [], "workers": 0, "slots_per_gate": 0, "gates_at_once": 0, "gates_running": 0},
             "children": 0, "reviews": 0, "err": why}
 
 
