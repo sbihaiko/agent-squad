@@ -13,6 +13,7 @@
 # usage: bash test-janitor-probe-retry.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs"
+# "$d"/* copies the whole directory as a fixture for the real janitor; it checks no script, so no `# guards: every-script`.
 cp "$d"/*.py "$d"/*.sh "$d"/*.json "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_CHECKOUT=%s BOARD=%s/s/board.sh SG_PREMISE_CHECK=%s/bin/pc\n. %s/address.sh\n' \
   "$T/st" "$T/co" "$T" "$T" "$T/s" > "$T/s/env.sh"

@@ -1,5 +1,6 @@
 #!/bin/bash
 # seconds: 3.28
+# guards: every-script
 # Table test for the address seam (address.sh): ONE function, sg_resolve_repo, turns each spelling of "which repository"
 # into one `owner/name` -- an address `owner/repo#N`, a bare `N`, a profile name and a checkout -- and sg_same_repo calls
 # two names one repository only when owner AND name match. A short name with no owner is resolved against the repositories
