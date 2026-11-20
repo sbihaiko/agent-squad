@@ -15,13 +15,13 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"   # (#801) the gate takes slots: its own budget, never the machine's
 export SG_FAST_LOG_DIR=$T/logs; mkdir -p "$SG_FAST_LOG_DIR"   # (#945) the gate's log sits outside SG_STATE, where the child that ran it may read it
 export SG_FAST_MEMO=0   # the pass memo is proved in its own block at the end; every other case here runs a fresh battery
-R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs"
+R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs" "$R/tests"
 # A stub suite logs its name and whether the machine lock was held, and fails when its name is in $SUITE_FAIL.
 for n in foo bar baz; do
   printf '#!/bin/bash\necho "test-%s.sh lock=$([ -d "%s/locks/gate" ] && echo held || echo free)" >> "%s/ran.log"\ncase " $SUITE_FAIL " in *" test-%s.sh "*) exit 1;; esac\n' "$n" "$SG_STATE" "$T" "$n" > "$S/test-$n.sh"
   printf '#!/bin/bash\n# %s\n' "$n" > "$S/$n.sh"; done
 rm "$S/test-baz.sh"   # baz has no suite
-echo base > "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m base
+echo base > "$R/docs/x.md"; printf 'def test_a():\n    assert True\n' > "$R/tests/test_x.py"; $G -C "$R" add -A; $G -C "$R" commit -q -m base
 
 # A Python script selects its shell suite. baz.py has no suite and the docs change is outside scripts.
 $G -C "$R" checkout -q -b gui/py; echo 1 >> "$S/foo.py"; echo 1 >> "$S/baz.py"; echo 1 >> "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m python-work
@@ -46,7 +46,16 @@ out=$(BASE_FAIL=1 fg); rc=$?
 
 # A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests run once
 # more, serially (SG_FAST_RETRY_CMD). Green there, the gate goes on and names it; red there too, the gate fails as before.
-printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\n[ -z "$RETRY_FAIL" ]\n' "$T" > "$T/retry.sh"
+printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\n[ -z "$RETRY_FAIL" ] && exit 0\nfor x in "$@"; do echo "FAILED $x - boom"; done\nexit 1\n' "$T" > "$T/retry.sh"
+# (#2272) The gate asks the merge-base's own tree about the tests that still fail alone. The stub logs the tree it ran in (one
+# line of docs/x.md at the base, two on the branch) and fails the ids it is handed when BASERED names it.
+cat > "$T/baserun.sh" <<BR
+#!/bin/bash
+echo "baserun \$* cwd=\$PWD xlines=\$(wc -l < docs/x.md 2>/dev/null | tr -d ' ')" >> "$T/ran.log"
+[ -n "\$BASERED" ] && for x in "\$@"; do echo "FAILED \$x - boom"; done
+exit 0
+BR
+export SG_FAST_BASE_RUN_CMD="bash $T/baserun.sh"   # no case here runs a real pytest against the base
 fgr() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="bash $T/base.sh" SG_FAST_RETRY_CMD="bash $T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
 out=$(BASE_FAIL=1 fgr); rc=$?
 [ $rc = 0 ] && ok "a base battery red only under load passes once its failed tests pass alone" || ko "saturation retry: rc $rc: $out"
