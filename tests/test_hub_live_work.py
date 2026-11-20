@@ -850,7 +850,7 @@ def test_the_red_eye_is_css_only(hub):
     rule = re.search(r"[^\n{}]*\.haleye\{[^}]*\}", hub.PAGE)
     assert rule, "no CSS rule draws the eye"
     css = rule.group(0)
-    assert "radial-gradient" in css and "#ff4a18" in css and "#000" in css, css   # a red gradient inside a dark ring
+    assert "radial-gradient" in css and "rgb(255 74 24)" in css and "rgb(0 0 0)" in css, css   # a red gradient inside a dark ring
     assert "url(" not in css and "background-image" not in css, css   # no image file
     assert re.search(r"width:\s*14px", css) and re.search(r"height:\s*14px", css), css   # the size of the other row icons
 
