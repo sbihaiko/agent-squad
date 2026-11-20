@@ -185,6 +185,17 @@ $G -qF "test-red.sh" "$ST/auto/daysuites-unproven" 2>/dev/null && ok "the unprov
 [ -z "$(/bin/ls -A "$ST/auto" 2>/dev/null | $G '^daysuites-2')" ] && ok "an unproven suite spends no day marker" \
   || ko "an unproven suite spent the day marker"
 
+# 10) a suite runs under its own HOME and keeps the caller's Python user site (#2484): pytest's own imports (pygments) may
+# live only there, and a moved HOME took them off sys.path, so every pytest-backed suite ended red on an import.
+newworld; tree=$T/w10; mktree "$tree"
+suite "$tree" test-site.sh 'echo "home=$HOME" >> "$RUNLOG"; echo "base=$(python3 -m site --user-base)" >> "$RUNLOG"; exit 0'
+commit "$tree"; : > "$T/ran.log"
+run "$tree" >/dev/null
+want=$(python3 -m site --user-base)
+$G -q '^home=' "$T/ran.log" && ! $G -qxF "home=$HOME" "$T/ran.log" && ok "the suite ran under its own HOME" || ko "the suite ran under the caller's HOME: $(cat "$T/ran.log")"
+$G -qxF "base=$want" "$T/ran.log" && ok "the suite keeps the caller's Python user site" \
+  || ko "the suite lost the caller's Python user site ($want): $(cat "$T/ran.log")"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "daysuites: every case green"
 exit "$fail"
