@@ -7136,7 +7136,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .khead #kanchip,#tab-set .khead #slotchip{margin-left:auto;font-size:var(--fs-body);font-weight:600;text-transform:none;letter-spacing:0;white-space:nowrap}
 #tab-set .khead #kanchip.ok,#tab-set .khead #slotchip.ok{color:var(--ok)}#tab-set .khead #kanchip.err,#tab-set .khead #slotchip.err{color:var(--warn)}
 #tab-set .ktab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body)}
-#tab-set .ktab .kcol1{width:18%}#tab-set .ktab .kcol2{width:20%}#tab-set .ktab .kcol3{width:20%}#tab-set .ktab .kcol4{width:42%}
+#tab-set .ktab .kcol1{width:18%}#tab-set .ktab .kcol2{width:24%}#tab-set .ktab .kcol3{width:20%}#tab-set .ktab .kcol4{width:38%}
 #tab-set .ktab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .ktab tbody th,#tab-set .ktab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0}
 #tab-set .ktab tbody th{white-space:nowrap;font-size:var(--fs-body);color:var(--fg)}
@@ -7160,7 +7160,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .kbar{display:inline-block;vertical-align:middle;width:calc(100% - 58px);min-width:24px;max-width:120px;height:8px;border-radius:var(--radius-sm);background:var(--line);overflow:hidden}
 #tab-set .kbar .kfill{display:block;height:100%;background:var(--ok)}
 #tab-set .kbar .kfill.full{background:var(--warn)}
-#tab-set .knum{margin-left:8px;font-variant-numeric:tabular-nums;color:var(--fg);white-space:nowrap}
+#tab-set .knum{margin-left:0;font-variant-numeric:tabular-nums;color:var(--fg);white-space:nowrap}
+#tab-set .kbar+.knum{margin-left:8px}
 #tab-set .lstate{font-weight:600;font-size:var(--fs-body);margin:0 0 6px}
 #tab-set .lstate.on{color:var(--ok)}#tab-set .lstate.off,#tab-set .lstate.draining,#tab-set .lstate.starting{color:var(--warn)}
 #tab-set input,#tab-set select{font-size:var(--fs-body);height:var(--ctl-h)}
@@ -7703,6 +7704,13 @@ async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)retu
   kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
   kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
+async function kanRefresh(get){let s;try{s=await (get?get():fetch("/api/columns").then(r=>r.json()))}catch(e){return false}
+ if(!s||s.err)return false;
+ const prev=kanS,cur=kanCols();   // a later board read moves the counts and the stops; a limit the owner typed and has not saved stays in the draft (#2541)
+ kanDraft=(s.columns||[]).map(x=>{const c=cur.find(y=>y.name===x.name),p=prev&&(prev.columns||[]).find(y=>y.name===x.name),dirty=!!c&&!!p&&c.max_cards!==p.max_cards;return dirty?{...x,max_cards:c.max_cards}:x});
+ kanS=s;return true}
+async function kanPoll(){const f=document.activeElement,typing=!!f&&f.tagName==="INPUT"&&!!f.closest&&!!f.closest("#lbody");
+ if(document.hidden||RO||!(await kanRefresh()))return;if(!typing)limRender()}   // a field the owner is typing in keeps its focus; its counts follow on the next read (#2541)
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanS&&kanS.read===false?"":kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
   +`<table class=ktab><colgroup><col class=kcol1><col class=kcol2><col class=kcol3><col class=kcol4></colgroup><thead><tr><th scope=col>Column</th><th scope=col>Cards now</th><th scope=col>Card limit</th><th scope=col>What the limit stops</th></tr></thead><tbody>`
@@ -7792,6 +7800,7 @@ async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limM
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
  limRender()}
+setInterval(()=>{if(limShown())kanPoll()},5000);   // the board's read reaches the Kanban counts within one poll (#2541)
 async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slotCaps(),confirm})}),d=await r.json();
  if(d.err){slotMsg="!"+d.err;slotDiff=null;if(slotS)slotDraft=slotClone(slotS)}   // a refused payload never stays staged, so the next Save sends the server's value
  else if(confirm){slotS=d.state||slotS;slotDraft=slotClone(slotS);slotDiff=null;slotMsg=(d.diff||[]).length?"saved · the next run and gate read it":"nothing changed"}

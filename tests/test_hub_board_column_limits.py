@@ -259,6 +259,37 @@ def test_the_sub_group_chip_names_a_column_at_its_limit(hub):
     assert got == ["Doing at its limit", "under its limit"], got
 
 
+def test_the_kanban_group_shows_the_counts_once_the_board_is_read_with_no_reload(hub):
+    # Issue #2541: the page loads while the board is unread; a later board read fills the counts without a reload.
+    mod, _ = hub
+    page = mod.PAGE
+    assert re.search(r"setInterval\(\(\)=>\{if\(limShown\(\)\)kanPoll\(\)", page), "no timer re-reads the Kanban columns"
+    got = _node(mod, "kanS={file:'/p',read:false,columns:[{name:'Doing',max_cards:6,count:null,stops:''},"
+                      "{name:'Todo',max_cards:null,count:null,stops:''}]};kanDraft=kanClone(kanS.columns);"
+                      "(async()=>{const before=kanHtml();"
+                      "await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:2,stops:''},"
+                      "{name:'Todo',max_cards:null,count:1,stops:''}]}));"
+                      "console.log(JSON.stringify({before:before,after:kanHtml(),chip:kanChip()}))})()")
+    assert "cards not read yet" in got["before"], got["before"]
+    assert "cards not read yet" not in got["after"], got["after"]
+    assert "2 of 6" in got["after"] and "data-kanrow=\"Todo\"" in got["after"], got["after"]
+    assert "<b class=knum>1</b>" in got["after"], got["after"]
+    assert "Cards now: board items not read yet." not in got["after"]
+    assert got["chip"] == "under its limit", got["chip"]
+
+
+def test_a_refresh_keeps_an_unsaved_card_limit_edit(hub):
+    # Issue #2541: the owner's typed Card limit stays staged when a later board read moves the counts.
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:3,stops:''}]};"
+                      "kanDraft=kanClone(kanS.columns);kanDraft[0].max_cards=2;"
+                      "(async()=>{await kanRefresh(async()=>({file:'/p',read:true,columns:[{name:'Doing',max_cards:6,count:4,stops:''}]}));"
+                      "console.log(JSON.stringify({limits:kanLimits(),dirty:kanDirty(),h:kanHtml()}))})()")
+    assert got["limits"] == {"Doing": "2"}, got["limits"]
+    assert got["dirty"] is True, got
+    assert "4 of 2" in got["h"] or "value=\"2\"" in got["h"], got["h"]
+
+
 # --- the Kanban header
 
 def test_the_column_header_shows_n_over_max_only_where_a_limit_exists(hub):
