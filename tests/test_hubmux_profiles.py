@@ -8,6 +8,7 @@ import http.client
 import importlib.util
 import json
 import pathlib
+import shutil
 import sys
 import threading
 import time
@@ -98,6 +99,77 @@ def test_the_tailnet_rule_reads_a_changed_allow_list_on_the_next_request(mux):
         f"tailnet:\n  host: {TAILNET}\n  allow: {json.dumps(['other@example.com'])}\n")
     status, body = request(mux["port"], "/api/hub", headers=tn)
     assert status == 403 and "login not allowed" in body
+
+
+# ---------------------------------------------------------------- a hand hold with no squad package (#2533)
+# The live hub serves a profile whose checkout holds no `squad` package, and the hub.py beside the live copy sits in a
+# tree that holds none either. The Live work answer read the hand holds through `squad.handhold` and dropped every row of
+# such a profile, so the hub reads the profile's state directory directly.
+
+def _live_tree(tmp_path):
+    """A hub tree shaped as the live copy under the home is: a hub.py and a hubmux.py copy in a tree that holds no `squad`
+    package, every other script linked beside them."""
+    root = tmp_path / "live"
+    scripts = root / "contrib" / "squad-goal" / "scripts"
+    scripts.mkdir(parents=True)
+    for f in SCRIPTS.iterdir():
+        if f.name in ("hub.py", "hubmux.py"):
+            continue
+        if f.is_dir():
+            (scripts / f.name).symlink_to(f, target_is_directory=True)
+        else:
+            (scripts / f.name).symlink_to(f)
+    for name in ("hub.py", "hubmux.py"):
+        shutil.copy2(SCRIPTS / name, scripts / name)
+    return root, scripts
+
+
+def _hold_file(base, slug, n, carrier="manual"):
+    d = base / slug / "auto"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"hold-{n}").write_text(f"by {carrier}\nsince 2026-11-20T08:00:00Z\nuntil 2030-01-01T00:00:00Z\n")
+
+
+@pytest.mark.heavy
+def test_two_profiles_serve_their_hand_holds_with_no_squad_package(tmp_path, monkeypatch):
+    """#2533 (A): two profiles of one hubmux process, each whose checkout holds no `squad` package, and the Live work
+    answer of each carries its own live hand hold row. The live hub dropped every hold row of such a profile: the read
+    imported `squad.handhold` from roots that hold no package, and the answer named the failure in its log."""
+    root, scripts = _live_tree(tmp_path)
+    assert not (root / "squad" / "__init__.py").is_file(), "the premise: no squad package"
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    for slug in ("alpha", "beta"):
+        co = tmp_path / f"co-{slug}"
+        co.mkdir()
+        write_profile(prof, slug, co)
+    _hold_file(base, "alpha", 4201, carrier="hal9k")
+    _hold_file(base, "beta", 4202)
+    for k in ("SG_SQUAD", "SG_PROJECTS", "SG_FORK_DIR"):   # the shell's own repository never answers for these profiles
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "co-alpha"))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    spec = importlib.util.spec_from_file_location("hubmux_holds", scripts / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    assert all(a.get("mod") for a in apps.values()), [(s, a.get("err")) for s, a in apps.items()]
+    srv = mux.server(0, apps)
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        port = srv.server_address[1]
+        assert index_slugs(port) == ["alpha", "beta"]
+        held = {}
+        for slug in ("alpha", "beta"):
+            status, body = request(port, f"/{slug}/api/live")
+            assert status == 200, (slug, body)
+            held[slug] = [r["id"] for r in json.loads(body)["lines"] if r["kind"] == "hold"]
+        assert held["alpha"] == ["hold-4201"], held
+        assert held["beta"] == ["hold-4202"], held
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 # ---------------------------------------------------------------- one scan a tick for every profile (#1746)

@@ -4357,18 +4357,85 @@ def holder_chip(i, taken=None, state=None):
         t = dt.datetime.fromtimestamp(float(when), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
         return f"Squad · taken over {t} UTC"
     return "Squad · running" if state == "running" else "Squad"
+HAND_HOLD_ISO = "%Y-%m-%dT%H:%M:%SZ"   # the stamp `squad/handhold.py` writes `since` and `until` in
+HAND_HOLD_CARRIERS = ("manual", "hal9k")
+def _hand_hold(path):
+    """One hold file as a dict, or None when the file is not there: `by`, `since` and `until`, on three lines. A
+    malformed file raises ValueError, so the caller serves no hold rather than a guessed one. The format is
+    `squad/handhold.py`'s and the hub reads it here (#2533)."""
+    try: text = path.read_text()
+    except FileNotFoundError: return None
+    fields = {}
+    for line in text.splitlines():
+        key, _, value = line.partition(" ")
+        fields[key] = value
+    try:
+        if fields["by"] not in HAND_HOLD_CARRIERS: raise KeyError("by")
+        since = dt.datetime.strptime(fields["since"], HAND_HOLD_ISO).replace(tzinfo=dt.timezone.utc)
+        until = dt.datetime.strptime(fields["until"], HAND_HOLD_ISO).replace(tzinfo=dt.timezone.utc)
+    except (KeyError, ValueError):
+        raise ValueError(f"the hold on {path.name} is malformed") from None
+    return {"by": fields["by"], "since": fields["since"], "until": fields["until"], "until_t": until.timestamp()}
+def hand_holds(base, closed=(), now=None):
+    """Every hand hold of this profile's state directory, read from the files the hub serves (#2533): a live hub serves
+    a profile whose checkout and hub tree hold no `squad` package, so this read imports none. One file per issue,
+    `auto/hold-<n>`, is the whole file face. `stale` is True once `until` has passed, `orphan` is True when the issue is
+    closed, and `activity` is the seconds since the marker's own write, the folder-activity read."""
+    now = time.time() if now is None else now
+    d = pathlib.Path(base) / "auto"
+    closed = {str(n) for n in closed}
+    out = []
+    for p in sorted(d.glob("hold-*")) if d.is_dir() else []:
+        n = p.name[len("hold-"):]
+        if not n.isdigit(): continue
+        c = _hand_hold(p)
+        if c is None: continue
+        try: activity = now - p.stat().st_mtime
+        except OSError: activity = None
+        stale = now > c["until_t"]
+        orphan = n in closed
+        out.append({"issue": int(n), "carrier": c["by"], "since": c["since"], "until": c["until"],
+                    "stale": stale, "orphan": orphan, "live": not stale and not orphan, "activity": activity})
+    return sorted(out, key=lambda r: r["issue"])
+def hand_hold_alerts(base, rows, now=None):
+    """One `alerts.log` line for each stale and each orphan hold the last pass did not name: one line per episode, never
+    one per poll, kept by the `auto/hold-alerts` file. The lines are `squad/handhold.py`'s, written here for the same
+    reason the read is (#2533)."""
+    now = time.time() if now is None else now
+    stamp = time.strftime("%F %T", time.localtime(now))
+    want = {}
+    for r in rows:
+        key = str(r["issue"])
+        if r["orphan"]:
+            want[f"orphan-{key}"] = (f"{stamp} HOLD ORPHAN #{key} {r['carrier']} since {r['since']}; "
+                                     "the issue is closed or abandoned")
+        elif r["stale"]:
+            want[f"stale-{key}"] = (f"{stamp} HOLD STALE #{key} {r['carrier']} since {r['since']} until {r['until']}")
+    base = pathlib.Path(base)
+    seen_path = base / "auto" / "hold-alerts"
+    try:
+        seen = set(seen_path.read_text().split())
+    except FileNotFoundError:
+        seen = set()
+    lines = [line for key, line in want.items() if key not in seen]
+    if lines:
+        with (base / "alerts.log").open("a") as f:
+            for line in lines:
+                f.write(line + "\n")
+    if set(want) != seen:   # the dedupe file changes only when an episode starts or ends, never on every read
+        _write_record(seen_path, "".join(f"{key}\n" for key in sorted(want)))
+    return lines
 def hold_rows(now=None, state=None):
     """The Live work rows for hand holds: a Manual or HAL9k hold proven by folder activity (the marker's own write time,
     under the one bound `SG_HAND_HOLD_MINUTES`), never stale and never an orphan. A Squad run is a run row, proven by its
-    live process. The read and the write are `squad.handhold`'s, so the page holds no rule of its own (ADR-0137)."""
+    live process. The page holds no rule of its own (ADR-0137); the read is this module's on the profile's state
+    directory, so it imports no `squad` package (#2533)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
     closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
     try:
-        (HH,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__),
-                           ("handhold",))
-        HH.alerts(state=base, closed=closed, now=now)   # one line per stale or orphan episode, never one per poll
-        rows = HH.holds(state=base, closed=closed, now=now)
+        rows = hand_holds(base, closed=closed, now=now)
+        hand_hold_alerts(base, rows, now=now)   # one line per stale or orphan episode, never one per poll
     except Exception as e:
         log_once(f"hub: the hand holds are unknown: {type(e).__name__}: {' '.join(str(e).split())}"); return []
     out = []

@@ -5,6 +5,8 @@ A hold has two faces, and this module is the one writer of both (#1678). The fil
 Presence is the hold. The label face is the holder label on the issue: `ready-for-human` for `manual` and
 `ready-for-HAL9K` for `hal9k`. A hold, a renew and a release write both faces in one act. A pass reads only the label;
 the janitor reads only the file; the reconciler reports a disagreement between them as a defect and rewrites neither.
+The hub's Live work tile reads the file face itself, with no `squad` import, because it serves profiles whose checkout
+holds no package (#2533).
 
 `until` is the moment the hold stops being trusted; the board pass reports a hold past it as stale and never moves a
 card (ADR-0170). The marker's own write time is the folder-activity read the Live work tile uses, measured against the
