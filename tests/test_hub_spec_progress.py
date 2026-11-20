@@ -2,6 +2,7 @@
 (ADR-0137); the page only draws the served value."""
 import datetime as dt
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -134,6 +135,7 @@ def _specs_row(hub, p):
     return _run(hub, f"speedRow({json.dumps(sp)})")
 
 
+@pytest.mark.heavy
 def test_the_throughput_card_draws_the_specs_row_with_the_closed_of_total_text(hub):
     """#2264: the Specs row reads closed of total for open specs, with no second line."""
     p = hub.spec_progress(BOARD, moves={})
@@ -144,6 +146,7 @@ def test_the_throughput_card_draws_the_specs_row_with_the_closed_of_total_text(h
     assert "spws" not in html and "open</span>" not in html, html
 
 
+@pytest.mark.heavy
 def test_the_card_draws_the_specs_row_the_hub_serves_for_one_fixture(hub, monkeypatch):
     """#1424: the row is drawn from the payload the hub serves, over the same fixture the old Specs card read, so a
     wiring gap between `spec_progress` and the card cannot pass: the served counts are the computed counts."""
@@ -157,6 +160,7 @@ def test_the_card_draws_the_specs_row_the_hub_serves_for_one_fixture(hub, monkey
     assert "spws" not in html and "open</span>" not in html, html
 
 
+@pytest.mark.heavy
 def test_the_specs_row_survives_a_hub_with_no_throughput_history(hub):
     """#1424: the Specs row comes off the board cache, never off the optional speed fact: a hub with no slot history
     still draws it."""
@@ -294,3 +298,13 @@ def test_an_open_spec_shows_its_age_since_its_first_landed_ticket(hub):
     items = [_item(1, "Todo", si=(2, 5)), _item(6, "Closed", s="CLOSED", labels=("bug",), pa=1, c="2026-11-01T00:00:00Z")]
     p = hub.spec_progress(items, moves={}, now=now)
     assert p["tip"] == "#1 Spec 1 — 2/5 · open 10 d"
+
+
+def test_every_case_that_runs_node_carries_heavy():
+    """#2542: a case that starts node runs past the unmarked 2 s line on the CI runner, so it carries `heavy`."""
+    node_cases = [fn for name, fn in globals().items()
+                  if name.startswith("test_") and name != "test_every_case_that_runs_node_carries_heavy"
+                  and ("_run(" in inspect.getsource(fn) or "_specs_row(" in inspect.getsource(fn))]
+    assert node_cases, "the node-driven cases are found"
+    unmarked = [fn.__name__ for fn in node_cases if not any(m.name == "heavy" for m in getattr(fn, "pytestmark", []))]
+    assert unmarked == [], unmarked
