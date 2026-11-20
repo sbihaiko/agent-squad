@@ -83,7 +83,7 @@ def _count(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
 
 
-_RESOLVED = {}   # (the plugin file's identity, the project file's identity) -> the resolution it answered
+_RESOLVED: dict[tuple, dict] = {}   # (the plugin file's identity, the project file's identity) -> the resolution it answered
 
 
 def _pair(path):
