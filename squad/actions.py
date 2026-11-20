@@ -64,14 +64,15 @@ def merge_land(target, worktree, branch, message, timeout=None, replace=False):
     The merge message carries each `Refs #N` line of the branch's own commits: a check that reads the head's message for its
     issue reads the merge, not the child's commit (#818). A `Closes` line is never carried.
 
-    `replace` is set by a fix run (#2561): its target is cut at the work branch's old tip, and its child may rebase that branch
-    onto a newer base. When the target's tip is no ancestor of the branch, the target moves to the branch head and the result
-    carries `rewritten`. A merge would conflict with the branch's own old commits."""
+    `replace` is the tip a fix run cut its target at (#2561): the work branch's old tip, which its child may rebase onto a
+    newer base. When the target still stands on that tip and the tip is no ancestor of the branch, the target moves to the
+    branch head and the result carries `rewritten`: a merge would conflict with the branch's own old commits. A target that
+    moved since the cut (a sibling's landing, a node commit) keeps the merge, so a replace never drops landed work."""
     before = git.head(target)
     c = commit(worktree, message, timeout)
     if not c.ok:
         return c
-    if replace and git.run(["merge-base", "--is-ancestor", "HEAD", branch], target, timeout=timeout).returncode == 1:
+    if replace and before == replace and git.run(["merge-base", "--is-ancestor", "HEAD", branch], target, timeout=timeout).returncode == 1:
         r = git.run(["reset", "-q", "--hard", branch], target, timeout=timeout)
         if r.returncode != 0:
             return ActionResult(False, ["land_replace_failed"], git.head(target), {"stderr": r.stderr.strip()[-400:]})

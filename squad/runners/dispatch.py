@@ -301,14 +301,14 @@ class Dispatch:
             r = actions.ActionResult(False, why, head_before)
         else:
             try:
-                r = await anyio.to_thread.run_sync(functools.partial(actions.merge_land, replace=self.e.fix_run), self.e.target, path, branch,
+                r = await anyio.to_thread.run_sync(functools.partial(actions.merge_land, replace=self.e.fix_cut), self.e.target, path, branch,
                                                    f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)    # a fix run's child may rebase its branch (#2561)
             except subprocess.TimeoutExpired:
                 r = actions.ActionResult(False, ["land_timeout"], head_before)
         if r.ok:
             rewritten = r.extra.get("rewritten")
             r = await self.landing_check(name, head_before)
-            if r.ok and rewritten:      # the landing check replaces the merge's result: keep the mark that the target moved to a rebased branch
+            if rewritten:               # the landing check replaces the merge's result: keep the mark that the target moved to a rebased branch, on either outcome
                 r.extra["rewritten"] = True
         return review, rounds, r
 
