@@ -84,4 +84,99 @@ case "$r" in *"left out: none"*) ok "EW6: the close line leaves out no requeued 
 [ ! -e "$T/st/auto/wave-recut-run-23" ] && ok "EW6: no recut marker stays for a requeued child" || ko "EW6: the recut marker stays for a requeued child"
 [ ! -e "$T/st/auto/wave-run-23" ] && ok "EW6: the run's wave marker goes" || ko "EW6: the run's wave marker stays, so the requeued issue stays busy"
 
+# recut <run> <entered> <left out ...>: EW2's setup. The run's wave closes early with <entered> in it, and each other issue is a
+# dispatched child of the run that never entered (child id k<issue>). It prints the landing and exits with its code.
+recut() { local r=$1 e=$2 n rec; shift 2
+  start2 "$r" >/dev/null; child "$e" "g$e" "origin/wave/$r"; en2 "$r" "$e" >/dev/null
+  mkdir -p "$T/co/runs/$r"
+  rec='{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #'$e' work"}}'
+  for n in "$@"; do printf '%s\n' "$r" > "$T/st/auto/disp-$n"
+    rec="$rec"$'\n''{"event": "spawn_accepted", "child": "k'$n'", "definition": {"prompt": "GitHub issue #'$n' work"}}'; done
+  printf '%s\n' "$rec" > "$T/co/runs/$r/record.jsonl"
+  printf '%s\n' "$(( $(date +%s) - 1801 ))" > "$T/st/auto/wave-entry-$r"
+  land2 "$r"; }
+gone() { local r=$1 m left=""; for m in wave wave-recut wave-start; do [ -e "$T/st/auto/$m-$r" ] && left="$left $m-$r"; done; printf '%s' "$left"; }
+
+# EW7 (#2559, AC1): a left-out child that never enters holds its issue for at most the wave age cap. The early close starts the
+# clock of the run's next cut, and the recut marker names the child left out. The run still holds its run slot, so only the
+# age cap ends the recut: the landing requeues the child and clears every marker of the run, with no landing failure.
+printf '%s\n' "$T/co/runs/run-24" >> "$T/st/active-runs.txt"
+r=$(recut run-24 240 241); rc=$?
+[ $rc = 0 ] && case "$r" in *"WAVE CLOSE wave/run-24"*"#241"*) true;; *) false;; esac && ok "EW7: the wave closes early and leaves #241 out" || ko "EW7: exit $rc: '$r'"
+[ -s "$T/st/auto/wave-start-run-24" ] && ok "EW7: the early close starts the age clock of the run's next cut" || ko "EW7: the early close left no wave-start marker, so the age cap never fires"
+[ "$(sed -n 2p "$T/st/auto/wave-recut-run-24" 2>/dev/null)" = 241 ] && ok "EW7: the recut marker names the child left out" || ko "EW7: the recut marker does not name #241: '$(cat "$T/st/auto/wave-recut-run-24" 2>/dev/null)'"
+r=$(land2 run-24 2>&1); rc=$?
+[ $rc = 1 ] && case "$r" in *"WAVE WAIT wave/run-24"*) true;; *) false;; esac && ok "EW7: a run that holds its slot under the age cap waits for its next cut" || ko "EW7: exit $rc: '$r'"
+case "$r" in *"is not on"*) ko "EW7: the wait reads the deleted wave branch: '$r'";; *) ok "EW7: the wait fetches no deleted wave branch";; esac
+[ -e "$T/st/auto/wave-recut-run-24" ] && [ -e "$T/st/auto/wave-run-24" ] && [ -e "$T/st/auto/disp-241" ] && ok "EW7: the wait keeps the recut, the wave marker and the dispatch" || ko "EW7: the wait lost a marker:$(gone run-24)"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-24"
+bash "$T/s/wave.sh" expired run-24 >/dev/null 2>&1 && ok "EW7: the recut run is expired past the age cap" || ko "EW7: the recut run is not expired past the age cap"
+r=$(land2 run-24 2>&1); rc=$?
+[ $rc = 0 ] && ok "EW7: the landing of the expired recut exits 0" || ko "EW7: exit $rc: '$r'"
+case "$r" in *"WAVE REQUEUE #241"*) ok "EW7: the age cap sends the child left out back to the queue";; *) ko "EW7: #241 is not requeued: '$r'";; esac
+case "$r" in *NEEDS-HUMAN*) ko "EW7: the expired recut went to the owner: '$r'";; *) ok "EW7: the expired recut needs no owner";; esac
+[ -z "$(gone run-24)" ] && ok "EW7: no wave, recut or start marker stays" || ko "EW7: markers stay:$(gone run-24)"
+
+# EW8 (#2559, AC2): a requeue of the child left out, written after the early close, drops the recut when no child is left out.
+# The requeue reads no ledger fact: runreview.sh writes that fact after the requeue.
+r=$(recut run-25 250 251); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-25" ] || ko "EW8: the setup did not close early: exit $rc: '$r'"
+r=$(cd "$T/co" && SG_REQUEUE_RUN=run-25 bash "$T/s/wave.sh" requeue 251 "the review asked for changes" 2>&1)
+case "$r" in *"WAVE REQUEUE #251"*) ok "EW8: the child left out is requeued";; *) ko "EW8: no requeue: '$r'";; esac
+[ -z "$(gone run-25)" ] && ok "EW8: the last requeue drops the recut, wave and start markers" || ko "EW8: markers stay:$(gone run-25)"
+r=$(recut run-26 260 261 262); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-26" ] || ko "EW8: the setup with two left out did not close early: exit $rc: '$r'"
+(cd "$T/co" && SG_REQUEUE_RUN=run-26 bash "$T/s/wave.sh" requeue 261 "the review asked for changes" >/dev/null 2>&1)
+[ -e "$T/st/auto/wave-recut-run-26" ] && [ -e "$T/st/auto/wave-run-26" ] && ok "EW8: a requeue that leaves one child out keeps both markers" || ko "EW8: a marker went while #262 is still left out:$(gone run-26)"
+[ "$(sed -n 2p "$T/st/auto/wave-recut-run-26" 2>/dev/null)" = 262 ] && ok "EW8: the recut marker names only the child still left out" || ko "EW8: the recut marker reads '$(cat "$T/st/auto/wave-recut-run-26" 2>/dev/null)'"
+
+# EW9 (#2559, E3): a child left out that commits again after the close keeps its tip. Its requeue pushes the head to
+# fix/<n>-salvage-<run> and names that branch.
+WT=$T/co/runs/run-27/ws/target-k271
+mkdir -p "$T/co/runs/run-27/ws"; $G clone -q "$T/origin.git" "$WT" 2>/dev/null
+(cd "$WT" && $G checkout -q -b gui/271 origin/dev && echo a > g271 && $G add g271 && $G commit -q -m "work 271 (Refs #271)") || ko "EW9: the child's worktree is not ready"
+r=$(recut run-27 270 271); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-27" ] || ko "EW9: the setup did not close early: exit $rc: '$r'"
+(cd "$WT" && echo b > g271b && $G add g271b && $G commit -q -m "more work 271 (Refs #271)") || ko "EW9: the commit after the close failed"
+tip=$($G -C "$WT" rev-parse HEAD)
+r=$(cd "$T/co" && SG_REQUEUE_RUN=run-27 bash "$T/s/wave.sh" requeue 271 "the review asked for changes" 2>&1)
+case "$r" in *"WAVE REQUEUE #271"*"fix/271-salvage-run-27"*) ok "EW9: the requeue names the salvage branch";; *) ko "EW9: the requeue names no salvage branch: '$r'";; esac
+[ "$($O rev-parse -q --verify refs/heads/fix/271-salvage-run-27 2>/dev/null)" = "$tip" ] && ok "EW9: the salvage branch holds the tip committed after the close" || ko "EW9: the remote salvage branch is not the child's tip"
+
+# EW10 (#2559): a recut run that has its verdict holds no run slot, so its child left out can never enter. The landing ends
+# the recut and never reads the wave branch the early close deleted.
+r=$(recut run-28 280 281); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-28" ] || ko "EW10: the setup did not close early: exit $rc: '$r'"
+printf '%s\n' '{"event": "verdict", "verdict": "completed"}' >> "$T/co/runs/run-28/record.jsonl"
+printf '%s\n' "$T/co/runs/run-28" >> "$T/st/active-runs.txt"
+r=$(land2 run-28 2>&1); rc=$?
+case "$r" in *"is not on the remote"*|*"is not on $T"*) ko "EW10: the landing reads the deleted wave branch: '$r'";; *) ok "EW10: the landing does not read the deleted wave branch";; esac
+[ $rc = 0 ] && [ -z "$(gone run-28)" ] && ok "EW10: the landing ends the recut (exit 0, no marker)" || ko "EW10: exit $rc, markers:$(gone run-28): '$r'"
+case "$r" in *"WAVE REQUEUE #281"*) ok "EW10: with no fix run in flight, the child left out goes back to the queue";; *) ko "EW10: #281 is not requeued: '$r'";; esac
+[ ! -e "$T/st/auto/disp-281" ] && ok "EW10: the requeue drops the dispatch of #281" || ko "EW10: disp-281 stays"
+
+# EW11 (#2559, #667): a recut run with a verdict whose child left out has a childcc fix run in flight waits for it. The age
+# cap or the fix run's verdict ends the wait.
+r=$(recut run-29 290 291); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-29" ] || ko "EW11: the setup did not close early: exit $rc: '$r'"
+printf '%s\n' '{"event": "verdict", "verdict": "completed"}' >> "$T/co/runs/run-29/record.jsonl"
+printf '%s\n' "$T/co/runs/run-29" >> "$T/st/active-runs.txt"
+mkdir -p "$T/fx29"; printf '%s\n' '{"event": "run_start"}' > "$T/fx29/record.jsonl"
+printf '%s\n' "$T/fx29" > "$T/st/auto/ccfix-run-29-k291"
+r=$(land2 run-29 2>&1); rc=$?
+[ $rc = 1 ] && case "$r" in *"WAVE WAIT wave/run-29"*) true;; *) false;; esac && ok "EW11: a live fix run of the child left out holds the recut" || ko "EW11: exit $rc: '$r'"
+case "$r" in *"WAVE REQUEUE #291"*|*"RECUT-END"*|*"is not on"*) ko "EW11: the landing ended the recut under a live fix run: '$r'";; *) ok "EW11: no requeue and no fetch while the fix run works";; esac
+[ -e "$T/st/auto/disp-291" ] && [ -e "$T/st/auto/wave-recut-run-29" ] && ok "EW11: the dispatch and the recut stay" || ko "EW11: a marker went:$(gone run-29)"
+printf '%s\n' '{"event": "verdict", "verdict": "failed"}' >> "$T/fx29/record.jsonl"
+r=$(land2 run-29 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"WAVE REQUEUE #291"*) true;; *) false;; esac && ok "EW11: the fix run's verdict ends the wait, and #291 goes back to the queue" || ko "EW11: exit $rc: '$r'"
+
+# EW12 (#2559): a requeue of the child left out that ends early (here the requeue cap stops it) still drops it from the
+# recut, so the run stops holding the issue.
+r=$(recut run-30 300 301); rc=$?
+[ $rc = 0 ] && [ -e "$T/st/auto/wave-recut-run-30" ] || ko "EW12: the setup did not close early: exit $rc: '$r'"
+r=$(cd "$T/co" && SG_REQUEUE_CAP=1 SG_REQUEUE_RUN=run-30 bash "$T/s/wave.sh" requeue 301 "the review asked for changes" 2>&1)
+case "$r" in *"WAVE STOP #301"*) ok "EW12: the requeue cap stops #301";; *) ko "EW12: no stop: '$r'";; esac
+[ -z "$(gone run-30)" ] && ok "EW12: the stopped child leaves the recut, and no marker stays" || ko "EW12: markers stay:$(gone run-30)"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
