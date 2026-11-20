@@ -7137,8 +7137,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .ktab .kl input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px;text-align:left}
 #tab-set .ktab .kn{white-space:nowrap}
 #tab-set .ktab .ks{color:var(--fg);font-size:var(--fs-body);line-height:1.35;overflow-wrap:anywhere}
-#tab-set .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);margin:6px 0 4px}
-#tab-set .stab .scol1{width:15%}#tab-set .stab .scol2{width:17%}#tab-set .stab .scol3{width:10%}#tab-set .stab .scol4{width:58%}
+#tab-set .stab{width:100%;border-collapse:collapse;table-layout:auto;font-size:var(--fs-body);margin:6px 0 4px}
+#tab-set .stab .scol1,#tab-set .stab .scol2,#tab-set .stab .scol3,#tab-set .stab .scol4{width:auto}
 #tab-set .stab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .stab tbody th,#tab-set .stab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0;overflow-wrap:anywhere}
 #tab-set .stab tbody th{white-space:nowrap;color:var(--fg)}
