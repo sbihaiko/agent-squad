@@ -106,20 +106,21 @@ def test_the_switch_is_one_key_and_carries_no_explanation(hub):
     assert out.count('role=switch') == 1
     assert "drains" not in out and "<p" not in out and "<small" not in out, out
     log = _run(page, f"loopLogHtml({json.dumps(LOOP_VIEW)})", _monitor_blocks(page))
-    assert "drains" not in log and "<h4>Changes</h4>" in log, log
+    assert "drains" not in log and "<summary>Changes " in log, log
     confirm = _run(page, f"loopConfirmHtml({json.dumps(LOOP_VIEW)})", _monitor_blocks(page))
     assert re.search(r'value=drain checked', confirm)
 
 
-def test_the_monitor_carries_the_one_loop_switch_and_the_panel_keeps_the_log(hub):
-    """The owner moved the switch to the Monitor; the Loop panel carries the change log and the history, never a button."""
+def test_the_monitor_carries_the_one_loop_switch_and_the_loop_tab_keeps_the_log(hub):
+    """The owner moved the switch to the Monitor; the Loop tab carries the change log and the history, never a button."""
     page = hub.PAGE
     monitor = _section(page, "inst")
     assert "id=iloop" in monitor, "the Monitor carries the loop slot"
-    panel = _section(page, "lop")
-    assert "id=lopb" in panel, panel[:200]
-    assert "id=histb" not in panel and "id=list" not in panel, "the run history left the Loop panel (#1277)"
-    assert "role=switch" not in panel, "the Loop panel carries no second switch"
+    assert "<details id=lop" not in page, "the Settings page still carries a Loop panel (#2515)"
+    loop_tab = page.split("<section id=tab-prof", 1)[1].split("</section>", 1)[0]
+    assert "id=lopaud" in loop_tab, "the Loop tab lost the change list"
+    assert "id=histb" not in loop_tab and "id=list" not in loop_tab, "the run history left the Loop tab (#1277)"
+    assert "role=switch" not in loop_tab, "the Loop tab carries a second switch"
 
 
 def test_the_instruments_lead_the_monitor_and_throughput_follows(hub):

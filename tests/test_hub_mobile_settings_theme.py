@@ -55,11 +55,13 @@ def _phone_link_href(stored):
 def _desktop_tab_and_theme(hub, hash_):
     page = hub.PAGE
     sth = re.search(r"^const STH=[^\n]*", page, re.M).group(0)
+    first = re.search(r"^const SET_FIRST=[^\n]*", page, re.M).group(0)
+    initial = re.search(r"^let sTheme=[^\n]*", page, re.M).group(0)
     hash_map = re.search(r"^const HASH=[^\n]*", page, re.M).group(0)
     tab_fn = re.search(r"^function tabFromLocation\(.*$", page, re.M).group(0)
     boot = re.search(r"^const themeHash=[^\n]*", page, re.M).group(0)
     src = (
-        f"const location={{hash:{json.dumps(hash_)}}};\n{sth}\nlet sTheme='lop';\n{hash_map}\n{tab_fn}\n{boot}\n"
+        f"const location={{hash:{json.dumps(hash_)}}};\nconst ls={{}};\n{sth}\n{first}\n{initial}\n{hash_map}\n{tab_fn}\n{boot}\n"
         "console.log(JSON.stringify([tabFromLocation(),sTheme]));"
     )
     return json.loads(_node(src))
@@ -77,19 +79,44 @@ def _node(src):
     [
         ('{"sth":"acc"}', "./#set-acc"),
         ('{"sth":"sub","pins":[]}', "./#set-sub"),
-        ("{}", "./#set-lop"),
-        ('{"sth":"bogus"}', "./#set-lop"),
-        ("not json", "./#set-lop"),
+        ("{}", "./#set-lim"),
+        ('{"sth":"bogus"}', "./#set-lim"),
+        ('{"sth":"lop"}', "./#set-lim"),
+        ("not json", "./#set-lim"),
     ],
 )
-def test_the_phone_settings_link_carries_the_last_theme_or_loop(stored, href):
+def test_the_phone_settings_link_carries_the_last_theme_or_the_first_one(stored, href):
     assert json.loads(_phone_link_href(stored)) == href
+
+
+def _desktop_themes_and_first(hub):
+    """The desktop's theme order and first theme, read from the running page, never a second literal kept in step."""
+    sth = re.search(r"^const STH=[^\n]*", hub.PAGE, re.M).group(0)
+    first = re.search(r"^const SET_FIRST=[^\n]*", hub.PAGE, re.M).group(0)
+    return json.loads(_node(f"{sth}\n{first}\nconsole.log(JSON.stringify([Object.keys(STH),SET_FIRST]));"))
+
+
+@needs_node
+def test_the_phone_theme_list_and_first_theme_match_the_desktop(hub):
+    """#2515: the phone handoff opens every theme the desktop knows, and a stored non-theme value (the removed Loop
+    theme) opens the desktop's runtime first theme, so the two defaults cannot drift apart."""
+    themes, first = _desktop_themes_and_first(hub)
+    for t in themes:
+        assert json.loads(_phone_link_href(json.dumps({"sth": t}))) == f"./#set-{t}", f"the phone drops {t}"
+    assert json.loads(_phone_link_href('{"sth":"lop"}')) == f"./#set-{first}", \
+        f"the phone's fallback does not match the desktop's runtime first theme {first!r}"
+
+
+@needs_node
+def test_an_old_loop_theme_link_opens_the_first_remaining_theme(hub):
+    """#2515: a saved #set-lop link opens the first theme left, never a Settings page with no theme shown."""
+    assert _desktop_tab_and_theme(hub, "#set-lop") == ["set", "lim"]
 
 
 @needs_node
 def test_the_desktop_opens_settings_on_the_themed_hash(hub):
     assert _desktop_tab_and_theme(hub, "#set-acc") == ["set", "acc"]
-    assert _desktop_tab_and_theme(hub, "#set-bogus") == ["set", "lop"]
+    assert _desktop_tab_and_theme(hub, "#set-bogus") == ["set", "lim"]
 
 
 def _redirect_condition(hub):
