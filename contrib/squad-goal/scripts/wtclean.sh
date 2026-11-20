@@ -16,6 +16,10 @@
 # #2574: uncommitted work or commits outside the base keep a tree only while one of its issues is open. A tree whose issues are
 # all closed, that nothing moved for SG_WT_ARCHIVE_SECONDS and that no active run names goes once its HEAD and its tracked dirt
 # are archived on the remote (archive below). The archived refs keep every commit, so the removal deletes no work but untracked files.
+# #2588: a tree holds run folders, so a removal also takes every record.jsonl with it and the hub's trip bar forgot each delivery
+# whose tree was cleaned. Before any removal, each run folder's record.jsonl and request.txt copy to $SG_STATE/run-archive/<run>/,
+# where the hub folds them; a copy that fails keeps the tree under one WT KEPT line. An archive folder older than
+# SG_RUN_ARCHIVE_DAYS (30 by default) goes.
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 sdir=$(cd "$(dirname "$0")" && pwd)   # after env.sh: test-address.sh wants env.sh as the first command of a script that calls gh
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
@@ -73,6 +77,24 @@ dirt() { $G -C "$1" status --porcelain 2>/dev/null | awk -v s=" $scratch " '!(su
 # inner <tree>: another registered worktree lies inside the tree (a run folder's ws/ trees). `git worktree remove` deletes the
 # whole directory, the inner tree and its uncommitted work with it, and says nothing: the outer tree waits for the inner one.
 inner() { $G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | awk -v p="$1/" 'index($0, p) == 1 {f=1} END {exit !f}'; }
+# run_archive <tree>: the run records of a tree that is about to go stay readable (#2588). A child tree holds its run folders,
+# so the removal took every record.jsonl with it, and the hub's trip bar lost each delivery whose tree was cleaned. Each run
+# folder's record.jsonl and request.txt copy to $SG_STATE/run-archive/<run>/ first, where the hub folds them beside the live
+# ones. A copy that fails returns 1 with $arch_why naming it, and the caller keeps the tree.
+run_archive() { local w=$1 r d f
+  for r in "$w"/runs/*/; do [ -f "$r/record.jsonl" ] || continue
+    d="$SG_STATE/run-archive/$(basename "${r%/}")"
+    mkdir -p "$d" 2>/dev/null || { arch_why="could not make $d"; return 1; }
+    for f in record.jsonl request.txt; do [ -f "$r$f" ] || continue
+      cp -p "$r$f" "$d/$f" 2>/dev/null || { arch_why="could not copy $r$f to $d/$f"; return 1; }; done; done; return 0; }
+# archive_prune: an archive folder older than SG_RUN_ARCHIVE_DAYS days (30 by default) goes; one the hub still folds stays
+# until then. One line names the count, and a folder the pass cannot remove stays for the next pass.
+archive_prune() { local d n=0 root="$SG_STATE/run-archive"
+  [ -d "$root" ] || return 0
+  for d in "$root"/run-*; do [ -d "$d" ] || continue
+    [ $(( now - $(mtime "$d") )) -ge $(( ${SG_RUN_ARCHIVE_DAYS:-30} * 86400 )) ] || continue
+    rm -rf "$d" 2>/dev/null; [ -e "$d" ] || n=$(( n + 1 )); done
+  [ $n -eq 0 ] || echo "RUN ARCHIVE PRUNED $n (older than ${SG_RUN_ARCHIVE_DAYS:-30} days)"; }
 # kept <class> <tree> <tag> <reason>: a tree an ended run keeps, named once per tree and reason (#676).
 kept() { grep -qxF "keep $3 $2" "$seen" && return 0; echo "WT KEPT $1 ${2##*/}: $4; kept"; echo "keep $3 $2" >> "$seen"; }
 # ended <run folder>: 0 when the run has ended for good, read as the dashboard reads it (the last verdict after the last run_start
@@ -160,7 +182,9 @@ free_archived() { local c=$1 w=$2 sha rc
   wt_remove "$SG_CHECKOUT" "$w" force "$3"; rc=$?
   if [ $rc = 0 ]; then echo "WT CLEAN $4 ${fb:-detached} ${sha:-} (its issues are closed${aref:+; archived at $aref}; removed with --force)"; return 0; fi
   kept "$c" "$w" archrm "${wt_why:-git refused to remove it}${aref:+; its work is at $aref}"; return 1; }
-wt_remove() { wt_forced=; wt_sub=0; wt_why=; has_sub "$2" && wt_sub=1
+wt_remove() { wt_forced=; wt_sub=0; wt_why=; arch_why=; has_sub "$2" && wt_sub=1
+  # #2588: every removal keeps the tree's run records first, so the one removal door is also the one archive point.
+  if ! run_archive "$2"; then grep -qxF "rec $2" "$seen" || { echo "WT KEPT ${2##*/}: its run record did not reach the archive ($arch_why); kept"; echo "rec $2" >> "$seen"; }; return 1; fi
   local s; for s in $scratch; do $G -C "$2" status --porcelain -- "$s" 2>/dev/null | grep -qxF "?? $s" && rm -rf "${2:?}/$s"; done   # the caller proved it is all the dirt
   if [ "$3" = force ]; then   # #2574: after an archive only; the tests that keep a tree run again right before the one --force
     cwds=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
@@ -206,6 +230,7 @@ tmp_prune() {
 }
 now=$(date +%s)
 tmp_prune   # before the cd: the prune needs no checkout
+archive_prune   # #2588: an archive folder past its day count goes, before this pass writes a new one
 cd "$SG_CHECKOUT" || exit 0
 SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.
 cwds=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test

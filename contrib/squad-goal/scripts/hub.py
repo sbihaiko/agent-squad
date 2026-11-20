@@ -496,6 +496,19 @@ def run_roots(co):   # where a checkout keeps run folders: its runs/, and each r
     co = pathlib.Path(co)
     return [co / "runs", *(w / "runs" for kind in ("run", "child") for w in sorted((co / "worktrees" / kind).glob("*")))]
 
+def trip_record_files():
+    """The run records the Loop tab folds (#2588): every run folder of this checkout's run roots, then the copies wtclean.sh
+    keeps in the state's run-archive/ before it removes the tree that held them, so a delivery outlives its tree. A run the
+    live folder and the archive both hold is read once, from its live folder, and counts once."""
+    seen, out = set(), []
+    for root in [*run_roots(CHECKOUT), STATE / "run-archive"]:
+        try: files = sorted(root.glob("run-*/record.jsonl"))
+        except OSError: continue
+        for p in files:
+            if p.parent.name in seen: continue
+            seen.add(p.parent.name); out.append(p)
+    return out
+
 def own_roots():
     """The run roots of this profile: its checkout, SG_PROJECTS and SG_FORK_DIR. A dashboard outside them is another profile's."""
     ds = set(run_roots(CHECKOUT))
@@ -2992,10 +3005,7 @@ def trip_stamp(allowed=True):
     """The identity of the inputs the trip bar folds (#2582): every run's record and request, the board's history stores,
     the gate history, the review ledger and, for a caller the hub allowed, the minute record. A poll that finds them all
     unchanged serves the view it built, so the fold runs when a record moves and not on every read of the tab."""
-    files = []
-    for root in run_roots(CHECKOUT):
-        try: files.extend(root.glob("run-*/record.jsonl"))
-        except OSError: continue
+    files = trip_record_files()
     return (tuple(sorted((str(p), _pair(p), _pair(p.parent / "request.txt")) for p in files)),
             _pair(_hist.history_path(BOARD, REPO)), _pair(_flow.history_path(BOARD, REPO)),
             _pair(STATE / "gate-history"), _pair(STATE / "token-usage.tsv"), load_record_stamp() if allowed else None)
@@ -3015,10 +3025,7 @@ def trip_view(window_s, now=None, allowed=True):
     kept = _TRIP_KEPT.get(key)
     if kept is not None: return kept
     since = now - window_s
-    files = []
-    for root in run_roots(CHECKOUT):
-        try: files.extend(sorted(root.glob("run-*/record.jsonl")))
-        except OSError: continue
+    files = trip_record_files()
     issues = {p: trip_issues(p) for p in files}
     numbers = {n for ns in issues.values() for n in ns}
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
