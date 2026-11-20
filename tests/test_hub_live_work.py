@@ -110,6 +110,7 @@ def test_the_takeover_chip_names_the_squad_and_the_time(hub):
     assert chip.startswith("Squad · taken over ")
 
 
+@pytest.mark.heavy   # starts node to render the card; a loaded runner pushed the call past the 2 s line (#2550)
 def test_the_card_paints_the_holder_name_the_row_carries(hub):
     if NODE is None:
         pytest.skip("node is required")
