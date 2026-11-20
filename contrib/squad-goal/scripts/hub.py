@@ -7667,8 +7667,9 @@ function limQueue(which,send){if(RO)return;clearTimeout(limTmr[which]);limTmr[wh
    (ADR-0137). A blank field is unlimited. The frontier reads Doing, the branch review pass reads Reviewing, and the
    Kanban header shows the count against the limit. */
 // KAN{ the Kanban sub-group's pure rules (#2432): its values, its dirty test, its chip and its html. Run in node by tests.
-let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanRef={},kanDiff=[],kanChain=Promise.resolve();   // kanSent holds the value each column last posted, so a timer save and a later blur send one request; kanRef holds the value the hub refused, so a later pause never resends it (#2433)
+let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanRef={},kanDiff=[],kanChain=Promise.resolve(),kanStaged={},kanBusy=false,kanGen=0;   // kanSent holds the value each column last posted, so a timer save and a later blur send one request; kanRef holds the value the hub refused, so a later pause never resends it; kanStaged names each column whose field holds an edit the owner has not saved, so no refresh infers it from a snapshot (#2433, #2541)
 const kanClone=o=>JSON.parse(JSON.stringify(o));
+function kanStage(name,raw){const c=kanDraft&&kanDraft.find(x=>x.name===name);if(!c)return false;c.max_cards=raw===""?null:Number(raw);kanStaged[name]=true;kanMsg="";return true}   // the input marks its column staged; only a landed or refused write clears the mark (#2541)
 const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
 const kanLims=c=>Object.fromEntries(c.map(x=>[x.name,x.max_cards==null?"none":String(x.max_cards)]));
@@ -7682,7 +7683,8 @@ const kanFile=()=>{const f=(kanS&&(kanS.file_label||kanS.file))||"";   // the fo
  const p=String(f).split(String.fromCharCode(92)).join("/"),i=p.lastIndexOf("/docs/");
  return i>=0?p.slice(i+1):p.startsWith("docs/")?p:p.slice(p.lastIndexOf("/")+1)};
 const kanBar=c=>`<span class=kbar role=img aria-label="${c.count} of ${c.max_cards}"><span class="kfill${c.count>=c.max_cards?" full":""}" style="width:${kanPct(c)}%"></span></span><b class=knum>${c.count} of ${c.max_cards}</b>`;   // a limited column shows its bar and N of M (#2512)
-const kanRow=c=>`<tr data-kanrow="${esc(c.name)}"><th scope=row class=kc>${esc(c.name)}</th><td class=kn>${c.count==null?`<b class=knum>—</b>`:c.max_cards==null?`<b class=knum>${c.count}</b>`:kanBar(c)}</td>`
+const kanNow=c=>c.count==null?`<b class=knum>—</b>`:c.max_cards==null?`<b class=knum>${c.count}</b>`:kanBar(c);
+const kanRow=c=>`<tr data-kanrow="${esc(c.name)}"><th scope=row class=kc>${esc(c.name)}</th><td class=kn>${kanNow(c)}</td>`
  +`<td class=kl><input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}></td>`
  +`<td class=ks>${esc(c.stops||"no pass reads it yet")}${kanOK===c.name?" <span class=lok aria-label=saved>✓</span>":""}</td></tr>`;   // one aligned row of the table the spec draws (#2512)
 const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
@@ -7699,18 +7701,22 @@ async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)retu
  if(kanSent[name]===val)return {skip:true};   // the last write posted this column's value already (#2433)
  if(kanBad===name&&kanRef[name]===val)return {skip:true};   // the hub refused this value already, so a later pause never resends it (#2433)
  let d;try{d=send?await send({columns:body,confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:body,confirm:true})})).json()}catch(x){d={err:"save failed"}}
- if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";kanRef[name]=val;delete kanSent[name];clearTimeout(limTmr["kan:"+name]);delete limTmr["kan:"+name]}   // a refused column keeps its mark and its value in the draft; its timer is cleared so no pause resends the same body (#2433)
- else{kanS=d.state||kanS;const st=(kanS&&kanS.columns)||[],landed=st.find(x=>x.name===name);
+ if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";kanRef[name]=val;delete kanStaged[name];delete kanSent[name];clearTimeout(limTmr["kan:"+name]);delete limTmr["kan:"+name]}   // a refused column keeps its mark and its value in the draft; its timer is cleared so no pause resends the same body; the mark is no longer staged, so a refresh reads the server again (#2433, #2541)
+ else{kanS=d.state||kanS;const st=(kanS&&kanS.columns)||[],landed=st.find(x=>x.name===name);delete kanStaged[name];   // the column landed: the draft follows the server again (#2541)
   kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
   kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
-async function kanRefresh(get){let s;try{s=await (get?get():fetch("/api/columns").then(r=>r.json()))}catch(e){return false}
- if(!s||s.err)return false;
- const prev=kanS,cur=kanCols();   // a later board read moves the counts and the stops; a limit the owner typed and has not saved stays in the draft (#2541)
- kanDraft=(s.columns||[]).map(x=>{const c=cur.find(y=>y.name===x.name),p=prev&&(prev.columns||[]).find(y=>y.name===x.name),dirty=!!c&&!!p&&c.max_cards!==p.max_cards;return dirty?{...x,max_cards:c.max_cards}:x});
+async function kanRefresh(get){if(!get){if(kanBusy)return false;kanBusy=true}   // one read of the columns at a time, so a slow tick never stacks on the next (#2541)
+ const gen=++kanGen;let s;try{s=await (get?get():fetch("/api/columns").then(r=>r.json()))}catch(e){s=null}
+ finally{if(!get)kanBusy=false}
+ if(!s||s.err||gen!==kanGen)return false;   // an older response never overwrites a newer read (#2541)
+ const cur=kanCols();
+ kanDraft=(s.columns||[]).map(x=>{const c=cur.find(y=>y.name===x.name);return kanStaged[x.name]&&c?{...x,max_cards:c.max_cards}:x});   // a later board read moves the counts and the stops; a staged limit rides over it (#2541)
+ cur.forEach(c=>{if(kanStaged[c.name]&&!kanDraft.some(x=>x.name===c.name))kanDraft.push({...c})});   // a staged column the payload lacks still keeps its row, never dropped by a partial read (#2541)
  kanS=s;return true}
+function kanCounts(){document.querySelectorAll("#lbody tr[data-kanrow]").forEach(tr=>{const c=kanCols().find(x=>x.name===tr.dataset.kanrow),cell=tr.querySelector(".kn");if(c&&cell)cell.innerHTML=kanNow(c)})}   // the cells alone move, so the field the owner is typing in keeps its value and its focus (#2541)
 async function kanPoll(){const f=document.activeElement,typing=!!f&&f.tagName==="INPUT"&&!!f.closest&&!!f.closest("#lbody");
- if(document.hidden||RO||!(await kanRefresh()))return;if(!typing)limRender()}   // a field the owner is typing in keeps its focus; its counts follow on the next read (#2541)
+ if(document.hidden||RO||!(await kanRefresh()))return;if(typing)kanCounts();else limRender()}   // a focused field keeps its value and its selection: the poll moves the count cells alone (#2541)
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanS&&kanS.read===false?"":kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
   +`<table class=ktab><colgroup><col class=kcol1><col class=kcol2><col class=kcol3><col class=kcol4></colgroup><thead><tr><th scope=col>Column</th><th scope=col>Cards now</th><th scope=col>Card limit</th><th scope=col>What the limit stops</th></tr></thead><tbody>`
@@ -7797,7 +7803,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
  b.innerHTML=h;if(typeof setBar==="function")setBar();limTickSync();kanTickSync()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
- try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
+ try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanStaged={};kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
  limRender()}
 setInterval(()=>{if(limShown())kanPoll()},5000);   // the board's read reaches the Kanban counts within one poll (#2541)
@@ -7807,7 +7813,7 @@ async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"P
  else if((d.diff||[]).length)slotDiff=d.diff;else{slotDraft=slotClone(slotS);slotDiff=null;slotMsg="nothing changed"}}catch(x){slotMsg="!save failed"}
  limRender();return d}
 $("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot;   // a Kanban row, a slot cap or a limit field saves on its own (#2432, #2433, #2435)
- if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg="";limQueue("kan:"+n)}
+ if(n&&kanDraft&&kanStage(n,e.target.value))limQueue("kan:"+n)
  else if(sp&&slotDraft){if(slotStage(sp,e.target.value))limQueue("slot:"+sp)}   // a cleared or out-of-range cap is refused here, never queued for a write the hub would refuse (#2435)
  else if(e.target.id&&LIM_FIELD[e.target.id])limQueue(LIM_FIELD[e.target.id]);   // a pause in typing saves the field (#2433)
  setBar()});
@@ -7929,7 +7935,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
 // The explicit revert drops a refused value and redraws the saved state (#2433).
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];limRender()}
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
