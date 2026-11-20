@@ -2983,6 +2983,21 @@ def load_rows_now():
         LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
     return LOAD_STATE["record_rows"] or []
 
+TRIP_MEMO_SECS = 30.0   # the bar's own cadence: the Loop tab's file views are read every 30 s with the switch off
+_TRIP_KEPT = {}   # (the window, the refusal, the half minute, the inputs' identity) -> the trip view
+
+def trip_stamp(allowed=True):
+    """The identity of the inputs the trip bar folds (#2582): every run's record and request, the board's history stores,
+    the gate history, the review ledger and, for a caller the hub allowed, the minute record. A poll that finds them all
+    unchanged serves the view it built, so the fold runs when a record moves and not on every read of the tab."""
+    files = []
+    for root in run_roots(CHECKOUT):
+        try: files.extend(root.glob("run-*/record.jsonl"))
+        except OSError: continue
+    return (tuple(sorted((str(p), _pair(p), _pair(p.parent / "request.txt")) for p in files)),
+            _pair(_hist.history_path(BOARD, REPO)), _pair(_flow.history_path(BOARD, REPO)),
+            _pair(STATE / "gate-history"), _pair(STATE / "token-usage.tsv"), load_record_stamp() if allowed else None)
+
 def trip_view(window_s, now=None, allowed=True):
     """The Loop tab's trip bar (#1769, #2152): the board's six columns of a delivery over the chosen window, folded by the
     rule layer from the run records under this profile's run roots, the gate history, and the board transitions of the
@@ -2991,8 +3006,12 @@ def trip_view(window_s, now=None, allowed=True):
     records' call outcomes and the review token ledger as Tokens, and the minute record's whole-machine CPU and RAM, each
     sample placed in the column the card stood in at its time. `allowed` False is a caller the hub refused: then the
     minute record is not stat, the CPU and RAM lines read no row, and the payload asserts neither a peak nor a count of
-    silent minutes, as the load chart reads none."""
+    silent minutes, as the load chart reads none. The view is kept while its inputs and the half minute its `since` stands
+    in are unchanged (#2582): the Loop tab's sampler asks it every second, and the fold reads every record."""
     now = time.time() if now is None else now
+    key = (window_s, allowed, int(now // TRIP_MEMO_SECS), trip_stamp(allowed))
+    kept = _TRIP_KEPT.get(key)
+    if kept is not None: return kept
     since = now - window_s
     files = []
     for root in run_roots(CHECKOUT):
@@ -3009,13 +3028,15 @@ def trip_view(window_s, now=None, allowed=True):
                                         {n: w["closed"] for n, w in waits.items() if w.get("closed") is not None})
     spans = [s if k else None for s, k in zip(spans, keep, strict=True)]
     rework = [r for w in waits.values() for r in w.get("rework") or ()]
-    return {"window_s": window_s, "since": since,
+    if len(_TRIP_KEPT) >= 16: _TRIP_KEPT.clear()   # a long-lived process may stand in many windows: the old ones go first
+    _TRIP_KEPT[key] = out = {"window_s": window_s, "since": since,
             **hub_profiler.trip(spans, trip_gates(since), since,
                                 cards=[next((columns[n] for n in issues[p] if n in columns), None) for p in files],
                                 calls=[trip_calls_of(p) for p in files], review_calls=trip_review_calls(since),
                                 loads=load_rows_now() if allowed else None, now=now, cores=os.cpu_count(),
                                 mem_gb=mem_total_gb(), rework=rework,
                                 waves=[{"wave": p.parent.name, "issues": issues[p]} for p in files])}
+    return out
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
