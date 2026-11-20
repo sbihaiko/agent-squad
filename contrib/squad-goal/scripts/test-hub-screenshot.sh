@@ -1,7 +1,8 @@
 #!/bin/bash
 # seconds: 0.15
 # The overlay's screenshot (#903) captures with a vendored static library: its version, source and hash are recorded beside
-# it, and the hub serves it once on every page that carries the overlay.
+# it, and the hub serves it once on every page that carries the overlay. The phone page carries no overlay since #2490, so
+# it carries no copy of the library.
 # usage: bash test-hub-screenshot.sh [path/to/hub.py]
 d=$(cd "$(dirname "$0")" && pwd); export HUB_SRC=${1:-$d/hub.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 lib="$d/vendor-html2canvas-1.4.1.min.js"; rec="$d/vendor-html2canvas.VENDOR"
@@ -28,7 +29,7 @@ banner = lib.read_text().split("\n", 2)[1][:80]
 page = hub.served_page()
 n = page.count(banner)
 print(("ok   " if n == 1 else "FAIL ") + f"the hub page carries the vendored library once (found {n})")
-print(("ok   " if hub.MOBILE_PAGE.count(banner) == 1 else "FAIL ") + "the mobile page carries the vendored library once")
+print(("ok   " if hub.MOBILE_PAGE.count(banner) == 0 else "FAIL ") + "the mobile page carries no vendored library: its overlay left it with the session controls")
 PY
 )
 echo "$out"; echo "$out" | /usr/bin/grep -q "^FAIL" && fail=1
