@@ -151,8 +151,26 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"would dispatch 1 cluster(s)"*) ok "2c the pass asks for no more children than one run funds";; *) ko "2c the pass asked past the funded room: '$r'";; esac
 printf 'print("-")\n' > "$T/s/fundroom.py"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
-case "$r" in *"would dispatch 2 cluster(s)"*) ok "2c with no funding bound the free slots decide";; *) ko "2c no funding bound, yet not two children: '$r'";; esac
+case "$r" in *"would dispatch 2 cluster(s)"*) ok "2c with no funding bound the pack decides";; *) ko "2c no funding bound, yet not two children: '$r'";; esac
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1229], open(p,"w"))' "$T/issues.json"
+
+# 2d) (#2544) The pack of the one run follows the gate load, never the free run slots. Four bugs of four root causes and one
+#     free slot: with no live gate lease the run takes two; with one live gate lease it takes all four; one bug is one child.
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d+=[{"number":n,"title":"Core: crash %d"%n,"body":"step p%d/q.py"%n,"created_at":"2026-09-01T15:30:00Z","labels":["bug","ready-for-agent"]} for n in (1229,1230,1231)]; json.dump(d, open(p,"w"))' "$T/issues.json"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"; todo 1228 1229 1230 1231 1400 1401
+rm -rf "$T/caps/gates"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 2 cluster(s)"*) ok "2d no live gate lease: the run takes two children";; *) ko "2d no live gate lease, yet not two children: '$r'";; esac
+mkdir -p "$T/caps/gates"; printf '{"holder":"gate-x","pid":%s,"since":%s}' "$$" "$(date +%s)" > "$T/caps/gates/gate-x.json"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 4 cluster(s)"*) ok "2d a live gate lease: the run takes every bug up to six";; *) ko "2d a live gate lease, yet not four children: '$r'";; esac
+r=$(SG_PACK_BUSY=3 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 3 cluster(s)"*) ok "2d SG_PACK_BUSY sets the busy pack";; *) ko "2d SG_PACK_BUSY=3, yet not three children: '$r'";; esac
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"] not in (1229,1230,1231)], open(p,"w"))' "$T/issues.json"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 1 cluster(s): [1228]"*) ok "2d one bug dispatches at once as one child";; *) ko "2d one bug did not dispatch as one child: '$r'";; esac
+rm -rf "$T/caps/gates"
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; todo 1228 1229 1400 1401 60 61 62 70 71 72 73
 
 # 3) no startable bug: debt is dispatched
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1228], open(p,"w"))' "$T/issues.json"

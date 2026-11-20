@@ -60,7 +60,7 @@ def test_a_field_the_record_lacks_is_null_and_never_zero():
     router = json.loads((DESIGN / "router.graph.json").read_text())
     rev = run_node([{"op": "record", "text": (DESIGN / "router.record.jsonl").read_text()}])[0]["events"]
     t = run_node([{"op": "stats", "events": rev, "doc": router, "shown": True}])[0]["totals"]
-    assert t["spend"] is None and t["turns"] is None and t["wall"] is None and t["cap_pct"] is None and t["cap"] == 40
+    assert t["spend"] is None and t["turns"] is None and t["wall"] is None and t["cap_pct"] is None and t["cap"] == router["run"]["spend_cap"]
 
 
 def test_a_node_with_two_entries_sums_its_cost_and_shows_the_last_outcome_and_the_worst_cap_use():

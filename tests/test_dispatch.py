@@ -435,10 +435,10 @@ async def test_a_child_that_asks_above_the_projects_ceiling_is_refused_by_name(t
 @pytest.mark.anyio
 @pytest.mark.heavy
 async def test_max_children_per_entry_is_enforced(tmp_path):
-    reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design", "tdd", "tdd")]
+    reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design", "tdd", "tdd", "tdd", "tdd")]
     eng = make(tmp_path, {"router": routed(*reqs), "route.router.1": CHILD}, adapter={"repeat_last": True, "default": CHILD})
     await eng.run()
-    assert len(ev(tmp_path, "spawn_accepted")) == 4
+    assert len(ev(tmp_path, "spawn_accepted")) == 6   # the shipped envelope's max_children (#2544)
     assert [r["reason"] for r in ev(tmp_path, "spawn_rejected")] == ["max_children_over"]
 
 
