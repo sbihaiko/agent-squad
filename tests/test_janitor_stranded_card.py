@@ -332,3 +332,89 @@ def test_a_stale_card_whose_issue_carries_a_skip_label_moves_nothing(tmp_path):
     assert f"STALE-CARD #{N}" not in decided(tmp_path), decided(tmp_path)
     skipped = [x for x in decided(tmp_path).splitlines() if f"SKIP-LABEL #{N}" in x]
     assert len(skipped) == 1 and "ready-for-HAL9K" in skipped[0], decided(tmp_path)
+
+
+# --- #2548: a dispatch whose run never started -----------------------------------------------------------------------
+
+REQ = "autobug-20261120-072301"
+
+
+def refused_dispatch(tmp_path: Path, *, board_run: str | None = REQ, log: str = "refusing to start", kind: str = "bug", age: int = 16 * 60) -> None:
+    """autobug wrote #N to Doing for request REQ and recorded that write in the ledger; launch.py then refused the start.
+    The marker is `age` seconds old: by default past the refused-start window (10 min) and inside the launch window (30 min).
+    `board_run` names the run of the ledger's board fact, or None for a card no loop write placed."""
+    st = tmp_path / "st"
+    (st / f"{REQ}.log").write_text(f"{log}: cannot fetch origin/dev in co: Couldn't connect to server\n")
+    marker = st / "auto" / f"{kind}-{N}"
+    marker.write_text(REQ + "\n")
+    old = time.time() - age
+    os.utime(marker, (old, old))
+    if board_run:
+        ledger(tmp_path, "board", f"x/y#{N}", board_run, "Doing", f"{st}/req.json")
+        ledger(tmp_path, "boardw", f"x/y#{N}", board_run, "Doing", "autobug dispatch")
+
+
+def two_passes(tmp_path: Path) -> None:
+    """The first pass drops the failed-request marker; the second reads the card with no marker behind it."""
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert not (tmp_path / f"st/auto/bug-{N}").exists() and not (tmp_path / f"st/auto/disp-{N}").exists(), decided(tmp_path)
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+
+
+@pytest.mark.heavy
+def test_a_never_started_dispatch_sends_its_card_back_to_todo_on_the_next_pass(tmp_path):
+    """The marker drop records the never-started fact; the next pass reads it with the ledger's board fact and moves the
+    card to Todo once, and the fact is consumed."""
+    sandbox(tmp_path, card="Doing")
+    refused_dispatch(tmp_path)
+    two_passes(tmp_path)
+    assert f"STATUS o 4 Todo {N}" in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"STALE-CARD #{N}" in decided(tmp_path), decided(tmp_path)
+    assert not (tmp_path / f"st/auto/neverstarted-{N}").exists(), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_never_started_dispatch_with_no_loop_board_fact_keeps_the_card(tmp_path):
+    """No loop write placed the card: a person may have, so the card stays in Doing."""
+    sandbox(tmp_path, card="Doing")
+    refused_dispatch(tmp_path, board_run=None)
+    two_passes(tmp_path)
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"DOING-NO-RUN #{N}" in decided(tmp_path), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_never_started_dispatch_under_a_hand_hold_keeps_the_card(tmp_path):
+    """A person took a hand hold after the refused dispatch: the card is somebody's and stays in Doing."""
+    sandbox(tmp_path, card="Doing")
+    refused_dispatch(tmp_path)
+    now = time.time()
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+    (tmp_path / f"st/auto/hold-{N}").write_text(f"by manual\nsince {stamp(now)}\nuntil {stamp(now + 4 * HOUR)}\n")
+    two_passes(tmp_path)
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"STALE-CARD #{N}" not in decided(tmp_path), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_never_started_dispatch_of_another_run_keeps_the_card(tmp_path):
+    """The ledger's board fact names a run other than the dropped request: the fact proves nothing about this card."""
+    sandbox(tmp_path, card="Doing")
+    refused_dispatch(tmp_path, board_run="autobug-20261120-080000")
+    two_passes(tmp_path)
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"DOING-NO-RUN #{N}" in decided(tmp_path), decided(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_failed_run_that_started_records_no_never_started_fact(tmp_path):
+    """A `verdict failed` drop is rule O's: the run started, so the drop records no never-started fact and the card stays."""
+    sandbox(tmp_path, card="Doing")
+    refused_dispatch(tmp_path, log="verdict failed", kind="disp", age=31 * 60)   # past the failed-request window (30 min)
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert not (tmp_path / f"st/auto/disp-{N}").exists(), decided(tmp_path)
+    assert not (tmp_path / f"st/auto/neverstarted-{N}").exists(), decided(tmp_path)
+    janitor(tmp_path, SG_BOARD_VOCAB="shipped")
+    assert f"Todo {N}" not in writes(tmp_path), writes(tmp_path) + decided(tmp_path)
+    assert f"DOING-NO-RUN #{N}" in decided(tmp_path), decided(tmp_path)
