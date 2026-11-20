@@ -76,9 +76,9 @@ def test_the_resolved_limits_are_the_table_with_no_project_file(tmp_path):
 
 def test_each_active_column_answers_the_pass_that_stops_at_its_limit():
     assert "autofrontier" in B.column_stop("Doing")
-    assert "Backlog for Todo" in B.column_stop("Todo")
+    assert "into Todo" in B.column_stop("Todo")
     assert "autofrontier" in B.column_stop("Batching")
-    assert "branch review pass" in B.column_stop("Reviewing")
+    assert "branch review" in B.column_stop("Reviewing")
     assert "wave" in B.column_stop("Testing")
 
 
