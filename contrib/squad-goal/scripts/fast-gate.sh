@@ -4,7 +4,8 @@
 # It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD) at the `fast` stage, so the pytest runs the delta the
 # tip reaches in one pass; a child's own gate narrows a delta the selector cannot place instead of widening it (#2085, the
 # `narrow` battery argument below), while the wave entry, the wave tip and the landing check keep the full-battery fallback
-# (ADR-0169 rules 4 and 8): the parallel run records every unmarked call at or over the project's 2 s line (the line the CI
+# (ADR-0169 rules 4 and 8). A change that needs no test, such as an image of the record, passes with pytest in the not-run list
+# (#2592). The parallel run records every unmarked call at or over the project's 2 s line (the line the CI
 # serial tier enforces), and only those calls run once more, serially, against it (#1726), then the shell suite test-<script>.sh of every .sh or .py
 # script under contrib/squad-goal/scripts that the tip changes, and every fixture suite whose `# mirrors:` line names a changed
 # file; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
@@ -368,7 +369,10 @@ suites=$(sg_shell_suites "$top" "$mb")
 bran="ruff mypy pytest"; bnot=-
 # (#1249) A battery whose selection was empty ran no pytest, so it proves nothing: the line it logged names why.
 empty=$(/usr/bin/grep -m 1 '^no pytest ran' "$lg")
-[ -z "$empty" ] || { bran="ruff mypy"; bnot=pytest; }
+# (#2592) A battery over a change that needs no test ran no pytest either, and that is no doubt: the gate passes with pytest
+# among the checks that did not run (ADR-0169 rule 5).
+needed=$(/usr/bin/grep -m 1 '^no test needed' "$lg")
+[ -z "$empty$needed" ] || { bran="ruff mypy"; bnot=pytest; }
 # (#2357) A suite that declares its live copy in a `# mirrors:` line must name every module its fixture loads: the check
 # reads the suite's own commands and the line, and a load the line misses (or a name the repository lacks) fails the gate.
 # It runs here, over the suites this gate runs, and takes no gate slot of its own; child-gate.sh runs one suite a caller
@@ -490,7 +494,8 @@ if [ -n "$kdone$unconf$unstarted" ]; then
   verdict unproven "bounded: the gate passed its ${bound}s deadline and $parts" "$bran$ranS" "$bnot"
   echo "fast-gate: bounded: the gate passed its ${bound}s deadline and $parts, so the gate does not pass"; exit 4
 fi
-# A gate that ran no test is never a pass: the empty selection is unproven, with the selector's reason, and is never kept.
+# A gate whose battery selected no test is never a pass: the empty selection is unproven, with the selector's reason, and is
+# never kept. A change that needs no test is no empty selection: it passed above, with pytest among the checks that did not run.
 if [ -n "$empty" ]; then
   verdict unproven "$empty" "$bran$ranS" "$bnot"
   echo "fast-gate: unproven: $empty; the gate does not pass ($lg)"; exit 4
