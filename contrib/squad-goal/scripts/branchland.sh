@@ -63,19 +63,29 @@ slotwait() { [ "$1" = 75 ] && printf '%s\n' "$2" | /usr/bin/grep -qE '^serial: w
 # repeat rule of wave.sh never reads it. One round per tip, whatever base it meets. A new tip that conflicts on the base of the
 # last round, or a third conflict, stops the rounds: no review, frozen:owner and one status line, once per tip. The branch and
 # the marker stay: the branch is the only copy of its work. No approval carries over: the round review replaces it (ADR-0151).
-# Exit 3: the label write of a stop failed, so the caller writes no conflict marker and the next pass retries on the same base.
-salvage_round() { local br=$1 sha=$2 i=$3 files=$4 k km bs lt lb n why o
+# A stop is keyed to the tip: a stopped tip, or a tip whose stop failed its label write, stays stopped when the base moves.
+# Exit 3: the label write of a stop failed, so the caller writes no conflict marker and the next pass retries. The
+# SG_SALVAGE_STOP_TRIES-th failed write (default 3) ends the retries: the stop marker is written with no label, and one status
+# line asks the owner to freeze the card by hand.
+salvage_round() { local br=$1 sha=$2 i=$3 files=$4 k km bs lt lb n why o sf c
   k=$(printf '%s' "$br" | tr / _); km="$SG_STATE/auto/kept-$k"
   bs=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-gate/$land" 2>/dev/null)
   read -r _ lt lb <<< "$(/usr/bin/grep '^salvage ' "$km" 2>/dev/null | tail -1)"; n=$(/usr/bin/grep -c '^salvage ' "$km" 2>/dev/null)
   [ -n "$lt" ] && [ "$lt" = "$sha" ] && return 0
+  [ -e "$A/branchland-salvagestop-$k-${sha:0:9}" ] && return 0
+  sf="$A/branchland-salvagestopfail-$k-${sha:0:9}"
   why=; [ -n "$lt" ] && [ "$lb" = "$bs" ] && why="its new tip conflicts again on the base of the last round"
   [ -z "$why" ] && [ "${n:-0}" -ge 2 ] && why="this is a third conflict, after $n rounds"
+  [ -z "$why" ] && [ -s "$sf" ] && why=$(sed -n 2p "$sf")
   if [ -n "$why" ]; then
-    [ -e "$A/branchland-salvagestop-$k-${sha:0:9}" ] && return 0
-    o=$(gh_send --method POST "repos/$SG_REPO/issues/$i/labels" -f "labels[]=frozen:owner") \
-      || { echo "BRANCHLAND SALVAGE STOP $br: the label write failed, the next pass retries: $o"; return 3; }
-    : > "$A/branchland-salvagestop-$k-${sha:0:9}"
+    if ! o=$(gh_send --method POST "repos/$SG_REPO/issues/$i/labels" -f "labels[]=frozen:owner"); then
+      c=$(( $(head -1 "$sf" 2>/dev/null || echo 0) + 1 )); printf '%s\n%s\n' "$c" "$why" > "$sf"
+      [ "$c" -lt "${SG_SALVAGE_STOP_TRIES:-3}" ] && { echo "BRANCHLAND SALVAGE STOP $br: the label write failed ($c), the next pass retries: $o"; return 3; }
+      : > "$A/branchland-salvagestop-$k-${sha:0:9}"; rm -f "$sf"
+      printf 'Status update — branch %s @ %s: its salvage rebase rounds stop, because %s, but the frozen:owner label write failed %s times, so the card is not frozen. Freeze it by hand. The last answer: %s\n' \
+        "$br" "${sha:0:9}" "$why" "$c" "$o" > "$(sg_cq_status "$i" "branchlandstop$$")"
+      echo "BRANCHLAND ALERT $br @ ${sha:0:9} (issue #$i): the frozen:owner label write failed $c times; rounds stop, the card is not frozen"; return 0; fi
+    rm -f "$sf"; : > "$A/branchland-salvagestop-$k-${sha:0:9}"
     printf 'Status update — branch %s @ %s is frozen for the owner (frozen:owner): its salvage rebase rounds stop, because %s. %s conflicts with %s %s; the last round ran on %s %s. The branch and its kept marker stay.\n' \
       "$br" "${sha:0:9}" "$why" "$files" "$land" "${bs:0:9}" "$land" "${lb:0:9}" > "$(sg_cq_status "$i" "branchlandstop$$")"
     echo "BRANCHLAND SALVAGE STOP $br @ ${sha:0:9} (issue #$i): $why; card frozen for the owner"; return 0; fi
@@ -239,7 +249,7 @@ for m in "$A"/salvaged-*; do [ -e "$m" ] || continue; k=${m##*/salvaged-}
   case "$heads" in *" $k "*) continue;; esac
   # A pusher pushes first and writes its marker after, so a marker older than the read names a push the list saw. A newer one waits.
   [ "$(if stat --version >/dev/null 2>&1; then stat -c %Y "$m"; else stat -f %m "$m"; fi 2>/dev/null || echo "$listed")" -lt "$listed" ] || continue
-  rm -f "$m" "$A/kept-$k" "$A"/branchland-salvagestop-"$k"-*; echo "BRANCHLAND SWEEP $k: the salvage branch is gone, so its markers go"
+  rm -f "$m" "$A/kept-$k" "$A"/branchland-salvagestop-"$k"-* "$A"/branchland-salvagestopfail-"$k"-*; echo "BRANCHLAND SWEEP $k: the salvage branch is gone, so its markers go"
 done
 
 # base_refs: the issues a commit the base carries names with a `Refs #N` line (#2184), each named once, as " 7 9 ". A close
