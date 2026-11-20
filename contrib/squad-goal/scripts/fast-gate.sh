@@ -399,6 +399,10 @@ run_suite() {  # <script> <home>: the suite in its own home, from the repository
 # suite starts and every running suite's whole tree is killed.
 pd=$(mktemp -d "${TMPDIR:-/tmp}/fg-pool.XXXXXX")
 workers=${SQUAD_GATE_WORKERS:-${SG_GATE_WORKERS:-1}}; case $workers in ''|*[!0-9]*|0) workers=1;; esac
+# (#2598) The wave tip gate runs the shell suites of every script the wave changes, more than a hundred, and at the granted count
+# of two it passed its 1200 s bound with 52 done. Its pool is its own: four by default, and SG_TIP_SUITE_POOL names another.
+# The pool is CPU parallelism inside one gate, never a slot count: the gate takes the slots it always took.
+if [ "${SG_GATE_CALLER:-}" = tip ]; then workers=${SG_TIP_SUITE_POOL:-4}; case $workers in ''|*[!0-9]*|0) workers=4;; esac; fi
 pool_emit() {  # <label> <index>: one suite's block, whole: header, its log, and the verdict line
   local n=test-${pn[$2]}.sh
   echo "=== $1$n"; cat "$pd/$tag.$2.log" 2>/dev/null

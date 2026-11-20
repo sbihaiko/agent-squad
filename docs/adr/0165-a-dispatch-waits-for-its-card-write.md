@@ -24,6 +24,8 @@ its run and column. An older instant never replaces a newer one, and the same ev
 | autobug resume | a pass finds a pending Doing event whose issues fail a gate | the recorded instant | none | the event is dropped unwritten, the claims are freed, nothing launches; the card stays where its owner left it |
 | autobug resume | a pass finds a pending Doing event whose request file is gone | the recorded instant | Todo | a Todo event is recorded and written; nothing launches |
 | autobug resume | a pass finds a pending Todo event | the recorded instant | Todo | the card is written again; nothing launches; a board rule's refusal drops the event, and no later pass writes it |
+| autobug pass | a pending write whose issue left the open list | the recorded instant | none | the event is dropped unwritten, before the pending set is read, and one cycle.log line names it: no later pass can write a closed card |
+| autobug pass | a pending write older than `SG_BOARD_PENDING_TTL` (default 1800 s) | the recorded instant | none | the event is dropped unwritten, before the pending set is read, and one cycle.log line names its age and the bound |
 | autofrontier dispatch | the launch of a frontier request | none yet | Doing | not gated: it launches before its card write and reads no pending event (known limit) |
 | janitor card moves | a card move the janitor writes | none yet | any | not events: no pending write, no retry (known limit) |
 | landing card moves | a card move the landing pass writes | none yet | any | not events: no pending write, no retry (known limit) |
@@ -39,7 +41,7 @@ A missing or corrupt ledger holds the issue (ADR-0149): the dispatch records not
 Known limits, kept on purpose: the window between a card write that landed and its launch leaves a card in Doing with no
 run until the janitor's rules read it; the bug board's write comes after the launch and is not gated; the frontier pass
 does not yet read pending events, and the janitor and landing rows are not events yet. A pending write that GitHub refuses, or
-cannot read, is retried on every pass, with no backoff yet. A board rule's refusal never clears between passes, so its
+cannot read, is retried on every pass while its issue is open and its age is under the bound, with no backoff before it. A board rule's refusal never clears between passes, so its
 event ends at the refusal. A pick whose card write lands but whose written marks fail
 part way is not rolled back: a later resume launches the stored request for the pending part of the pick.
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 20.37
+# seconds: 201.07
 # Regression test for autobug ranking (bug first, then debt) and autofrontier skipping debt (Refs #1494).
 # Offline: stub gh. usage: bash test-autobug.sh [scripts dir]
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
@@ -1446,6 +1446,41 @@ $G -qxF 'AUTOBUG pass 1: none (loop off)' "$PL/st/cycle.log" && ok "34d a pass w
 [ "$($G -c '^AUTOBUG pass ' "$PL/st/cycle.log")" = 1 ] && ok "34d the loop-off line is written once" \
   || ko "34d the line repeats: '$(cat "$PL/st/cycle.log")'"
 rm -f "$PL/st/auto/off"
+# 34e-34f (#2589) a pending card write never clears on its own once its issue closes, or once the write outlives its bound:
+# the next pass drops it before ab_resume reads the pending set, so the row neither names the idle reason nor rewrites a
+# card. The board stub below fails with a generic exit, which is how a GitHub failure keeps an event pending (ADR-0165).
+printf '#!/bin/bash\necho "board.py: the board did not answer" >&2\nexit 2\n' > "$PL/s/board-fail.sh"; chmod +x "$PL/s/board-fail.sh"
+pl_run_fail() { PATH="$PL/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$PL/s/board-fail.sh" bash "$PL/s/autobug.sh" 2>&1; }
+pend() { SG_STATE="$PL/st" python3 "$PL/s/issue_ledger.py" pending x/y 2>/dev/null; }
+# 34e: the issue of the pending row is closed
+pl_fresh; printf '[]\n' > "$PL/issues.json"
+SG_STATE="$PL/st" python3 "$PL/s/issue_ledger.py" board x/y#2599 reconcile "Code Complete" "" >/dev/null
+r=$(pl_run_fail); rc=$?
+[ "$rc" = 0 ] && ok "34e a pass holding a closed issue's pending row exits 0" || ko "34e the pass exited $rc: '$r'"
+[ -z "$(pend)" ] && ok "34e the pending row of a closed issue is dropped" || ko "34e the row stays: '$(pend)'"
+$G -qxF 'AUTOBUG pass 1: none (no startable bug)' "$PL/st/cycle.log" && ok "34e a closed issue's pending row no longer names the idle reason" \
+  || ko "34e cycle.log: '$(cat "$PL/st/cycle.log")'"
+$G -qE '^AUTOBUG: dropped the pending reconcile/Code Complete card write of #2599, its issue is closed$' "$PL/st/cycle.log" \
+  && ok "34e the closed-issue drop is named once in cycle.log" || ko "34e the drop is unnamed: '$(cat "$PL/st/cycle.log")'"
+# 34f: the issue is open, and the pending write outlived SG_BOARD_PENDING_TTL
+pl_fresh; printf '[{"number":1602,"title":"Core: other crash","body":"step src/core.py","created_at":"2026-10-10T15:05:00Z","labels":[]}]\n' > "$PL/issues.json"
+printf '1602\tBacklog\n' > "$PL/cards.tsv"
+SG_STATE="$PL/st" python3 "$PL/s/issue_ledger.py" board x/y#1602 reconcile Todo "" "$(( $(date +%s) - 3600 ))" >/dev/null
+r=$(pl_run_fail); rc=$?
+[ "$rc" = 0 ] && ok "34f a pass holding an over-age pending row exits 0" || ko "34f the pass exited $rc: '$r'"
+[ -z "$(pend)" ] && ok "34f an over-age pending row is dropped" || ko "34f the row stays: '$(pend)'"
+$G -qE '^AUTOBUG: dropped the pending reconcile/Todo card write of #1602, [0-9]+s old \(bound 1800s\)$' "$PL/st/cycle.log" \
+  && ok "34f one cycle.log line names the over-age drop and its bound" || ko "34f cycle.log: '$(cat "$PL/st/cycle.log")'"
+# 34g: an open issue, a fresh row, and no stored request: ab_resume reads every field of the row, so the row lands and
+# leaves no pending event behind. A read that splits on tabs alone put the issue number in the request and left no issue.
+pl_fresh; printf '[{"number":1602,"title":"Core: other crash","body":"step src/core.py","created_at":"2026-10-10T15:05:00Z","labels":[]}]\n' > "$PL/issues.json"
+printf '1602\tBacklog\n' > "$PL/cards.tsv"
+SG_STATE="$PL/st" python3 "$PL/s/issue_ledger.py" board x/y#1602 reconcile "Code Complete" "" >/dev/null
+r=$(pl_run); rc=$?
+[ -z "$(pend)" ] && ok "34g a row with no stored request is resumed, never skipped" || ko "34g the row stays: '$(pend)'"
+$G -qxF 'AUTOBUG pass 1: none (no startable bug)' "$PL/st/cycle.log" && ok "34g the resumed row no longer names the idle reason" \
+  || ko "34g cycle.log: '$(cat "$PL/st/cycle.log")'"
+printf '1601\tTodo\n1602\tTodo\n' > "$PL/cards.tsv"; printf '[]\n' > "$PL/issues.json"
 
 # 35-39) (#1677, SPEC 1672) the bug pass follows the frontier's triage rule: the column Todo is the one go signal, so a bug
 # with no triage label is claimed and dispatched, and the pass writes ready-for-agent on it once, before the pending Doing

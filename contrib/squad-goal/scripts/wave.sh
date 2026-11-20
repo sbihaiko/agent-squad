@@ -1250,7 +1250,9 @@ child_pytest() {
 case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
 "$SG_WAVE_PY" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-2}" -m "not heavy" "$@"'
   fi
-  out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
+  # (#2594) A child gate is a delta over one child's change, so it takes SG_WAVE_GATE_WORKERS slots, one by default: at two, two
+  # waves held the whole budget of four and a third entry gate ended unproven for "budget is full".
+  out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SG_GATE_WORKERS=${SG_WAVE_GATE_WORKERS:-1} SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
   # Each cause of a run that measured nothing names itself in `cpwhy`, so the landing that waits says the one it met (#1700).
   if [ $grc = 73 ] && held_by "$out" >/dev/null; then
     cpwhy="the gate lock or the gate slots were held by another gate"
