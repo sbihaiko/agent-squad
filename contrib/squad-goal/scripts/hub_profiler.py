@@ -74,6 +74,9 @@ OTHER = ("other", "other")       # the head of every path outside the loop: the 
 UNKNOWN = ("unknown", "unknown")  # a process of the loop whose program cannot be told, and no ancestor names one
 FOREIGN = "another loop"         # a supervisor no other profile names, with its descendants
 CONTEXT = "outside the loop"
+SAMPLER = ("cpu sampling", "sampler")        # the sampler thread's own seconds, under the hub process that runs it (#2581)
+SAMPLE_READ = ("table read", "sampler")      # the share of them spent reading the process table
+SAMPLE_FOLD = ("window fold", "sampler")     # the share of them spent folding a reading into the window
 _IN, _OUT, _OTHER_LOOP = "in", "out", "foreign"
 
 # The supervisor's pid or None; the folders of the profile; and the other profiles' loops (name, supervisor pid or None,
@@ -373,13 +376,15 @@ def _paths(rows, scope, starts=None, memo=None):
     return path
 
 
-def fold(prev, cur, scope, memo=_LABELS):
+def fold(prev, cur, scope, memo=_LABELS, sampler=None):
     """{node path: [cpu seconds, events]} for what happened between two readings.
     A (pid, start time) the first reading does not hold is one event, and all its CPU time is new. So is one whose CPU
     time went back, where the system gives no start time. A process whose CPU read the system refused carries `None` in
     place of its seconds: it is seen and not read, so it is no row here, and it counts nothing anywhere. `memo` keeps
     each process's label while the reading holds it, so the next reading reuses it instead of parsing the line again; a
-    process the reading no longer holds leaves the memo, and with no memo every line is parsed."""
+    process the reading no longer holds leaves the memo, and with no memo every line is parsed. `sampler` is
+    `(pid, spent seconds, read seconds)` for the sampler thread of that process over this interval: those seconds leave
+    the process's own row and stand as `cpu sampling` under it, split into the table read and the window fold (#2581)."""
     if memo is not None:
         live = set(cur)
         for key in list(memo):   # a snapshot: another profile's sampler can fold on its own thread in the same hub
@@ -398,10 +403,27 @@ def fold(prev, cur, scope, memo=_LABELS):
         used = cpu if new else cpu - was[1]
         if not new and used <= 0:
             continue
-        cell = out.setdefault(path(key[0]), [0.0, 0])
+        parts = path(key[0])
+        if sampler is not None and key[0] == sampler[0]:
+            used = _split_sampler(out, parts, used, sampler)
+        cell = out.setdefault(parts, [0.0, 0])
         cell[0] += used
         cell[1] += 1 if new else 0
     return out
+
+
+def _split_sampler(out, parts, used, sampler):
+    """Take the sampler thread's seconds out of its process's own row and hang them under it: `cpu sampling` carries the
+    whole of them through its two children, so the row itself holds none and no second counts twice. A sampler that spent
+    more than the process gained leaves the row at zero, never below it."""
+    spent = min(used, max(0.0, float(sampler[1])))
+    if spent <= 0:
+        return used
+    read = min(spent, max(0.0, float(sampler[2])))
+    out.setdefault(parts + (SAMPLER,), [0.0, 0])   # the row itself holds nothing: its two children carry every second
+    for cell_parts, secs in ((parts + (SAMPLER, SAMPLE_READ), read), (parts + (SAMPLER, SAMPLE_FOLD), spent - read)):
+        out.setdefault(cell_parts, [0.0, 0])[0] += secs
+    return used - spent
 
 
 def coverage(reading):
@@ -511,9 +533,10 @@ class Window:
                 "processes_read": read, "processes_seen": seen,
                 "coverage": round(read / seen, 3) if seen else None}
 
-    def add(self, now, reading, scope):
+    def add(self, now, reading, scope, sampler=None):
         """Take one reading. The first is the baseline: it holds every process and says nothing about the window. A
-        process whose CPU read was refused counts in the coverage and in no row."""
+        process whose CPU read was refused counts in the coverage and in no row. `sampler` is the sampler thread's own
+        cost over the interval that ends at this reading, passed to `fold` (#2581)."""
         if self.since is None:
             self.since = now
         if self.last is not None:
@@ -522,7 +545,7 @@ class Window:
         read, seen = coverage(reading)
         self.cov.append((now, read, seen))
         if self.prev is not None:
-            delta = fold(self.prev, reading, scope)
+            delta = fold(self.prev, reading, scope, sampler=sampler)
             self.steps.append((now, delta))
             for parts, (cpu, events) in delta.items():
                 cell = self.acc.setdefault(parts, [0.0, 0])
