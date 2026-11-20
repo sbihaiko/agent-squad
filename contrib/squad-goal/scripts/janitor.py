@@ -21,7 +21,7 @@
     also stop it when every one closed after the run started and before the run's last progress and the run holds no landing for it (no land in its record or the ledger, no branch of its children naming the issue), and write the verdict that says why (#1571);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again, and the auto/branchfix-<key>-<sha9> marker of the fix round it never started, so the fix pass dispatches that tip again (#2309). Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
- K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
+ K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`. The drop of a refused start records auto/neverstarted-<n> with the request, and the next card pass sends a Doing card back to Todo when the issue ledger's board fact names that request (#2548).
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
@@ -864,6 +864,24 @@ def entered():   # {(run, issue)} of each child of repo0 that entered a wave, re
 def dispatched(n):   # the issue's ledger records a run that dispatched it (the entered fact, ADR-0149): the proof the
     # loop owns the card, never a wave label (#1987). A ledger that cannot be read records nothing, so the card stays.
     return any(x == str(n) for _, x in entered())
+def never_started(n, doing):   # the drop of a refused request recorded auto/neverstarted-<n> (#2548): the loop placed the card
+    # when the issue ledger's board fact names that request as its run and a Doing column, since a run that never started wrote
+    # no entered fact. The fact is read once and consumed, whatever the caller decides. A ledger that cannot be read, or one
+    # that is held, proves nothing (ADR-0149 rule 4), so the card stays.
+    m = st / "auto" / f"neverstarted-{n}"
+    req = marker_text(m)
+    if req is None: return False
+    req = req.strip()
+    if not dry: m.unlink(missing_ok=True)
+    try: rec = ledger().read(f"{repo0}#{n}")
+    except (OSError, ImportError, ValueError, KeyError): return False
+    b = rec.get("board") or {}
+    return bool(req) and rec.get("state") != "held" and b.get("run") == req and b.get("column") in ("Doing", doing)
+_hand = None
+def hand_holders():   # {issue: holder} of every hand hold and takeover marker, read once a pass through squad/handhold.py (#2548)
+    global _hand
+    if _hand is None: _hand = _handhold_module().holders(state=st)
+    return _hand
 _landed = None
 def landings():   # {issue: {(ref, kind)}} of the landing passes' facts (ADR-0149), read from the ledgers once a pass. A
     # landing is delivered work only when a landing pass wrote it (#691, #695): rule R reads this, never a run's land heads.
@@ -1562,8 +1580,12 @@ def reconcile_board():
             # A Doing card that no run holds and no marker claims is left alone (#1034): a card a person placed and a stuck one
             # look the same, so only the owner moves it (ADR-0143 rule 1). The recorded dispatch of the issue's ledger tells
             # the two apart: a card the loop dispatched goes back to Todo, and the pass names it once before any other case.
+            if have_cards.get(n, "") not in ("", doing) and (st / "auto" / f"neverstarted-{n}").exists() and not dry:   # the card left Doing: the fact proves nothing more (#2548)
+                (st / "auto" / f"neverstarted-{n}").unlink(missing_ok=True)
             if not is_spec and have_cards.get(n, "") == doing and not holding(n) and not (st / "auto" / f"disp-{n}").exists() and not (st / "auto" / f"bug-{n}").exists():
-                if dispatched(n) and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n):   # the one-time recovery (#1034): a card a run left in Doing has no other way back, and the recorded dispatch proves the loop owns it (#1987)
+                ns = never_started(n, doing)   # read before the dispatch check, so the fact is consumed on this read (#2548)
+                if ((dispatched(n) or ns) and not base_landed(n, set()) and branch_ahead_count(n) == "0" and not owner_frozen(n)
+                        and n not in hand_holders()):   # the one-time recovery (#1034): a card a run left in Doing has no other way back, and the recorded dispatch proves the loop owns it (#1987). A hand hold makes the card somebody's (#2548)
                     held = sorted(issue_labels(n) & FRONTIER_SKIP)   # the frontier refuses such an issue, so Todo would never dispatch it (#2352)
                     if held:
                         say(f"SKIP-LABEL #{n}: card {doing} with a recorded dispatch stays; the frontier skips the issue for label {', '.join(held)}")
@@ -1742,7 +1764,11 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
         say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a work branch names the issue; {d.name} kept so the pass never dispatches it again")
         continue
     say(f"stale {d.name} (request {req} ended failed, issue open, no work branch) removed")
-    if not dry: d.unlink(missing_ok=True)
+    if not dry:
+        d.unlink(missing_ok=True)
+        # A refused start made no run, so the run writes no entered fact and the card pass cannot prove the loop placed the
+        # card (#2548). The drop records the request once: the card pass reads it with the ledger's board fact. It writes no card.
+        if refused and "verdict failed" not in lt: (st / "auto" / f"neverstarted-{n}").write_text(req.strip() + "\n")
 def proof_unfinished(rs):   # #1892: a run whose only reasons are unfinished proofs, and no measured red (ADR-0164)
     return bool(rs) and all(r.startswith(("unproven:", "kept:")) or r == "deadline" for r in rs) and any(r == "deadline" or r.startswith("unproven:") for r in rs)
 
