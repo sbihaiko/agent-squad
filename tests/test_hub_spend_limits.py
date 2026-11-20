@@ -305,8 +305,8 @@ def lim_draw(hub, view):
     """The theme's own renderer in node over one view: the two blocks the owner reads, and both chips."""
     return lim_eval(hub, f"limS={json.dumps(view)};limRender();"
                          'console.log(JSON.stringify({html:STORE["#lbody"].innerHTML,'
-                         'sr:STORE["#limsr"].textContent,srcls:STORE["#limsr"].className,'
-                         'nav:STORE["#limnav"].textContent,navcls:STORE["#limnav"].className}))')
+                         'sr:$("#limsr").textContent,srcls:$("#limsr").className,'
+                         'nav:$("#limnav").textContent,navcls:$("#limnav").className}))')
 
 
 def lim_blocks(out):
@@ -398,19 +398,11 @@ def test_the_pause_factor_row_shows_the_hourly_burn_it_pauses_at(ctx):
     assert "2 × (cap ÷ 24) = 83.33B tokens/h" in settings, settings
 
 
-def test_a_paused_dispatch_shows_err_on_its_tile_and_on_both_chips(ctx):
+def test_a_paused_dispatch_shows_err_on_its_tile_and_on_its_chip(ctx):
     out = lim_draw(ctx["hub"], dict(LIM, paused=True))
     now, _ = lim_blocks(out)
     assert 'class="tile err"' in now and ">paused<" in now, now
-    assert (out["sr"], out["nav"]) == ("paused", "paused"), out
-    assert out["srcls"].split() == ["sr", "err"] and out["navcls"].split() == ["err"], out
-
-
-def test_the_summary_chip_reports_the_same_dispatch_state_as_the_nav_line(ctx):
-    for view, want in ((LIM, "on"), (dict(LIM, paused=True), "paused"),
-                       (dict(LIM, guard="off"), "guard off · never pauses")):
-        out = lim_draw(ctx["hub"], view)
-        assert out["sr"] == out["nav"] == want, out
+    assert '<span id=limtok class="chip err">paused</span>' in out["html"], out["html"]
 
 
 def test_a_guard_off_names_itself_and_shows_no_pause_line(ctx):
@@ -421,7 +413,6 @@ def test_a_guard_off_names_itself_and_shows_no_pause_line(ctx):
     assert pause, now
     assert pause.group(1) == "muted", pause.group(0)
     assert not re.search(r"\d", pause.group(2)), f"the tile still shows a pause line: {pause.group(2)!r}"
-    assert out["sr"] == "guard off · never pauses" and out["navcls"].split() == [], out
 
 
 def test_a_guard_on_keeps_the_pause_line_its_tone_and_its_number(ctx):
@@ -482,6 +473,32 @@ def test_the_fields_share_one_column_and_each_help_follows_its_field(ctx):
     assert "Read only while the guard is on." in cap, cap
     fac = controls["Pause factor"]
     assert '<small class=lunit>×</small><small class=kstop>' in fac, fac
+
+
+def test_the_state_chip_shows_once_beside_the_tokens_heading(ctx):
+    """The state is written in one place: the theme's nav line and summary stay blank, and the Tokens heading carries it (#2522)."""
+    page = ctx["hub"].PAGE
+    assert "<small id=limnav></small>" in page and "<span class=sr id=limsr></span>" in page, "the theme writes a state copy"
+    for view in (LIM, dict(LIM, paused=True), dict(LIM, guard="off")):
+        out = lim_draw(ctx["hub"], view)
+        assert out["sr"] == "" and out["nav"] == "", out
+        assert len(re.findall(r"<span id=limtok ", out["html"])) == 1, out["html"]
+
+
+def test_the_help_text_is_left_aligned_at_both_widths(ctx):
+    page = ctx["hub"].PAGE
+    kstop = re.search(r"#lbody \.setrow \.kstop\{([^}]*)\}", page)
+    assert kstop and "text-align:left" in kstop.group(1), kstop and kstop.group(1)
+
+
+def test_at_1000_px_the_tiles_pair_up_and_each_field_stacks_its_label(ctx):
+    """Below 1200 px the Settings column is about 445 px: two tiles per row keep a value on one line, and a label above its field lets the help run full width after the unit (#2522)."""
+    page = ctx["hub"].PAGE
+    narrow = re.search(r"@media \(max-width:1200px\)\{#tab-set #lbody \.now[^\n]*", page)
+    assert narrow, "the 1200 px block no longer reflows the Tokens group"
+    rule = narrow.group(0).replace(" ", "")
+    assert "#tab-set#lbody.now{" in rule.replace(" ", "") and "repeat(2,minmax(0,1fr))" in rule, rule
+    assert "#tab-set#lbody.setrow{grid-template-columns:minmax(0,1fr)}" in rule, rule
 
 
 def test_the_pause_line_drops_the_trailing_zeros(ctx):

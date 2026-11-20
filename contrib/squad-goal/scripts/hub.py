@@ -7174,7 +7174,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #lbody .setrow .lf{flex:0 0 auto;display:flex;align-items:center;gap:4px;min-width:104px}
 #lbody .setrow .lf input:not([type=checkbox]){width:104px}
 #lbody .setrow .lunit{flex:none;color:var(--mute);font-size:var(--fs-caption)}
-#lbody .setrow .kstop{flex:1 1 0;min-width:0}
+#lbody .setrow .kstop{flex:1 1 0;min-width:0;text-align:left}
 #lbody .swt{display:inline-flex;align-items:center;gap:8px}
 #lbody input[type=checkbox]{-webkit-appearance:none;appearance:none;margin:0;width:52px;height:32px;padding:0;border:1px solid var(--line);border-radius:var(--radius-full);cursor:pointer;flex:none;background-color:var(--edge);background-image:radial-gradient(circle at 16px 50%,var(--highlight) 0 12px,transparent 13px)}
 #lbody input[type=checkbox]:checked{background-color:var(--ok);background-image:radial-gradient(circle at calc(100% - 16px) 50%,var(--highlight) 0 12px,transparent 13px)}
@@ -7190,7 +7190,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #lbody .chg li:last-child{border-bottom:0}
 #lbody .chg .cat{font-variant-numeric:tabular-nums}
 #tab-set #lbody .tile{padding:6px 8px}
-@media (max-width:1200px){#tab-set #lbody .now{gap:6px}#tab-set #lbody .tile .tv{font-size:var(--fs-body)}}
+@media (max-width:1200px){#tab-set #lbody .now{gap:6px;grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #lbody .setrow{grid-template-columns:minmax(0,1fr)}#tab-set #lbody .tile .tv{font-size:var(--fs-body)}}
 @media (max-width:820px){#tab-set #lbody .now{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:600px){#tab-set #lbody .now{grid-template-columns:1fr}}
 .mtab{width:100%;border-collapse:collapse;font-size:var(--fs-caption);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
@@ -7277,10 +7277,10 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav>on</small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
 <div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
 <details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
-<details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr>on</span></summary><div class=sb id=lbody></div></details>
+<details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
@@ -7761,7 +7761,6 @@ function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k); 
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  const chipTxt=off?"guard off · never pauses":s.paused?"paused":"on",chipCls=s.paused?"err":"";   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
- setChip("lim",chipTxt,chipCls);
  if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
  // The Tokens group draws its own heading and state chip (#2510), then the four Now tiles on one row, then the fields.
  let h=`<div class=setblk data-blk=tokens data-theme=lim><h3 class="blkh tokhead">Tokens <span id=limtok class="chip${chipCls?" "+chipCls:""}">${esc(chipTxt)}</span></h3></div>`

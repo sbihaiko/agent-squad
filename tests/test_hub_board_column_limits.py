@@ -173,7 +173,7 @@ def test_the_spend_and_limits_theme_loads_with_the_page(hub):
     mod, _ = hub
     page = mod.PAGE
     assert re.search(r'^if\(!\$\("#lim"\)\.open\)limLoad\(\);', page, re.M), "the Spend & limits data does not load with the page"
-    assert "setChip(\"lim\"" in page, "the Spend & limits render does not write its chip"
+    assert "id=limtok" in page, "the Spend & limits render does not draw its Tokens chip"
 
 
 def test_the_canban_sub_group_draws_one_row_per_active_column(hub):
