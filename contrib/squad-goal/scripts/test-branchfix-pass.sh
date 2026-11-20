@@ -317,4 +317,43 @@ case "$r" in *"ended with no verdict"*) ok "2346 a dead round is named";; *) ko 
 [ ! -e "$T/st/auto/branchfix-push-$rid26" ] && [ "$(cat "$T/st/auto/branchfix-fix_42-dead-${t26:0:9}" 2>/dev/null)" != "$rid26" ] \
   && ok "2346 a dead round drops both markers and the tip is dispatched again" \
   || ko "2346 a marker of $rid26 survived: $(ls "$T/st/auto" | /usr/bin/grep 42-dead)"
+# 27) (#2571) a salvage branch's rebase round: the lander's kept marker carries `salvage <tip> <base>` lines. The round at the
+#     marker's last salvage tip gets one fix run with the rebase wording on origin/dev, and its head is pushed under a lease on
+#     the reviewed sha. A review of the pushed head gets the ordinary wording. A round that pushes nothing, or dies, drops its
+#     dispatch marker as an ordinary branch does, so the stall rule stops the retries at two.
+: > "$T/launch.log"; sb=fix/50-salvage-run-a; sk=fix_50-salvage-run-a
+push "$sb"; rev "$sb" CHANGES "g.sh:1 the rebase on dev conflicts"; S0=$($O rev-parse "$sb"); touch "$T/st/auto/salvaged-$sk"
+printf 'origin/dev\nsalvage %s %s\n' "$S0" "$($O rev-parse dev)" > "$T/st/auto/kept-$sk"
+r=$(OPEN="50" fp); q=$(/usr/bin/grep "work branch $sb " "$T/launch.log")
+[ "$(n "$sb")" = 1 ] && ok "2571 a salvage round gets one fix run" || ko "2571 the salvage round dispatched $(n "$sb") times: '$r'"
+case "$q" in *"REBASE ROUND"*"rebase the branch it has checked out on origin/dev"*) ok "2571 the salvage round's wording names origin/dev";; *) ko "2571 the salvage round's wording: '$q'";; esac
+rid=$(cat "$T/st/auto/branchfix-$sk-${S0:0:9}" 2>/dev/null); tg6=$T/tg6; rm -rf "$tg6"; $G clone -q "$T/origin.git" "$tg6" 2>/dev/null
+(cd "$tg6" && $G checkout -q -b "squad/run/$rid" origin/dev && echo s > s50 && $G add s50 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #50)")
+SH=$($G -C "$tg6" rev-parse HEAD); mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "unproven", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg6" "$rid" "$SH" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="50" fp)
+[ "$($O rev-parse "refs/heads/$sb")" = "$SH" ] && case "$r" in *"(rebase round, run $rid)"*) true;; *) false;; esac \
+  && ok "2571 the salvage round's head is pushed under the lease" || ko "2571 the salvage round was not pushed: remote $($O rev-parse "refs/heads/$sb") want $SH: '$r'"
+: > "$T/launch.log"; rev "$sb" CHANGES "h.sh:2 a finding on the rebased head"; r=$(OPEN="50" fp); q=$(/usr/bin/grep "work branch $sb " "$T/launch.log")
+case "$q" in *"REBASE ROUND"*) ko "2571 the head after the round got the rebase wording: '$q'";; *"commit on top of the branch your worktree has checked out"*) ok "2571 the head after the round gets the ordinary wording";; *) ko "2571 no round after the salvage round: '$q' '$r'";; esac
+# an empty salvage round drops its dispatch marker, and the stall rule stops the retries at two
+: > "$T/launch.log"; sb=fix/51-salvage-run-b; sk=fix_51-salvage-run-b
+push "$sb"; rev "$sb" CHANGES "g.sh:1 the rebase on dev conflicts"; S1=$($O rev-parse "$sb"); touch "$T/st/auto/salvaged-$sk"
+printf 'origin/dev\nsalvage %s %s\n' "$S1" "$($O rev-parse dev)" > "$T/st/auto/kept-$sk"
+eround() { local rid tg; rid=$(cat "$T/st/auto/branchfix-$sk-${S1:0:9}" 2>/dev/null); tg=$T/tge-$rid; rm -rf "$tg"; $G clone -q "$T/origin.git" "$tg" 2>/dev/null
+  (cd "$tg" && $G checkout -q dev && $G branch -q -f "squad/run/$rid" dev); mkdir -p "$T/co/runs/$rid"
+  printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "verdict", "verdict": "completed"}\n' "$tg" "$rid" > "$T/co/runs/$rid/record.jsonl"; printf '%s\n' "$rid"; }
+r=$(OPEN="51" fp); e1=$(eround); r=$(OPEN="51" fp)
+[ "$(cat "$T/st/auto/branchfix-$sk-${S1:0:9}" 2>/dev/null)" != "$e1" ] && [ "$(n "$sb")" = 2 ] && [ "$($O rev-parse "$sb")" = "$S1" ] \
+  && ok "2571 an empty salvage round drops its marker and the tip is dispatched again" || ko "2571 the empty round kept its marker: $(n "$sb") runs: '$r'"
+e2=$(eround); r=$(OPEN="51" fp)
+[ "$(n "$sb")" = 2 ] && case "$r" in *"BRANCHFIX STOP $sb"*) true;; *) false;; esac && ok "2571 the stall rule stops the empty salvage rounds at two" || ko "2571 no stall stop: $(n "$sb") runs: '$r'"
+# a dead salvage round (gone, no verdict, a still record) drops both markers
+: > "$T/launch.log"; sb=fix/52-salvage-run-c; sk=fix_52-salvage-run-c
+push "$sb"; rev "$sb" CHANGES "g.sh:1 the rebase on dev conflicts"; S2=$($O rev-parse "$sb"); touch "$T/st/auto/salvaged-$sk"
+printf 'origin/dev\nsalvage %s %s\n' "$S2" "$($O rev-parse dev)" > "$T/st/auto/kept-$sk"
+r=$(OPEN="52" fp); rid=$(cat "$T/st/auto/branchfix-$sk-${S2:0:9}" 2>/dev/null)
+mkdir -p "$T/co/runs/$rid"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n' "$T/co" "$rid" > "$T/co/runs/$rid/record.jsonl"; touch -t 202001010000 "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="52" fp)
+[ ! -e "$T/st/auto/branchfix-push-$rid" ] && [ "$(cat "$T/st/auto/branchfix-$sk-${S2:0:9}" 2>/dev/null)" != "$rid" ] && ok "2571 a dead salvage round drops both markers" || ko "2571 a dead salvage round kept a marker: '$r'"
 exit $fail

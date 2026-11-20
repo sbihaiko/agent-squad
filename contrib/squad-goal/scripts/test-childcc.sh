@@ -134,6 +134,7 @@ for sp in "nw 5104" "dg 5105"; do set -- $sp   # a Code Complete card and a Doin
     && ok "a finished no-wave child (#$2) is pushed to its salvage branch" || ko "no salvage branch for #$2: $out"
   echo "$out" | /usr/bin/grep -q "CHILD NO-WAVE SALVAGE #$2 ($1 c): pushed ${sha:0:9} to fix/$2-salvage-$1" && ok "the salvage line names the sha and the branch (#$2)" || ko "no salvage line for #$2: $out"
   [ -e "$T/st/auto/cc-$1-c" ] && ok "a salvaged child gets its marker (#$2)" || ko "no marker after the salvage (#$2)"
+  [ "$(cat "$T/st/auto/salvaged-fix_$2-salvage-$1" 2>/dev/null)" = "$sha" ] && ok "2571 the salvage push writes the provenance marker with its head (#$2)" || ko "2571 no provenance marker for #$2: '$(ls "$T/st/auto")'"
   [ ! -s "$WAVE_CALLS" ] && ok "a salvaged child is not entered or requeued (#$2)" || ko "wave calls for a salvaged child: $(cat "$WAVE_CALLS")"
   [ -e "$T/moves" ] && grep -q " $2\$" "$T/moves" && ko "a salvaged child moved its card (#$2)" || ok "a salvaged child moves no card (#$2)"
 done
@@ -144,6 +145,7 @@ out=$(pass pf)
 echo "$out" | /usr/bin/grep -q "CHILD NO-WAVE SALVAGE FAILED #5106" && ok "a failed salvage push is named" || ko "failed push not named: $out"
 [ ! -e "$T/st/auto/cc-pf-c" ] && ok "a failed salvage push writes no done marker" || ko "marker after a failed push"
 ! /usr/bin/grep -q '^requeue 5106' "$WAVE_CALLS" && ok "a failed salvage push is not requeued" || ko "requeued on a failed push: $(cat "$WAVE_CALLS")"
+[ ! -e "$T/st/auto/salvaged-fix_5106-salvage-pf" ] && ok "2571 a failed salvage push writes no provenance marker" || ko "2571 a provenance marker with no push"
 # A no-wave child with nothing past origin/dev has nothing to salvage: it is requeued with the reason, and the requeue is
 # loop-caused (wave.sh loop_caused), so it does not count toward the issue's cap.
 run nq 5107 v; mkdir -p "$T/co/runs/nq"; printf 'CHILD — GitHub issue(s) 5107 (work in the worktree the run gives you)\n' > "$T/co/runs/nq/request.txt"
