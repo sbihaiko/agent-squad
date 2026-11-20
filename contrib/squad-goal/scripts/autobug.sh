@@ -4,8 +4,8 @@
 # marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), no file a live run holds
 # (slicecut.py holds, the frontier's own issue-to-file map, ADR-0150), none of $SG_BUG_SKIP_LABELS
 # (the holder and hold floor) and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
-# per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
-# runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
+# per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), at most the pack of one run (#2544: 2 children
+# with no live gate lease, 6 with one; squad.caps.pack). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529), and when launch.py refuses the
 # start (#852): a dispatch that never happened must not mark the issue done, and its card goes back to Todo. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
@@ -271,7 +271,7 @@ fi
 AB_REASON=""; AB_PENDING=""; AB_DISPATCHED=""; AB_PASS_ENDED=""
 if [ -n "${AB_DRY:-}" ]; then AB_PASS_ENDED=1; else AB_PASS_NO=$(ab_pass_count); trap ab_pass_end EXIT; fi
 lab=${SG_BUG_LABEL:-bug}; skip=$(sg_skip_labels bug)   # the bug lane's own skip set (#1593); the freeze markers are its floor (#537)
-read -r free runs_cap < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
+read -r free runs_cap pack gates < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, sys
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. `C.free_runs` is the one counter of the runs that hold a slot: every live lease
@@ -282,9 +282,10 @@ sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
 from squad import caps as C
 try:
     ceil = C.ceiling(".")
+    pack, gates = C.pack(ceil)   # the children the one run takes by the gate load (#2544): 2 with no live gate lease, 6 with one
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
-print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"])   # the free run slots, and caps.runs for the refusal line (#2430)
+print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"], pack, gates)   # the free run slots, caps.runs for the refusal line (#2430), and the pack (#2544)
 PY
 
 )
@@ -444,12 +445,21 @@ cj="${cj%,}]"
 # One candidate is already one cluster of one, so the pass spends no Python startup on cluster.py for it (#556).
 if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || { AB_REASON="the clusters are not readable"; exit 0; }; fi   # cluster.py itself never answered: no cluster to trust
 # One cluster is one child, and a run funds only so many children (#480): the engine rejects the rest (spend_over_remainder),
-# and their issues would sit in Doing with nobody on them. So the pass asks for no more than the free run slots and the
-# children one run can fund (fundroom.py; "-" when the graph does not say).
-lim=$free; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
+# and their issues would sit in Doing with nobody on them. So the pass asks for no more than the pack of its one run (#2544:
+# 2 children with no live gate lease, 6 with one; squad.caps.pack) and the children one run can fund (fundroom.py; "-" when
+# the graph does not say). The free run slots are checked above: the pass opens one run, whatever their number.
+lim=$pack; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
 case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$lim" ] && lim=$fr;; esac
 [ "$lim" -gt 0 ] || { AB_REASON="one run funds no child"; echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
-clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$lim" ] && break; done <<<"$cl"
+# The run takes no more cards than the Doing column has free (#2423): the pack never carries a card past the limit. Each
+# issue of a cluster is one card, and a cluster that does not fit waits whole for a later pass.
+room=; case "${doing_max:-}" in ''|*[!0-9]*) ;; *) room=$((doing_max - doing_n));; esac
+clusters=(); ncards=0
+while read -r c; do
+  [ -n "$c" ] || continue; read -ra cw <<<"$c"
+  [ -z "$room" ] || [ $((ncards + ${#cw[@]})) -le "$room" ] || continue
+  clusters+=("$c"); ncards=$((ncards + ${#cw[@]})); [ ${#clusters[@]} -ge "$lim" ] && break
+done <<<"$cl"
 # a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
 # and a cluster whose numbers are not all valid is dropped (#1855).
 pick=()
@@ -466,7 +476,7 @@ ab_waiting() {   # the startable bugs this pass leaves with no run (#616): the c
   echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
 }
 ab_waiting
-[ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots)"; exit 0; }
+[ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots, $lim a run with $gates gate lease(s) live)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass
 # that started in that window used to pick them all over again. A launch that fails keeps the claim -- the marker is
