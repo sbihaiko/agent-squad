@@ -809,10 +809,11 @@ def _card_hold(n, icon, age=600, stages=()):
     """One hold row as the server sends it: its carrier's icon, its issue link and its age, with the stages it reached."""
     carrier = "hal9k" if icon == "eye" else "manual"
     names = ("gate", "dev", "stg", "main", "publish")
+    pairs = zip(names, stages, strict=True) if stages else ()
     return {"kind": "hold", "id": f"hold-{n}", "icon": icon, "carrier": carrier, "issue": n,
             "repo": "sbihaiko/agent-squad", "text": f"#{n}", "age": age,
             "title": f"{'HAL9k' if carrier == 'hal9k' else 'Manual'} · #{n}",
-            "stages": [{"name": a, "state": b} for a, b in zip(names, stages, strict=True)]}
+            "stages": [{"name": a, "state": b} for a, b in pairs]}
 
 
 def test_the_card_draws_no_chip_row_for_a_hold_with_no_stages(hub):

@@ -4484,7 +4484,8 @@ def delivery_stages(n, base=None, closed=False, gating=False):
     done["publish"] = done["main"] and bool(closed)
     cur = next((s for s in DELIVERY_STAGES if not done[s]), None)
     if cur == "gate" and not gating: cur = None
-    return [{"name": s, "state": "done" if done[s] else ("current" if s == cur else "later")} for s in DELIVERY_STAGES]
+    out = [{"name": s, "state": "done" if done[s] else ("current" if s == cur else "later")} for s in DELIVERY_STAGES]
+    return [] if all(c["state"] == "later" for c in out) else out   # every stage waits: the chips say nothing (#2572)
 
 def suite_name(line):
     """The short name a suite row shows (#2507): the pass or the gate its holder's command line names, never a path."""
@@ -4608,7 +4609,8 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         n = int(r["issues"][0])
         title = titles.get(str(n)) or ""
         item = next((i for i in items if str(i.get("n")) == str(n)), {})
-        rows.append({"kind": "hold", "id": r["id"], "icon": "hand", "issue": n, "repo": REPO,
+        rows.append({"kind": "hold", "id": r["id"], "icon": "eye" if r["carrier"] == "hal9k" else "hand",   # the icon its carrier wears (#2572)
+                     "carrier": r["carrier"], "issue": n, "repo": REPO,
                      "text": f"#{n}", "age": int(r["age"]), "stages": delivery_stages(n, base, closed=item.get("s") == "closed", gating=str(n) in gated),
                      "title": " · ".join(x for x in (r["label"], title) if x)})   # the id of the hold's own row; the holder and the title live in the tooltip
     hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
@@ -7153,6 +7155,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #lrun .lch.done{color:var(--ok);border-color:var(--ok)}
 #lrun .lch.current{color:var(--warn);border-color:var(--warn)}
 #lrun .lch.later{color:var(--mute);border-color:var(--line);opacity:.75}
+#lrun .haleye,#lrd .haleye{position:relative;display:inline-block;width:14px;height:14px;border-radius:50%;background:radial-gradient(circle closest-side,#fff0b0 0 5%,#ff4a18 12%,#e01206 24%,#8a0400 40%,#2e0000 56%,#050000 72%,#000 77%,transparent 78%),linear-gradient(160deg,#c3c8ce 0%,#5d636b 35%,#1b1e22 65%,#6c727a 100%);box-shadow:0 0 0 1px #000,inset 0 0 0 1px rgba(255,255,255,.15)}   /* the HAL9k hold's red eye in a dark ring (#2572): drawn in CSS, no image file, at the size of the other row icons */
+#lrun .haleye::after,#lrd .haleye::after{content:"";position:absolute;left:30%;top:24%;width:16%;height:10%;border-radius:50%;background:rgba(255,255,255,.55);transform:rotate(-30deg);filter:blur(.4px)}
 #lrun .lslot{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--ink-soft)}
 #lrun .lr.red{border-color:var(--err)}#lrun .lr.red .lid,#lrun .lr.red .lic{color:var(--err)}
 #lrun .lr.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .lr.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}
@@ -7518,15 +7522,17 @@ const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&sh
 // tooltip. The footer is the board read's age. A run row keeps its `data-id`, so the card's own handler opens the run sheet.
 const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
-function liveCard(live,shown){const IC={run:"🏃",hand:"✋",microscope:"🔬"},MK={done:"✓",current:"⏳",later:""};   // the icons a row wears (#2507): a loop run, a hand hold, a suite or gate the machine runs; and a delivery stage: done, in hand, still ahead
+function liveCard(live,shown){const IC={run:"🏃",hand:"✋",microscope:"🔬",eye:"<span class=haleye></span>"},MK={done:"✓",current:"⏳",later:""};   // the icons a row wears (#2507): a loop run, a hand hold, a suite or gate the machine runs, the HAL9k hold's red eye (#2572); and a delivery stage: done, in hand, still ahead
  const runs=live.filter(r=>r.kind!=="hold"),n=runs.length,rows=(liveWork&&liveWork.lines)||[];
- const held=new Set([...live.filter(r=>r.kind==="hold"),...rows.filter(t=>t.kind==="hold")].map(x=>x.id)).size;   // a hold is work by hand, never a live run (#2168); the run list and the rows name one hold by one id (#2523)
- const head=`<span class=lpill title="the runs live now">🏃 <b>${n}</b></span><span class=lpill title="the cards held by hand">✋ <b>${held}</b></span>`;   // the summary's heading row carries the two counts, once, never the cost (#2507, #2523)
+ const holds=[...new Map([...live.filter(r=>r.kind==="hold"),...rows.filter(t=>t.kind==="hold")].map(x=>[x.id,x.icon])).values()];   // a hold is work by hand, never a live run (#2168); the run list and the rows name one hold by one id (#2523)
+ const nEye=holds.filter(i=>i==="eye").length,nHand=holds.length-nEye;   // each carrier's own count, off the icon the server sent (#2572)
+ const pill=(g,c,t)=>c?`<span class=lpill title="${t}">${g} <b>${c}</b></span>`:"";   // a count of zero hides its pill (#2572)
+ const head=`<span class=lpill title="the runs live now">🏃 <b>${n}</b></span>`+pill(IC.eye,nEye,"the HAL9k holds")+pill("✋",nHand,"the Manual holds");   // the summary's heading row carries the counts, once, never the cost (#2507, #2523)
  const at=a=>a==null?"":`<span class=lage>${esc(age(a))}</span>`,chips=c=>`<span class=lchips>${c}</span>`;
  const item=t=>{const ic=IC[t.icon]||"",tt=t.title?` title="${iq(t.title)}"`:"";
    if(t.kind==="hold"){const ch=(t.stages||[]).map(s=>`<span class="lch ${esc(s.state)}" title="${iq(s.name+": "+s.state)}">${esc(s.name)} ${MK[s.state]||""}</span>`).join("");   // the five delivery chips, in the order the hub names them
      const id=t.issue!=null?(t.repo?`<a class=lid href="https://github.com/${esc(t.repo)}/issues/${t.issue}" target=_blank rel=noopener>#${esc(t.issue)}</a>`:`<span class=lid>#${esc(t.issue)}</span>`):`<span class=lid>${esc(t.text)}</span>`;
-     return `<div class=lr${tt}><span class=lic>${ic||"✋"}</span><span class=lm>${id}${chips(ch)}</span>${at(t.age)}</div>`}   // the holder and the full title live only in the tooltip (#2507)
+     return `<div class=lr${tt}><span class=lic>${ic||"✋"}</span><span class=lm>${id}${ch?chips(ch):""}</span>${at(t.age)}</div>`}   // no chip row for an empty stage list (#2572); the holder and the full title live only in the tooltip (#2507)
    const id=`<span class=lid>${esc(t.text)}</span>`,red=t.red?" red":"";
    if(t.kind==="gate"){const c=t.slots==null?"":`<span class=lslot title="the gate slots this suite holds">${t.slots===1?"1 slot":`${t.slots} slots`}</span>`;   // the suite's name, its slot count and its age (#2507)
      return `<div class="lr${red}"${tt}><span class=lic>${ic||"🔬"}</span><span class=lm>${id}${chips(c)}</span>${at(t.age)}</div>`}
