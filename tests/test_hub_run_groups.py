@@ -166,6 +166,7 @@ function boot(){
     addEventListener(t, f){ (this.L[t] = this.L[t] || []).push(f); this.bound = true; }
     fire(t){ (this.L[t] || []).forEach((f) => f({ target: this })); }
     closest(){ return null; }
+    querySelectorAll(){ return []; }   // the card's own stacking pass reads its rows' chips; this stub holds none (#2507)
     set innerHTML(v){
       this._html = String(v);
     }

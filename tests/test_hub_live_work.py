@@ -31,6 +31,7 @@ def hub():
     os.environ["SG_STATE"] = state
     os.environ["SG_CHECKOUT"] = checkout
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    os.environ["SQUAD_CAPS_DIR"] = tempfile.mkdtemp()   # the gate slots a suite row counts, in a folder of this suite's own
     spec = importlib.util.spec_from_file_location("hub_live_work", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -47,6 +48,9 @@ def clean(hub):
     (d / "hold-alerts").unlink(missing_ok=True)
     (Path(hub.STATE) / "alerts.log").unlink(missing_ok=True)
     (Path(hub.STATE) / "watchd.pid").unlink(missing_ok=True)   # one case's open loop never leaks into the next
+    for name in ("landed.tsv", "promote.log", "fastloop.pid", "cqflush.pid"):
+        (Path(hub.STATE) / name).unlink(missing_ok=True)   # the delivery stage and the driver reads start empty in every case
+    shutil.rmtree(Path(os.environ["SQUAD_CAPS_DIR"]) / "gates", ignore_errors=True)
     hub.board_cache = {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None}
     yield
 
@@ -155,17 +159,18 @@ def _held(hub, name, cmd=None):
 
 def test_a_live_gate_lock_names_the_run_it_checks_never_bash(hub):
     """#1695: the lock file names `bash`; the holder command line names the run workspace the gate checks. #1697: the row
-    is tagged `gate` and carries the run's id, so the card places it by identity."""
+    is tagged `gate` and carries the run's id, so the card places it by identity. #2507: the row's visible text is the
+    suite's name, and the pid and the run it checks ride its tooltip."""
     lock = _held(hub, "gate", "bash")
     line = "bash /r/worktrees/child/gui-1673/runs/run-20261113-204951-f6107e/ws/w/contrib/squad-goal/scripts/serial.sh gate bash x/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh"
     try:
         ans = _answer(hub, argv=lambda pid: line)
     finally:
         shutil.rmtree(lock)
-    lines = [r["text"] for r in ans["lines"]]
-    assert f"gate: pid {os.getpid()} checks run run-20261113-204951-f6107e" in lines, lines
-    assert not any("serves" in x or x.endswith("bash") for x in lines), lines
     gate = _row(ans, "gate")
+    assert gate["text"] == "Gate", gate
+    assert f"gate: pid {os.getpid()} checks run run-20261113-204951-f6107e" in gate["title"], gate
+    assert not any("serves" in x or x.endswith("bash") for x in (r["text"] for r in ans["lines"])), ans["lines"]
     assert gate["id"] == "gate-gate" and gate["run"] == "run-20261113-204951-f6107e", gate
 
 
@@ -176,17 +181,17 @@ def test_a_gate_lock_outside_a_run_names_its_gate_script(hub):
     finally:
         shutil.rmtree(lock)
     gate = _row(ans, "gate")
-    assert gate["text"] == f"gate: pid {os.getpid()} runs fast-gate.sh", gate
+    assert gate["text"] == "Gate" and gate["title"] == f"gate: pid {os.getpid()} runs fast-gate.sh", gate
     assert gate["run"] is None, gate   # a gate outside a run names no run
 
 
 def test_a_gate_lock_whose_command_line_is_unread_names_its_pid_alone(hub):
     lock = _held(hub, "gate", "bash")
     try:
-        lines = _lines(hub, argv=lambda pid: "")
+        ans = _answer(hub, argv=lambda pid: "")
     finally:
         shutil.rmtree(lock)
-    assert f"gate: pid {os.getpid()}" in lines, lines
+    assert _row(ans, "gate")["title"] == f"gate: pid {os.getpid()}", ans["lines"]
 
 
 def test_a_ready_for_human_issue_is_never_live_work(hub):
@@ -207,9 +212,10 @@ def test_a_doing_card_with_no_live_run_is_hand_work(hub):
              {"n": 1691, "t": "Queued", "s": "open", "st": "Todo", "l": ["bug"]}]
     ans = _answer(hub, items)
     lines = [r["text"] for r in ans["lines"]]
-    assert "hand work #1695 The lock line · in Doing, no registered run" in lines, lines
+    hand = _row(ans, "hand")
+    assert hand["text"] == "#1695" and hand["title"] == "The lock line · in Doing, no registered run", hand   # #2507: the row is short
     assert not any("#1690" in x or "#1691" in x for x in lines), lines
-    assert _row(ans, "hand")["id"] == "hand-1695", ans["lines"]
+    assert hand["id"] == "hand-1695", ans["lines"]
 
 
 def test_a_doing_card_a_live_hold_names_is_one_line_with_its_carrier(hub):
@@ -223,7 +229,7 @@ def test_a_doing_card_a_live_hold_names_is_one_line_with_its_carrier(hub):
     assert [r["label"] for r in hub.hold_rows()] == ["Manual · #1713"]
     named = [x for x in lines if "#1713" in x]
     assert len(named) == 1, lines
-    assert "Manual" in named[0], named
+    assert "Manual" in _row(ans, "hold")["title"], ans["lines"]   # #2507: the carrier rides the tooltip
     assert not any("hand work #1713" in x for x in lines), lines
     assert _row(ans, "hold")["id"] == hub.hold_rows()[0]["id"] == "hold-1713", ans["lines"]
     assert not any(r["kind"] == "hand" for r in ans["lines"]), ans["lines"]
@@ -234,7 +240,7 @@ def test_a_hal9k_hold_line_names_its_carrier(hub):
     _closed(hub)
     _hold(hub, 1719, by="hal9k")
     hold = _row(_answer(hub), "hold")
-    assert hold["id"] == "hold-1719" and "HAL9k · #1719" in hold["text"], hold
+    assert hold["id"] == "hold-1719" and hold["text"] == "#1719" and "HAL9k · #1719" in hold["title"], hold
 
 
 def test_a_held_card_whose_row_carries_its_item_id_is_named_once(hub):
@@ -256,19 +262,18 @@ def test_a_doing_card_a_live_run_names_is_not_listed_twice(hub, monkeypatch, tmp
     assert sum("#1696" in x for x in lines) == 1, lines
 
 
-def test_the_driver_locks_fold_into_one_line_with_no_pid(hub):
-    """#1692, #1695: a loop driver lock holds a pid and no command; it is no live work, so the drivers share one line.
-    #1697: that line is tagged `lock`."""
+def test_the_driver_locks_are_no_row_and_no_pid_is_shown(hub):
+    """#1692, #1695: a loop driver lock holds a pid and no command; it is no live work. #2507: the `loop drivers running`
+    line leaves the panel, so the live locks drawn no row and no pid reaches the visible text."""
+    (Path(hub.STATE) / "watchd.pid").write_text(f"{os.getpid()}\n")
     locks = [_held(hub, n) for n in ("watch", "single-autobug")]
     try:
         ans = _answer(hub)
     finally:
         for lock in locks:
             shutil.rmtree(lock)
-    lines = [r["text"] for r in ans["lines"]]
-    assert "🔒 loop drivers running: single-autobug, watch" in lines, lines
-    assert not any(str(os.getpid()) in x for x in lines), lines
-    assert _row(ans, "lock")["id"] == "lock-drivers", ans["lines"]
+    assert not any(r["kind"] in ("lock", "gate", "stopped") for r in ans["lines"]), ans["lines"]
+    assert not any(str(os.getpid()) in r["text"] for r in ans["lines"]), ans["lines"]
 
 
 def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
@@ -281,9 +286,11 @@ def test_a_live_run_names_its_issue_node_and_age(hub, monkeypatch, tmp_path):
         f'{{"ts": {now}, "event": "outcome", "node": "wave.landing"}}\n')
     os.utime(rec, (now - 600, now - 600))   # ten minutes since the run's last write: the age reads a concrete number
     monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
-    row = next(x for x in _lines(hub) if "#1674" in x)
-    assert re.fullmatch(r"run run-20261113-200000-abcd · #1674 · node wave\.landing · age \d+ min", row), row
-    assert 9 <= int(re.search(r"age (\d+) min", row).group(1)) <= 11, row   # the record's own ten minutes, never a bare word
+    ans = _answer(hub)
+    row = _row(ans, "run")
+    assert row["text"] == "#1674 · node wave.landing", row   # #2507: the row is short; the full line is its tooltip
+    assert re.fullmatch(r"run run-20261113-200000-abcd · #1674 · node wave\.landing · age \d+ min", row["title"]), row
+    assert 9 <= int(re.search(r"age (\d+) min", row["title"]).group(1)) <= 11, row   # the record's own ten minutes, never a bare word
 
 
 def test_a_live_run_with_no_issue_reads_no_issue(hub, monkeypatch, tmp_path):
@@ -294,8 +301,9 @@ def test_a_live_run_with_no_issue_reads_no_issue(hub, monkeypatch, tmp_path):
     rec.write_text(f'{{"ts": {now}, "event": "outcome", "node": "wave.landing"}}\n')
     os.utime(rec, (now - 120, now - 120))
     monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
-    row = next(x for x in _lines(hub) if x.startswith("run run-20261113-210000-efgh"))
-    assert re.fullmatch(r"run run-20261113-210000-efgh · no issue · node wave\.landing · age \d+ min", row), row
+    row = _row(_answer(hub), "run")
+    assert row["text"] == "no issue · node wave.landing", row
+    assert re.fullmatch(r"run run-20261113-210000-efgh · no issue · node wave\.landing · age \d+ min", row["title"]), row
 
 
 def test_the_panel_carries_no_line_on_work_it_cannot_see(hub):
@@ -400,9 +408,9 @@ def test_the_panel_takes_the_column_the_board_draws(hub, monkeypatch):
         ans = _answer(hub, items)
     finally:
         hub.MOVES.unlink(missing_ok=True)
-    lines = [r["text"] for r in ans["lines"]]
-    assert "hand work #1711 Moved by hand · in Doing, no registered run" in lines, lines
-    assert "hand work #1712 An old column name · in Doing, no registered run" in lines, lines
+    assert [(r["text"], r["title"]) for r in ans["lines"] if r["kind"] == "hand"] == [
+        ("#1711", "Moved by hand · in Doing, no registered run"),
+        ("#1712", "An old column name · in Doing, no registered run")], ans["lines"]
     assert [r["id"] for r in ans["lines"] if r["kind"] == "hand"] == ["hand-1711", "hand-1712"], ans["lines"]
 
 
@@ -414,7 +422,8 @@ def _card_run(hub, prelude, live="[]", row='"<row "+r.id+">"'):
     """The card's html for one answer and one list of live rows, as the JSON text node prints. `row` is the stand-in for
     the page's run row."""
     real_age = re.search(r"^const age=s=>[^\n]*", hub.PAGE, re.M).group(0)   # the page's own age rule, not a stand-in
-    script = ('const esc=s=>String(s);' + real_age + 'const liveRow=(r,shown)=>' + row + ';const LIVE_ROWS=4;\n'
+    real_iq = re.search(r"^const iq=[^\n]*", hub.PAGE, re.M).group(0)        # the page's own attribute writer
+    script = ('const esc=s=>String(s);' + real_age + real_iq + 'const liveRow=(r,shown)=>' + row + ';const LIVE_ROWS=4;\n'
               + prelude + "\n" + _card_fn(hub) + f'\nconsole.log(JSON.stringify(liveCard({live},"").html));\n')
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
@@ -560,3 +569,187 @@ def test_the_page_reads_live_work_after_a_run_pause_or_resume(hub):
     """#1697: a paused or resumed run changes its live line, so the page reads the live work again."""
     m = re.search(r'\$\("#rkpause"\)\.onclick.*?^addEventListener', hub.PAGE, re.M | re.S)
     assert m and "livePoll()" in m.group(0)
+
+
+# --------------------------------------------------------------------------- #2507: one short row per item
+def _fail(hub, n, at, sha="a" * 40):
+    """One landing row for an issue: the landed.tsv ledger `<epoch> TAB <branch> TAB <sha> TAB <issue>`."""
+    p = Path(hub.STATE) / "landed.tsv"
+    with p.open("a") as f:
+        f.write(f"{int(at)}\twave/run-{n}\t{sha}\t{n}\n")
+
+
+def _promote(hub, at, branch="stg"):
+    """One promotion success line: the writer's ISO date, its marker and the promoted sha."""
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+    marker = "promote-main-pass" if branch == "main" else "promote-pass"
+    with (Path(hub.STATE) / "promote.log").open("a") as f:
+        f.write(f"{iso} {marker}: {'b' * 40} promoted: the tip\n")
+
+
+def _slots(hub, holder, pid, n=1, since=None):
+    """`n` live gates leases of one holder, as squad/caps.py writes them: one file per slot."""
+    d = Path(os.environ["SQUAD_CAPS_DIR"]) / "gates"
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        name = f"{holder}.json" if n == 1 else f"{holder}.slot{i}.json"
+        (d / name).write_text(json.dumps({"holder": holder, "pid": pid, "since": since or time.time()}))
+
+
+def _stages(ans):
+    return [(c["name"], c["state"]) for c in _row(ans, "hold")["stages"]]
+
+
+def test_a_hold_row_shows_the_five_delivery_stages_its_own_facts_reach(hub):
+    """#2507: the chips follow the loop's own records: a landing puts the gate and dev done, a promotion after it puts stg
+    done and makes main the stage in hand, and publish stays later while the issue is open."""
+    _closed(hub)
+    now = int(time.time())
+    _fail(hub, 2439, now - 3600)
+    _promote(hub, now - 600, "stg")
+    _hold(hub, 2439)
+    hold = _row(_answer(hub), "hold")
+    assert [c["name"] for c in hold["stages"]] == ["gate", "dev", "stg", "main", "publish"], hold
+    assert [c["state"] for c in hold["stages"]] == ["done", "done", "done", "current", "later"], hold
+
+
+def test_a_hold_row_with_no_delivery_fact_stands_at_the_gate(hub):
+    """#2507: a hold the loop has landed nothing for is at its gate: every later stage waits."""
+    _closed(hub)
+    _hold(hub, 2486)
+    assert [c["state"] for c in _row(_answer(hub), "hold")["stages"]] == ["current", "later", "later", "later", "later"]
+
+
+def test_a_hold_row_names_its_issue_and_no_title(hub):
+    """#2507: a hold row is short: the issue as a link, and the holder and the full title in the row's tooltip only."""
+    _closed(hub)
+    _hold(hub, 2439)
+    hold = _row(_answer(hub, [{"n": 2439, "t": "No new wave enters its gate", "s": "open", "st": "Doing", "l": []}]), "hold")
+    assert hold["text"] == "#2439" and hold["issue"] == 2439 and hold["icon"] == "hand", hold
+    assert "HAL9k" not in hold["text"] and "No new wave" not in hold["text"], hold
+    assert "No new wave enters its gate" in hold["title"] and "#2439" in hold["title"], hold
+
+
+def test_a_suite_row_shows_its_name_its_gate_slots_and_its_age(hub):
+    """#2507: a gate the machine runs is a suite row: the microscope's name, the slots it holds and how long it has held
+    them; the pid and the script ride the tooltip."""
+    lock = _held(hub, "gate", "bash")
+    _slots(hub, f"gate-{os.getpid()}", os.getpid(), 2, since=time.time() - 180)
+    try:
+        ans = _answer(hub, argv=lambda pid: "bash /repo/contrib/squad-goal/scripts/gate.sh --inner bash contrib/squad-goal/scripts/fast-gate.sh")
+    finally:
+        shutil.rmtree(lock)
+    suite = _row(ans, "gate")
+    assert suite["icon"] == "microscope" and suite["text"] == "Gate" and suite["slots"] == 2, suite
+    assert 175 <= suite["age"] <= 185, suite
+    assert f"pid {os.getpid()}" in suite["title"] and "gate.sh" in suite["title"], suite
+    assert not any(str(os.getpid()) in r["text"] for r in ans["lines"]), ans["lines"]
+
+
+def test_a_daysuites_gate_lock_is_named_the_daily_suite(hub):
+    """#2507: the name a reader sees is the suite's own, read from the command line the lock names; the path stays in the
+    tooltip."""
+    lock = _held(hub, "gate", "bash")
+    try:
+        ans = _answer(hub, argv=lambda pid: "bash /repo/contrib/squad-goal/scripts/serial.sh gate bash /repo/contrib/squad-goal/scripts/daysuites.sh --suite test-x.sh")
+    finally:
+        shutil.rmtree(lock)
+    suite = _row(ans, "gate")
+    assert suite["text"] == "Daily suite", suite
+    assert "daysuites.sh" in suite["title"] and "serial.sh" not in suite["text"], suite
+
+
+def test_no_driver_row_is_drawn_while_every_driver_runs(hub):
+    """#2507: the `loop drivers running` line leaves the panel; a live lane is no row at all."""
+    (Path(hub.STATE) / "watchd.pid").write_text(f"{os.getpid()}\n")
+    (Path(hub.STATE) / "fastloop.pid").write_text(f"{os.getpid()}\n")
+    (Path(hub.STATE) / "cqflush.pid").write_text(f"{os.getpid()}\n")
+    locks = [_held(hub, n) for n in ("watch", "single-autobug")]   # the loop's own locks, live, with no command of their own
+    try:
+        ans = _answer(hub)
+    finally:
+        for lock in locks:
+            shutil.rmtree(lock)
+    assert not any(r["kind"] in ("lock", "stopped") for r in ans["lines"]), ans["lines"]
+    assert not any("drivers running" in r["text"] for r in ans["lines"]), ans["lines"]
+
+
+def test_a_stopped_driver_is_one_red_row(hub):
+    """#2507: a lane whose record names a dead process is one red row, named by the lane, with its pid in the tooltip."""
+    (Path(hub.STATE) / "watchd.pid").write_text(f"{os.getpid()}\n")
+    (Path(hub.STATE) / "fastloop.pid").write_text("999999\n")
+    (Path(hub.STATE) / "cqflush.pid").write_text(f"{os.getpid()}\n")
+    ans = _answer(hub)
+    rows = [r for r in ans["lines"] if r["kind"] == "stopped"]
+    assert len(rows) == 1, ans["lines"]
+    assert rows[0]["id"] == "stopped-fastloop" and rows[0]["red"] is True, rows[0]
+    assert rows[0]["text"] == "fastloop stopped" and "999999" in rows[0]["title"], rows[0]
+
+
+def _card_html(hub, rows, live="[]", board="null"):
+    """The card's html for one hub answer, drawn by the page's own liveCard."""
+    return json.loads(_card_run(
+        hub, f'let liveWork={{loop:"on",boardAge:{board},lines:{json.dumps(rows)}}};', live))
+
+
+def _hold_row(n=2439, states=("done", "done", "done", "current", "later"), age=2640, title="HAL9k · #2439 · No new wave enters its gate"):
+    names = ("gate", "dev", "stg", "main", "publish")
+    return {"kind": "hold", "id": f"hold-{n}", "icon": "hand", "issue": n, "repo": "sbihaiko/agent-squad",
+            "text": f"#{n}", "age": age, "title": title,
+            "stages": [{"name": a, "state": b} for a, b in zip(names, states, strict=True)]}
+
+
+def test_the_card_draws_a_hold_as_a_link_and_five_stage_chips(hub):
+    """#2507: a hold row is the issue as a link to its issue, the five delivery chips of its state and its age; the title
+    and the holder live in the tooltip, never in the visible row."""
+    if NODE is None:
+        pytest.skip("node is required")
+    html = _card_html(hub, [_hold_row()])
+    assert 'href="https://github.com/sbihaiko/agent-squad/issues/2439"' in html, html
+    assert html.count('class="lch ') == 5, html
+    assert "✓" in html and "⏳" in html, html   # done is a check mark, the stage in hand an hourglass
+    assert ">No new wave" not in html, html     # no title in the visible row
+    assert 'title="HAL9k · #2439 · No new wave enters its gate"' in html, html   # the holder and the full title, in the tooltip
+    assert "44m" in html, html
+
+
+def test_the_card_draws_a_suite_with_its_name_slots_and_age(hub):
+    """#2507: a suite row wears the microscope, its name, the slots it holds and its age; the pid and the script are only in
+    its tooltip."""
+    if NODE is None:
+        pytest.skip("node is required")
+    row = {"kind": "gate", "id": "gate-gate", "run": None, "icon": "microscope", "text": "Daily suite", "slots": 1,
+           "age": 180, "title": "pid 4242 runs daysuites.sh", "red": False}
+    html = _card_html(hub, [row])
+    assert "🔬" in html and "Daily suite" in html and "1 slot" in html and "3m" in html, html
+    assert 'title="pid 4242 runs daysuites.sh"' in html, html
+    assert ">pid 4242" not in html, html
+
+
+def test_the_card_header_counts_runs_and_holds_and_shows_no_cost(hub):
+    """#2507: the header is two pills, the runs and the hand holds; the cost leaves it."""
+    if NODE is None:
+        pytest.skip("node is required")
+    html = json.loads(_card_run(hub, 'let liveWork={loop:"on",boardAge:null,lines:[]};', '[{id:"run-b",age:5,spend:2.5}]'))
+    assert "run-b" in html and "🏃" in html, html
+    assert "$" not in html and "0.00" not in html and "2.50" not in html, html   # the cost leaves the header
+
+
+def test_the_card_footer_shows_only_the_board_read_age(hub):
+    """#2507: the footer is the board read's age, and nothing else follows the rows."""
+    if NODE is None:
+        pytest.skip("node is required")
+    html = _card_html(hub, [_hold_row()], board="38")
+    assert "board read 38s ago" in html, html
+    assert "All runs" not in html and "oldest" not in html, html
+
+
+def test_a_stopped_driver_is_one_red_row_on_the_card(hub):
+    """#2507: the stopped driver the hub answers is a red row, with the lane's pid in its tooltip."""
+    if NODE is None:
+        pytest.skip("node is required")
+    row = {"kind": "stopped", "id": "stopped-fastloop", "icon": "run", "text": "fastloop stopped", "red": True,
+           "title": "the loop's fastloop.sh lane names pid 999999, which is not alive"}
+    html = _card_html(hub, [row])
+    assert "fastloop stopped" in html and "red" in html, html
+    assert 'title="the loop\'s fastloop.sh lane names pid 999999, which is not alive"' in html, html

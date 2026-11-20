@@ -1650,9 +1650,21 @@ def limits_last():
         if isinstance(rec, dict) and rec.get("text"): return rec
     return None
 
+def limits_changes(limit=20):
+    """The changes the ledger records, newest first, at most `limit` of them: the Tokens group's Changes list (#2510)."""
+    try: lines = [ln for ln in (STATE / LIMIT_LEDGER).read_text().splitlines() if ln.strip()]
+    except OSError: return []
+    recs = []
+    for ln in reversed(lines):
+        try: rec = json.loads(ln)
+        except ValueError: continue
+        if isinstance(rec, dict) and rec.get("text"): recs.append(rec)
+        if len(recs) >= limit: break
+    return recs
+
 def limits_read():
     """The Spend & limits theme's data: the settings the guard will read on its next pass, the burn it measures, the pause
-    marker it writes and the last change recorded. Every value is a fact of one file or one marker; the page renders it."""
+    marker it writes and the changes recorded. Every value is a fact of one file or one marker; the page renders it."""
     path = profile_file()
     s = limits_settings(path)
     hour = burn_read(hours=1)
@@ -1661,7 +1673,7 @@ def limits_read():
             "guard": s["guard"], "cap": s["cap"], "factor": s["factor"],
             "window_h": s["window"], "pause_line": limit_line(s["cap"], s["factor"], s["window"]),
             "hour_burn": (hour or {}).get("total"), "window_burn": (window or {}).get("total"),
-            "paused": (STATE / "token-pause").exists(), "last_change": limits_last()}
+            "paused": (STATE / "token-pause").exists(), "changes": limits_changes(), "last_change": limits_last()}
 
 def limits_diff(old, new):
     """The diff a Save shows before it writes: one line per changed setting, in the order the theme reads them."""
@@ -3012,10 +3024,11 @@ def strip_steps():
         return None
     return steprec.fold(_read(path).splitlines())
 
-def strip_landings():
-    """The landing ledger's rows, `<epoch> TAB <branch> TAB <sha> TAB <issue>`: a row this reader cannot read is skipped."""
+def strip_landings(base=None):
+    """The landing ledger's rows, `<epoch> TAB <branch> TAB <sha> TAB <issue>`: a row this reader cannot read is skipped.
+    `base` is another project's state directory (#2507 reads a hold's own stage from it)."""
     out = []
-    for raw in _read(STATE / "landed.tsv").splitlines():
+    for raw in _read((pathlib.Path(base) if base else STATE) / "landed.tsv").splitlines():
         f = raw.split("\t")
         if len(f) < 4: continue
         try: at = int(f[0])
@@ -3025,13 +3038,14 @@ def strip_landings():
         out.append({"at": at, "branch": f[1], "sha": f[2], "issue": issue})
     return out
 
-def strip_promotions():
+def strip_promotions(base=None):
     """The promotion log's success lines: a line that says `promoted:` after its marker, never a refusal's line. The mark
-    takes the nearest date in front of the marker, so a writer that wraps or prefixes its line still names its delivery."""
+    takes the nearest date in front of the marker, so a writer that wraps or prefixes its line still names its delivery.
+    `base` is another project's state directory (#2507 reads a hold's own stage from it)."""
     stg = os.environ.get("SG_STG_BRANCH") or "stg"
     main = os.environ.get("SG_MAIN_BRANCH") or "main"
     out = []
-    for raw in _read(STATE / "promote.log").splitlines():
+    for raw in _read((pathlib.Path(base) if base else STATE) / "promote.log").splitlines():
         for rx, branch in ((PROMOTED_MAIN, main), (PROMOTED_STG, stg)):
             m = rx.search(raw)
             if not m: continue
@@ -4383,6 +4397,62 @@ def gate_lock_line(pid, line, issues_of):
     scripts = [x for x in re.findall(r"([\w-]+\.(?:sh|py))\b", line) if x not in ("serial.sh", "gate.sh")]
     return f"gate: pid {pid} runs {scripts[0]}" if scripts else f"gate: pid {pid}"
 
+# ---------------------------------------------------------------- one short live row (#2507)
+# The Live work panel draws one short row per item: an icon, the issue or the item's name, its chips and its age. The pid,
+# the script, the holder and the full title ride the row's tooltip, never its visible text.
+DELIVERY_STAGES = ("gate", "dev", "stg", "main", "publish")   # the delivery pipeline a hold's chips follow, in order
+LANES = (("watch", pathlib.Path("locks") / "watch" / "pid"), ("fastloop", pathlib.Path("fastloop.pid")),
+         ("cqflush", pathlib.Path("cqflush.pid")))   # the loop's three lanes, each named by the pid file it writes
+
+def delivery_stages(n, base=None, closed=False):
+    """The five delivery stages of one issue, from the loop's own records and no GitHub read (#2507): `gate` and `dev` are
+    done once the landing ledger names the issue; `stg` and `main` once a promotion of that branch came after the landing,
+    since a later green tip carries the earlier work with it (ADR-0145); `publish` once the issue is closed, which is what
+    a publish does to the issues it carries. The stage in hand is the first one not done, and every later one waits."""
+    at = max((r["at"] for r in strip_landings(base) if r.get("issue") == n), default=None)
+    promos = strip_promotions(base)
+    stg = os.environ.get("SG_STG_BRANCH") or "stg"
+    main = os.environ.get("SG_MAIN_BRANCH") or "main"
+    done = {"gate": at is not None, "dev": at is not None}
+    done["stg"] = done["dev"] and any(p["at"] >= at for p in promos if p.get("branch") == stg)
+    done["main"] = done["stg"] and any(p["at"] >= at for p in promos if p.get("branch") == main)
+    done["publish"] = done["main"] and bool(closed)
+    cur = next((s for s in DELIVERY_STAGES if not done[s]), None)
+    return [{"name": s, "state": "done" if done[s] else ("current" if s == cur else "later")} for s in DELIVERY_STAGES]
+
+def suite_name(line):
+    """The short name a suite row shows (#2507): the pass or the gate its holder's command line names, never a path."""
+    if "daysuites.sh" in line: return "Daily suite"
+    if "child-gate.sh" in line: return "Child gate"
+    if "shell-suites.sh" in line: return "Shell suites"
+    return "Gate"
+
+def caps_folder():
+    """The machine's caps leases folder, the one squad/caps.py writes, or the folder a test points SQUAD_CAPS_DIR at."""
+    return pathlib.Path(os.environ.get("SQUAD_CAPS_DIR") or (pathlib.Path.home() / ".cache" / "agent-squad" / "caps"))
+
+def gate_slots(pid, procs=None, now=None):
+    """The gate slots one lock holds and the instant its oldest lease began (#2507): the live caps.gates leases whose holder
+    is the lock's own pid or a process under it, because a gate takes its slots from a child of the lock holder. The hub
+    only reads: a lease whose pid is gone counts for nothing, and no caps folder answers `(0, None)`."""
+    now = time.time() if now is None else now
+    try: paths = sorted((caps_folder() / "gates").glob("*.json"))
+    except OSError: return 0, None
+    leases, table = [], procs if procs is not None else process_table(now)   # one table read for every lease
+    for p in paths:
+        try: lease = json.loads(p.read_text())
+        except (OSError, ValueError): continue
+        if not isinstance(lease, dict): continue
+        lpid = lease.get("pid")
+        if not isinstance(lpid, int) or not _pid_alive(lpid): continue
+        q, depth = lpid, 0
+        while q is not None and q != pid and depth < 8:   # the subtree the lock holder owns, never the whole machine
+            q, depth = getattr(table.get(q), "ppid", None), depth + 1
+        if q == pid: leases.append(lease)
+    if not leases: return 0, None
+    since = min((x["since"] for x in leases if isinstance(x.get("since"), (int, float))), default=None)
+    return len(leases), since
+
 LIVE_POLL_SECS = 3.0   # seconds: the page's own live poll (`poll()` reads /api/live every 3 s), never a guess (#1933)
 LIVE_CLOCK = time.monotonic   # the age reader; a test injects its own, so freshness is proved by a clock and never by a sleep
 _LIVE_KEPT = {"at": None, "answer": None}   # the kept Live work answer: one entry per loaded module, so one per profile
@@ -4413,28 +4483,31 @@ def live_recompute():
 def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv=None):
     """The Live work panel's answer, all from local state and the board read the hub already holds:
     `{"loop": <on|off|draining|starting>, "lines": [<row>], "boardAge": <seconds or None>}`. A row is
-    `{"kind", "id", "text"}`: the kind names its source and the id names the thing it draws, so the card places a row by
-    identity, never by a substring of its text (#1697). The kinds, in order: `loop` (a stopped loop), `run` (each live
-    run: its issue, node and age), `gate` (each gate lock: its pid and what it checks, with `run` the id of the run it
-    checks or None), `lock` (the loop drivers, one line), `hold` (each hand hold, with its carrier) and `hand` (each open
-    Doing card no live run and no hold names: work by hand). The loop's state rides apart from the rows, so an open loop
-    with nothing to show answers one `empty` row, `no live work`. A ready-for-human card waits on the owner and is no live
-    work (#1701). Doing is the column the board draws, an old Status name and a recorded move included, never the row's
-    raw Status (#1713). `boardAge` is how many seconds old the board read the `hand` rows came from is, so the panel
+    `{"kind", "id", "text", "icon", "title"}`: the kind names its source and the id names the thing it draws, so the card
+    places a row by identity, never by a substring of its text (#1697). `text` is the short visible line and `title` the
+    tooltip where the pid, the script, the holder and the full title live (#2507). The kinds, in order: `loop` (a stopped
+    loop), `run` (each live run: its issue and node), `gate` (each gate lock: the suite's name, the gate slots it holds and
+    its age, with `run` the id of the run it checks or None), `stopped` (a loop lane whose record names a dead process),
+    `hold` (each hand hold: its issue as a link and the five delivery stage chips its own facts reach) and `hand` (each
+    open Doing card no live run and no hold names: work by hand). The loop's state rides apart from the rows, so an open
+    loop with nothing to show answers one `empty` row, `no live work`. A ready-for-human card waits on the owner and is no
+    live work (#1701). Doing is the column the board draws, an old Status name and a recorded move included, never the
+    row's raw Status (#1713). `boardAge` is how many seconds old the board read the `hand` rows came from is, so the panel
     never claims a freshness it does not have."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
     moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
     st = loop_state({}, now=now, state=base)
-    rows, issues_of, drivers, held = [], {}, [], set()
+    rows, issues_of, held = [], {}, set()
     if st == "off": rows.append({"kind": "loop", "id": "loop", "text": "loop off"})
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
         if not folder: continue
         row, _ = run_row(folder, "", procs or {})
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
-        rows.append({"kind": "run", "id": row["id"],
-                     "text": f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min"})
+        rows.append({"kind": "run", "id": row["id"], "icon": "run", "age": int(row["age"]),
+                     "text": f"{issues} · node {row.get('stage') or '-'}",
+                     "title": f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min"})
         issues_of[row["id"]] = issues; held.update(str(n) for n in row["issues"])
     for d in sorted((base / "locks").glob("*")):
         if not d.is_dir(): continue   # a stray file in locks/ is not a lock
@@ -4443,21 +4516,34 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
             if not (pid.isdigit() and _pid_alive(int(pid))): continue
             cmd = _read(d / "cmd").strip()
         except OSError: continue   # one unreadable lock is no lock: it never fails the panel
-        if not cmd: drivers.append(d.name); continue   # a lock that names no command is a loop driver's own: no live work (#1692)
+        if not cmd: continue   # a lock that names no command is a loop driver's own: no live work, and no row (#1692, #2507)
         line = (argv or _holder_argv)(int(pid))
-        rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "text": gate_lock_line(pid, line, issues_of)})
-    if drivers: rows.append({"kind": "lock", "id": "lock-drivers", "text": "🔒 loop drivers running: " + ", ".join(drivers)})   # a padlock marks a lock, never work
-    holds = hold_rows(now=now, state=base)   # each live hand hold is one line, with its carrier (#1713)
+        slots, since = gate_slots(int(pid), procs, now)   # the slots the gate under this lock holds (#2507)
+        rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "icon": "microscope",
+                     "text": suite_name(line), "slots": slots, "age": int(now - since) if since else None, "red": False,
+                     "title": gate_lock_line(pid, line, issues_of)})   # the pid and the script ride the tooltip only
+    if st != "off":   # a lane whose own record names a dead process is one red row; a live lane is no row at all (#2507)
+        for lane, f in LANES:
+            pid = _read(base / f).strip()
+            if not pid or (pid.isdigit() and _pid_alive(int(pid))): continue
+            rows.append({"kind": "stopped", "id": f"stopped-{lane}", "icon": "run", "age": None, "red": True,
+                         "text": f"{lane} stopped", "title": f"the loop's {lane}.sh lane names pid {pid}, which is not alive"})
+    holds = hold_rows(now=now, state=base)   # each live hand hold is one row, with its carrier (#1713)
     titles = {str(i.get("n")): (i.get("t") or "") for i in items}
     for r in holds:
-        title = titles.get(str(r["issues"][0])) or ""
-        rows.append({"kind": "hold", "id": r["id"], "text": f"hold: {r['label']}" + (f" {title}" if title else "")})   # the id of the hold's own row
+        n = int(r["issues"][0])
+        title = titles.get(str(n)) or ""
+        item = next((i for i in items if str(i.get("n")) == str(n)), {})
+        rows.append({"kind": "hold", "id": r["id"], "icon": "hand", "issue": n, "repo": REPO,
+                     "text": f"#{n}", "age": int(r["age"]), "stages": delivery_stages(n, base, closed=item.get("s") == "closed"),
+                     "title": " · ".join(x for x in (r["label"], title) if x)})   # the id of the hold's own row; the holder and the title live in the tooltip
     hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
         ids = {str(i.get("n")), str(i.get("i") or "")}
         if (cache_row_column(i, moves, window) == DOING and i.get("s") != "closed" and not (ids & held)
                 and not (ids & hold_ids) and "ready-for-human" not in (i.get("l") or [])):
-            rows.append({"kind": "hand", "id": f"hand-{i['n']}", "text": f"hand work #{i['n']} {i.get('t') or ''} · in Doing, no registered run"})
+            rows.append({"kind": "hand", "id": f"hand-{i['n']}", "icon": "hand", "text": f"#{i['n']}",
+                         "title": f"{i.get('t') or ''} · in Doing, no registered run"})
     if not rows: rows.append({"kind": "empty", "id": "", "text": "no live work"})   # an open loop with nothing to show says so
     t = board_cache.get("t") or 0
     return {"loop": st, "lines": rows, "boardAge": int(now - t) if t else None}
@@ -6983,11 +7069,25 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-runs #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
-#lrun .r{border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:8px;background:var(--card);min-width:0;overflow:hidden;display:block;position:relative;padding:7px 22px 8px 10px}#lrun .r>div{min-width:0}#lrun .r.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .r.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}   /* the panel's own run keeps its accent bar beside the amber one */
-#lrun .r1{display:flex;align-items:center;gap:6px;min-width:0}#lrun .r1 .load{flex:none;margin:0;padding:0;border:0;background:none;color:var(--warn);font-size:var(--fs-caption)}#lrun .r1 b{flex:0 0 auto;white-space:nowrap;color:var(--lc,inherit)}
-#lrun .r2{margin-top:1px;color:var(--ink-body);font-size:var(--fs-caption);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-#lrun .r .pn{position:absolute;top:6px;right:7px;opacity:0;pointer-events:none}#lrun .r:hover .pn,#lrun .r:focus-visible .pn{opacity:1}#lrun .r3{margin-top:1px;color:var(--mute);font-size:var(--fs-caption);font-family:var(--font-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lrun .r .st,#lrun .r .m{white-space:normal;overflow-wrap:anywhere;max-width:none}#lrun .r:last-child{margin-bottom:0}
-#lrmore{display:block;width:100%;margin:2px 0 0;text-align:center}
+#lrun .lh{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px}   /* the card's header: the runs and the hand holds, never the cost (#2507) */
+#lrun .lr{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:3px 6px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:6px;background:var(--card);min-width:0;padding:6px 8px;color:var(--fg);cursor:default}   /* one short row per item (#2507): the icon, the id with its chips, and the age; the chips join the id's line when they fit and stack under it when they do not */
+#lrun .lr:hover{border-color:var(--line-strong)}#lrun .lr[data-id]{cursor:pointer}
+#lrun .lr .lic{grid-column:1;flex:none;font-size:var(--fs-caption);line-height:1}
+#lrun .lr .lm{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;gap:3px 6px;min-width:0}
+#lrun .lr.stack{align-items:start}#lrun .lr.stack .lm{flex-direction:column;align-items:flex-start}   /* the chips did not fit the id's line: they take their own line, under the id, and the icon and the age stay on the id's line (#2507) */
+#lrun .lr .lid{color:var(--lc,var(--fg));font-weight:600;white-space:nowrap;text-decoration:none;font-size:var(--fs-caption)}
+#lrun .lr a.lid{color:var(--acc)}#lrun .lr a.lid:hover{text-decoration:underline}
+#lrun .lr .lchips{display:flex;flex-wrap:wrap;align-items:center;gap:3px;min-width:0}
+#lrun .lr .lage{grid-column:3;color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;font-variant-numeric:tabular-nums}
+#lrun .lch{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--mute);background:transparent}
+#lrun .lch.done{color:var(--ok);border-color:var(--ok)}
+#lrun .lch.current{color:var(--warn);border-color:var(--warn)}
+#lrun .lch.later{color:var(--mute);border-color:var(--line);opacity:.75}
+#lrun .lslot{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--ink-soft)}
+#lrun .lr.red{border-color:var(--err)}#lrun .lr.red .lid,#lrun .lr.red .lic{color:var(--err)}
+#lrun .lr.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .lr.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}
+#lrun .lpill{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 7px;font-size:var(--fs-caption);line-height:16px;color:var(--ink-soft)}#lrun .lpill b{color:var(--fg);font-variant-numeric:tabular-nums}
+#lrun .lf{margin-top:2px;color:var(--mute);font-size:var(--fs-caption);text-align:right}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}
 /*BOARD_LANES_CSS*/
 /*RUN_SHEET_CSS*/
@@ -7048,6 +7148,38 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set textarea{font-size:var(--fs-body);min-height:var(--ctl-h)}
 #tab-set .ro{color:var(--warn);background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);padding:6px 10px;margin:0 0 10px;max-width:1120px}#tab-set .ro[hidden]{display:none}
 @media (max-width:600px){#tab-set .now{grid-template-columns:1fr}}
+/* Settings > Spend & limits · Tokens (#2510): the spec mockup draws one heading with its state chip at the right, four
+   Now tiles in one row with the value larger than its label, fields in one column, and a toggle switch. These rules are
+   scoped to `#lbody`, so the other themes keep the shared shape above. */
+#tab-set #lbody .tokhead{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:var(--fs-heading);font-weight:600;text-transform:none;letter-spacing:0;color:var(--fg)}
+#tab-set #lbody .chip{display:inline-block;margin-left:auto;padding:0 7px;border-radius:var(--radius-lg);border:1px solid var(--line);color:var(--mute);font-size:var(--fs-caption);font-weight:600;letter-spacing:0;text-transform:none}
+#tab-set #lbody .chip.err{color:var(--err);border-color:var(--err)}
+#tab-set #lbody .now{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+#tab-set #lbody .tile .tv{font-size:var(--fs-heading);font-weight:600;line-height:1.25}
+#tab-set #lbody .setrow{grid-template-columns:minmax(120px,1fr) minmax(0,2.4fr);gap:12px}
+#tab-set #lbody .setrow .sc{justify-self:stretch;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+#lbody .setrow .lf{flex:0 0 auto;display:flex;align-items:center;gap:4px;min-width:104px}
+#lbody .setrow .lf input:not([type=checkbox]){width:104px}
+#lbody .setrow .lunit{flex:none;color:var(--mute);font-size:var(--fs-caption)}
+#lbody .setrow .kstop{flex:1 1 0;min-width:0}
+#lbody .swt{display:inline-flex;align-items:center;gap:8px}
+#lbody input[type=checkbox]{-webkit-appearance:none;appearance:none;margin:0;width:52px;height:32px;padding:0;border:1px solid var(--line);border-radius:var(--radius-full);cursor:pointer;flex:none;background-color:var(--edge);background-image:radial-gradient(circle at 16px 50%,var(--highlight) 0 12px,transparent 13px)}
+#lbody input[type=checkbox]:checked{background-color:var(--ok);background-image:radial-gradient(circle at calc(100% - 16px) 50%,var(--highlight) 0 12px,transparent 13px)}
+#lbody input[type=checkbox]:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#lbody .chg{margin:6px 0 0;padding-top:6px;border-top:1px solid var(--line)}
+#lbody .chg summary{display:flex;align-items:center;gap:6px;min-height:32px;cursor:pointer;font-size:var(--fs-body);color:var(--fg);list-style:none}
+#lbody .chg summary::-webkit-details-marker{display:none}
+#lbody .chg summary::before{content:"\25B8";color:var(--mute)}
+#lbody .chg[open] summary::before{content:"\25BE"}
+#lbody .chg summary .m{color:var(--mute)}
+#lbody .chg ul{list-style:none;margin:4px 0 0;padding:0;font-size:var(--fs-caption);color:var(--mute)}
+#lbody .chg li{padding:3px 0;border-bottom:1px solid var(--line)}
+#lbody .chg li:last-child{border-bottom:0}
+#lbody .chg .cat{font-variant-numeric:tabular-nums}
+#tab-set #lbody .tile{padding:6px 8px}
+@media (max-width:1200px){#tab-set #lbody .now{gap:6px}#tab-set #lbody .tile .tv{font-size:var(--fs-body)}}
+@media (max-width:820px){#tab-set #lbody .now{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){#tab-set #lbody .now{grid-template-columns:1fr}}
 .mtab{width:100%;border-collapse:collapse;font-size:var(--fs-caption);margin-bottom:8px}.mtab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 6px;border-bottom:1px solid var(--line)}.mtab td{padding:4px 6px;border-bottom:1px solid var(--line)}.mtab tr.off .mn{text-decoration:line-through;color:var(--mute)}
 .stc{display:inline-block;font-size:var(--fs-caption);border:1px solid var(--line);border-radius:var(--radius-sm);padding:0 5px;color:var(--mute)}.stc.off{color:var(--warn);border-color:var(--tint-warn-line)}.stc.lim{color:var(--err);border-color:var(--err)}.mr.off .mn{text-decoration:line-through}.mr.rmk .mn,.mr.rmk .pv{text-decoration:line-through;opacity:.55}
 .madd select{flex:1;min-width:0;height:var(--ctl-h);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}#mbody .lead{margin:4px 0 8px}#mbody details.hlp{margin-top:10px}#mbody details.hlp summary{cursor:pointer;color:var(--acc)}
@@ -7275,22 +7407,36 @@ async function loadPoll(){try{const d=await (await fetch("/api/load")).json();in
 // then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
-// The Monitor's Live work card (#1276): a bounded glance, never a second full list. Its summary states the whole truth --
-// the live count and the oldest live run's age -- even when the rows are capped. It draws at most LIVE_ROWS rows, oldest
-// first, and one control that opens the Runs tab. Each row is two lines -- the label and its stage, then the issue title -- and
-// keeps its `data-id`, so the card's own handler still opens the run sheet. Its liveness slot says whether the run is moving.
+// The Monitor's Live work card (#1276, #2507): a bounded glance of the runs live now and the work held by hand. The header
+// is two pills -- the runs live now and the cards held by hand -- and never a cost. Each row is one short line: an icon, the
+// issue id or the item's name, its chips and its age. A hold row is the issue as a link to its issue, with the five delivery
+// chips (gate, dev, stg, main, publish) in order. A suite row wears the microscope, its name, the slots it holds and its age.
+// A stopped driver is one red row. The pid, a script path, a driver name, a holder and a full title live only in the row's
+// tooltip. The footer is the board read's age. A run row keeps its `data-id`, so the card's own handler opens the run sheet.
 const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
-function liveCard(live,shown){const runs=live.filter(r=>r.kind!=="hold"),n=runs.length,held=live.length-n,oldest=runs.reduce((m,r)=>r.age>m?r.age:m,0),total=runs.reduce((s,r)=>s+(+r.spend||0),0);   // a hold is work by hand, never a live run: the count names the two apart (#2168)
- const drawn=live.slice().sort((a,b)=>b.age-a.age).filter(r=>r.kind!=="hold").slice(0,LIVE_ROWS);   // a hand hold is its own line below, never also a row (#1713)
- const head=(n||held)?`${n} live${held?` · ${held} held`:""} · $${total.toFixed(2)}${n?` · oldest ${age(oldest)}`:""}`:"none";   // the count and the spend are every live run, never the rows drawn, and a hand hold is no run
- const more=(n||held)?`<button id=lrmore type=button data-t=runs title="open the Runs tab: the one full list of runs">All runs →</button>`:"";   // the card's way to the full list, drawn only while it has live work to show
- const rows=(liveWork&&liveWork.lines)||[],line=t=>`<div class=m>${esc(t.text)}</div>`;   // the tagged rows the hub answers, or none before the first read
- const own=r=>rows.filter(t=>t.kind==="gate"&&t.run===r.id).map(line).join("");   // a gate is drawn beside the row of the run it checks (#1713): by the run id its row carries, never a substring of its text (#1697)
- const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(line).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)
- const board=(liveWork&&liveWork.boardAge!=null)?`<div class=m>board read ${age(liveWork.boardAge)} ago</div>`:"";   // the age of the board read the hand-work rows came from (#1697)
- const body=drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra;   // the page's own run rows, each with its gate, and the hub's other tagged rows, each drawn once
- return{head,html:(body||(liveWork?"":"<div class=m>no live work</div>"))+board+more}}   // the empty state is the hub's own tagged row, never the page's: it names one only before the first read (#1697)
+function liveCard(live,shown){const IC={run:"🏃",hand:"✋",microscope:"🔬"},MK={done:"✓",current:"⏳",later:""};   // the icons a row wears (#2507): a loop run, a hand hold, a suite or gate the machine runs; and a delivery stage: done, in hand, still ahead
+ const runs=live.filter(r=>r.kind!=="hold"),n=runs.length,rows=(liveWork&&liveWork.lines)||[];
+ const held=live.length-n+rows.filter(t=>t.kind==="hold").length;   // a hold is work by hand, never a live run (#2168)
+ const head=(n||held)?`${n} live${held?` · ${held} held`:""}`:"none";   // the collapsed summary states both counts; the spend left the card (#2507)
+ const pills=`<div class=lh><span class=lpill title="the runs live now">🏃 <b>${n}</b></span><span class=lpill title="the cards held by hand">✋ <b>${held}</b></span></div>`;   // the header: the two counts, never the cost (#2507)
+ const at=a=>a==null?"":`<span class=lage>${esc(age(a))}</span>`,chips=c=>`<span class=lchips>${c}</span>`;
+ const item=t=>{const ic=IC[t.icon]||"",tt=t.title?` title="${iq(t.title)}"`:"";
+   if(t.kind==="hold"){const ch=(t.stages||[]).map(s=>`<span class="lch ${esc(s.state)}" title="${iq(s.name+": "+s.state)}">${esc(s.name)} ${MK[s.state]||""}</span>`).join("");   // the five delivery chips, in the order the hub names them
+     const id=t.issue!=null?(t.repo?`<a class=lid href="https://github.com/${esc(t.repo)}/issues/${t.issue}" target=_blank rel=noopener>#${esc(t.issue)}</a>`:`<span class=lid>#${esc(t.issue)}</span>`):`<span class=lid>${esc(t.text)}</span>`;
+     return `<div class=lr${tt}><span class=lic>${ic||"✋"}</span><span class=lm>${id}${chips(ch)}</span>${at(t.age)}</div>`}   // the holder and the full title live only in the tooltip (#2507)
+   const id=`<span class=lid>${esc(t.text)}</span>`,red=t.red?" red":"";
+   if(t.kind==="gate"){const c=t.slots==null?"":`<span class=lslot title="the gate slots this suite holds">${t.slots===1?"1 slot":`${t.slots} slots`}</span>`;   // the suite's name, its slot count and its age (#2507)
+     return `<div class="lr${red}"${tt}><span class=lic>${ic||"🔬"}</span><span class=lm>${id}${chips(c)}</span>${at(t.age)}</div>`}
+   if(t.kind==="stopped")return `<div class="lr${red} stopped"${tt}><span class=lic>${ic||"🏃"}</span><span class=lm>${id}</span>${at(t.age)}</div>`;   // a lane whose record names a dead process is one red row (#2507)
+   if(t.kind==="run"||t.kind==="hand")return `<div class=lr${tt}><span class=lic>${ic}</span><span class=lm>${id}</span>${at(t.age)}</div>`;
+   return `<div class=m${tt}>${esc(t.text)}</div>`};   // the loop line, the hub's own empty state and a failed read
+ const drawn=runs.slice().sort((a,b)=>b.age-a.age).slice(0,LIVE_ROWS);   // a hand hold is its own row below, never also a run row (#1713)
+ const own=r=>rows.filter(t=>t.kind==="gate"&&t.run===r.id).map(item).join("");   // a gate is drawn beside the row of the run it checks (#1713): by the run id its row carries, never a substring of its text (#1697)
+ const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(item).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)
+ const board=(liveWork&&liveWork.boardAge!=null)?`<div class=lf>board read ${age(liveWork.boardAge)} ago</div>`:"";   // the footer: the age of the board read the hand-work rows came from (#1697)
+ const body=drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra;   // the page's own run rows, each with its gate, and the hub's other rows, each drawn once
+ return{head,html:pills+(body||(liveWork?"":"<div class=m>no live work</div>"))+board}}   // the empty state is the hub's own tagged row, never the page's: it names one only before the first read (#1697)
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -7304,15 +7450,19 @@ const liveTitle=r=>{const t=sub(r)||"";return t.replace(/^\[SPEC \d+\] /,"")};
 // The record names its node in the graph's own words (`route.router.1`, `review_gate`); the row says it in a person's, short
 // enough to share one line with the label: `router 1`, `review`. A node the map does not know keeps its own name.
 const liveStage=r=>{const n=r.stage||"";if(!n)return"";const m=/^route\.router\.(\d+)$/.exec(n);return m?"router "+m[1]:n.replace(/_gate$/,"")};
+// A live run in one short row (#2507): the run icon, the issue id or the run's name, the node it is at, and its age. The
+// full label, the issue title, the model and the load live in the tooltip. A quiet run, an unreadable record and a run that
+// has not written yet keep their own words in the age's place, never a fresh age. The row keeps its `data-id`, so the card's
+// handler opens the run sheet, and its quiet edge says the run stopped writing (#1276).
 function liveRow(r,shown){
- const s=liveSlot(r),on=shown&&(shown.has?shown.has(r.id):shown.includes(r.id))?` show`:"",t=liveTitle(r);
- const st=r.cpu?"":liveStage(r),dot=`<i class="dot${s.k?" "+s.k:""}"></i>`,stg=st?`<span class=stg title="the node the run is at">· ${esc(st)}</span>`:"";
- const bid=(r.issues||[])[0],lc=bid==null?"":((typeof SPECLC!=="undefined"&&SPECLC&&SPECLC.get(String(bid)))||"");   // the number wears its spec colour, as the board card does (#1429)
- const lab=`<b title="${iq(labelTip(r))}">${esc(name(r).replace(/^implement /,""))}</b>`,slot=`<span class="slot${s.k?" "+s.k:""}">${esc(s.text)}</span>`;
- const act=r.kind==="hold"?"":` data-id="${esc(r.id)}" tabindex=0 role=button`;   // a hand hold opens no run sheet: it has no run
- return `<div class="r${on}${s.k?" "+s.k:""}"${act}${lc?` style="--lc:${lc}"`:""}><div class=r1>${dot}${lab}${stg}${loadMark(r)}${slot}</div>${t?`<div class=r2 title="${iq(t)}">${esc(t)}</div>`:""}${r.model?`<div class=r3 title="the model this run is on now">${esc(r.model_label||r.model)}</div>`:""}<span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`
+ const s=liveSlot(r),on=shown&&(shown.has?shown.has(r.id):shown.includes(r.id))?` show`:"";
+ const st=r.cpu?"":liveStage(r),bid=(r.issues||[])[0],lc=bid==null?"":((typeof SPECLC!=="undefined"&&SPECLC&&SPECLC.get(String(bid)))||"");   // the number wears its spec colour, as the board card does (#1429); one diagnostic shares the row: a run that owns CPU shows `cpu N%`, never both (#1276)
+ const lab=bid!=null?`#${esc(bid)}`:esc(name(r).replace(/^implement /,"")),tip=[name(r),liveTitle(r),r.model?`model ${r.model_label||r.model}`:"",r.cpu?`cpu ${r.cpu}%`:""].filter(Boolean).join(" · ");
+ const node=st?`<span class=lslot title="the node the run is at">${esc(st)}</span>`:"",act=` data-id="${esc(r.id)}" tabindex=0 role=button`;
+ return `<div class="lr${on}${s.k?" "+s.k:""}"${act}${tip?` title="${iq(tip)}"`:""}${lc?` style="--lc:${lc}"`:""}><span class=lic>🏃</span><span class=lm><span class=lid>${lab}</span><span class=lchips>${node}${loadMark(r)}</span></span><span class=lage>${esc(s.k?s.text:age(r.age))}</span></div>`
 }
-function drawList(){const c=liveCard(runs.filter(r=>r.rank===0),new Set(slots));$("#lrun").innerHTML=c.html;$("#lrs").textContent=c.head}   // the sidebar card: a bounded glance of the runs that are live now (#1276); the full list is the Runs tab's (#1770)
+function drawList(){const c=liveCard(runs.filter(r=>r.rank===0),new Set(slots)),el=$("#lrun");el.innerHTML=c.html;$("#lrs").textContent=c.head;
+  [...el.querySelectorAll(".lr")].forEach(r=>{const lid=r.querySelector(".lid"),ch=r.querySelector(".lchips");if(lid&&ch&&ch.children.length&&ch.offsetHeight>lid.offsetHeight+2)r.classList.add("stack")})}   // the sidebar card: a bounded glance of the runs that are live now (#1276); a row whose chips do not fit the id's line stacks them under the id (#2507)
 // The Runs tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
 // Live draws each live row once, in the full form (#1770): the childcc pass first, then the live runs and the hand holds,
 // under one heading that carries the occupancy the runs answer built. The age bands left the page: Ended today is the history.
@@ -7463,6 +7613,12 @@ const limBadCls=k=>limBad===k?" class=bad":"";
 const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
 function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
  if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · <span id=limage>${limAgeTxt()}</span>`}
+/* The Tokens group's Changes list (#2510): one collapsed line that names the count, and the records the ledger holds
+   under it, newest first. The hub reads the ledger; the page only prints what it is given. */
+function limChangesHtml(cs){cs=Array.isArray(cs)?cs:[];
+ return `<details class=chg><summary>Changes <span class=m>${cs.length}</span></summary>`
+  +(cs.length?`<ul>${cs.map(r=>`<li><span class=cat>${esc(r.at||"")}</span> ${esc(r.text||"")}</li>`).join("")}</ul>`
+             :`<p class=m>No change recorded.</p>`)+`</details>`}
 function limTick(now){const el=$("#limage");if(el&&limOK)el.textContent=limAgeTxt(now)}   // the age moves on with the clock, with no new write
 let limAgeTmr=null;   // the age ticker runs only while a saved value is shown in a visible theme (#2433)
 const limShown=()=>{const p=$("#lim");return !p||p.open===undefined||!!p.open};   // a collapsed theme ticks nothing
@@ -7571,7 +7727,8 @@ function slotsHtml(){const t=slotChip();
   +(slotDiff&&slotDiff.length?`<div class="mx" role=status>${slotDiff.map(l=>esc(l)).join(" · ")}</div>`:"")
   +`<div class="mx${slotMsg.startsWith("!")?" err":""}" id=slotmsg role=status>${esc(slotMsg.replace(/^!/,""))}</div></div>`}
 // }SLOT
-const limN=v=>v==null?"—":tk(v);
+const limN=v=>{if(v==null)return "—";const t=tk(v);   // a reading under 1000 is whole; a unit reading never keeps a trailing zero: 125B, not 125.00B (#2510)
+ return /[KMBT]$/.test(t)&&t.includes(".")?t.replace(/0+([KMBT])$/,"$1").replace(/\.([KMBT])$/,"$1"):t};
 const LIM_UNITS=[["T",1e12],["B",1e9],["M",1e6],["K",1e3]],LIM_SCALE={K:1e3,M:1e6,B:1e9,T:1e12};
 const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))return String(n??"");   // a cap reads 1.5M, 250M or 1T, never a row of zeros (#2434)
  for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
@@ -7588,19 +7745,25 @@ function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k); 
  const st=$("#limstat");if(st)st.innerHTML=limLine()}   // and so does the saved line (#2433)
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
- setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ const chipTxt=off?"guard off · never pauses":s.paused?"paused":"on",chipCls=s.paused?"err":"";   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ setChip("lim",chipTxt,chipCls);
  if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
- let h=setNow("lim",[
+ // The Tokens group draws its own heading and state chip (#2510), then the four Now tiles on one row, then the fields.
+ let h=`<div class=setblk data-blk=tokens data-theme=lim><h3 class="blkh tokhead">Tokens <span id=limtok class="chip${chipCls?" "+chipCls:""}">${esc(chipTxt)}</span></h3></div>`
+ +setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
-  setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
+  setTile("Last "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
- ],`Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434); the last change stays data, never a fifth fact
+ ])
  +setSettings("lim",[
-  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
-  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
-  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
- ],`<span id=limstat>${limLine()}</span>`);   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
+  setRow("Token guard",`<span class=lf><label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}></label>${limMark("guard")}</span><small class=kstop>Off: dispatch never pauses on token burn.</small>`),
+  setRow("Daily token cap",`<span class=lf><input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}></span><small class=lunit>tokens</small>${limMark("cap")}<small class=kstop>Accepts 6M, 250M, 1T. Read only while the guard is on.</small>`),
+  setRow("Pause factor",`<span class=lf><input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}></span><small class=lunit>×</small>${limMark("factor")}<small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>`),
+ ])   // the settings block carries no note here: the profile line, the Changes list and the saved line follow it (#2510)
+ +`<p class=note>Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code></p>`   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434)
+ +limChangesHtml(s.changes)
+ +`<p class=note><span id=limstat>${limLine()}</span></p>`;   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
@@ -8280,9 +8443,9 @@ function tabClick(e){const b=e.target.closest("button[data-t]");if(b)setTab(b.da
 document.querySelector(".tabs").addEventListener("click",tabClick);
 function tabKey(e){const bs=[...document.querySelectorAll(".tabs button[data-t]")],n=tabNext(e.key,bs.indexOf(e.target),bs.length);if(n<0)return;e.preventDefault();e.stopPropagation();setTab(bs[n].dataset.t);bs[n].focus()}
 document.querySelector(".tabs").addEventListener("keydown",tabKey);   // the bar is a tab list: focus and the shown pane move together (#1274)
-$("#lrun").addEventListener("click",tabClick);   // the live-runs card's control opens the Runs tab (#1276)
-$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".r[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
-$("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
+$("#lrun").addEventListener("click",tabClick);   // a control of the live-runs card names its tab by data-t, as the bar does (#1276)
+$("#lrun").addEventListener("click",e=>{const r=e.target.closest(".lr[data-id]");if(!r)return;const id=r.dataset.id;hl={run:id};paintHL();openRun(id)});   // a card row opens the run sheet, exactly as the list's row does (#1276)
+$("#lrun").addEventListener("keydown",e=>{const r=e.target.closest(".lr[data-id]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();const id=r.dataset.id;hl={run:id};paintHL();openRun(id)}});   // the card row answers the keyboard too (#1276)
 function flowTabs(){const h=$("#flowov").hidden,k=typeof FLOWK==="string"?FLOWK:"cfd";$("#bflow").classList.toggle("on",!h&&k==="cfd");$("#blead").classList.toggle("on",!h&&k==="lead")}   // the two chart tabs mark the open chart
 $("#main").addEventListener("click",e=>{const r=e.target.closest(".r[data-rid]");if(!r)return;const id=r.dataset.rid;hl={run:id};paintHL();openRun(id)});   // a run row on the Runs tab opens the sheet (#984) and marks its cards, as the old list row did (#1770)
 $("#main").addEventListener("keydown",e=>{const r=e.target.closest(".r[data-rid]");if(r&&(e.key==="Enter"||e.key===" ")){e.preventDefault();openRun(r.dataset.rid)}});

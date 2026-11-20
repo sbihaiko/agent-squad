@@ -319,25 +319,25 @@ def lim_blocks(out):
 @pytest.mark.heavy   # serves the page and reads the block: 3.7 s on a loaded CI runner
 def test_the_now_block_holds_four_fact_tiles_and_no_input(ctx):
     now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
-    tiles, note = now.split("<p class=note>", 1)
+    tiles = now
     assert re.findall(r'<div class="tile ([a-z]+)">', tiles) == ["ok", "neutral", "neutral", "neutral"], tiles
     assert re.findall(r"<span class=tk>(.*?)</span>", tiles) == \
-           ["Dispatch", "Last hour", "Window · 24 h", "Pauses over"], tiles
+           ["Dispatch", "Last hour", "Last 24 h", "Pauses over"], tiles
     # Four tiles and nothing else in the container: a fifth, unlabelled fact cannot slip in.
     assert re.sub(r'<div class="tile [a-z]+">.*?</div>', "", tiles) == \
-           '<div class=setblk data-blk=now data-theme="lim"><h3 class=blkh>Now</h3><div class=now></div>', tiles
+           '<div class=setblk data-blk=now data-theme="lim"><h3 class=blkh>Now</h3><div class=now></div></div>', tiles
     for ctl in ("<input", "<select", "<textarea", "<button"):
         assert ctl not in now, f"the Spend & limits Now block carries {ctl}"
-    # The note row names the profile file and no other fact: the last change is data, never a fifth line.
+    # The profile line sits under the fields (#2510), so the Now block carries no note row at all.
     assert "Last change" not in now, "a fifth fact sits in the Now block, outside its four tiles"
-    assert re.fullmatch(r'Profile: <code title="[^"]+">t\.sh</code></p></div>', note), note
+    assert "<p class=note>" not in now, "a note row still sits in the Now block"
 
 
 def test_the_profile_shows_by_file_name_with_its_path_on_hover(ctx):
-    now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
-    visible = re.sub(r'\btitle="[^"]*"', "", now)   # what a reader sees, with every hover removed
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    visible = re.sub(r'\btitle="[^"]*"', "", settings)   # what a reader sees, with every hover removed
     assert "t.sh" in visible and LIM["profile"] not in visible, "the row shows the whole path, not the file name"
-    assert f'title="{LIM["profile"]}"' in now, "the full path is not on the hover"
+    assert f'title="{LIM["profile"]}"' in settings, "the full path is not on the hover"
 
 
 def test_the_settings_block_holds_only_the_three_editable_settings(ctx):
@@ -429,3 +429,79 @@ def test_a_guard_on_keeps_the_pause_line_its_tone_and_its_number(ctx):
     pause = re.search(r'<div class="tile ([a-z]+)"><span class=tk>Pauses over</span><span class=tv>(.*?)</span></div>', now)
     assert pause and pause.group(1) == "neutral", now
     assert pause.group(2) == "188K tokens/h", pause.group(2)
+
+
+# --- the Tokens group against its spec mockup (#2510)
+
+def lim_rows(settings):
+    """Each row's label and its control, in the order the theme draws them."""
+    return re.findall(r'<span class=sl>(.*?)</span><span class=sc>(.*?)</span></div>', settings)
+
+
+def test_the_theme_names_its_tokens_group_with_the_state_chip_at_the_right(ctx):
+    html = lim_draw(ctx["hub"], LIM)["html"]
+    head = re.search(r'<div class=setblk data-blk=tokens data-theme=lim><h3 class="[^"]*">Tokens '
+                     r'<span id=limtok class="chip([^"]*)">([^<]*)</span></h3></div>', html)
+    assert head, "the Tokens group has no heading with its state chip"
+    assert head.group(2) == "on", head.group(0)
+    assert html.index("data-blk=tokens") < html.index("data-blk=now"), "the Tokens heading sits below the tiles"
+    off = lim_draw(ctx["hub"], dict(LIM, guard="off"))["html"]
+    assert '<span id=limtok class="chip">guard off · never pauses</span>' in off, off
+
+
+def test_the_now_tiles_read_in_one_row_with_a_large_value(ctx):
+    page = ctx["hub"].PAGE
+    row = re.search(r"#tab-set #lbody \.now\{([^}]*)\}", page)
+    assert row and "repeat(4,minmax(0,1fr))" in row.group(1).replace(" ", ""), row and row.group(1)
+    tv = re.search(r"#tab-set #lbody \.tile \.tv\{([^}]*)\}", page)
+    assert tv and "font-size:var(--fs-heading)" in tv.group(1), tv and tv.group(1)
+
+
+def test_the_guard_is_drawn_as_a_toggle_switch(ctx):
+    page = ctx["hub"].PAGE
+    sw = re.search(r"#lbody input\[type=checkbox\]\{([^}]*)\}", page)
+    assert sw and "appearance:none" in sw.group(1) and "border-radius:var(--radius-full)" in sw.group(1), \
+        sw and sw.group(1)
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    assert "id=limg type=checkbox role=switch" in settings, settings
+
+
+def test_the_fields_share_one_column_and_each_help_follows_its_field(ctx):
+    page = ctx["hub"].PAGE
+    row = re.search(r"#tab-set #lbody \.setrow\{([^}]*)\}", page)
+    assert row and "grid-template-columns:minmax(120px,1fr)minmax(0,2.4fr)" in row.group(1).replace(" ", ""), \
+        row and row.group(1)
+    _, settings = lim_blocks(lim_draw(ctx["hub"], LIM))
+    rows = lim_rows(settings)
+    assert [r[0] for r in rows] == ["Token guard", "Daily token cap", "Pause factor"], rows
+    for label, ctl in rows:
+        assert ctl.startswith("<span class=lf>"), (label, ctl)   # every field starts in the one field column
+    controls = dict(rows)
+    cap = controls["Daily token cap"]
+    assert '<small class=lunit>tokens</small><small class=kstop>' in cap, cap
+    assert "Read only while the guard is on." in cap, cap
+    fac = controls["Pause factor"]
+    assert '<small class=lunit>×</small><small class=kstop>' in fac, fac
+
+
+def test_the_pause_line_drops_the_trailing_zeros(ctx):
+    now, _ = lim_blocks(lim_draw(ctx["hub"], dict(LIM, cap=1000000000000, factor=3, pause_line=125000000000)))
+    pause = re.search(r"<span class=tk>Pauses over</span><span class=tv>(.*?)</span>", now)
+    assert pause and pause.group(1) == "125B tokens/h", pause and pause.group(1)
+
+
+def test_the_profile_line_sits_under_the_fields_before_the_changes(ctx):
+    html = lim_draw(ctx["hub"], LIM)["html"]
+    i_field = html.index('aria-label="Pause factor"')
+    i_prof = html.index("Profile: <code")
+    i_chg = html.index("class=chg")
+    assert i_field < i_prof < i_chg, (i_field, i_prof, i_chg)
+    assert html.index("data-blk=settings") < i_prof, "the profile line is outside the settings block"
+
+
+def test_the_changes_list_names_each_recorded_change(ctx):
+    view = dict(LIM, changes=[{"at": "2026-11-04 09:12:00", "text": "token cap: 1000 -> 2000"},
+                              {"at": "2026-11-04 09:15:00", "text": "token guard: off"}])
+    html = lim_draw(ctx["hub"], view)["html"]
+    assert "<summary>Changes <span class=m>2</span></summary>" in html, html
+    assert "2026-11-04 09:12:00" in html and "token guard: off" in html, html
