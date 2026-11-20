@@ -595,6 +595,8 @@ def test_the_monitor_switch_is_styled_where_the_monitor_draws_it():
     assert not missing, f"a switch style sits outside the block the phone serves: {missing}"
     assert all(sel.startswith("#inst ") for sels, _ in rules for sel in sels if "laud" not in sel), \
         "a switch style names a panel the page no longer draws"
+    assert not any("#lop" in sel for sels, _ in rules for sel in sels), \
+        "a loop-tab rule styles a switch again; only the Monitor draws one (#2515)"
     assert any("#inst .lsw" in sels for sels, _ in rules), "the Monitor's switch is styled"
 
 

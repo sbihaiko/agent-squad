@@ -486,25 +486,17 @@ def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hu
 
 
 def test_a_loop_poll_draws_the_monitor_switch_and_the_loop_tab_change_list(hub):
-    """After `/api/loop` answers, the Monitor's switch and the Loop tab's blocks both draw from the one answer (#2515).
-    The tab draws the class names `#lopaud` styles: a setblk, a now grid, a tile, and the aud disclosure, so a rendered
-    Loop tab never shows unstyled markup while this test stays green."""
-    page = hub.PAGE
-    esc = re.search(r"^const esc=.*$", page, re.M).group(0)
-    sett = page[page.index("// SETT{"):page.index("// }SETT")]
-    loop = page[page.index("// }SETT"):page.index("// loop-switch:end")]
-    draw = page[page.index("function loopDraw("):page.index("async function loopPoll(")]
-    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",dataset:{}});'
-            'let loopV=null,loopErr="";')
-    body = "\n".join([stub, esc, sett, loop, draw,
-                      f"loopV={json.dumps(LOOP_VIEW)};loopDraw();"
-                      "console.log(JSON.stringify([STORE['#iloop'].innerHTML.includes('role=switch'),"
-                      "STORE['#lopaud'].innerHTML.includes('class=setblk'),"
-                      "STORE['#lopaud'].innerHTML.includes('<div class=now>'),"
-                      "STORE['#lopaud'].innerHTML.includes('<div class=\"tile '),"
-                      "STORE['#lopaud'].innerHTML.includes('<details class=aud>')]))"])
-    # The classes are the ones `#lopaud` styles, not a bespoke marker: an unstyled tile or disclosure fails here.
-    assert json.loads(_node(body)) == [True, True, True, True, True]
+    """After `/api/loop` answers, the Monitor's switch and the Loop tab's blocks both draw from the real page renderers,
+    never a stub (#2515). The tab emits the classes `#lopaud` styles — a setblk, a now grid, a tile, and the aud
+    disclosure — so a rendered Loop tab never shows unstyled markup while this test stays green."""
+    view = json.dumps(LOOP_VIEW)
+    monitor = _run(hub.PAGE, f'(loopErr="",loopSetHtml({view}))')
+    assert "role=switch" in monitor, "the Monitor draws no switch from the loop answer"
+    tab = _run(hub.PAGE, f"loopLogHtml({view})")
+    assert "class=setblk" in tab and "<div class=now>" in tab, tab
+    assert '<div class="tile ' in tab, "the Loop tab's tiles carry no `#lopaud .tile` class"
+    assert "<details class=aud>" in tab, "the change list is not the `#lopaud details.aud` disclosure"
+    assert "<h3 class=blkh>Now</h3>" in tab, "the Now grid carries no `#lopaud .blkh` heading"
 
 
 # ---------------------------------------------------------------- a page that may not write

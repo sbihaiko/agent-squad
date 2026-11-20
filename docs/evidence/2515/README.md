@@ -14,17 +14,32 @@ headless Chrome. Each render set the device metrics in the same process that too
 a unique query so a hash change forced a fresh document. The change list renders with its disclosure opened through
 `document.querySelector("#lopaud details.aud").open = true`.
 
+Run this from the worktree root: `OUT` derives from `$PWD`, so the six renders land beside this README. It writes every
+render below in one pass: two widths, both tabs, and the change list closed and open.
+
 ```js
+const OUT = process.cwd() + "/docs/evidence/2515";
 const task = await taskSpace("issue 2515 settings without the loop theme");
 const page = task.page("p1");
-await page.cdp("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
-await page.goto("http://127.0.0.1:7841/?v=1#settings", { waitUntil: "domcontentloaded" });
-await page.waitForTimeout(1600);
-await page.screenshot({ path: "/absolute/docs/evidence/2515/settings-1440.png", fullPage: true });
+for (const width of [1440, 1000]) {
+  await page.cdp("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+  // Settings: the theme list and the phone select, with no Loop theme.
+  await page.goto(`http://127.0.0.1:7841/?w=${width}#settings`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1600);
+  await page.screenshot({ path: `${OUT}/settings-${width}.png`, fullPage: true });
+  // The Loop tab: the Now tiles and the change list closed.
+  await page.goto(`http://127.0.0.1:7841/?w=${width}#loop`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1600);
+  await page.screenshot({ path: `${OUT}/loop-${width}.png`, fullPage: true });
+  // The Loop tab: the change list open.
+  await page.evaluate(() => { document.querySelector("#lopaud details.aud").open = true; });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT}/loop-open-${width}.png`, fullPage: true });
+}
 ```
 
-Repeat with `width: 1000` and with the `#loop` hash. Open the disclosure before the Loop screenshot when the change list
-must show its entries.
+The `#loop` hash is the Loop tab (`HASH={prof:"#loop"}`); `#settings` is the Settings tab. An old `#set-lop` link opens
+the first theme left, and Settings never lists a Loop theme.
 
 - `settings-1440.png`: 1440 px. The theme list reads Spend & limits, Subscriptions, Models & chains, Communication and
   Access. It holds no Loop theme, and the phone select carries the same five themes.

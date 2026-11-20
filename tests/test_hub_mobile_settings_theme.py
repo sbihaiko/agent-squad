@@ -89,18 +89,22 @@ def test_the_phone_settings_link_carries_the_last_theme_or_the_first_one(stored,
     assert json.loads(_phone_link_href(stored)) == href
 
 
+def _desktop_themes_and_first(hub):
+    """The desktop's theme order and first theme, read from the running page, never a second literal kept in step."""
+    sth = re.search(r"^const STH=[^\n]*", hub.PAGE, re.M).group(0)
+    first = re.search(r"^const SET_FIRST=[^\n]*", hub.PAGE, re.M).group(0)
+    return json.loads(_node(f"{sth}\n{first}\nconsole.log(JSON.stringify([Object.keys(STH),SET_FIRST]));"))
+
+
+@needs_node
 def test_the_phone_theme_list_and_first_theme_match_the_desktop(hub):
-    """#2515: the phone handoff names the desktop's themes in the desktop's order and falls back to the desktop's first
-    theme, so the two defaults cannot drift."""
-    desktop = re.search(r"^const STH=\{(.*?)\};", hub.PAGE, re.M).group(1)
-    themes = re.findall(r"(\w+):", desktop)
-    first = re.search(r'^const SET_FIRST="(\w+)";', hub.PAGE, re.M).group(1)
-    block = _handoff_block(MOBILE_HTML.read_text())
-    phone_list = re.findall(r'"(\w+)"', re.search(r"SET_THEMES = \[(.*?)\]", block).group(1))
-    fallbacks = re.search(r't : "(\w+)"; \} catch \(e\) \{ return "(\w+)";', block)
-    assert fallbacks, "the phone handoff no longer falls back to a first theme"
-    assert phone_list == themes, f"the phone names {phone_list}, the desktop {themes}"
-    assert set(fallbacks.groups()) == {first}, f"the phone falls back to {fallbacks.groups()}, the desktop to {first!r}"
+    """#2515: the phone handoff opens every theme the desktop knows, and a stored non-theme value (the removed Loop
+    theme) opens the desktop's runtime first theme, so the two defaults cannot drift apart."""
+    themes, first = _desktop_themes_and_first(hub)
+    for t in themes:
+        assert json.loads(_phone_link_href(json.dumps({"sth": t}))) == f"./#set-{t}", f"the phone drops {t}"
+    assert json.loads(_phone_link_href('{"sth":"lop"}')) == f"./#set-{first}", \
+        f"the phone's fallback does not match the desktop's runtime first theme {first!r}"
 
 
 @needs_node
