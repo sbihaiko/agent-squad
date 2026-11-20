@@ -26,7 +26,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/board_columns.py" "$d/board-definition.json" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359)
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/base-battery.sh" "$d/columnlimit.sh" "$d/board_columns.py" "$d/board-definition.json" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359); wave.sh sources its battery and the Testing limit (#2439)
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
@@ -118,10 +118,13 @@ childcc() { ( cd "$T/co" && . "$T/s/env.sh" && SG_WAVE_GATES=${GATES-true} pytho
 printf '#!/bin/bash\nexit 0\n' > "$T/s/reconcile.py"
 for s in consult.sh autohunt.sh autofrontier.sh autobug.sh heartbeat.sh wtclean.sh janitor.sh live-guard.sh branchland.sh startability.sh; do
   printf '#!/bin/bash\nexit 0\n' > "$T/s/$s"; chmod +x "$T/s/$s"; done
+# The stub ends the loop through the pid `cycle` recorded, never the process table: a child session runs under the kernel
+# wall, and /bin/ps there answers EPERM, so a stub that read the parent that way never ended a cycle and the loop ran on
+# until its bound (ADR-0139). The sibling suite test-watch-cycle.sh records its loop the same way.
 cat > "$T/s/vendor-guard.sh" <<EOF
 #!/bin/bash
 c=\$(( \$(cat "$T/cyc" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$T/cyc"
-[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(/bin/ps -o ppid= -p "\$PPID" | tr -d ' ')" 2>/dev/null
+[ "\$c" -ge "\${SG_TEST_CYCLES:-1}" ] && kill -TERM "\$(cat "$T/watchpid" 2>/dev/null)" 2>/dev/null
 exit 0
 EOF
 chmod +x "$T/s/vendor-guard.sh"
@@ -131,6 +134,7 @@ cycle() { local i=0; : > "$T/watch.out"; echo 0 > "$T/cyc"
   # exec: the pid this helper holds is the loop itself, never a subshell around it (#1742). A cycle past the bound
   # (CYCLE_TICKS tenths of a second) is ended with every process it started, so no loop outlives the suite.
   ( cd "$T/co" && exec env SG_TEST_CYCLES="${1:-1}" bash "$T/s/watch.sh" > "$T/watch.out" 2>&1 ) & local p=$!
+  echo "$p" > "$T/watchpid"   # the pid the vendor-guard stub ends the loop by, never the process table
   while kill -0 "$p" 2>/dev/null && [ $i -lt "${CYCLE_TICKS:-600}" ]; do /bin/sleep 0.1; i=$((i+1)); done
   end_tree "$p"; wait "$p" 2>/dev/null; rm -f "$T/st/fastloop.pid"
   # A cycle ended at the bound took its landing pass with it: the busy marker that pass held has no writer left to clear it.
