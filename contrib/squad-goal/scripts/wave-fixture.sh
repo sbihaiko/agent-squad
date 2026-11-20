@@ -34,7 +34,11 @@ G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 # The scripts a case runs: one copy of this checkout's scripts, by a list.
 for f in wave.sh issue_ledger.py ghread.py wavepause.py child_issues.py address.sh caps.sh serial.sh  \
   ghcall.sh drainpolicy.py base-battery.sh basecheck.sh fast-gate.sh quality-reading.py siblings.py  \
-  cluster.py autohunt.sh revformat.py gate.sh; do cp "$d/$f" "$T/s/"; done 2>/dev/null
+  cluster.py autohunt.sh revformat.py gate.sh columnlimit.sh issue_state.py; do cp "$d/$f" "$T/s/"; done 2>/dev/null
+# The board read of the wave's Testing bound (#2439) is the shipped one: the real issue_state.py beside the scripts, over the
+# hub cache the loop writes (SG_BOARD_CACHE). A case writes that cache in the hub's own shape (rows), so the wave's seam is the
+# one the loop runs, never a stub of it, and a case that writes none reads a board that carries no card.
+printf '{"t": %s, "repo":"x/y","items":[]}\n' "$(date +%s)" > "$T/st/hub-items.json"
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 # A capped run here is an ended run: the retirement an age-cap requeue waits for (#1970) is test-wave-retire.sh's, and here
 # a stub proves the end at once, so no process table is read and no process is signalled.
@@ -45,6 +49,7 @@ export SG_RETIRE_CMD=/usr/bin/true
   printf ': "${SG_WAVE_TIP_GATES:=true}"; export SG_WAVE_TIP_GATES\n'   # the tip's check (#377): `true` unless a case replaces it
   printf ': "${SG_WAVE_ENTRY_GATE:=on}"; export SG_WAVE_ENTRY_GATE\n'   # the entry cases prove the entry gate, so it is on here (#1802); Z10 names its own
   printf 'export SG_BOARD_VOCAB=shipped\n'   # the vocabulary every wave profile runs on (#468): its columns are the ones the landing writes
+  printf 'export SG_BOARD_CACHE=%s/st/hub-items.json\n' "$T"   # the board read a case writes (rows): the hub cache issue_state.py reads (#2439)
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
 # The seam notes each items read on stderr (issue_state.py); the stub does too, so a write that worked is never read as refused (#526).
