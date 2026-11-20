@@ -1650,11 +1650,15 @@ def reconcile_board():
         set_expected(n, "Closed", "a stale hand hold sits on a closed issue", rank=120)
         HH.clear_release(n, state=st)
         say(f"HOLD-RELEASED #{n}: the hold by {r['carrier']} is stale and the issue is closed, so it is released to Closed")
+    gating_now = HH.gates(state=st) if shipped else set()   # a hand gate in flight names its issue (#2563)
     for n, c in sorted(HH.holders(state=st).items(), key=lambda kv: int(kv[0])):
         if n in released: continue
         have = have_all.get(n)
         if not have or issue_info(n)[0] == "closed": continue
         who = f"taken over from run {c['who']}" if c["kind"] == "taken" else f"held by {c['who']}"
+        if c["kind"] == "hold" and n in gating_now and (have == os.environ.get("SG_TODO", "Todo") or canonical(have) in hand_columns):
+            set_expected(n, GATING, f"the issue is {who} and its hand gate runs", rank=60)   # above the hold's 45 and the branch rules' 50, below the landing's 80; a card in Testing stays (forward only)
+            continue
         if have == os.environ.get("SG_TODO", "Todo"): set_expected(n, doing, f"the issue is {who}: somebody works it", rank=45)
         elif canonical(have) in hand_columns: set_expected(n, have, f"the issue is {who}: its card is not moved back", rank=45)
     for n, (_, want, why) in sorted(held_owner.items(), key=lambda kv: int(kv[0])):   # frozen:owner holds the card: R names the write it held back, and writes nothing
