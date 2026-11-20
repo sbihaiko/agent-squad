@@ -7127,8 +7127,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
    header and no label wraps into its field at 1000 px wide. */
 #tab-set .khead{display:flex;align-items:baseline;gap:8px;font-size:var(--fs-body);font-weight:600;color:var(--fg);text-transform:none;letter-spacing:0}
 #tab-set .khead .ksub{font-size:var(--fs-body);font-weight:400;color:var(--mute);text-transform:none;letter-spacing:0}
-#tab-set .khead #kanchip{margin-left:auto;font-size:var(--fs-body);font-weight:600;text-transform:none;letter-spacing:0;white-space:nowrap}
-#tab-set .khead #kanchip.ok{color:var(--ok)}#tab-set .khead #kanchip.err{color:var(--warn)}
+#tab-set .khead #kanchip,#tab-set .khead #slotchip{margin-left:auto;font-size:var(--fs-body);font-weight:600;text-transform:none;letter-spacing:0;white-space:nowrap}
+#tab-set .khead #kanchip.ok,#tab-set .khead #slotchip.ok{color:var(--ok)}#tab-set .khead #kanchip.err,#tab-set .khead #slotchip.err{color:var(--warn)}
 #tab-set .ktab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body)}
 #tab-set .ktab .kcol1{width:18%}#tab-set .ktab .kcol2{width:20%}#tab-set .ktab .kcol3{width:20%}#tab-set .ktab .kcol4{width:42%}
 #tab-set .ktab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -7138,10 +7138,10 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .ktab .kn{white-space:nowrap}
 #tab-set .ktab .ks{color:var(--fg);font-size:var(--fs-body);line-height:1.35;overflow-wrap:anywhere}
 #tab-set .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);margin:6px 0 4px}
-#tab-set .stab .scol1{width:18%}#tab-set .stab .scol2{width:24%}#tab-set .stab .scol3{width:14%}#tab-set .stab .scol4{width:44%}
+#tab-set .stab .scol1{width:15%}#tab-set .stab .scol2{width:17%}#tab-set .stab .scol3{width:10%}#tab-set .stab .scol4{width:58%}
 #tab-set .stab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .stab tbody th,#tab-set .stab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0;overflow-wrap:anywhere}
-#tab-set .stab tbody th{white-space:normal;color:var(--fg)}
+#tab-set .stab tbody th{white-space:nowrap;color:var(--fg)}
 #tab-set .stab .slotnone{white-space:nowrap}
 #tab-set .stab input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
 #tab-set .stab .slotuse{display:flex;align-items:center;gap:8px;min-width:0}
@@ -7724,15 +7724,15 @@ const slotDirty=()=>!!slotS&&!!slotDraft&&(slotVal("runs")!==String(slotS.runs.c
 const slotFull=a=>!!a&&a.in_use>=a.cap;
 const slotChip=(s=slotS)=>{s=s||{};return slotFull(s.runs)?["runs full","err"]:slotFull(s.gates)?["gate workers full","err"]:["under the caps","ok"]};
 const slotHeld=h=>h.issues&&h.issues.length?h.issues.map(n=>`<a class=chip href="https://github.com/__REPO__/issues/${esc(n)}" target=_blank rel=noopener>#${esc(n)}</a>`).join(" "):`<small class="m slotnone">no issue named</small>`;
-const slotRun=g=>g.gates_running?`${g.gates_running} gate${g.gates_running===1?"":"s"} running`:"none running";
+const slotRun=g=>g.gates_running?`${g.gates_running} gate${g.gates_running===1?"":"s"} running`:g.in_use?"no loop gate running":"none running";
 const slotGateLine=g=>`a gate takes ${g.slots_per_gate} slots (${g.workers} asked, cap ${g.cap}) = ${g.gates_at_once} ${g.gates_at_once===1?"gate":"gates"} at a time · ${slotRun(g)}`;
 const slotRow=(name,label,use,cap,held)=>`<tr><th scope=row>${label}</th><td><span class=slotuse><span class="slotbar${use>=cap?" full":""}"><i style="width:${cap?Math.min(100,100*use/cap):0}%"></i></span><span class=slotnow>${use} of ${cap}</span></span></td><td>${slotCap(name)}</td><td class=slothold>${held}</td></tr>`;
 const slotCap=name=>`<input data-slot=${name} type=number min=1 max="${slotMax(name)}" step=1 inputmode=numeric value="${slotNow()[name].cap}" aria-label="${name==="runs"?"runs cap":"gate workers cap"}">`;
 const slotSay=()=>{const e=$("#slotmsg");if(!e)return;e.textContent=slotMsg.replace(/^!/,"");e.className="mx"+(slotMsg.startsWith("!")?" err":"")};
 function slotsHtml(){const t=slotChip();
- if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
+ if(!slotS)return `<div class=setblk data-blk=slots data-theme=lim><h3 class="blkh khead"><span>Machine slots <small class=ksub>· this machine · all projects</small></span></h3><span class=m>${esc(slotMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  const s=slotNow(),r=s.runs,g=s.gates;
- return `<div class=setblk data-blk=slots data-theme=lim><h3 class=blkh>Machine slots <small>· this machine · all projects</small> <small id=slotchip class=${t[1]}>${esc(t[0])}</small></h3>`
+ return `<div class=setblk data-blk=slots data-theme=lim><h3 class="blkh khead"><span>Machine slots <small class=ksub>· this machine · all projects</small></span> <small id=slotchip class=${t[1]}>${esc(t[0])}</small></h3>`
   +`<table class=stab><colgroup><col class=scol1><col class=scol2><col class=scol3><col class=scol4></colgroup><thead><tr><th scope=col>Slot</th><th scope=col>In use</th><th scope=col>Slots</th><th scope=col>Held by</th></tr></thead><tbody>`
   +slotRow("runs","Runs",r.in_use,r.cap,r.holders.length?r.holders.map(slotHeld).join(" "):`<small class=m>none running</small>`)
   +slotRow("gates","Gate workers",g.in_use,g.cap,`${esc(slotGateLine(g))}${g.holders.length?" · held by "+esc(g.holders.filter((h,i,a)=>a.indexOf(h)===i).join(", ")):""}`)
