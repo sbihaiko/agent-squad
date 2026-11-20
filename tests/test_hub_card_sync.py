@@ -360,3 +360,39 @@ def test_a_wide_tree_stays_under_its_deadline(hub, monkeypatch):
     assert out["capped"] == "deadline"
     assert len(reads) <= 11, "the reads stop once the deadline has passed, one read past it at most"
     assert elapsed < 1.0, "the press answers near its deadline, not after the whole tree"
+
+
+# --- #2495: a press writes the parent link its walk knows -----------------------------------------------------------
+
+def test_a_spec_press_writes_the_spec_as_pa_on_each_sub_issue_row(hub, monkeypatch):
+    _tree(hub, monkeypatch, {5: [6, 7]})
+    out = hub.sync_card(5)
+    assert {r["n"]: r.get("pa") for r in out["rows"] if r["n"] != 5} == {6: 5, 7: 5}, \
+        "each sub-issue row a spec press reads names the spec as its parent"
+
+
+def test_a_ticket_press_writes_pau_when_no_read_names_its_parent(hub, monkeypatch):
+    _tree(hub, monkeypatch, {5: []})
+    hub.sync_card(5)
+    item = next(i for i in hub.board_cache["items"] if i["n"] == 5)
+    assert item.get("pau") is True and "pa" not in item, "a ticket with no parent read cached is marked pau"
+
+
+def test_a_ticket_press_keeps_the_pa_the_parent_read_named(hub, monkeypatch):
+    _tree(hub, monkeypatch, {5: []})
+    hub.board_cache["items"] = [{**i, "pa": 9} if i["n"] == 5 else i for i in hub.board_cache["items"]]
+    hub.sync_card(5)
+    item = next(i for i in hub.board_cache["items"] if i["n"] == 5)
+    assert item.get("pa") == 9 and "pau" not in item, "a ticket press keeps the spec the parent read named"
+
+
+def test_a_sub_issue_row_a_press_wrote_is_not_promotable(hub, monkeypatch):
+    _tree(hub, monkeypatch, {5: [6]})
+
+    def backlog(num):
+        return {**{k: v for k, v in fresh(num).items() if k != "h"}, "st": "Backlog", "l": ["spec"] if num == 5 else []}
+
+    monkeypatch.setattr(hub, "read_one_card", backlog)
+    hub.sync_card(5)
+    item = next(i for i in hub.board_cache["items"] if i["n"] == 6)
+    assert hub.promotable(item) is False, "a sub-issue a press wrote is held by its spec, never promotable alone"
