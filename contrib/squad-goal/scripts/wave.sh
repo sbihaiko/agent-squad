@@ -2075,8 +2075,12 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     if [ "$(sc rev-list --count "origin/$base..origin/$w" 2>/dev/null)" != 0 ] && red=$(sg_base_red "$base"); then
       rh=$(basered_head "$red")
       full=""; [ -n "$rh" ] && full=$(sc rev-parse -q --verify "$rh^{commit}" 2>/dev/null)
-      if [ -z "$full" ] || ! sc merge-base --is-ancestor "$full" "origin/$w" 2>/dev/null; then
-        basered_wait "$w" "${full:-$rh}" "$red"; rm -rf "$S"; return 1; fi
+      # A red line that names no commit of this tree is no head the wave can carry: the wave says so, and never reads the
+      # token as a head its tip lacks, which would wait without naming why.
+      if [ -z "$full" ]; then
+        basered_wait "$w" "-no-commit:$rh" "$red; the red line names no commit this tree resolves, so the wave cannot tell whether its tip carries it, and it lands on a later pass"; rm -rf "$S"; return 1; fi
+      if ! sc merge-base --is-ancestor "$full" "origin/$w" 2>/dev/null; then
+        basered_wait "$w" "$full" "$red"; rm -rf "$S"; return 1; fi
       if [ -z "$tipgate" ]; then
         basered_wait "$w" "$full" "$red; the wave runs no tip check, so no evidence carries it past"; rm -rf "$S"; return 1; fi
       pastred=$rh; basered=1
@@ -2445,13 +2449,13 @@ land_queue() {
 # the first run last. A wave with nothing ahead of the base leaves the batch before it is sized and lands empty on its own
 # (`land`), after the batch's books; a run that owes a close or is past its age cap does the same (#2288). Exit 10: the batch does not fit --
 # fewer than two waves fit and carry commits, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
-# and the caller lands each run alone. Exit 1: no wave carries a red base head, or the gate ran no verdict -- a skip that names a hold, or a
+# and the caller lands each run alone. Exit 1: a wave of the batch does not carry a red base head, or the gate ran no verdict -- a skip that names a hold, or a
 # slot or lock wait that ran out -- so every run waits for a later pass with its queue kept. Exit 2: the network failed.
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 early=0 dropped="" tipobl="" brc=0 self0 selfrd er erd hid why
   local rows issues anyref rfs nontest bcards c twrc testmiss testpaths SG_REQUEUE_RUN
-  local pastred="" red rh full ncarry redseen=""
+  local pastred="" red rh full noncarry
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
     rs+=("$1"); rds+=("$rd")
@@ -2491,29 +2495,32 @@ land_batch() {
     done
     rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
     [ "${#rs[@]}" -ge 2 ] || { echo "WAVE BATCH: ${#rs[@]} wave(s) with commits left, so each run lands alone"; rm -rf "$S"; return 10; }
-    # A red base fails every gate a wave would start, so only a wave whose tip carries the red head lands past it (#2597, as
-    # branchland's redfix lands a branch, #809): the one tip gate over the stack is the evidence, and a wave that does not carry
-    # the head leaves the batch and waits. The containment is a fact of the wave branch, read before the stack adds the base.
+    # A red base fails every gate the batch would start (#786). The batch lands past it only when every wave of it carries the
+    # red head and its one tip check is green, as branchland's redfix lands a branch (#2597, #809): the tip gate over the stack
+    # is the evidence. Otherwise the whole batch waits with one line, said once for that batch and that head. It returns 1, not
+    # 10: a fallback lone landing would read the same red and wait again, and one pass would name the head twice. The
+    # containment is a fact of the wave branch, read before the stack adds the base.
     pastred=""
     if red=$(sg_base_red "$base"); then
       rh=$(basered_head "$red"); full=""
       [ -n "$rh" ] && full=$(sc rev-parse -q --verify "$rh^{commit}" 2>/dev/null)
-      if [ -z "$tipgate" ]; then
-        basered_wait "batch $(IFS=,; printf '%s' "${rs[*]}")" "${full:-$rh}" "$red; the batch runs no tip check, so no evidence carries it past"
+      ids=$(IFS=,; printf '%s' "${rs[*]}")
+      if [ -z "$full" ]; then   # a red line that names no commit of this tree: the batch never guesses which tip carries it
+        basered_wait "batch $ids" "-no-commit:$rh" "$red; the red line names no commit this tree resolves, so the batch cannot tell which tip carries it, and it lands on a later pass"
         rm -rf "$S"; return 1
       fi
-      kr=() krd=() kw=(); ncarry=0
+      noncarry=""
       for i in "${!ws[@]}"; do
-        if [ -n "$full" ] && sc merge-base --is-ancestor "$full" "origin/${ws[$i]}" 2>/dev/null; then
-          kr+=("${rs[$i]}"); krd+=("${rds[$i]}"); kw+=("${ws[$i]}"); ncarry=$((ncarry + 1))
-        elif [ -z "$redseen" ]; then   # a retry reads the red again, and a wave already sent back is named once
-          ers+=("${rs[$i]}"); erds+=("${rds[$i]}")
-          basered_wait "${ws[$i]}" "${full:-$rh}" "$red; the wave does not carry the red head, so it lands on a later pass"
-        fi
+        sc merge-base --is-ancestor "$full" "origin/${ws[$i]}" 2>/dev/null || noncarry="${noncarry:+$noncarry, }${ws[$i]}"
       done
-      redseen=1
-      rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
-      [ $ncarry -ge 2 ] || { echo "WAVE BATCH: $ncarry wave(s) carry the red base head, so each run lands alone"; rm -rf "$S"; return 10; }
+      if [ -n "$noncarry" ]; then
+        basered_wait "batch $ids" "$full" "$red; $noncarry do not carry the red head, so the batch lands on a later pass"
+        rm -rf "$S"; return 1
+      fi
+      if [ -z "$tipgate" ]; then
+        basered_wait "batch $ids" "$full" "$red; the batch runs no tip check, so no evidence carries it past"
+        rm -rf "$S"; return 1
+      fi
       pastred=$rh
     fi
     ids=$(IFS=,; printf '%s' "${rs[*]}")

@@ -164,7 +164,8 @@ r=$(landq run-y); rc=$?
 [ $rc != 0 ] && ok "l: the pass waits on a red base" || ko "l: exit $rc: '$r'"
 [ ! -s "$TIPLOG" ] && ok "l: no gate runs on a red base" || ko "l: tip gates: '$(cat "$TIPLOG")': '$r'"
 [ "$(devpushes)" = 0 ] && ok "l: no wave lands on a red base" || ko "l: pushes: '$(cat "$T/pushes.log")'"
-case "$r" in *"WAVE WAIT wave/run-y:"*"WAVE WAIT wave/run-z:"*) ok "l: one wait line names each wave that does not carry the head";; *) ko "l: no wait line: '$r'";; esac
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE WAIT')" = 1 ] && ok "l: one pass says the red base once" || ko "l: wait lines: '$r'"
+case "$r" in *"WAVE WAIT batch"*"wave/run-y, wave/run-z do not carry the red head"*) ok "l: the one line names each wave that does not carry the head";; *) ko "l: no wait line: '$r'";; esac
 rm -f "$T/st/auto"/basecheck-* "$T/st/auto"/wland-*
 
 # m (#2295, ADR-0170): the batch gate moves the card of every wave in the batch to Testing before it starts, and the landing

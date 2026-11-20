@@ -61,6 +61,10 @@ reset; queue run-q
 r=$(RED_BASE=1 landq run-p); rc=$?
 [ $rc = 1 ] && ok "B: a batch whose tips do not carry the red head waits (exit 1)" || ko "B: exit $rc: '$r'"
 case "$r" in *"WAVE WAIT"*"base dev is red at $h1"*) ok "B: the wait line names the red head";; *) ko "B: no wait line for $h1: '$r'";; esac
+# One pass names the red head once, however many runs and waves reach it (#2597): the batch says it, and a lone landing the
+# batch falls back to adds no second line for the same head.
+n=$(printf '%s\n' "$r" | /usr/bin/grep -c "base dev is red at $h1")
+[ "$n" = 1 ] && ok "B: one pass names the red head exactly once" || ko "B: the pass named the red head $n times: '$r'"
 [ "$(devpushes)" = 0 ] && ok "B: the batch pushes nothing to the base" || ko "B: pushed: '$(cat "$T/pushes.log")'"
 # The second pass on the same red head keeps the say-once marker (the pass writes it), and only the read cache goes.
 rm -f "$T/st/auto/basecheck-"*; : > "$T/pushes.log"; queue run-q
@@ -103,6 +107,19 @@ r=$(RED_BASE=1 TIPRED=1 SG_WAVE_CHILD_GATES='[ "$SG_WAVE_CHILD" = 24 ] && exit 1
 [ $rc = 1 ] && ok "D: a red tip on a red base waits (exit 1)" || ko "D: exit $rc: '$r'"
 case "$r" in *"leaves the wave"*) ko "D: the wave blamed the child of a red base: '$r'";; *) ok "D: no child is blamed for the base's red";; esac
 [ "$(devpushes)" = 0 ] && ok "D: nothing lands on the red base without green evidence" || ko "D: pushed: '$(cat "$T/pushes.log")'"
+
+# E (a red line that names no commit): sg_base_red answers a token this tree cannot resolve, so no wave can be read as carrying
+# it. The landing says so in its own line and waits; it never takes the token for a head the tip lacks and never waits silently.
+# A 9-char head resolves, which every section above relies on.
+cp "$T/s/basecheck.sh" "$T/s/basecheck.sh.real"
+printf '\nsg_base_red() { printf "base dev is red at unknown: fast-battery ended failure\\n"; return 0; }\n' >> "$T/s/basecheck.sh"
+mkrun run-t 25
+reset
+r=$(RED_BASE=1 lando run-t); rc=$?
+cp "$T/s/basecheck.sh.real" "$T/s/basecheck.sh"
+[ $rc = 1 ] && ok "E: an unresolvable red head makes the wave wait (exit 1)" || ko "E: exit $rc: '$r'"
+case "$r" in *"names no commit"*) ok "E: the wait line says the red line names no commit";; *) ko "E: no distinct line: '$r'";; esac
+[ "$(devpushes)" = 0 ] && ok "E: nothing lands on an unresolvable red" || ko "E: pushed: '$(cat "$T/pushes.log")'"
 
 [ $fail = 0 ] && echo "PASS test-wave-basered.sh" || echo "FAILED test-wave-basered.sh"
 exit $fail
