@@ -1,5 +1,5 @@
 """Name the test files a change reaches, by imports and by the paths tests name; answer `all` with a reason when neither can
-say, and `none` with a reason when the change reaches no test."""
+say, `skip` with a reason when the change needs no test, and `none` with a reason when the change reaches no test."""
 import argparse
 import ast
 import subprocess
@@ -27,6 +27,9 @@ SCRIPT_DIRS = ("contrib/squad-goal/scripts",)
 # list does not name is full too: a typo in a stage never narrows a gate.
 DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush"})
 SCRATCH = ".scratch"
+# The folders that hold the proof a card carries: an image, a render, an asset of a spec. No test can read it, so a path there
+# that no test and no script names needs no test: the delta places it with no reader instead of refusing the change (#2592).
+NEEDS_NO_TEST = ("docs/evidence/", "docs/spec-assets/")
 
 
 class _All(Exception):
@@ -43,6 +46,18 @@ class _None(Exception):
 
 def _none(reason):
     raise _None(reason)
+
+
+class _Skip(Exception):
+    pass
+
+
+def _skip(reason):
+    raise _Skip(reason)
+
+
+def _needs_no_test(rel):
+    return rel.startswith(NEEDS_NO_TEST)
 
 
 def _git(root, *args):
@@ -297,6 +312,13 @@ def _answer(root, base):
     if added.returncode:
         _all(f"the diff against {base} failed")
     added_paths = {p for p in added.stdout.split("\0") if p}
+    # The added and deleted paths are read before any answer: a test the tip adds or deletes is never placed with no
+    # reader, so no answer taken earlier can hide it (#1249).
+    added_or_deleted = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=AD",
+                            merge_base.stdout.strip(), "HEAD")
+    if added_or_deleted.returncode:
+        _all(f"the diff against {base} failed")
+    added_or_deleted_paths = {p for p in added_or_deleted.stdout.split("\0") if p}
 
     inert = _inert(root)
     live = []
@@ -360,11 +382,13 @@ def _answer(root, base):
 
     readers = _readers(root, live)
     selected = set()
+    unneeded = []
     for rel in live:
         hits = _named_by(named, listed, rel)
         # A script that reads the changed file reaches the tests that load it (#2271). Its own tests are the named ones, so
         # a test that loads the script by a path literal or imports it is selected whichever file of the pair changed.
-        for script in readers.get(Path(rel).name, ()):
+        readers_of = readers.get(Path(rel).name, set())
+        for script in readers_of:
             hits |= _named_by(named, listed, script)
         if _is_test(rel):
             hits.add(rel)
@@ -373,15 +397,27 @@ def _answer(root, base):
         elif rel.startswith(("squad/", "tests/")) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
+            # A file the record carries needs no test, so an unnamed one is placed with no reader instead of refusing the
+            # whole change. A test that names it keeps its reader and still runs above; a script that names it is a reader
+            # too, so the change still refuses when no test reaches that script (#2592).
+            if _needs_no_test(rel):
+                if readers_of:
+                    _all(f"{rel} is named by a script no test reaches: {' '.join(sorted(readers_of))}")
+                unneeded.append(rel)
+                continue
             if rel.endswith(".py"):
                 _all(f"{rel} is reached by no test: no import, no path literal, not inert")
             _all(f"{rel} is reached by no reader the selector can name: no test names it and no script reads it")
         selected |= hits
-    added_or_deleted = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=AD",
-                            merge_base.stdout.strip(), "HEAD")
-    if added_or_deleted.returncode:
-        _all(f"the diff against {base} failed")
-    if any(_is_test(rel) and Path(rel).parent.as_posix() == "tests" for rel in added_or_deleted.stdout.split("\0")):
+    # The change reaches no test because it needs none: no pytest can prove it, and no refusal holds it. The gate passes with
+    # pytest among the checks that did not run (ADR-0169 rule 5). A test the tip adds or deletes is no such change, so the
+    # skip never answers over it (#1249).
+    if not selected and unneeded:
+        touched = sorted(rel for rel in added_or_deleted_paths if _is_test(rel))
+        if touched:
+            _all(f"the tip adds or deletes a test: {' '.join(touched)}")
+        _skip(f"the change needs no test: {' '.join(unneeded)}")
+    if any(_is_test(rel) and Path(rel).parent.as_posix() == "tests" for rel in added_or_deleted_paths):
         selected.add(SHARD_GUARD)
     for rel in list(selected):
         if _is_test(rel):
@@ -409,6 +445,10 @@ def main(argv=None):
             print(path)
     except _All as reason:
         print(f"all: {reason}")
+    except _Skip as reason:
+        # The change needs no test. The one line says what it is, so the gate passes with pytest among the checks that did
+        # not run, never with the empty selection that ends unproven (ADR-0169 rule 5).
+        print(f"skip: {reason}")
     except _None as reason:
         # The delta selects no test. The one line says why, so the gate records the attempt as unproven with that reason,
         # never as a pass (#1249).

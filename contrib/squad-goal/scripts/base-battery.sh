@@ -23,27 +23,38 @@
 # files that squad/testselect.py answers for <base> at <stage>; `no` runs pytest over the whole tree. A stage the selector
 # does not know as a delta stage answers `all`, so the whole tree runs too. An empty selection (`none: <reason>`, or no line)
 # runs no pytest and logs `no pytest ran: the selection is empty: <reason>`, which the fast gate records as unproven (#1249).
+# A change that needs no test (`skip: <reason>`) runs no pytest either, records `no test needed: <reason>` and `delta`, and
+# leaves the gate a pass: no test can read an image of the record (ADR-0169 rule 5).
 # The line it logs, and writes to $GATE_SELECT_FILE when a gate set one, says `selected N files` or `all: <reason>`;
 # $GATE_SCOPE_FILE says `delta` or `full`, the scope that line names. A delta the selector cannot cover answers `all` with
 # its reason, so the full battery runs and the record says why the delta refused: a cheaper scope never narrows a gate
 # (ADR-0018). <narrow> `yes` is the child's own gate (#2085): an `all` answer there runs no pytest and keeps the `delta`
 # scope, and the line names the change the delta cannot cover, so the gate ends unproven with that reason (ADR-0169 rule 4).
+# One line answers, and the answers never mix: `SG_TEST_SELECT=no` answers `all:` before the selector is asked, so a gate told to
+# run the whole battery never narrows; `all:` runs the full battery and names its reason; `skip:` runs no pytest and leaves a
+# pass; `none:` runs no pytest and leaves the gate unproven. The skip line carries its own why and prefix, so no later read of
+# the selected-0-files branch can take it for the empty selection (#1249).
 sg_battery_run() {
   local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} narrow=${6:-no} scope why="the selector named no test file" \
-        out= defs= prefix="the selection is empty: "
+        out= defs= prefix="the selection is empty: " needed=
   "$py" -m ruff check squad tests && "$py" -m mypy squad || return
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
   case $files in none:*) why=${files#none: }; files=;; esac
+  case $files in skip:*) needed=${files#skip: }; files=; why=$needed; prefix="the change needs no test: ";; esac
   case $files in
     all:*) if [ "$narrow" = yes ] && [ "$4" = yes ]; then
              line="selected 0 files"; scope=delta; why=${files#all: }; prefix="the delta cannot cover the change: "
            else line=$files; scope=full; fi;;
-    *) line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; scope=delta;;
+    *) if [ -n "$needed" ]; then line="no test needed: $needed"; else line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; fi
+       scope=delta;;
   esac
   echo "$line"
   [ -z "${GATE_SELECT_FILE:-}" ] || echo "$line" > "$GATE_SELECT_FILE"
   [ -z "${GATE_SCOPE_FILE:-}" ] || echo "$scope" > "$GATE_SCOPE_FILE"
+  # (#2592) A change that needs no test runs no pytest either, and nothing is left unproven: the line names the change, and
+  # fast-gate.sh reads it as a pass with pytest among the checks that did not run (ADR-0169 rule 5).
+  [ -z "$needed" ] || { echo "no test needed: $needed"; return 0; }
   # (#1249) No pytest ran, so nothing is proven: the line names why, and fast-gate.sh reads it as an unproven verdict.
   [ "$line" != "selected 0 files" ] || { echo "no pytest ran: $prefix$why"; return 0; }
   # (#1726) One pass, at the project's own line: the parallel run lifts no cap, so the slow-cap guard records every unmarked

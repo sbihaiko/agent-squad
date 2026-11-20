@@ -111,6 +111,11 @@ def none_reason(lines):
     return lines[0].removeprefix("none: ") if len(lines) == 1 and lines[0].startswith("none: ") else None
 
 
+def skip_reason(lines):
+    """The reason of a `skip:` answer: the change needs no test, and the line names it. None when it is not one."""
+    return lines[0].removeprefix("skip: ") if len(lines) == 1 and lines[0].startswith("skip: ") else None
+
+
 def test_a_deleted_test_file_answers_all_because_pytest_cannot_run_a_missing_path(tmp_path):
     """A path absent at the tip made the gate's pytest collect nothing (exit 5). An empty selection proves nothing (#1249),
     so a delta whose every test the tip deleted falls through to the full battery and names the deleted path."""
@@ -200,6 +205,68 @@ def test_a_changed_file_no_import_edge_reaches_answers_all(tmp_path, path, text)
     repo = tip(tmp_path, {path: text})
     lines = select(repo)
     assert len(lines) == 1 and lines[0].startswith("all: ") and path in lines[0]
+
+
+@pytest.mark.parametrize("path", [
+    "docs/evidence/2592/kanban-1000.png",
+    "docs/spec-assets/settings-limits-bugs/slots-after-1000-today.png",
+])
+def test_an_image_under_the_evidence_folders_needs_no_test(tmp_path, path):
+    """#2592: a file under docs/evidence or docs/spec-assets that no test and no script names carries nothing a test can
+    read, so the delta places it with no reader instead of refusing it (ADR-0169 rule 5)."""
+    repo = tip(tmp_path, {path: "png\n"})
+    assert skip_reason(select(repo)) == f"the change needs no test: {path}"
+
+
+def test_an_image_beside_a_named_script_keeps_the_script_delta(tmp_path):
+    """#2592: an image that needs no test adds nothing to the delta and hides nothing: the other file still selects."""
+    script = "contrib/squad-goal/scripts/check.sh"
+    repo = tip(
+        tmp_path,
+        {"docs/evidence/2592/kanban-1000.png": "png\n", script: "changed\n"},
+        extra={script: "old\n", "tests/test_names.py": f'SCRIPT = "{script}"\n'},
+    )
+    assert select(repo) == ["tests/test_names.py"]
+
+
+def test_an_unknown_path_beside_an_evidence_image_still_answers_all(tmp_path):
+    """#2592: the evidence folders are no blanket. A path outside them that no reader names still refuses the delta."""
+    repo = tip(tmp_path, {"docs/evidence/2592/kanban-1000.png": "png\n", "docs/notes.md": "notes\n"})
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and "docs/notes.md" in lines[0]
+
+
+def test_an_evidence_image_a_test_names_still_selects_that_test(tmp_path):
+    """#2592: a named image keeps its reader: a test that asserts the image exists still runs when it changes."""
+    path = "docs/evidence/2512/kanban-1000.png"
+    repo = tip(
+        tmp_path,
+        {path: "changed\n"},
+        extra={path: "old\n", "tests/test_names.py": f'IMAGE = "{path}"\n'},
+    )
+    assert select(repo) == ["tests/test_names.py"]
+
+
+def test_an_evidence_image_a_script_names_is_no_change_that_needs_no_test(tmp_path):
+    """#2592: only a path that no test and no script names is placed with no reader (ADR-0169 rule 5). A script that names
+    the image is a reader, so when no test reaches that script the delta cannot cover the change: it answers `all`."""
+    path = "docs/evidence/2592/kanban-1000.png"
+    script = "contrib/squad-goal/scripts/render_proof.py"
+    repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", script: f'IMG = "{path}"\n'})
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and path in lines[0] and script in lines[0], lines
+
+
+def test_a_deleted_test_beside_an_evidence_image_never_passes_as_a_change_that_needs_no_test(tmp_path):
+    """#2592: the deletion of a test is never placed with no reader. The shard guard proves the partition, so the delta is
+    that guard, and a skip that would hide the deleted test behind an image beside it never answers (#1249)."""
+    repo = tip(
+        tmp_path,
+        {"tests/test_gamma.py": None, "docs/evidence/2592/kanban-1000.png": "png\n"},
+        extra={"tests/test_tooling.py": "X = 1\n"},
+    )
+    lines = select(repo)
+    assert skip_reason(lines) is None and lines == ["tests/test_tooling.py"], lines
 
 
 def test_a_base_that_does_not_resolve_answers_all_never_an_empty_list(tmp_path):
