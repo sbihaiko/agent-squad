@@ -141,11 +141,16 @@ case "$r" in *"BATCH rn1: WAVE wave/rn1 "*) ok "D: the test-only run took its bo
 
 # E: the test-only decision reads a path as one path, never as the shell's words. One classification feeds both decisions,
 # and a path with whitespace stays whole, in the code list and in the boolean alike.
-e=$( ( . "$T/s/wave.sh"
-  paths_of() { printf '%s\n' "docs/a note.MD" "squad/with space.py"; }
-  echo "cls=$(paths_classified body | tr '\n' '|')"
-  echo "notest=$(paths_nontest body | tr '\n' '|')"
-  echo "nonote=$(paths_nonnote body | tr '\n' '|')" ) 2>/dev/null )
+# A case sources wave.sh under a $0 inside $T/s (the tipcheck form), so wave.sh reads the fixture's env.sh and never the
+# real one, which exits where no profile resolves.
+inwave() { T="$T" bash -c '. "$1/wave.sh"; . "$2"' "$T/s/probe.sh" "$T/s" "$1" 2>/dev/null; }
+cat > "$T/e.sh" <<'EOF'
+paths_of() { printf '%s\n' "docs/a note.MD" "squad/with space.py"; }
+echo "cls=$(paths_classified body | tr '\n' '|')"
+echo "notest=$(paths_nontest body | tr '\n' '|')"
+echo "nonote=$(paths_nonnote body | tr '\n' '|')"
+EOF
+e=$(inwave "$T/e.sh")
 case "$e" in *"cls=C squad/with space.py|"*) ok "E: a path with whitespace is one code path";; *) ko "E: the classification: '$e'";; esac
 case "$e" in *"nonote=squad/with space.py|"*) ok "E: the whitespace path survives the non-note read";; *) ko "E: the non-note read: '$e'";; esac
 case "$e" in *"notest=squad/with space.py|"*) ok "E: the whitespace path reads as code whole";; *) ko "E: the code read: '$e'";; esac
@@ -161,13 +166,15 @@ case "$(comments 26)" in *"squad/a.py, squad/b.py"*) ok "F: the comment names bo
 
 # G: the one Refs token is read as an issue number or not at all. A token that is no number reads no issue, so a malformed
 # Refs line never turns into a read of some other issue.
-g=$( ( . "$T/s/wave.sh"
-  issue_text() { echo CALLED >> "$T/g.log"; echo "a test at tests/x.py"; }
-  : > "$T/g.log"
-  issues=""; amb=""; nontest=""; rfs="x"; testonly_read a b
-  echo "miss=[$testmiss]"
-  issues=""; amb=""; nontest=""; rfs="26"; w=wave/x; testonly_read a b
-  echo "calls=$(wc -l < "$T/g.log" | tr -d ' ')" ) 2>/dev/null )
+cat > "$T/g.sh" <<'EOF'
+issue_text() { echo CALLED >> "$T/g.log"; echo "a test at tests/x.py"; }
+: > "$T/g.log"
+issues=""; amb=""; nontest=""; rfs="x"; testonly_read a b
+echo "miss=[$testmiss]"
+issues=""; amb=""; nontest=""; rfs="26"; w=wave/x; testonly_read a b
+echo "calls=$(wc -l < "$T/g.log" | tr -d ' ')"
+EOF
+g=$(inwave "$T/g.sh")
 case "$g" in *"miss=[]"*) ok "G: a token that is no issue number takes no decision";; *) ko "G: the token was read: '$g'";; esac
 case "$g" in *"calls=1"*) ok "G: the one numeric token is the only one read";; *) ko "G: the read count: '$g'";; esac
 
