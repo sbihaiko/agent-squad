@@ -50,6 +50,8 @@ def clean(hub):
     (Path(hub.STATE) / "watchd.pid").unlink(missing_ok=True)   # one case's open loop never leaks into the next
     for name in ("landed.tsv", "promote.log", "fastloop.pid", "cqflush.pid"):
         (Path(hub.STATE) / name).unlink(missing_ok=True)   # the delivery stage and the driver reads start empty in every case
+    for p in (Path(hub.STATE) / "state").glob("*.json"):
+        p.unlink()   # one case's landing facts never leak into the next
     shutil.rmtree(Path(os.environ["SQUAD_CAPS_DIR"]) / "gates", ignore_errors=True)
     hub.board_cache = {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None}
     yield
@@ -572,11 +574,45 @@ def test_the_page_reads_live_work_after_a_run_pause_or_resume(hub):
 
 
 # --------------------------------------------------------------------------- #2507: one short row per item
-def _fail(hub, n, at, sha="a" * 40):
-    """One landing row for an issue: the landed.tsv ledger `<epoch> TAB <branch> TAB <sha> TAB <issue>`."""
-    p = Path(hub.STATE) / "landed.tsv"
-    with p.open("a") as f:
-        f.write(f"{int(at)}\twave/run-{n}\t{sha}\t{n}\n")
+def _landing(hub, n, at, ref=None, sha="a" * 40):
+    """One landing fact in the issue's ledger file, dated `at`: the fact the delivery chips read (ADR-0149)."""
+    d = Path(hub.STATE) / "state"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{hub.REPO.replace('/', '__')}__{n}.json"
+    rec = json.loads(p.read_text()) if p.exists() else {}
+    rec.setdefault("landed", {})[ref or f"wave/run-{n}"] = {"kind": "run", "sha": sha, "ts": at}
+    p.write_text(json.dumps(rec))
+
+
+def _work_repo(tmp_path, branch, subjects):
+    """A bare remote with one commit on dev, and a work branch with one commit per subject, pushed to the remote."""
+    def git(*args, cwd):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True, capture_output=True)
+    remote, work = tmp_path / "remote.git", tmp_path / "work"
+    git("init", "-q", "--bare", str(remote), cwd=tmp_path)
+    git("init", "-q", "-b", "dev", str(work), cwd=tmp_path)
+    git("remote", "add", "origin", str(remote), cwd=work)
+    (work / "base").write_text("base\n")
+    git("add", "base", cwd=work); git("commit", "-q", "-m", "base", cwd=work)
+    git("push", "-q", "origin", "dev", cwd=work)
+    git("checkout", "-q", "-b", branch, cwd=work)
+    for i, subject in enumerate(subjects):
+        (work / f"f{i}").write_text(subject)
+        git("add", f"f{i}", cwd=work); git("commit", "-q", "-m", subject, cwd=work)
+    git("push", "-q", "origin", branch, cwd=work)
+    return remote
+
+
+def _ffland(remote, branch, issue):
+    """A hand landing: ffland.sh pushes the branch to the base of the fixture remote, as a fast-forward."""
+    env = {**os.environ, "SG_BASE": "dev", "SG_LAND_REMOTE": str(remote), "SG_LAND_STATUS": "off"}
+    out = subprocess.run(["bash", str(ROOT / "contrib/squad-goal/scripts/ffland.sh"), branch, str(issue)],
+                         env=env, capture_output=True, text=True)
+    assert out.stdout.startswith("FFLAND "), out.stdout + out.stderr
+
+
+def _dev_done(hub, n):
+    return [s["state"] for s in hub.delivery_stages(n)][:2]
 
 
 def _promote(hub, at, branch="stg"):
@@ -605,7 +641,7 @@ def test_a_hold_row_shows_the_five_delivery_stages_its_own_facts_reach(hub):
     done and makes main the stage in hand, and publish stays later while the issue is open."""
     _closed(hub)
     now = int(time.time())
-    _fail(hub, 2439, now - 3600)
+    _landing(hub, 2439, now - 3600)
     _promote(hub, now - 600, "stg")
     _hold(hub, 2439)
     hold = _row(_answer(hub), "hold")
@@ -618,6 +654,21 @@ def test_a_hold_row_with_no_delivery_fact_stands_at_the_gate(hub):
     _closed(hub)
     _hold(hub, 2486)
     assert [c["state"] for c in _row(_answer(hub), "hold")["stages"]] == ["current", "later", "later", "later", "later"]
+
+
+def test_a_hand_landing_through_ffland_marks_gate_and_dev_done(hub, tmp_path):
+    """#2532: a hand landing by ffland.sh writes the issue's landing fact, so its hold row reads gate and dev done."""
+    remote = _work_repo(tmp_path, "gui/2527-hold", ["hold work (Refs #2527)"])
+    _ffland(remote, "gui/2527-hold", 2527)
+    assert _dev_done(hub, 2527) == ["done", "done"], hub.delivery_stages(2527)
+
+
+def test_one_branch_landing_two_issues_marks_gate_and_dev_done_for_both(hub, tmp_path):
+    """#2532: a landing that carries two issues gives each of them the landing fact, so both read gate and dev done."""
+    remote = _work_repo(tmp_path, "gui/2512-2514", ["first (Refs #2512)", "second (Refs #2514)"])
+    _ffland(remote, "gui/2512-2514", 2512)
+    assert _dev_done(hub, 2512) == ["done", "done"], hub.delivery_stages(2512)
+    assert _dev_done(hub, 2514) == ["done", "done"], hub.delivery_stages(2514)
 
 
 def test_a_hold_row_names_its_issue_and_no_title(hub):

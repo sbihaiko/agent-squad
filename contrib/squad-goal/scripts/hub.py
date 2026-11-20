@@ -4406,10 +4406,11 @@ LANES = (("watch", pathlib.Path("locks") / "watch" / "pid"), ("fastloop", pathli
 
 def delivery_stages(n, base=None, closed=False):
     """The five delivery stages of one issue, from the loop's own records and no GitHub read (#2507): `gate` and `dev` are
-    done once the landing ledger names the issue; `stg` and `main` once a promotion of that branch came after the landing,
-    since a later green tip carries the earlier work with it (ADR-0145); `publish` once the issue is closed, which is what
-    a publish does to the issues it carries. The stage in hand is the first one not done, and every later one waits."""
-    at = max((r["at"] for r in strip_landings(base) if r.get("issue") == n), default=None)
+    done once the issue's ledger holds a landing fact (ADR-0149, #2532); `stg` and `main` once a promotion of that branch
+    came after the landing, since a later green tip carries the earlier work with it (ADR-0145); `publish` once the issue
+    is closed, which is what a publish does to the issues it carries. The stage in hand is the first one not done, and
+    every later one waits."""
+    at = max(issue_ledger.landed_at(f"{REPO}#{n}", base), default=None)
     promos = strip_promotions(base)
     stg = os.environ.get("SG_STG_BRANCH") or "stg"
     main = os.environ.get("SG_MAIN_BRANCH") or "main"
