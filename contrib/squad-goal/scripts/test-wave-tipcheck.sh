@@ -33,6 +33,15 @@ W94=wave/run-94; start2 run-94 >/dev/null; child 1947 g1947 "origin/$W94"; en2 r
 printf 'run-94\n' > "$T/st/auto/disp-1947"; rm -f "$T/st/py.log"; : > "$T/gh.log"; : > "$T/board.log"
 r=$(SG_WAVE_GATE_WORKERS=2 SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 1947"' SG_WAVE_CHILD_PYTEST='echo "workers=${SQUAD_GATE_WORKERS:-none}" >> "$SG_STATE/py.log"; exit 0' land2 run-94 2>&1); rc=$?
 [ "$(/usr/bin/tail -1 "$T/st/py.log" 2>/dev/null)" = "workers=2" ] && ok "W2594: SG_WAVE_GATE_WORKERS names the child gate's count" || ko "W2594: named count: '$(cat "$T/st/py.log" 2>/dev/null)' (exit $rc)"
+# W2604 (#2604): the tip check takes one gate slot by default, and SG_TIP_GATE_SLOTS names another; its worker count stays.
+W90=wave/run-90; start2 run-90 >/dev/null; child 1950 g1950 "origin/$W90"; en2 run-90 1950 >/dev/null
+rm -f "$T/st/tip.log"
+r=$(SG_WAVE_TIP_GATES='echo "slots=${SG_GATE_SLOT_COUNT:-none} workers=${SG_GATE_WORKERS:-none}" >> "$SG_STATE/tip.log"; exit 0' land2 run-90 2>&1); rc=$?
+[ "$(/usr/bin/tail -1 "$T/st/tip.log" 2>/dev/null)" = "slots=1 workers=${SG_GATE_WORKERS:-none}" ] && ok "W2604: the tip check takes one gate slot by default" || ko "W2604: default slot count: '$(cat "$T/st/tip.log" 2>/dev/null)' (exit $rc)"
+W91=wave/run-91; start2 run-91 >/dev/null; child 1952 g1952 "origin/$W91"; en2 run-91 1952 >/dev/null
+rm -f "$T/st/tip.log"
+r=$(SG_TIP_GATE_SLOTS=2 SG_WAVE_TIP_GATES='echo "slots=${SG_GATE_SLOT_COUNT:-none}" >> "$SG_STATE/tip.log"; exit 0' land2 run-91 2>&1); rc=$?
+[ "$(/usr/bin/tail -1 "$T/st/tip.log" 2>/dev/null)" = "slots=2" ] && ok "W2604: SG_TIP_GATE_SLOTS names the tip check's slot count" || ko "W2604: named slot count: '$(cat "$T/st/tip.log" 2>/dev/null)' (exit $rc)"
 
 # A green tip runs no child pytest.
 W95=wave/run-95; start2 run-95 >/dev/null; child 950 g950 "origin/$W95"; en2 run-95 950 >/dev/null

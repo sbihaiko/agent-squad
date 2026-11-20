@@ -348,8 +348,14 @@ case "${1:-}" in
     # (#2317) The two clocks the record needs to split the gate stint: when it asked for its slots inside the lock, and
     # when it held them. The run clock starts after this, so its seconds are the run, never the wait (ADR-0166).
     slot_ask=$(date +%s)
-    SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "${SG_GATE_WORKERS:-6}" --pid "${PPID:-$$}" --target "$PWD" "${take[@]}" "${prio[@]}"); slot_rc=$?
+    # (#2604) The slot count is the admission and the worker count is the pool: SG_GATE_SLOT_COUNT names the slots this gate
+    # takes, and SG_GATE_WORKERS stays the count its command reads. A wave tip check takes one slot by default (wave.sh) and
+    # keeps its pytest pool; at the whole count, a long gate left the wave no slot inside its wait, and the check measured nothing.
+    slot_count=${SG_GATE_SLOT_COUNT:-}; named=1
+    case $slot_count in ''|*[!0-9]*|0) slot_count=${SG_GATE_WORKERS:-6}; named=0;; esac
+    SQUAD_GATE_WORKERS=$(sg_caps take gates "gate-$$" --count "$slot_count" --pid "${PPID:-$$}" --target "$PWD" "${take[@]}" "${prio[@]}"); slot_rc=$?
     [ "$slot_rc" = 0 ] || { [ ${#prio[@]} = 0 ] || sg_caps release gates "gate-$$" >/dev/null 2>&1; exit "$slot_rc"; }
+    [ "$named" = 0 ] || SQUAD_GATE_WORKERS=${SG_GATE_WORKERS:-$SQUAD_GATE_WORKERS}
     export SQUAD_GATE_WORKERS SG_GATE_SLOT_ASK="$slot_ask" SG_GATE_SLOT_GOT="$(date +%s)"
     trap 'exit 143' TERM; trap 'exit 130' INT   # a stop past the hold deadline still runs the EXIT trap below
     trap 'sg_caps release gates "gate-$$"' EXIT
