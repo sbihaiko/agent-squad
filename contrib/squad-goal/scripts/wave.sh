@@ -417,6 +417,9 @@ landed_key() {
 # what auto/requeues-<n> and its .runs held, under a lock per issue and with an atomic write (ADR-0030). A missing file beside
 # those old files holds the issue until the owner's `migrate` (ADR-0149 rule 4).
 ledger() { local op=$1 n=$2; shift 2; python3 "$here/issue_ledger.py" "$op" "$SG_REPO#$n" "$@"; }
+# requeued_in <run> <issue> [<dropped>]: the run requeued the issue (its ledger's requeue fact, ADR-0149), or the tip check
+# of this pass dropped its child (#2209). The landing and the early close read the same rule (#1106, #2538).
+requeued_in() { case " ${3:-} " in *" $2 "*) return 0;; esac; [ -n "$(ledger requeued "$2" "$1" 2>/dev/null)" ]; }
 
 # count <issue> <run> <why> [own|loop]: one failed dispatch of the issue (#609). The count is the issue's (#532), in its
 # ledger file, which lists each one: the run, the evolution key, the reason. The run is the key: one run counts once,
@@ -1690,7 +1693,8 @@ stuck() {
 # entry records the new clock. One WAVE CLOSE line names the wave, the limit and the children left out.
 close_early() {
   local run=$1 w=$2 rd=$3 kept=$4 lo="" out="" n
-  for n in $(run_issues "$rd"); do case " $kept " in *" $n "*) ;; *) lo="${lo:+$lo }$n";; esac; done
+  # (#2538) A child the run requeued is no child left out: it goes to a new run, so it keeps no recut and no wave marker.
+  for n in $(run_issues "$rd"); do case " $kept " in *" $n "*) ;; *) requeued_in "$run" "$n" || lo="${lo:+$lo }$n";; esac; done
   mkdir -p "$SG_STATE/auto"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-entry-$run"
   if [ -n "$lo" ]; then
     printf '%s\n' "$w" > "$SG_STATE/auto/wave-recut-$run"   # the wave that closed early: the next cut replaces it
@@ -2022,8 +2026,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # issue again on a new branch. Without this the wave refused on every later cycle, so the run never landed and the commits
       # of its other children stayed on their branches too.
       # (#2209) A child the tip check dropped in this pass was requeued by it, whatever its ledger could record.
-      requeued_here() { case " $dropped " in *" $1 "*) return 0;; esac; [ -n "$(python3 "$here/issue_ledger.py" requeued "$SG_REPO#$1" "$run" 2>/dev/null)" ]; }
-      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) requeued_here "$n" || undel="${undel:+$undel }$n";; esac; done
+      for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *) requeued_in "$run" "$n" "$dropped" || undel="${undel:+$undel }$n";; esac; done
       # (#1833) A wave whose tip the base already carries has landed: its children's work reached the base in an earlier landing,
       # and only the wave branch stayed behind (its deletion did not reach it). A child that never entered such a wave is no
       # orphan to hold the wave: nothing can change on a later pass, so the pass writes its books and drops its markers as a kept

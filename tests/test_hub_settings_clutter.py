@@ -1,8 +1,8 @@
 """The hub's first screen carries no configuration accordion and no History tab.
 
 Configuration lives on the Settings tab: the subscription plans are a panel there, and the sidebar keeps only what a
-reader watches. The run history is the bottom of the Runs tab, never a block of the Settings Loop theme (#1277). The tab
-bar keeps Kanban, Runs, Flow and Settings.
+reader watches. The run history is the bottom of the Runs tab (#1277), never a block of Settings or of the Loop tab. The
+tab bar keeps Kanban, Runs, Flow, Loop and Settings.
 """
 import importlib.util
 import re
@@ -54,11 +54,11 @@ def test_the_tab_bar_holds_no_history_tab(hub):
 
 
 def test_the_settings_tab_holds_the_plans_and_no_run_history(hub):
-    """Re-anchored (#1277): the run history left the Settings Loop theme for the Runs tab. The plans stay here."""
+    """Re-anchored (#1277): the run history left Settings for the Runs tab. The plans stay here."""
     pane = _settings_pane(hub.PAGE)
     assert "id=subs" in pane, "the subscription plans are not on the Settings tab"
     assert "id=list" not in pane, "the run history is back on the Settings tab"
-    assert "Run history" not in pane, "the Loop theme carries a run history block again"
+    assert "Run history" not in pane, "Settings carries a run history block again"
 
 
 def test_the_history_lives_in_the_runs_tab(hub):
@@ -66,7 +66,8 @@ def test_the_history_lives_in_the_runs_tab(hub):
     side = hub.PAGE[hub.PAGE.index("<aside id=side>"):hub.PAGE.index("</aside>")]
     assert "Last ended" not in side, "the Last ended card is back on the first screen"
     assert "#ended" not in hub.PAGE and "#enall" not in hub.PAGE, "a script still writes the removed panel"
-    assert re.search(r'<details id=lop[^>]*>.*?id=histb', hub.PAGE, re.S) is None, "the run history is back in the Loop theme"
+    loop = hub.PAGE[hub.PAGE.index("<section id=tab-prof"):hub.PAGE.index("</section>", hub.PAGE.index("<section id=tab-prof"))]
+    assert "id=histb" not in loop and "id=list" not in loop, "the run history is back in the Loop tab"
     pane = hub.PAGE[hub.PAGE.index("id=tab-runs"):hub.PAGE.index("</section>", hub.PAGE.index("id=tab-runs"))]
     assert "id=main" in pane and "id=list" not in pane, "the Runs tab has a second list again"
 
@@ -79,7 +80,6 @@ def test_the_models_renderer_writes_no_sidebar_card(hub):
 def test_every_accordion_the_page_names_exists(hub):
     """A name with no element behind it kills the whole page script (#1032): every name is answered by a card."""
     import json
-    import re
     ids = json.loads(re.search(r"const ACC=(\[[^\]]*\]);", hub.PAGE).group(1))
     assert ids, "the page names no accordion"
     for i in ids:

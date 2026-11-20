@@ -67,13 +67,35 @@ def test_settings_has_a_theme_list_a_phone_select_and_one_page_save(hub):
     nav = re.search(r'<nav class=snav aria-label="Settings themes">(.*?)</nav>', view, re.S)
     assert nav, "Settings has no left theme list"
     themes = re.findall(r"data-sp=(\w+)", nav.group(1))
-    assert {"mdl", "slk", "lop", "acc"} <= set(themes)
+    assert themes == ["lim", "sub", "mdl", "slk", "acc"], "Settings lists a theme that belongs to another screen (#2515)"
     sel = re.search(r"<select id=ssel[^>]*>(.*?)</select>", view, re.S)
     assert sel and re.findall(r"value=(\w+)", sel.group(1)) == themes, "the phone select does not list the same themes"
     assert view.count("id=ssave") == 1, "Settings needs exactly one page-level Save"
-    for sp in ("lop", "acc"):
+    for sp in ("lim", "acc"):
         panel = re.search(rf"<details id={sp} class=sp data-sp={sp}.*?</details>", view, re.S).group(0)
         assert "Save" not in panel, f"the {sp} theme carries a Save"
+
+
+def test_settings_lists_no_loop_theme(hub):
+    """#2515: the Loop theme left Settings. The page keeps one theme per remaining screen, in the nav and in the
+    phone select, and the loop's change list lives in the Loop tab."""
+    _, port = hub
+    st, page = _get(port, "/")
+    assert st == 200
+    view = _between(page, "<section id=tab-set", "</section>\n</main>")
+    nav = re.search(r'<nav class=snav aria-label="Settings themes">(.*?)</nav>', view, re.S)
+    assert nav and "Loop" not in nav.group(1), "Settings still lists a Loop theme"
+    assert "data-sp=lop" not in view and "<details id=lop " not in view, "Settings still carries the Loop panel"
+    sel = re.search(r"<select id=ssel[^>]*>(.*?)</select>", view, re.S)
+    assert sel and "value=lop" not in sel.group(1), "the phone select still lists the Loop theme"
+
+
+def test_the_loop_change_list_is_reachable_from_the_loop_tab(hub):
+    """#2515: the change list left Settings with its theme; the Loop tab still draws it."""
+    _, port = hub
+    _, page = _get(port, "/")
+    loop_tab = _between(page, "<section id=tab-prof", "</section>")
+    assert "id=lopaud" in loop_tab, "the loop change list left the page with the Loop theme"
 
 
 def test_the_sidebar_carries_no_control_that_writes_a_chain_and_no_link_to_settings(hub):

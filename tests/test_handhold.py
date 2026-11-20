@@ -369,3 +369,98 @@ def test_the_vocabulary_is_hold_renew_release_never_claim_or_job():
         assert word not in source, f"the settled vocabulary never says {word!r}"
     for verb in ("hold", "renew", "release"):
         assert verb in source
+
+
+# ---- the gate marker (#2563): a hand gate in flight names its issue, so the card moves to Testing
+GATE_START = NOW - 120.0
+
+
+def alive(pid=PID, start=GATE_START):
+    return {pid: RL.Proc(start, "bash hand-gate.sh")}
+
+
+def test_gate_writes_a_marker_with_the_pid_and_the_start_time(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    fields = dict(line.split(" ", 1) for line in (env / "auto" / "gate-7").read_text().splitlines())
+    assert fields["pid"] == str(PID)
+    assert int(fields["start"]) == int(GATE_START)
+
+
+def test_gate_leaves_the_three_line_hold_file_as_it_was(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    before = read(env, 7)
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    assert read(env, 7) == before
+    assert len(before.splitlines()) == 3
+
+
+def test_gate_refuses_an_issue_with_no_hold_and_writes_no_marker(env, capsys):
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 1
+    assert "no live hold" in capsys.readouterr().err
+    assert not (env / "auto" / "gate-7").exists()
+
+
+def test_gate_refuses_a_stale_hold(env, capsys):
+    assert H.hold([7], by="manual", minutes=1, state=env, now=NOW - 7200, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 1
+    assert not (env / "auto" / "gate-7").exists()
+
+
+def test_gate_refuses_a_pid_that_is_not_running(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs={}) == 1
+    assert not (env / "auto" / "gate-7").exists()
+
+
+def test_gates_names_the_issue_while_the_gate_process_lives(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    assert H.gates(state=env, procs=alive()) == {"7"}
+
+
+def test_gates_drops_a_marker_whose_pid_is_gone(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    assert H.gates(state=env, procs={}) == set()
+
+
+def test_gates_drops_a_marker_whose_pid_was_reused_by_a_later_process(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    assert H.gates(state=env, procs=alive(start=GATE_START + 500)) == set()
+
+
+def test_gates_skips_a_malformed_marker(env):
+    (env / "auto" / "gate-7").write_text("garbage\n")
+    assert H.gates(state=env, procs=alive()) == set()
+
+
+def test_a_release_removes_the_gate_marker(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs=alive()) == 0
+    assert H.release([7], by="manual", to="Todo", state=env, now=NOW, procs={}) == 0
+    assert not (env / "auto" / "gate-7").exists()
+
+
+def test_the_gate_verb_is_a_cli_verb(env):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.main(["gate", "7", "--pid", str(PID)], state=env, now=NOW, procs=alive()) == 0
+    assert H.gates(state=env, procs=alive()) == {"7"}
+
+
+def test_gate_refuses_a_process_with_no_start_time(env, capsys):
+    assert H.hold([7], by="manual", minutes=60, state=env, now=NOW, procs={}) == 0
+    assert H.gate(7, PID, state=env, now=NOW, procs={PID: RL.Proc(None, "bash")}) == 1
+    assert not (env / "auto" / "gate-7").exists()
+
+
+@pytest.mark.parametrize("text", ["pid 4242\nstart \n", "pid 4242\n", "pid 4242\nstart x\n"])
+def test_gates_drops_a_marker_whose_start_is_not_a_number(env, text):
+    (env / "auto" / "gate-7").write_text(text)
+    assert H.gates(state=env, procs=alive()) == set()
+
+
+def test_gates_drops_a_marker_when_the_process_has_no_start_time(env):
+    (env / "auto" / "gate-7").write_text(f"pid {PID}\nstart {int(GATE_START)}\n")
+    assert H.gates(state=env, procs={PID: RL.Proc(None, "bash")}) == set()

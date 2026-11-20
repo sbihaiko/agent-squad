@@ -72,6 +72,7 @@ def test_the_monitor_scope_defines_the_formatters_the_cut_calls(hub):
     assert "const fpct" in scope, "the quota formatter rides along with the card it draws"
     assert "fpct(" in scope
 
+@pytest.mark.heavy
 def test_the_monitor_draws_gauges_tiles_and_the_spec_bar(hub):
     out = run_page(hub.MOBILE_PAGE, """
       await loadPoll(); await __tick(10);

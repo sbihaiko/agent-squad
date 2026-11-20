@@ -1768,4 +1768,17 @@ $G -q 'Doing full: 1 of 1 card(s)' "$TR/st/cycle.log" && ok "41d the line names 
 rm -f "$TR/st/auto/hold-1702"
 printf 'caps:\n  runs: 2\n' > "$TR/co/docs/squad/defaults.yaml"
 
+# 42) (#2538) a Todo bug a live run holds is skipped with one line that names the holding run, never in silence.
+tr_fresh
+mkdir -p "$TR/co/runs/run-2538"
+printf '{"event": "spawn_accepted", "child": "c1", "task": "GitHub issue #1745"}\n' > "$TR/co/runs/run-2538/record.jsonl"
+printf '%s\n' run-2538 > "$TR/st/active-runs.txt"
+printf '[{"number":1745,"title":"Core: busy bug","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]\n' > "$TR/issues.json"
+printf '1745\tTodo\n' > "$TR/cards.tsv"
+r=$(AB_DRY=1 PATH="$TR/bin:$PATH" SG_SQUAD="$SG_SQUAD" BOARD="$TR/s/board.sh" bash "$TR/s/autobug.sh" 2>&1)
+[ "$(printf '%s\n' "$r" | $G -c 'AUTOBUG skip #1745: a live run holds it (run-2538)')" = 1 ] \
+  && ok "42 the busy skip names the holding run once" || ko "42 no busy skip line naming run-2538: '$r'"
+case "$r" in *"[1745]"*) ko "42 the busy bug was dispatched: '$r'";; *) ok "42 the busy bug is not dispatched";; esac
+: > "$TR/st/active-runs.txt"; rm -rf "$TR/co/runs/run-2538"
+
 rm -rf "$T"; exit $fail

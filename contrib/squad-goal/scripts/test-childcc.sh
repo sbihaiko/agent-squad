@@ -518,6 +518,14 @@ newh=$(/usr/bin/git -C "$T/co/runs/stale/ws/target-c" rev-parse HEAD)
 [ "$rc" = 3 ] && [ "$rc2" = 3 ] && ok "a stale approval holds the child's delivery until its tip's review enters" || ko "stale approval: exit $rc, then $rc2: $out $out2"
 /usr/bin/grep -q 'Code Complete 6301$' "$T/moves" 2>/dev/null && ko "a child whose approval went stale moved to Code Complete" || ok "a child whose approval went stale is not moved to Code Complete"
 echo "$out" | /usr/bin/grep -q 'WAVE HOLD #6301: the review of' && ok "the pass names the review of the moved tip it holds for" || ko "no hold line: $out"
+# (b1) #2538: a child at its requeue head prints the TIP line once over two passes, and gets no cc- marker.
+export GH_NUMS="6300:Doing 6301:Doing 6302:Doing"
+h=$(orun rqh 6302 approve land); rfile rqh "$h" APPROVE
+/usr/bin/git -C "$T/co/runs/rqh/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m after-approval
+lqset 6302 rqh "$(/usr/bin/git -C "$T/co/runs/rqh/ws/target-c" rev-parse HEAD)"
+out=$(lpass rqh; lpass rqh)
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'CHILD REVIEW TIP #6302')" = 1 ] && ok "a child at its requeue head prints the TIP line once over two passes" || ko "TIP lines: $(printf '%s\n' "$out" | /usr/bin/grep -c 'CHILD REVIEW TIP #6302'): $out"
+[ ! -e "$T/st/auto/cc-rqh-c" ] && ok "a child at its requeue head gets no cc- marker" || ko "a child at its requeue head got a cc- marker"
 # (b2) a run-owned child whose own land failed on missing review evidence (a review deadline, or a review that held it) is
 # neither requeued nor worked here: the run's review is the only evidence, and missing evidence holds delivery (ADR-0151
 # rule 5). The failed-land requeue is for a failure unrelated to the review, so it reads the approval first.

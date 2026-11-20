@@ -339,7 +339,7 @@ def _set_bar(mod):
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:false,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="";')
-    body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;setBar();'
+    body = ('const out={};for(const t of Object.keys(STH)){sTheme=t;setBar();'
             'out[t]={save:$("#ssave").hidden,disc:$("#sdisc").hidden,text:$("#schg").textContent}}'
             'console.log(JSON.stringify(out));')
     return _node_src(mod, "\n".join([stub, src, body]))
@@ -361,7 +361,7 @@ def test_the_spend_and_limits_theme_shows_no_save_and_no_discard_button(hub):
 
 def test_every_other_theme_keeps_its_save_and_discard_buttons(hub):
     out = _set_bar(hub[0])
-    for theme in ("lop", "sub", "mdl", "slk", "acc"):
+    for theme in ("sub", "mdl", "slk", "acc"):
         assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
 
 

@@ -293,6 +293,15 @@ def test_a_node_render_that_paints_the_live_card_carries_the_heavy_mark():
     assert _heavy_marked(paints), "this test starts node for the card render and carries no heavy mark"
 
 
+def test_a_node_boot_of_the_monitor_page_carries_the_heavy_mark():
+    """#2567: this case boots the phone page under node to draw the Monitor, and a loaded serial runner pushed the call to
+    2.1 s, past the 2 s line an unmarked call is held to. The node start is the work the call does, so the case carries the
+    heavy mark."""
+    from tests.test_hub_mobile_monitor import test_the_monitor_draws_gauges_tiles_and_the_spec_bar as draws
+
+    assert _heavy_marked(draws), "this test boots the page under node and carries no heavy mark"
+
+
 def test_nested_pytest_checks_explain_their_slow_marker():
     checks = NESTED_CHECKS
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {

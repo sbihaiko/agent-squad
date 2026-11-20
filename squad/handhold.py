@@ -5,6 +5,8 @@ A hold has two faces, and this module is the one writer of both (#1678). The fil
 Presence is the hold. The label face is the holder label on the issue: `ready-for-human` for `manual` and
 `ready-for-HAL9K` for `hal9k`. A hold, a renew and a release write both faces in one act. A pass reads only the label;
 the janitor reads only the file; the reconciler reports a disagreement between them as a defect and rewrites neither.
+The hub's Live work tile reads the file face itself, with no `squad` import, because it serves profiles whose checkout
+holds no package (#2533).
 
 `until` is the moment the hold stops being trusted; the board pass reports a hold past it as stale and never moves a
 card (ADR-0170). The marker's own write time is the folder-activity read the Live work tile uses, measured against the
@@ -23,11 +25,16 @@ The verbs are hold, renew and release. A release names the next column and recor
 There is no release without a column: a card is never left in a ghost state. A pass releases a stale hold on a closed
 issue to Closed; a stale hold on an open issue is cleared by the release verb only.
 
+The gate verb (#2563) records a hand gate in flight: `$SG_STATE/auto/gate-<n>` holds `pid <pid>` and `start <epoch>`. The
+hold file keeps its three lines. The verb refuses an issue with no live hold. `gates()` reads the markers and drops one
+whose process is gone or started at another time, so a reused pid never reads as a gate. A release removes the marker.
+
 Every write verb touches `$SG_STATE/board-dirty`, so the board pass re-reads at once.
 
 usage: python3 -m squad.handhold hold <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold renew <n>... [--by manual|hal9k] [--minutes N]
        python3 -m squad.handhold release <n>... --to Todo|Batching|Closed [--by manual|hal9k]
+       python3 -m squad.handhold gate <n> --pid <pid>
        python3 -m squad.handhold holds [--live] [--closed n...]
 
 The bound defaults to `SG_HAND_HOLD_MINUTES` (240). The label writes name the repository `SG_REPO` names (owner/name).
@@ -158,6 +165,10 @@ def _numbers(issues):
 
 def _path(state, n):
     return state / "auto" / f"hold-{n}"
+
+
+def _gate_path(state, n):
+    return state / "auto" / f"gate-{n}"
 
 
 def _release_path(state, n):
@@ -321,6 +332,7 @@ def _verb(verb, issues, by, minutes, state, checkout, now, procs, to=None, label
         for n in nums:
             record.atomic_write(_release_path(st, n), f"to {to}\nby {by}\n")
             _path(st, n).unlink(missing_ok=True)
+            _gate_path(st, n).unlink(missing_ok=True)
             print(f"released #{n}: the card moves to {to}")
     else:
         for n in nums:
@@ -352,6 +364,67 @@ def release(issues, by="manual", to=None, state=None, checkout=None, now=None, p
     """Clear the hold file and the holder label the same carrier wrote, and record the column the card moves to. Return 0
     or 1: a label the clear does not reach keeps the hold."""
     return _verb("release", issues, by, None, state, checkout, now, procs, to=to, label_write=label_write, repo=repo)
+
+
+def gate(issue, pid, state=None, now=None, procs=None):
+    """Record that a hand gate runs as process `pid` for `issue`: write `auto/gate-<n>` with the pid and its start time.
+    Return 0, or 1 with one stderr line when the issue has no live hold or the process is not running (#2563)."""
+    st = _state(state)
+    now = time.time() if now is None else now
+    n = _numbers([issue])[0]
+    try:
+        c = _read(st, n)
+        table = RL.read_processes() if procs is None else (procs() if callable(procs) else procs)
+    except (HandError, RL.ReadError) as e:
+        print(f"refused #{n}: {e}", file=sys.stderr)
+        return 1
+    if c is None or now > c["until_t"]:
+        print(f"refused #{n}: no live hold to gate", file=sys.stderr)
+        return 1
+    p = table.get(int(pid))
+    if p is None:
+        print(f"refused #{n}: process {pid} is not running", file=sys.stderr)
+        return 1
+    (st / "auto").mkdir(parents=True, exist_ok=True)
+    if p.start is None:
+        print(f"refused #{n}: process {pid} has no start time, so a reused pid could not be told apart", file=sys.stderr)
+        return 1
+    record.atomic_write(_gate_path(st, n), f"pid {int(pid)}\nstart {int(p.start)}\n")
+    (st / "board-dirty").touch()
+    print(f"gating #{n}: process {pid}")
+    return 0
+
+
+def gates(state=None, procs=None):
+    """The set of issue numbers (as strings) with a live hand gate. A marker is dropped when it is unreadable, when its
+    process is gone, when either side has no start time, or when the process started at another time than the marker names
+    (a reused pid). Nothing is
+    written."""
+    st = _state(state)
+    d = st / "auto"
+    out = set()
+    markers = sorted(d.glob("gate-*")) if d.is_dir() else []
+    if not markers:
+        return out
+    try:
+        table = RL.read_processes() if procs is None else (procs() if callable(procs) else procs)
+    except RL.ReadError:
+        return out
+    for p in markers:
+        n = p.name[len("gate-"):]
+        try:
+            fields = dict(line.partition(" ")[::2] for line in p.read_text().splitlines())
+            pid = int(fields["pid"])
+        except (OSError, KeyError, ValueError):
+            continue
+        proc = table.get(pid)
+        if proc is None or not n.isdigit():
+            continue
+        began = fields.get("start", "")
+        if proc.start is None or not began.isdigit() or abs(proc.start - int(began)) > RL.START_SLACK:
+            continue   # no start time on either side: the pid alone proves nothing
+        out.add(n)
+    return out
 
 
 def holds(state=None, closed=None, now=None):
@@ -475,6 +548,9 @@ def main(argv=None, **kw):
             s.add_argument("--to", choices=COLUMNS + tuple(OLD_COLUMNS), required=True)
         else:
             s.add_argument("--minutes", type=int)
+    g = sub.add_parser("gate")
+    g.add_argument("issue", metavar="n")
+    g.add_argument("--pid", type=int, required=True)
     h = sub.add_parser("holds")
     h.add_argument("--live", action="store_true")
     h.add_argument("--closed", nargs="*", default=[], metavar="n")
@@ -491,6 +567,8 @@ def main(argv=None, **kw):
                 print(f"#{r['issue']} {r['carrier']} since {r['since']} until {r['until']}"
                       f"{'  stale' if r['stale'] else ''}{'  orphan' if r['orphan'] else ''}")
             return 0
+        if a.verb == "gate":
+            return gate(a.issue, a.pid, state=kw.get("state"), now=kw.get("now"), procs=kw.get("procs"))
         if a.verb == "release":
             return release(a.issues, by=a.by, to=a.to, **kw)
         fn = hold if a.verb == "hold" else renew

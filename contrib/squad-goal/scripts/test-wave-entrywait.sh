@@ -68,4 +68,20 @@ W22=wave/run-22; start2 run-22 >/dev/null; child 220 g220 "origin/$W22"; en2 run
 printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-22"
 bash "$T/s/wave.sh" expired run-22 >/dev/null 2>&1 && ok "EW5: the 7200 s age cap still applies" || ko "EW5: a wave past its age cap is not expired"
 
+# EW6 (#2538): a child the run already requeued is not left out. #230 entered; #231 has a requeue fact for the run. The early
+# close lands #230 and keeps no marker, so the run stops holding #231 as busy.
+W23=wave/run-23; start2 run-23 >/dev/null; child 230 g230 "origin/$W23"; en2 run-23 230 >/dev/null
+mkdir -p "$T/co/runs/run-23"
+printf '%s\n%s\n' \
+  '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #230 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #231 work"}}' > "$T/co/runs/run-23/record.jsonl"
+SG_STATE=$T/st python3 "$T/s/issue_ledger.py" requeue "x/y#231" run-23 0123456789abcdef0123456789abcdef01234567 >/dev/null 2>&1
+printf '%s\n' "$(( $(date +%s) - 1801 ))" > "$T/st/auto/wave-entry-run-23"
+: > "$T/gh.log"
+r=$(land2 run-23); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q 'issues/230 -f state=closed' "$T/gh.log" && ok "EW6: the wave lands the child that entered" || ko "EW6: exit $rc: '$r'"
+case "$r" in *"left out: none"*) ok "EW6: the close line leaves out no requeued child";; *) ko "EW6: the close line names a requeued child: '$r'";; esac
+[ ! -e "$T/st/auto/wave-recut-run-23" ] && ok "EW6: no recut marker stays for a requeued child" || ko "EW6: the recut marker stays for a requeued child"
+[ ! -e "$T/st/auto/wave-run-23" ] && ok "EW6: the run's wave marker goes" || ko "EW6: the run's wave marker stays, so the requeued issue stays busy"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
