@@ -7130,11 +7130,11 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .khead #kanchip{margin-left:auto;font-size:var(--fs-body);font-weight:600;text-transform:none;letter-spacing:0;white-space:nowrap}
 #tab-set .khead #kanchip.ok{color:var(--ok)}#tab-set .khead #kanchip.err{color:var(--warn)}
 #tab-set .ktab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body)}
-#tab-set .ktab .kcol1{width:16%}#tab-set .ktab .kcol2{width:27%}#tab-set .ktab .kcol3{width:20%}#tab-set .ktab .kcol4{width:37%}
+#tab-set .ktab .kcol1{width:18%}#tab-set .ktab .kcol2{width:20%}#tab-set .ktab .kcol3{width:20%}#tab-set .ktab .kcol4{width:42%}
 #tab-set .ktab thead th{text-align:left;color:var(--mute);font-weight:600;font-size:var(--fs-caption);padding:0 10px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
 #tab-set .ktab tbody th,#tab-set .ktab tbody td{text-align:left;font-weight:400;padding:9px 10px 9px 0;border-bottom:1px solid var(--line);vertical-align:middle;min-width:0}
 #tab-set .ktab tbody th{white-space:nowrap;font-size:var(--fs-body);color:var(--fg)}
-#tab-set .ktab .kl input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px}
+#tab-set .ktab .kl input{width:100%;max-width:110px;box-sizing:border-box;font-size:var(--fs-caption);padding:0 6px;text-align:left}
 #tab-set .ktab .kn{white-space:nowrap}
 #tab-set .ktab .ks{color:var(--fg);font-size:var(--fs-body);line-height:1.35;overflow-wrap:anywhere}
 #tab-set .stab{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--fs-body);margin:6px 0 4px}
@@ -7668,18 +7668,18 @@ const kanLims=c=>Object.fromEntries(c.map(x=>[x.name,x.max_cards==null?"none":St
 const kanBody=name=>{const out=kanLims((kanS&&kanS.columns)||[]),c=kanDraft&&kanDraft.find(x=>x.name===name);   // the payload is the last saved state, with only the column being saved overlaid, so another drafted column never rides along (#2433)
  if(c)out[name]=c.max_cards==null?"none":String(c.max_cards);return out};
 const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify(kanS.columns);
-const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
-const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
+const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count!=null&&c.count>=c.max_cards).map(c=>c.name);
+const kanChip=()=>{const f=kanFull();return kanS&&kanS.read===false?"cards not read yet":!f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
 const kanPct=c=>c.max_cards?Math.max(0,Math.min(100,Math.round(100*c.count/c.max_cards))):0;
 const kanFile=()=>{const f=(kanS&&(kanS.file_label||kanS.file))||"";   // the footer names the project file by its repository path, derived from the payload's own path when no label rides along (#2512)
  const p=String(f).split(String.fromCharCode(92)).join("/"),i=p.lastIndexOf("/docs/");
  return i>=0?p.slice(i+1):p.startsWith("docs/")?p:p.slice(p.lastIndexOf("/")+1)};
 const kanBar=c=>`<span class=kbar role=img aria-label="${c.count} of ${c.max_cards}"><span class="kfill${c.count>=c.max_cards?" full":""}" style="width:${kanPct(c)}%"></span></span><b class=knum>${c.count} of ${c.max_cards}</b>`;   // a limited column shows its bar and N of M (#2512)
-const kanRow=c=>`<tr data-kanrow="${esc(c.name)}"><th scope=row class=kc>${esc(c.name)}</th><td class=kn>${c.max_cards==null?`<b class=knum>${c.count}</b>`:kanBar(c)}</td>`
+const kanRow=c=>`<tr data-kanrow="${esc(c.name)}"><th scope=row class=kc>${esc(c.name)}</th><td class=kn>${c.count==null?`<b class=knum>—</b>`:c.max_cards==null?`<b class=knum>${c.count}</b>`:kanBar(c)}</td>`
  +`<td class=kl><input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}></td>`
  +`<td class=ks>${esc(c.stops||"no pass reads it yet")}${kanOK===c.name?" <span class=lok aria-label=saved>✓</span>":""}</td></tr>`;   // one aligned row of the table the spec draws (#2512)
 const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
- :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · <span id=kanage>${span((Date.now()-kanAt)/1000)} ago</span>`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
+ :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · <span id=kanage>${span((Date.now()-kanAt)/1000)} ago</span>`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):kanS&&kanS.read===false?"Cards now: board items not read yet.":"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
 function kanTick(now){const el=$("#kanage");if(el&&kanOK)el.textContent=span(((now||Date.now())-kanAt)/1000)+" ago"}   // a Kanban save's age moves with the clock, like the limits line (#2433)
 let kanAgeTmr=null;
 function kanTickStop(){if(kanAgeTmr){clearInterval(kanAgeTmr);kanAgeTmr=null}}
@@ -7698,7 +7698,7 @@ async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)retu
   kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
- return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
+ return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanS&&kanS.read===false?"":kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
   +`<table class=ktab><colgroup><col class=kcol1><col class=kcol2><col class=kcol3><col class=kcol4></colgroup><thead><tr><th scope=col>Column</th><th scope=col>Cards now</th><th scope=col>Card limit</th><th scope=col>What the limit stops</th></tr></thead><tbody>`
   +kanCols().map(kanRow).join("")+`</tbody></table>`
   +`<p class=note>Empty field = unlimited. Closed and Abandoned hold finished cards and take no limit. File: <code>${esc(kanFile())}</code></p></div>`
@@ -10148,10 +10148,12 @@ def columns_read():
     except Exception as e:
         return {"columns": [], "file": "", "err": f"the settings reader did not load: {type(e).__name__}: {' '.join(str(e).split())}"}
     lim = bl.limits(CHECKOUT or ".")
+    read = bool(board_cache.get("t"))
     counts = board_column_counts(bl.COLUMNS)
     return {"file": str(pathlib.Path(CHECKOUT or ".") / "docs" / "squad" / "defaults.yaml"),
             "file_label": str(pathlib.Path("docs") / "squad" / "defaults.yaml"),   # the footer names the file by its repository path (#2512)
-            "columns": [{"name": n, "max_cards": lim.get(n), "count": counts.get(n, 0),
+            "read": read,
+            "columns": [{"name": n, "max_cards": lim.get(n), "count": counts.get(n, 0) if read else None,
                          "stops": bl.column_stop(n)} for n in bl.COLUMNS]}
 
 

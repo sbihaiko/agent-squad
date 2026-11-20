@@ -12,6 +12,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -67,13 +69,14 @@ def test_the_route_answers_every_active_column_its_limit_and_its_count(hub):
     got = mod.columns_read()
     assert [c["name"] for c in got["columns"]] == ACTIVE
     assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
-    assert all(isinstance(c["count"], int) for c in got["columns"])
+    assert all(c["count"] is None for c in got["columns"]), "a column counts cards before any board read"
     assert got["file"].endswith("docs/squad/defaults.yaml")
     assert got["file_label"] == "docs/squad/defaults.yaml", "the page has no repository path for the footer"
 
 
 def test_each_column_count_comes_from_the_loop_board_cache(hub):
     mod, _ = hub
+    mod.board_cache["t"] = 1.0
     mod.board_cache["items"] = [
         {"n": 1, "st": "Doing", "s": "open", "l": []},
         {"n": 2, "st": "Doing", "s": "open", "l": []},
@@ -86,6 +89,7 @@ def test_each_column_count_comes_from_the_loop_board_cache(hub):
         got = {c["name"]: c["count"] for c in mod.columns_read()["columns"]}
     finally:
         mod.board_cache["items"] = []
+        mod.board_cache["t"] = 0
     assert got == {"Backlog": 1, "Todo": 1, "Doing": 2, "Reviewing": 0, "Batching": 0, "Testing": 1}, got
 
 
@@ -94,9 +98,9 @@ def test_a_row_states_what_its_limit_stops_or_that_no_pass_reads_it(hub):
     stops = {c["name"]: c["stops"] for c in mod.columns_read()["columns"]}
     assert "publish" in stops["Backlog"], stops["Backlog"]
     assert "autofrontier" in stops["Doing"], stops["Doing"]
-    assert "Backlog for Todo" in stops["Todo"], stops["Todo"]
+    assert "into Todo" in stops["Todo"], stops["Todo"]
     assert "autofrontier" in stops["Batching"], stops["Batching"]
-    assert "branch review pass" in stops["Reviewing"], stops["Reviewing"]
+    assert "branch review" in stops["Reviewing"], stops["Reviewing"]
     assert "wave" in stops["Testing"], stops["Testing"]
     for name in [n for n in stops if n not in ("Backlog", "Todo", "Doing", "Batching", "Reviewing", "Testing")]:
         assert "no pass reads it yet" in stops[name], (name, stops[name])
@@ -270,3 +274,133 @@ def test_the_kanban_draws_the_header_through_col_count(hub):
     assert "colCount(g.n,COLS[g.name])" in page, "the column header does not carry the limit"
     assert "const COLS=b.limits||{}" in page, "the page does not read the limits the board payload carries"
     assert mod.board_column_limits() == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
+
+
+def test_a_settings_page_with_no_board_read_shows_a_dash_in_every_cards_now_cell(hub):
+    # Issue #2526: before the first board read a count is unknown, so the cell shows a dash and the status line names the read.
+    mod, _ = hub
+    got = mod.columns_read()
+    assert got["read"] is False
+    h = _node(mod, "kanS=" + json.dumps(got) + ";console.log(JSON.stringify({h:kanHtml()}))")["h"]
+    cells = re.findall(r'<tr[^>]*data-kanrow="([^"]+)"><th[^>]*>.*?</th><td class=kn>(.*?)</td>', h, re.S)
+    assert [name for name, _ in cells] == ACTIVE, cells
+    assert all(cell == "<b class=knum>—</b>" for _, cell in cells), cells
+    assert "board items not read yet" in h, "the status line does not name the missing board read"
+
+
+# --- the rendered table at 1000 px and 1440 px (issue #2526): a real layout, measured in ego-browser
+
+_RENDER_JS = """
+const task = await taskSpace("kanban limits render " + Date.now());
+const page = task.page("p1");
+await page.cdp("Emulation.setDeviceMetricsOverride", { width: __WIDTH__, height: 1100, deviceScaleFactor: 1, mobile: false });
+await page.goto("http://127.0.0.1:__PORT__/");
+await page.waitForSelector("nav button, [role=tab]", { timeout: 15000 });
+await page.evaluate(() => {
+  const btn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Settings");
+  if (btn) btn.click();
+  const lim = document.querySelector("#lim");
+  if (lim) lim.open = true;
+  const sp = document.querySelector("[data-sp=lim]");
+  if (sp) sp.click();
+});
+await page.waitForSelector(".ktab tbody tr", { timeout: 15000 });
+const rows = await page.evaluate(() => [...document.querySelectorAll(".ktab tbody tr")].map((tr) => {
+  const th = tr.querySelector("th");
+  const range = document.createRange();
+  range.selectNodeContents(th);
+  const label = range.getBoundingClientRect();
+  const bar = tr.querySelector(".kbar");
+  const stops = tr.querySelector(".ks");
+  const input = tr.querySelector("input");
+  const lh = parseFloat(getComputedStyle(stops).lineHeight) || parseFloat(getComputedStyle(stops).fontSize) * 1.2;
+  const text = document.createRange();
+  text.selectNodeContents(stops);
+  return {
+    row: tr.dataset.kanrow,
+    gapToBar: bar ? bar.getBoundingClientRect().left - label.right : null,
+    stopsLines: Math.round(text.getBoundingClientRect().height / lh),
+    inputAlign: getComputedStyle(input).textAlign,
+  };
+}));
+await task.finish({ keep: [] });
+console.log(JSON.stringify(rows));
+"""
+
+
+def _render_rows(mod, width):
+    if shutil.which("ego-browser") is None:
+        pytest.skip("ego-browser is required")
+    mod.board_cache["t"] = 1.0
+    mod.board_cache["items"] = [{"n": i, "st": st, "s": "open", "l": []} for i, st in
+                                enumerate(["Doing"] * 6 + ["Reviewing"] * 3 + ["Testing"], start=1)]
+    try:
+        srv = _serve(mod)
+        try:
+            script = _RENDER_JS.replace("__WIDTH__", str(width)).replace("__PORT__", str(srv.server_address[1]))
+            out = subprocess.run(["ego-browser", "nodejs"], input=script, capture_output=True, text=True, timeout=120)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+    finally:
+        mod.board_cache["items"] = []
+        mod.board_cache["t"] = 0
+    assert out.returncode == 0, out.stderr or out.stdout
+    rows = json.loads(out.stderr.strip().splitlines()[-1])
+    assert [r["row"] for r in rows] == ACTIVE, rows
+    return rows
+
+
+def _serve(mod):
+    class Page(BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/":
+                body, ct = mod.PAGE.encode(), "text/html; charset=utf-8"
+            elif path == "/api/columns":
+                body, ct = json.dumps(mod.columns_read()).encode(), "application/json"
+            elif path == "/api/limits":
+                body, ct = json.dumps(mod.limits_read()).encode(), "application/json"
+            elif path == "/api/slots":
+                body, ct = json.dumps(mod.slots_read()).encode(), "application/json"
+            else:
+                body, ct = b"{}", "application/json"
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+@pytest.mark.heavy
+@pytest.mark.slow(reason="drives ego-browser through a real render of the Settings page")
+def test_the_label_and_the_bar_keep_a_gap_of_eight_px_at_1000_px(hub):
+    mod, _ = hub
+    for width in (1000, 1440):
+        for row in _render_rows(mod, width):
+            if row["gapToBar"] is not None:
+                assert row["gapToBar"] >= 8, (width, row)
+
+
+@pytest.mark.heavy
+@pytest.mark.slow(reason="drives ego-browser through a real render of the Settings page")
+def test_what_the_limit_stops_wraps_to_two_lines_at_1000_px(hub):
+    mod, _ = hub
+    for row in _render_rows(mod, 1000):
+        assert row["stopsLines"] <= 2, row
+
+
+@pytest.mark.heavy
+@pytest.mark.slow(reason="drives ego-browser through a real render of the Settings page")
+def test_the_limit_value_sits_at_the_left_edge_of_its_field(hub):
+    mod, _ = hub
+    for width in (1000, 1440):
+        for row in _render_rows(mod, width):
+            assert row["inputAlign"] == "left", (width, row)
