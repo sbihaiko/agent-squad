@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 MUX_PY = SCRIPTS / "hubmux.py"
 GHREAD_PY = SCRIPTS / "ghread.py"
-TABS = ["now", "work", "specs", "chat", "runs"]
+TABS = ["now", "work", "specs", "runs"]   # the chat tab left with the session controls (Refs #2490)
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 
@@ -78,7 +78,7 @@ def test_the_hub_fixture_reads_no_run_folder_of_the_machine(machine_fork, hub):
     assert [d for d in mod.project_dirs() if str(d).startswith(str(machine_fork))] == []
 
 
-def test_mobile_page_names_five_tabs_in_spec_order(hub):
+def test_mobile_page_names_four_tabs_in_spec_order(hub):
     mod, port = hub
     status, ct, body = get(port, "/mobile")
     assert status == 200 and ct.startswith("text/html")
