@@ -616,6 +616,19 @@ rm -f "$ST/locks/gate/pid"
 nrun "a gate lock with no live pid is stale and never holds"
 rm -rf "$ST/locks/gate"
 
+# 27b) (#2593) A nightly that ended bounded proved nothing, so the next one takes no machine: it runs beside a live run and a
+#      held gate lock, and the dispatch keeps starting runs. A pass, a fail or a missing verdict holds it as before, as case 27
+#      and case 5 prove. The run's own record rewrites the verdict, so the case clears it after.
+printf '%s\tunproven\t%s\tbounded\tmissing\t-\n' "$(date +%s)" "$sha" > "$ST/nightly-verdict"
+printf '{"event":"run_start"}\n' > "$T/live-run/record.jsonl"; echo "$T/live-run" > "$ST/active-runs.txt"
+mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"
+mark; rm -f "$T/ran.log"; out=$(ng SG_CHECKOUT="$T/src"); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && case "$out" in *"last nightly ended bounded"*) true;; *) false;; esac \
+  && ok "a bounded nightly runs beside a live run and a held gate lock, and says why" \
+  || ko "a bounded nightly did not run beside the runs: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+rm -f "$ST/locks/gate/pid"; rm -rf "$ST/locks/gate"; : > "$ST/active-runs.txt"
+rm -f "$ST/nightly-verdict"
+
 # 28) (#1722) the nightly starts the live check detached, so the suite owns its end. A check that keeps a window longer than
 #     this case is still alive when the nightly body returns: a suite that does not end it leaks `live-check.sh --run` and
 #     its `squad.livecheck` reading for that whole window, orphaned to pid 1. The case waits for the check to name its pid,
@@ -703,6 +716,33 @@ mark; rm -f "$T/ran.log"; out=$(ng FAKE_MS=20:00); rc=$?
 [ $rc = 0 ] && [ ! -e "$T/ran.log" ] && [ ! -e "$ST/auto/nightly-$(date +%F)" ] && case "$out" in *"min left"*) true;; *) false;; esac \
   && ok "the nightly never starts with less time left than it needs" \
   || ko "the nightly started with 40 min left: rc $rc, '$out', ran '$(cat "$T/ran.log" 2>/dev/null)'"
+
+# 33c) (#2593) A nightly that ended bounded proved nothing, so its next window holds no dispatch: the runs keep the machine and
+#      the nightly shares it. A pass, a fail, or a missing verdict holds the window as before. The reason is one cycle.log line,
+#      said once per verdict, so a bounded verdict that stands until the next nightly does not bury the log.
+verdict_line() { printf '%s\t%s\t%s\t%s\tmissing\t-\n' "$(date +%s)" "$1" "$sha" "$2" > "$ST/nightly-verdict"; }
+mark; rm -f "$ST/auto/nightly-missed-$(date +%F)" "$ST/nightly-result" "$ST/nightly-verdict" "$ST/nightly-bounded-release-noted" "$ST/cycle.log"
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ok "a missing verdict holds the window as before";;
+  *) ko "a missing verdict released the window: '$out'";; esac
+verdict_line pass pass
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ok "a pass verdict holds the window as before";;
+  *) ko "a pass verdict released the window: '$out'";; esac
+verdict_line fail fail
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ok "a fail verdict holds the window as before";;
+  *) ko "a fail verdict released the window: '$out'";; esac
+verdict_line unproven bounded
+out=$(export FAKE_HOUR=04; hold)
+case "$out" in *"nightly window"*) ko "a bounded nightly held the next window: '$out'";;
+  *) ok "a bounded nightly holds no dispatch in the next window";; esac
+/usr/bin/grep -q 'DISPATCH NOTE: the last nightly at .* ended bounded: its next window holds no dispatch' "$ST/cycle.log" 2>/dev/null \
+  && ok "one cycle.log line names the bounded nightly as the reason" \
+  || ko "cycle.log does not name the bounded release: '$(cat "$ST/cycle.log" 2>/dev/null)'"
+out2=$(export FAKE_HOUR=04; hold)
+[ -z "$out2" ] && ok "the bounded release is said once per verdict, not on every pass" || ko "the bounded release repeated: '$out2'"
+rm -f "$ST/nightly-verdict" "$ST/nightly-bounded-release-noted"
 
 # 34) (#1975) The local half runs only what a Linux runner deselects: both default mode commands carry the conftest's own
 #     switch, SQUAD_NIGHTLY_LOCAL_HALF=1, so the one deselection rule (tests/conftest.py, ADR-0139) picks the tests, never a list here.
