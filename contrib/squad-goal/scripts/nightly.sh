@@ -147,6 +147,11 @@ if [ "$hnow" -ne "$nhour" ]; then
   fi
   echo "nightly: held: outside the $(printf '%02d' "$nhour"):00 window (America/Sao_Paulo); the suite runs in that window only (#1975)"; exit 0
 fi
+# (#2527) A suite that cannot finish in the time left only ends bounded and costs the machine the dispatch got back
+# (ghcall.sh releases it at the same point), so it never starts then; the hour closes with one missed record.
+nmin=$(TZ=America/Sao_Paulo date +%M:%S); nmin=$((10#${nmin%%:*})); nneed=$((10#${SG_NIGHTLY_NEED_MINUTES:-45}))
+[ $((60 - nmin)) -lt "$nneed" ] && [ ! -e "$day" ] && {
+  echo "nightly: held: $((60 - nmin)) min left in the window, under the $nneed min the suite needs (#2527)"; exit 0; }
 [ -e "$st/promote-reserve" ] && exit 0   # a proof is measuring in its own tree: two full suites saturate the box before either shows in the load average, and no day marker is written, so the nightly runs once the proof is over
 [ -e "$day" ] && exit 0   # it already ran today: no second suite, whatever started this one
 # (#1527, ADR-0153) A full suite beside live runs and their gates bounds every child's gate at 900 s, so the nightly yields to them.
