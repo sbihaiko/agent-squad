@@ -87,23 +87,26 @@ sg_go_csv() {   # <issues.json> <label>
 # auto/wave-<run> stands (wave.sh clears it when the wave lands) still holds its issues, and so does a child that entered
 # such a wave (the entered fact of its ledger, ADR-0149), whether or not its run is still listed. A run whose record cannot be read holds
 # the issues its request names: an unknown delivery state keeps the hold.
-sg_live_issues() {   # <active-runs.txt>: print comma-separated issue numbers from live spawn_accepted events
-  python3 - "$SG_CHECKOUT" "$1" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "${SG_REPO:-}" <<'PY'
+# With `holders` as the second argument each issue is printed as <issue>=<run>, the run that holds it (#2538).
+sg_live_issues() {   # <active-runs.txt> [holders]: print comma-separated issue numbers from live spawn_accepted events
+  python3 - "$SG_CHECKOUT" "$1" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "${SG_REPO:-}" "${2:-}" <<'PY'
 import json, os, pathlib, re, sys
-root, active, here, repo = sys.argv[1:]
+root, active, here, repo, mode = sys.argv[1:]
 auto = pathlib.Path(active).parent / "auto"
-busy = set()
+busy = {}   # issue -> the run that holds it; the first reader to name a run keeps it
+def hold(ns, run):
+    for x in ns: busy.setdefault(str(x), str(run))
 os.environ.setdefault("SG_STATE", str(auto.parent)); sys.path.insert(0, here)
 try:
     import issue_ledger
     for run, n in (issue_ledger.entered(repo) if repo else []):
         if (auto / f"wave-{run}").exists():
-            busy.add(str(n))
+            hold([n], run)
 except (OSError, ImportError, ValueError) as e:
     print(f"startability: the entered facts could not be read ({e})", file=sys.stderr)
 try:
     import liveholds as lh   # the start's own rule (#1829): one answer for both readers (ADR-0149)
-    busy |= {str(n) for n in lh.live_holders(active, base=root)}
+    for n, run in lh.live_holders(active, base=root).items(): hold([n], run)
 except (OSError, ImportError, ValueError) as e:
     lh = None
     print(f"startability: the live-holder rule could not be read ({e}); the record's own words are read instead", file=sys.stderr)
@@ -130,13 +133,13 @@ for run in runs:
     # The router writes the issue it works in its own words, with and without the hash, one or several at a time, and names
     # its repository ("issue o/r #12") or its reference ("Refs #12"); liveholds reads every form the record carries (#428, #1829).
     if lh is not None:
-        busy |= {str(x) for x in lh.busy_from_record(text)}
+        hold(lh.busy_from_record(text), folder.name)
     else:
         for listed in re.findall(r"\bgithub\s+issues?\s*#?\s*([0-9][0-9,\s]*)", text, re.IGNORECASE):
-            busy.update(re.findall(r"\d+", listed))
-        busy.update(re.findall(r"\bissues?\s*#\s*(\d+)\b", text, re.IGNORECASE))
-        busy.update(re.findall(r"\bgui/(\d+)\b", text, re.IGNORECASE))
-print(",".join(sorted(busy, key=int)) or "-")
+            hold(re.findall(r"\d+", listed), folder.name)
+        hold(re.findall(r"\bissues?\s*#\s*(\d+)\b", text, re.IGNORECASE), folder.name)
+        hold(re.findall(r"\bgui/(\d+)\b", text, re.IGNORECASE), folder.name)
+print(",".join(f"{n}={busy[n]}" if mode == "holders" else n for n in sorted(busy, key=int)) or "-")
 PY
 }
 # A failed run's child can leave commits on a local branch no remote holds (#771). The loop never pushes them (#361):

@@ -289,7 +289,8 @@ print(C.free_runs(ceil, sys.argv[1], root="."), ceil.caps["runs"], pack, gates) 
 PY
 
 )
-busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
+holders=$(sg_live_issues "$SG_STATE/active-runs.txt" holders)   # <issue>=<run>: a busy skip names its run (#2538)
+busy=$(printf '%s' "$holders" | sed 's/=[^,]*//g')
 [ -n "${free:-}" ] || { AB_REASON="no slot"; echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
 # No free run slot stops the lane, and the line names the run slots (#2430): a card count is another unit, so the two
 # numbers never become one.
@@ -397,7 +398,9 @@ for sel in "$lab" debt; do
   if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || { AB_REASON="the candidate list is not readable"; exit 0; }; else list=$(gather "$sel") || { AB_REASON="the candidate list is not readable"; exit 0; }; fi   # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; case "$n" in *[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac   # before any gate, so a word is named, never dropped in silence (#1855)
-    sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+    sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*)
+      # (#2538) A Todo bug a live run holds is named with its run, never dropped in silence.
+      case "$todo" in *" $n "*) echo "AUTOBUG skip #$n: a live run holds it ($(printf '%s' ",$holders," | sed -n "s/.*,$n=\([^,]*\),.*/\1/p"))";; esac; continue;; esac
     case "$pendset" in *" $n "*) echo "AUTOBUG skip #$n: its card write is pending (ADR-0165)"; continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: not started

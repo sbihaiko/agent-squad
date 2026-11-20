@@ -465,7 +465,8 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
         held = run_hold(pathlib.Path(r), child, n, d, ok, rnd)
         if held and finished and lwhy is None and moved_tip(pathlib.Path(r), child, d, rnd):   # #808: the run has ended and its review read an older head, so no run will review the new tip: childcc reviews it, once per head, and enters it on its own review
             own, ok = False, False
-            print(f"CHILD REVIEW TIP #{n} ({name} {child}): the run ended on {(rnd or {}).get('head', '')[:9]}; the child's new tip is reviewed here", flush=True)
+            tip = head_of(child_worktree(pathlib.Path(r), child, d))   # once per head (#2538): a tip at its requeue head waits silently
+            logged(f"tip {name} {child}", f"CHILD REVIEW TIP #{n} ({name} {child}): the run ended on {(rnd or {}).get('head', '')[:9]}; the child's new tip {(tip or '')[:9]} is reviewed here")
         elif held:   # childcc never reviews or fixes a child its run reviewed: its run's approval is the only evidence, and a land that failed on the review itself (review_held, review_deadline) is missing evidence
             CAUSE[key] = held
             logged(f"held {name} {child}", f"CHILD RUN-OWNED #{n} ({name} {child}): {held}; delivery holds")
