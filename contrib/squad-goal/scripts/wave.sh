@@ -81,6 +81,8 @@
 # they are, no run is retired, and `auto/wave-recut-<run>` holds the next cut, which the first of them that enters makes from
 # the base the earlier landing moved. One `WAVE CLOSE` line names the wave, the limit and the children left out. A wave with
 # no entered child never closes early: its entry marker does not exist. The age cap stays the later close.
+# The close starts the age clock of the next cut (#2559): a child left out that never enters goes back to the queue at the
+# age cap, or when the run holds no run slot, and a requeue of the last child left out drops the recut.
 #
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
 # production, which no run can produce while the account's GitHub Actions billing is blocked (issue #439); the local check
@@ -683,10 +685,64 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     echo "WAVE KEEP #$n: run $SG_REQUEUE_RUN already sent it back to the queue once, so this landing starts no new run: $why"; return 0
   fi
   [ "${3:-}" = cap ] && [ -n "${SG_REQUEUE_RUN:-}" ] && { mkdir -p "$SG_STATE/auto" && : > "$SG_STATE/auto/empty-requeued-$SG_REQUEUE_RUN-$n"; }
+  [ -n "${SG_REQUEUE_RUN:-}" ] && recut_drop "$SG_REQUEUE_RUN" "$n"
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Batching as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
+}
+
+# recut_drop <run> <issue> (#2559): a requeue of a child the early close left out. The child's head goes to its salvage branch
+# and the requeue names it (salvage_note), so a commit after the close is kept. The issue leaves line 2 of the recut marker;
+# when no child is left out, the recut, its start clock and the run's wave marker go, so the run stops holding the issue.
+# An owed close keeps the wave marker: the next landing pass closes it. The requeue fact is not read here: runreview.sh writes
+# it after the requeue. It sets `why` in the caller's scope.
+recut_drop() {
+  local run=$1 n=$2 m="$SG_STATE/auto/wave-recut-$1" lo rest="" k note
+  [ -s "$m" ] || return 0
+  lo=$(sed -n 2p "$m" 2>/dev/null)
+  case " $lo " in *" $n "*) ;; *) return 0;; esac
+  note=$(salvage_note "$run" "$n"); [ -n "$note" ] && why="$why; $note"
+  for k in $lo; do [ "$k" = "$n" ] || rest="${rest:+$rest }$k"; done
+  if [ -n "$rest" ]; then printf '%s\n%s\n' "$(head -1 "$m")" "$rest" > "$m.tmp" && mv "$m.tmp" "$m"; return 0; fi
+  rm -f "$m" "$SG_STATE/auto/wave-start-$run"
+  [ -n "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "$run" 2>/dev/null)" ] || rm -f "$SG_STATE/auto/wave-$run"
+}
+
+# delivered_in <run> <issue>: the issue's ledger holds the run's delivered wave fact (ADR-0149).
+delivered_in() {
+  ledger read "$2" wave 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin); f=d.get(sys.argv[1]) if isinstance(d,dict) else None
+sys.exit(0 if isinstance(f,dict) and f.get("state")=="delivered" else 1)' "$1" 2>/dev/null
+}
+
+# recut_end <run> <wave> <run dir> (#2559): the end of a recut that no child can enter any more: the next cut passed the age
+# cap, or the run holds no run slot. It mirrors the capped empty landing: each child left out gets its salvage, a refused
+# wave fact and a cap hold, the markers of the run go, and retire_run ends the run before it requeues the children. A child
+# the run already requeued is salvaged too, so a commit it made after the close reaches a branch. A marker with no line 2
+# (written before #2559) reads the children left out from the run: not delivered and not requeued.
+recut_end() {
+  local run=$1 w=$2 rd=$3 m="$SG_STATE/auto/wave-recut-$1" lo n why note out="" lim=${SG_WAVE_MAX_AGE_SECONDS:-7200}
+  lo=$(sed -n 2p "$m" 2>/dev/null)
+  if [ -z "$lo" ]; then
+    for n in $(run_issues "$rd"); do delivered_in "$run" "$n" || requeued_in "$run" "$n" || lo="${lo:+$lo }$n"; done
+  fi
+  for n in $(run_issues "$rd"); do
+    case " $lo " in *" $n "*) continue;; esac
+    delivered_in "$run" "$n" && continue
+    note=$(salvage_note "$run" "$n"); [ -n "$note" ] && echo "WAVE-NOTE #$n: run $run requeued it before; $note"
+  done
+  for n in $lo; do
+    why="the run's wave closed early and this child never entered its next cut before the age cap ($lim s) or the run's end: it is back in the queue"
+    note=$(salvage_note "$run" "$n"); [ -n "$note" ] && why="$why; $note"
+    wave_fact "$run" "$n" refused "the run's wave closed early and this child never entered its next cut" keep
+    cap_hold "$run" "$rd" "$n" "$why"
+    out="${out:+$out, }#$n"
+  done
+  rm -f "$m" "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  echo "WAVE RECUT-END $w: no child of run $run can enter its next cut any more (age cap or run end); left out: ${out:-none}"
+  retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
+  return 0
 }
 
 # cap_hold <run> <run dir> <issue> <why>: an issue the age cap sends back to the queue waits for the end of its run (#1970).
@@ -1681,7 +1737,7 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # a wave that stopped for good leaves no tip to check again (#1700)
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wave-recut-$run"; tipred_clear "$w"   # a wave that stopped for good leaves no tip to check again (#1700), and no recut (#2559)
   if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $held"
   else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $held"; fi
   return 1
@@ -1691,15 +1747,18 @@ stuck() {
 # run that did not enter it go to the run's next wave (#2316, ADR-0145 rule 16). Their card and their dispatch stay as they
 # are, and auto/wave-recut-<run> holds their next cut: the first one that enters cuts the wave from the moved base, and the
 # entry records the new clock. One WAVE CLOSE line names the wave, the limit and the children left out.
+# (#2559) The recut marker keeps the wave on line 1 and the children left out on line 2, and the close starts the age clock
+# of the next cut in auto/wave-start-<run>: a child that never enters holds its issue for at most the age cap (recut_end).
 close_early() {
-  local run=$1 w=$2 rd=$3 kept=$4 lo="" out="" n
+  local run=$1 w=$2 rd=$3 kept=$4 lo="" out="" n m="$SG_STATE/auto/wave-recut-$1"
   # (#2538) A child the run requeued is no child left out: it goes to a new run, so it keeps no recut and no wave marker.
   for n in $(run_issues "$rd"); do case " $kept " in *" $n "*) ;; *) requeued_in "$run" "$n" || lo="${lo:+$lo }$n";; esac; done
-  mkdir -p "$SG_STATE/auto"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-entry-$run"
+  mkdir -p "$SG_STATE/auto"; rm -f "$SG_STATE/auto/wave-entry-$run"
   if [ -n "$lo" ]; then
-    printf '%s\n' "$w" > "$SG_STATE/auto/wave-recut-$run"   # the wave that closed early: the next cut replaces it
+    printf '%s\n%s\n' "$w" "$lo" > "$m.tmp" && mv "$m.tmp" "$m"   # the wave that closed early, and its children left out
+    date +%s > "$SG_STATE/auto/wave-start-$run"   # the age cap bounds the wait for the next cut (#2559)
     for n in $lo; do out="${out:+$out, }#$n"; done
-  else rm -f "$SG_STATE/auto/wave-recut-$run"; fi
+  else rm -f "$m" "$SG_STATE/auto/wave-start-$run"; fi
   echo "WAVE CLOSE $w: the oldest entry waited past ${SG_WAVE_ENTRY_WAIT_SECONDS:-1800} s (SG_WAVE_ENTRY_WAIT_SECONDS), so the wave lands with the children that entered; left out: ${out:-none}"
 }
 
@@ -1922,6 +1981,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # lands with the children that entered it. The age cap is the later one and decides first.
   local capped=0 early=0; expired "$run" && capped=1
   [ "$capped" = 1 ] || { entrywait "$run" && early=1; }
+  # (#2559) A recut whose next cut no child can enter any more ends here: the early close deleted the wave branch, so no fetch
+  # of it can land, and the children left out go back to the queue.
+  if [ -e "$SG_STATE/auto/wave-recut-$run" ] && { [ "$capped" = 1 ] || ! run_holds_slot "$rd"; }; then
+    recut_end "$run" "$w" "$rd"; return 0
+  fi
   local S; S=$(mktemp -d) || { echo "WAVE-ERROR no scratch dir"; return 2; }
   sc() { $G -C "$S" "$@"; }
   sc init -q . || { echo "WAVE-ERROR cannot make a scratch clone"; rm -rf "$S"; return 2; }
