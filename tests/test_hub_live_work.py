@@ -613,11 +613,38 @@ def test_a_hold_row_shows_the_five_delivery_stages_its_own_facts_reach(hub):
     assert [c["state"] for c in hold["stages"]] == ["done", "done", "done", "current", "later"], hold
 
 
-def test_a_hold_row_with_no_delivery_fact_stands_at_the_gate(hub):
-    """#2507: a hold the loop has landed nothing for is at its gate: every later stage waits."""
+def test_a_fresh_hold_with_no_landing_and_no_gate_has_no_current_stage(hub):
+    """#2547: a hold the loop landed nothing for and no gate checks is still coded: no chip is current, every stage waits."""
     _closed(hub)
     _hold(hub, 2486)
-    assert [c["state"] for c in _row(_answer(hub), "hold")["stages"]] == ["current", "later", "later", "later", "later"]
+    assert [c["state"] for c in _row(_answer(hub), "hold")["stages"]] == ["later"] * 5
+
+
+def _gated_hold(hub, monkeypatch, tmp_path, n, gated):
+    """A hold on `n` and a live gate lock whose holder checks a live run that names `gated`."""
+    run = tmp_path / "run-20261120-100000-abc123"
+    run.mkdir()
+    (run / "record.jsonl").write_text("")   # a live run is a folder with a record
+    monkeypatch.setattr(hub, "loop_live", lambda **kw: {"runs": [str(run)], "gates": []})
+    monkeypatch.setattr(hub, "run_row", lambda folder, port, procs: ({"id": run.name, "issues": [gated], "stage": "gate", "age": 60}, None))
+    _closed(hub)
+    _hold(hub, n)
+    lock = _held(hub, "gate", "bash")
+    try:
+        return _answer(hub, argv=lambda pid: f"bash /r/runs/{run.name}/ws/w/contrib/squad-goal/scripts/serial.sh gate bash x/gate.sh")
+    finally:
+        shutil.rmtree(lock)
+
+
+def test_a_hold_whose_issue_has_a_live_gate_stands_at_the_gate(hub, monkeypatch, tmp_path):
+    """#2547: the gate chip is current only while a gate for the hold's own issue runs or waits for its slots."""
+    assert _stages(_gated_hold(hub, monkeypatch, tmp_path, 2548, 2548)) == [
+        ("gate", "current"), ("dev", "later"), ("stg", "later"), ("main", "later"), ("publish", "later")]
+
+
+def test_a_gate_for_another_issue_leaves_the_hold_with_no_current_stage(hub, monkeypatch, tmp_path):
+    """#2547: a gate that checks another issue is no gate of this hold."""
+    assert [s for _, s in _stages(_gated_hold(hub, monkeypatch, tmp_path, 2548, 2549))] == ["later"] * 5
 
 
 def test_a_hold_row_names_its_issue_and_no_title(hub):
