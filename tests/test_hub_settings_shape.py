@@ -20,7 +20,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HUB_PY = os.path.join(ROOT, "contrib", "squad-goal", "scripts", "hub.py")
-THEMES = ["lop", "lim", "sub", "mdl", "slk", "acc"]   # the Board theme left the list: its limits live in Spend & limits (#2432)
+THEMES = ["lim", "sub", "mdl", "slk", "acc"]   # the Board theme left the list: its limits live in Spend & limits (#2432); the Loop theme left it for the Loop tab (#2515)
 
 
 @pytest.fixture(scope="module")
@@ -172,12 +172,15 @@ def _blocks(html):
     return html[i:j], html[j:]
 
 
-def test_the_loop_theme_draws_now_tiles_and_no_input(hub):
-    now, settings = _blocks(_run(hub.PAGE, f"loopLogHtml({json.dumps(LOOP_VIEW)})"))
-    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["Live", "Health", "Last change"], now
+def test_the_loop_history_block_draws_now_tiles_and_the_change_log(hub):
+    """#2515: the Loop theme left Settings. Its record is the Loop tab's history block: the state, three Now tiles and
+    the change log. It carries no input and no Settings block, so nothing there stages a write."""
+    out = _run(hub.PAGE, f"loopLogHtml({json.dumps(LOOP_VIEW)})")
+    assert re.findall(r"<span class=tk>(.*?)</span>", out) == ["Live", "Health", "Last change"], out
     for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in now, f"the Loop Now block carries {ctl}"
-    assert "Settings" in settings and "Monitor" in settings, settings
+        assert ctl not in out, f"the loop history block carries {ctl}"
+    assert "data-blk=settings" not in out, "the loop history block still carries a Settings block"
+    assert "<h4>Changes</h4>" in out, out
 
 
 def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_none(hub):
@@ -399,7 +402,7 @@ def _set_bar(hub):
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
-    body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
+    body = ('const out={};for(const t of ["lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent,'
             'save:$("#ssave").hidden,disc:$("#sdisc").hidden}}'
             'RO=true;sTheme="mdl";setBar();out.ro={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,'
@@ -412,8 +415,7 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
     for theme in THEMES:
         assert out[theme]["hidden"] is False, f"{theme}: the Save bar hid"
         assert out[theme]["disabled"] is True, f"{theme}: Save was armed with nothing to write"
-    for theme in ("lop", "acc"):
-        assert out[theme]["text"] == "nothing to save here", f"{theme}: {out[theme]['text']!r}"
+    assert out["acc"]["text"] == "nothing to save here", out["acc"]["text"]
     # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
     assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
     assert out["mdl"]["text"] == "Models & chains: no change"

@@ -765,9 +765,10 @@ $("to-desktop").href = base;
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
 
 // settings-handoff:begin
-// #1286: Settings opens the desktop tab on the theme last used there, kept under "hub"; Loop when none was used
-const SET_THEMES = ["lop","lim","sub","mdl","slk","acc"];
-const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lop"; } catch (e) { return "lop"; } })();
+// #1286: Settings opens the desktop tab on the theme last used there, kept under "hub"; Spend & limits when none was used
+// #2515: the Loop theme left Settings, so a stored "lop" opens the first remaining theme
+const SET_THEMES = ["lim","sub","mdl","slk","acc"];
+const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lim"; } catch (e) { return "lim"; } })();
 $("more-settings").href = "./#set-" + lastSetTheme;
 // #1446: the entry names the desktop view, so the desktop page's narrow-screen redirect does not return the owner
 $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
