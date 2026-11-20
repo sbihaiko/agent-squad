@@ -1238,7 +1238,7 @@ waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s f
 # status, history and wave journal: it only passes the command's exit code through. `SG_WAVE_CHILD_PYTEST` replaces the
 # command (SG_WAVE_CHILD, _FROM and _TO are set); the default selects the files the child's commit reaches (squad.testselect, as
 # the fast gate does), read in a detached tree at the child's commit, and runs them in the clone. An empty selection passes: the
-# child changed nothing pytest covers. Exit 0: passed; 1: failed; 9: no verdict: the gate lock or slots were not free, so nothing
+# child changed nothing pytest covers. A change that needs no test (`skip:`) passes too: no test reads an image of the record. Exit 0: passed; 1: failed; 9: no verdict: the gate lock or slots were not free, so nothing
 # ran, or the run was bounded and proved nothing (gate.sh exit 4, #1687). An unproven run is never the child's red, and its own
 # output goes to <log> with the cause in `cpwhy`, so the landing that waits keeps the trace of why it waited (#1700).
 child_pytest() {
@@ -1247,7 +1247,7 @@ child_pytest() {
   if [ -n "${SG_WAVE_CHILD_PYTEST:-}" ]; then cmd=$SG_WAVE_CHILD_PYTEST
   else
     cmd='sel=$(d=$(mktemp -d) && /usr/bin/git worktree add -q --detach "$d" "$SG_WAVE_CHILD_TO" && (cd "$d" && "$SG_WAVE_PY" -m squad.testselect --stage wave-tip --base "$SG_WAVE_CHILD_FROM"); r=$?; /usr/bin/git worktree remove --force "$d" 2>/dev/null; exit $r) || sel="all: the selector failed"
-case $sel in none:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
+case $sel in none:*|skip:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
 "$SG_WAVE_PY" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-2}" -m "not heavy" "$@"'
   fi
   # (#2594) A child gate is a delta over one child's change, so it takes SG_WAVE_GATE_WORKERS slots, one by default: at two, two

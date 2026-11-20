@@ -1,5 +1,5 @@
 """Name the test files a change reaches, by imports and by the paths tests name; answer `all` with a reason when neither can
-say, and `none` with a reason when the change reaches no test."""
+say, `skip` with a reason when the change needs no test, and `none` with a reason when the change reaches no test."""
 import argparse
 import ast
 import subprocess
@@ -27,6 +27,9 @@ SCRIPT_DIRS = ("contrib/squad-goal/scripts",)
 # list does not name is full too: a typo in a stage never narrows a gate.
 DELTA_STAGES = frozenset({"fast", "wave-entry", "wave-tip", "prepush"})
 SCRATCH = ".scratch"
+# The folders that hold the proof a card carries: an image, a render, an asset of a spec. No test can read it, so a path there
+# that no test and no script names needs no test: the delta places it with no reader instead of refusing the change (#2592).
+NEEDS_NO_TEST = ("docs/evidence/", "docs/spec-assets/")
 
 
 class _All(Exception):
@@ -43,6 +46,18 @@ class _None(Exception):
 
 def _none(reason):
     raise _None(reason)
+
+
+class _Skip(Exception):
+    pass
+
+
+def _skip(reason):
+    raise _Skip(reason)
+
+
+def _needs_no_test(rel):
+    return rel.startswith(NEEDS_NO_TEST)
 
 
 def _git(root, *args):
@@ -360,6 +375,7 @@ def _answer(root, base):
 
     readers = _readers(root, live)
     selected = set()
+    unneeded = []
     for rel in live:
         hits = _named_by(named, listed, rel)
         # A script that reads the changed file reaches the tests that load it (#2271). Its own tests are the named ones, so
@@ -373,10 +389,19 @@ def _answer(root, base):
         elif rel.startswith(("squad/", "tests/")) and rel.endswith(".py"):
             hits |= _reach(_module(rel), rel, importers, dynamic, resolved)
         if not hits:
+            # A file the record carries needs no test, so an unnamed one is placed with no reader instead of refusing the
+            # whole change. A test that names it keeps its reader and still runs above (#2592).
+            if _needs_no_test(rel):
+                unneeded.append(rel)
+                continue
             if rel.endswith(".py"):
                 _all(f"{rel} is reached by no test: no import, no path literal, not inert")
             _all(f"{rel} is reached by no reader the selector can name: no test names it and no script reads it")
         selected |= hits
+    # The change reaches no test because it needs none: no pytest can prove it, and no refusal holds it. The gate passes with
+    # pytest among the checks that did not run (ADR-0169 rule 5).
+    if not selected and unneeded:
+        _skip(f"the change needs no test: {' '.join(unneeded)}")
     added_or_deleted = _git(root, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=AD",
                             merge_base.stdout.strip(), "HEAD")
     if added_or_deleted.returncode:
@@ -409,6 +434,10 @@ def main(argv=None):
             print(path)
     except _All as reason:
         print(f"all: {reason}")
+    except _Skip as reason:
+        # The change needs no test. The one line says what it is, so the gate passes with pytest among the checks that did
+        # not run, never with the empty selection that ends unproven (ADR-0169 rule 5).
+        print(f"skip: {reason}")
     except _None as reason:
         # The delta selects no test. The one line says why, so the gate records the attempt as unproven with that reason,
         # never as a pass (#1249).

@@ -17,9 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BASE_BATTERY = ROOT / "contrib/squad-goal/scripts/base-battery.sh"
 
 
-def battery(tmp_path, repo, stage):
+def battery_run(tmp_path, repo, stage, narrow="no"):
     """Run the shared battery at <stage> in <repo> with a stub python: ruff and mypy pass, the selector is the real one, and
-    the pytest leg only records its argv. Return the selection line, the scope line and every argv the stub saw."""
+    the pytest leg only records its argv. Return the selection line, the scope line, every argv the stub saw, and the
+    battery's own stdout."""
     log = tmp_path / f"argv-{stage}.log"
     py = tmp_path / f"py-{stage}"
     py.write_text(
@@ -39,10 +40,16 @@ def battery(tmp_path, repo, stage):
            "SG_SCOPE_ROOT": str(ROOT), "GATE_SELECT_FILE": str(sel), "GATE_SCOPE_FILE": str(scope)}
     env.pop("SG_TEST_SELECT", None)   # a gate that runs this suite may hold it; the case reads its own stage, never the live one
     env.pop("SG_GATE_STAGE", None)
-    cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes "{stage}"'
+    cmd = f'. "{BASE_BATTERY}"; sg_battery_run "{py}" main 2 yes "{stage}" {narrow}'
     done = subprocess.run(["bash", "-c", cmd], cwd=repo, env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stdout + done.stderr
-    return sel.read_text().strip(), scope.read_text().strip(), log.read_text()
+    return sel.read_text().strip(), scope.read_text().strip(), log.read_text(), done.stdout
+
+
+def battery(tmp_path, repo, stage):
+    """The selection line, the scope line and every argv the stub saw: the battery's stdout is a case's own read."""
+    sel, scope, argv, _ = battery_run(tmp_path, repo, stage)
+    return sel, scope, argv
 
 
 def pytest_line(argv):
@@ -97,6 +104,39 @@ def test_an_uncovered_path_falls_back_to_the_full_battery_and_the_record_says_wh
     sel, scope, argv = battery(tmp_path, repo, "wave-entry")
     assert sel.startswith("all: ") and "docs/notes.md" in sel and scope == "full"
     assert "tests/test_" not in pytest_line(argv)
+
+
+def test_an_evidence_image_alone_records_no_test_needed_and_never_no_pytest_ran(tmp_path):
+    """(d) #2592: a tip that changes only an image under docs/evidence needs no test. The battery runs no pytest and says
+    `no test needed`; the gate reads that line as a pass, never as the empty selection that ends unproven (ADR-0169)."""
+    repo = tip(tmp_path, {"docs/evidence/2592/kanban-1000.png": "png\n"})
+    sel, scope, argv, out = battery_run(tmp_path, repo, "fast")
+    assert sel == "no test needed: the change needs no test: docs/evidence/2592/kanban-1000.png" and scope == "delta"
+    assert "-m pytest" not in argv
+    assert sel in out.splitlines()
+    assert not any(line.startswith("no pytest ran") for line in out.splitlines())
+
+
+def test_an_evidence_image_beside_a_named_script_runs_that_scripts_delta(tmp_path):
+    """(e) #2592: the image adds nothing and hides nothing: the other file's delta runs, and the record says a delta."""
+    script = "contrib/squad-goal/scripts/check.sh"
+    repo = tip(
+        tmp_path,
+        {"docs/evidence/2592/kanban-1000.png": "png\n", script: "changed\n"},
+        extra={script: "old\n", "tests/test_names.py": f'SCRIPT = "{script}"\n'},
+    )
+    sel, scope, argv = battery(tmp_path, repo, "fast")
+    assert sel == "selected 1 files" and scope == "delta"
+    assert pytest_line(argv).endswith("tests/test_names.py")
+
+
+def test_a_path_outside_the_evidence_folders_still_runs_no_pytest_at_a_child_gate(tmp_path):
+    """(f) #2592: an uncovered path outside the evidence folders still refuses the delta at the child's gate, as before."""
+    repo = tip(tmp_path, {"docs/notes.md": "notes\n"})
+    sel, scope, argv, out = battery_run(tmp_path, repo, "fast", narrow="yes")
+    assert sel == "selected 0 files" and scope == "delta"
+    assert "-m pytest" not in argv
+    assert any(line.startswith("no pytest ran: the delta cannot cover the change: docs/notes.md") for line in out.splitlines())
 
 
 def test_an_empty_selection_runs_no_pytest_and_logs_why(tmp_path):
