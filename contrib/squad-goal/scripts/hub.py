@@ -4404,11 +4404,13 @@ DELIVERY_STAGES = ("gate", "dev", "stg", "main", "publish")   # the delivery pip
 LANES = (("watch", pathlib.Path("locks") / "watch" / "pid"), ("fastloop", pathlib.Path("fastloop.pid")),
          ("cqflush", pathlib.Path("cqflush.pid")))   # the loop's three lanes, each named by the pid file it writes
 
-def delivery_stages(n, base=None, closed=False):
+def delivery_stages(n, base=None, closed=False, gating=False):
     """The five delivery stages of one issue, from the loop's own records and no GitHub read (#2507): `gate` and `dev` are
     done once the landing ledger names the issue; `stg` and `main` once a promotion of that branch came after the landing,
     since a later green tip carries the earlier work with it (ADR-0145); `publish` once the issue is closed, which is what
-    a publish does to the issues it carries. The stage in hand is the first one not done, and every later one waits."""
+    a publish does to the issues it carries. The stage in hand is the first one not done, and every later one waits.
+    Before a landing, `gate` is in hand only while a gate for the issue runs or waits for its slots (`gating`); with
+    no landing and no gate the issue is still coded, so no stage is in hand (#2547)."""
     at = max((r["at"] for r in strip_landings(base) if r.get("issue") == n), default=None)
     promos = strip_promotions(base)
     stg = os.environ.get("SG_STG_BRANCH") or "stg"
@@ -4418,6 +4420,7 @@ def delivery_stages(n, base=None, closed=False):
     done["main"] = done["stg"] and any(p["at"] >= at for p in promos if p.get("branch") == main)
     done["publish"] = done["main"] and bool(closed)
     cur = next((s for s in DELIVERY_STAGES if not done[s]), None)
+    if cur == "gate" and not gating: cur = None
     return [{"name": s, "state": "done" if done[s] else ("current" if s == cur else "later")} for s in DELIVERY_STAGES]
 
 def suite_name(line):
@@ -4498,7 +4501,8 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     base = pathlib.Path(state) if state else STATE
     moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
     st = loop_state({}, now=now, state=base)
-    rows, issues_of, held = [], {}, set()
+    rows, issues_of, held, gated = [], {}, set(), set()
+    run_issues = {}   # the issues each live run names: a gate's issue is the issues of the run it checks (#2547)
     if st == "off": rows.append({"kind": "loop", "id": "loop", "text": "loop off"})
     for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
         folder = active_folder(entry)
@@ -4509,6 +4513,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
                      "text": f"{issues} · node {row.get('stage') or '-'}",
                      "title": f"run {row['id']} · {issues} · node {row.get('stage') or '-'} · age {int(row['age'] // 60)} min"})
         issues_of[row["id"]] = issues; held.update(str(n) for n in row["issues"])
+        run_issues[row["id"]] = {str(n) for n in row["issues"]}
     for d in sorted((base / "locks").glob("*")):
         if not d.is_dir(): continue   # a stray file in locks/ is not a lock
         try:
@@ -4519,6 +4524,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         if not cmd: continue   # a lock that names no command is a loop driver's own: no live work, and no row (#1692, #2507)
         line = (argv or _holder_argv)(int(pid))
         slots, since = gate_slots(int(pid), procs, now)   # the slots the gate under this lock holds (#2507)
+        gated.update(run_issues.get(_gate_run(line), ()))   # a gate holds its lock while it runs or waits for its slots
         rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "icon": "microscope",
                      "text": suite_name(line), "slots": slots, "age": int(now - since) if since else None, "red": False,
                      "title": gate_lock_line(pid, line, issues_of)})   # the pid and the script ride the tooltip only
@@ -4535,7 +4541,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         title = titles.get(str(n)) or ""
         item = next((i for i in items if str(i.get("n")) == str(n)), {})
         rows.append({"kind": "hold", "id": r["id"], "icon": "hand", "issue": n, "repo": REPO,
-                     "text": f"#{n}", "age": int(r["age"]), "stages": delivery_stages(n, base, closed=item.get("s") == "closed"),
+                     "text": f"#{n}", "age": int(r["age"]), "stages": delivery_stages(n, base, closed=item.get("s") == "closed", gating=str(n) in gated),
                      "title": " · ".join(x for x in (r["label"], title) if x)})   # the id of the hold's own row; the holder and the title live in the tooltip
     hold_ids = {str(n) for r in holds for n in r["issues"]}   # the registry keys a hold on the issue; a row matches on it or on its item id
     for i in items:   # the panel agrees with the Doing column: a card no live run names is worked by hand (#1701)
