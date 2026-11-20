@@ -410,9 +410,12 @@ rm -f "$T/gh.log"; r=$(stubwave sbl)
 /usr/bin/grep -q 'issues/8/labels.*frozen:owner' "$T/gh.log" 2>/dev/null && [ -n "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 the next pass on the same base retries the stop" || ko "2571 the stop was not retried: '$r'"
 # a salvage branch that ended with no landing (deleted by hand) leaves no marker; a kept wave marker is not the sweep's
 salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); : > "$T/st/auto/branchland-salvagestop-$SK-0123456789"; printf 'origin/dev\n' > "$T/st/auto/kept-fix_9-rebase-gone"
-$O update-ref -d "refs/heads/$SB"; r=$(sbl)
+$O update-ref -d "refs/heads/$SB"; python3 -c 'import os,sys,time; [os.utime(f,(time.time()-120,)*2) for f in sys.argv[1:]]' "$T/st/auto/"*"$SK"*; r=$(sbl)
 [ ! -e "$SKM" ] && [ ! -e "$T/st/auto/salvaged-$SK" ] && [ -z "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 a gone salvage branch's three markers are swept" || ko "2571 markers of a gone branch remain: $(ls "$T/st/auto" | /usr/bin/grep "$SK" | tr '\n' ' ')"
 [ -s "$T/st/auto/kept-fix_9-rebase-gone" ] && ok "2571 the sweep leaves a kept marker with no salvage marker" || ko "2571 the sweep removed a wave kept marker"; rm -f "$T/st/auto/kept-fix_9-rebase-gone"
+# a marker written after the pass read the branch list is kept: its pusher may have pushed after the read (the list predates it)
+LK=fix_8-salvage-run-late; touch "$T/st/auto/salvaged-$LK"; python3 -c 'import os,sys,time; os.utime(sys.argv[1],(time.time()+60,)*2)' "$T/st/auto/salvaged-$LK"; r=$(sbl)
+[ -e "$T/st/auto/salvaged-$LK" ] && ok "2571 a marker newer than the branch list read is not swept" || ko "2571 the sweep removed a marker written after the list read: '$r'"; rm -f "$T/st/auto/salvaged-$LK"
 # a landed salvage branch drops all three markers
 salv8; (cd "$T/w" && $G checkout -q -B "$SB" origin/dev && echo s8 > s8 && $G add s8 && $G -c user.email=a@b -c user.name=t commit -q -m "salvage (Refs #8)" && $G push -q -f origin "$SB" 2>/dev/null); sapprove
 touch "$T/st/auto/salvaged-$SK"; printf 'origin/dev\nsalvage %s x\n' "$($O rev-parse "$SB")" > "$SKM"; : > "$T/st/auto/branchland-salvagestop-$SK-0123456789"; r=$(sbl)
