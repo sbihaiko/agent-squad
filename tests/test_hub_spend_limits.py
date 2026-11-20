@@ -293,6 +293,7 @@ def lim_eval(hub, script):
 const STORE={};
 const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",className:""});
 const setBar=()=>{};
+let RO=false;const RO_WHY="";   // the page's read-only switch, which the write path reads as it loads (#2433)
 """
     body = "\n".join([harness, esc.group(0), tk.group(0), sett, lim, script])
     p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)
@@ -359,8 +360,16 @@ def test_the_guard_is_a_switch_that_shows_its_state(ctx):
 
 
 def test_a_flipped_switch_answers_the_word_the_hub_reads(ctx):
-    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limVals().guard))') == "on"
-    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limVals().guard))') == "off"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:true};console.log(JSON.stringify(limTyped("guard")))') == "on"
+    assert lim_eval(ctx["hub"], 'STORE["#limg"]={checked:false};console.log(JSON.stringify(limTyped("guard")))') == "off"
+
+
+def test_a_flipped_switch_saves_the_word_the_hub_reads(ctx):
+    """The guard's own write reads the switch, not the saved state: a switch set off posts off."""
+    body = ("let seen=null;limS=" + json.dumps(LIM) + ";limRender();STORE[\"#limg\"]={checked:false};"
+            "limWrite(\"guard\",async b=>{seen=b;return {diff:[],state:{...limS,guard:\"off\"}}})"
+            ".then(()=>console.log(JSON.stringify({guard:seen&&seen.guard,saved:limS.guard})))")
+    assert lim_eval(ctx["hub"], body) == {"guard": "off", "saved": "off"}
 
 
 def test_the_cap_reads_with_a_unit_suffix_and_its_field_takes_text(ctx):

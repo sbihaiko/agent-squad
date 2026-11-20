@@ -6916,6 +6916,11 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #lbody .ldiff{margin:8px 0 0;padding:8px 10px;background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
 #lbody .ldiff b{display:block;margin-bottom:4px;color:var(--warn)}#lbody .ldiff .ln{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 #lbody .lact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#lbody .lact button{height:var(--ctl-h);padding:0 12px}
+/* A field saves on its own (#2433): the check mark sits beside the field, the group's one line names the saved value and
+   its age, and a value the hub refused paints its field and states why. */
+#lbody .lok{color:var(--ok);font-weight:600;margin-left:6px}#lbody .lbad{color:var(--err-strong);font-weight:600}
+#lbody input.bad,#lbody select.bad{border-color:var(--err);box-shadow:0 0 0 1px var(--err)}
+#lbody .klok{margin:6px 0 0;font-size:var(--fs-caption);color:var(--mute)}#lbody .setblk>.note .lok{color:var(--ok)}
 /* Settings > Communication (#924): a channel or a person is one row. A row is a grid on a desktop and stacks on a phone, and
    each switch carries its own text label. */
 #sbody select,#sbody input{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-field);height:var(--ctl-h);padding:0 6px;min-width:0;max-width:100%}
@@ -7406,28 +7411,89 @@ $("#mbody").addEventListener("click",e=>{const t=e.target.closest("button");if(!
  else return;
  mdlRender()});
 /* Settings > Spend & limits (#926): the token guard's on/off switch, its daily cap and its pause factor, with the burn
-   it measures and whether dispatch is paused now. The page renders and asks; the hub validates, shows the diff, writes
-   the profile and records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
-let limS=null,limMsg="",limDiff=null,limPend=null;   // limPend holds the typed settings while the diff asks for a confirm
+   it measures and whether dispatch is paused now. The page renders and asks; the hub validates, writes the profile and
+   records the change (ADR-0137), and the guard reads it on its next pass with no restart. */
+let limS=null,limMsg="";   // the last state the hub saved; a typed value lives only in its own field
+
+/* Spend & limits saves each field on its own, with no button (#2433). A valid edit posts once, on the field's blur or
+   after a short pause in typing; the field then shows a check mark, its group shows one line naming the saved value and
+   the line's age, and a value the hub refuses marks the field, writes nothing and leaves the saved state in force.
+   A write carries the saved state with only the edited field changed, so a refused value in another field never rides
+   along. The page writes and renders; the hub validates, writes atomically and records the change (ADR-0030, ADR-0137). */
+const LIM_FIELD={limg:"guard",limc:"cap",limf:"factor"},LIM_NAME={guard:"token guard",cap:"daily token cap",factor:"pause factor"};
+const LIM_ID={guard:"#limg",cap:"#limc",factor:"#limf"};
+let limOK="",limVal="",limAt=0,limBad="",limBadMsg="",limTmr={},limPauseMs=700,limSent={},limChain=Promise.resolve();   // limSent holds the value each field last posted, so a timer save and a later blur send one request; limTmr holds one timer per field, so a pause in one field never drops another field's edit; limChain runs one write at a time, so the next body carries the value the last write saved (#2433)
+const limKName=k=>LIM_NAME[k]||k;
+const limMark=k=>limOK===k?`<span class=lok id="limmk-${k}" aria-label=saved>✓</span>`:"";   // the mark carries an id, so a save patches it instead of redrawing its input (#2433)
+const limBadCls=k=>limBad===k?" class=bad":"";
+const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
+function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
+ if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · <span id=limage>${limAgeTxt()}</span>`}
+function limTick(now){const el=$("#limage");if(el&&limOK)el.textContent=limAgeTxt(now)}   // the age moves on with the clock, with no new write
+let limAgeTmr=null;   // the age ticker runs only while a saved value is shown in a visible theme (#2433)
+const limShown=()=>{const p=$("#lim");return !p||p.open===undefined||!!p.open};   // a collapsed theme ticks nothing
+function limTickStop(){if(limAgeTmr){clearInterval(limAgeTmr);limAgeTmr=null}}
+function limTickStart(){if(limAgeTmr||!limOK||!limShown())return;
+ limAgeTmr=setInterval(()=>{if(!limOK||!limShown()){limTickStop();return}limTick()},1000);if(limAgeTmr&&limAgeTmr.unref)limAgeTmr.unref()}
+const limTickSync=()=>{limOK?limTickStart():limTickStop()};
+/* The value the reader typed in the field's own input, or null when the page has not drawn it yet. */
+const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   // the guard is a switch: its checked state is the word the hub reads (#2434)
+ const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
+async function limSend(body){const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json()}
+function limWrite(which,send=limSend){const run=()=>limWriteNow(which,send),p=limChain.then(run,run);limChain=p.catch(()=>{});return p}   // the writes queue, so a second field's body carries the value the first one saved (#2433)
+async function limWriteNow(which,send=limSend){if(RO)return {skip:true};if(which.startsWith("kan:"))return kanWrite(which.slice(4),send);   // a read-only view writes nothing, and the Kanban row carries the same send, so a test's stub reaches it (#2433)
+ if(which.startsWith("slot:"))return slotPost(true);   // a slot cap saves on its own, like the limit fields (#2435)
+ const cur=limS||{},vals={guard:String(cur.guard??""),cap:String(cur.cap??""),factor:String(cur.factor??"")},typed=limTyped(which);
+ if(typed!==null)vals[which]=which==="cap"&&limCapParse(typed)!=null?String(limCapParse(typed)):typed;   // a cap leaves as the whole integer its units denote; text the parse refuses stays raw, for the hub to refuse (#2433)
+ if(limSent[which]===vals[which]){if(limBad===which){limBad="";limBadMsg="";limRender()}return {skip:true}}   // the last write posted this value already, so a timer save and then a blur send one request (#2433)
+ let d;
+ try{d=await send({...vals,confirm:true})}catch(x){d={err:"save failed"}}
+ if(d.err){limBad=which;limBadMsg=d.err;limOK="";limAt=0;delete limSent[which]}   // a refused value is never remembered as posted
+ else{limS=d.state||limS;limBad="";limBadMsg="";limOK=which;limVal=String((d.state||vals)[which]);limAt=Date.now();limSent[which]=vals[which]}
+ limRender();if(typeof setBar==="function")setBar();return d}
+function limQueue(which,send){if(RO)return;clearTimeout(limTmr[which]);limTmr[which]=setTimeout(()=>{delete limTmr[which];limWrite(which,send).catch(()=>{})},limPauseMs)}   // each field holds its own timer (#2433)
 
 /* Settings > Spend & limits · Kanban (#2432): the card limit of each active board column, inside one theme with the token
    guard. The page renders and asks; the hub validates, shows the diff and writes the project settings file on confirm
    (ADR-0137). A blank field is unlimited. The frontier reads Doing, the branch review pass reads Reviewing, and the
    Kanban header shows the count against the limit. */
 // KAN{ the Kanban sub-group's pure rules (#2432): its values, its dirty test, its chip and its html. Run in node by tests.
-let kanS=null,kanDraft=null,kanMsg="";
+let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanRef={},kanDiff=[],kanChain=Promise.resolve();   // kanSent holds the value each column last posted, so a timer save and a later blur send one request; kanRef holds the value the hub refused, so a later pause never resends it (#2433)
 const kanClone=o=>JSON.parse(JSON.stringify(o));
 const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
+const kanLims=c=>Object.fromEntries(c.map(x=>[x.name,x.max_cards==null?"none":String(x.max_cards)]));
+const kanBody=name=>{const out=kanLims((kanS&&kanS.columns)||[]),c=kanDraft&&kanDraft.find(x=>x.name===name);   // the payload is the last saved state, with only the column being saved overlaid, so another drafted column never rides along (#2433)
+ if(c)out[name]=c.max_cards==null?"none":String(c.max_cards);return out};
 const kanDirty=()=>!!kanS&&!!kanDraft&&JSON.stringify(kanDraft)!==JSON.stringify(kanS.columns);
 const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).map(c=>c.name);
 const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
-const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>`);
+const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>${kanOK===c.name?" <span class=lok aria-label=saved>✓</span>":""}`);
+const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
+ :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · <span id=kanage>${span((Date.now()-kanAt)/1000)} ago</span>`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
+function kanTick(now){const el=$("#kanage");if(el&&kanOK)el.textContent=span(((now||Date.now())-kanAt)/1000)+" ago"}   // a Kanban save's age moves with the clock, like the limits line (#2433)
+let kanAgeTmr=null;
+function kanTickStop(){if(kanAgeTmr){clearInterval(kanAgeTmr);kanAgeTmr=null}}
+function kanTickStart(){if(kanAgeTmr||!kanOK||!limShown())return;
+ kanAgeTmr=setInterval(()=>{if(!kanOK||!limShown()){kanTickStop();return}kanTick()},1000);if(kanAgeTmr&&kanAgeTmr.unref)kanAgeTmr.unref()}
+const kanTickSync=()=>{kanOK?kanTickStart():kanTickStop()};
+function kanWrite(name,send){const run=()=>kanWriteNow(name,send),p=kanChain.then(run,run);kanChain=p.catch(()=>{});return p}
+async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)return;
+ const body=kanBody(name),val=String(body[name]??"");
+ if(kanSent[name]===val)return {skip:true};   // the last write posted this column's value already (#2433)
+ if(kanBad===name&&kanRef[name]===val)return {skip:true};   // the hub refused this value already, so a later pause never resends it (#2433)
+ let d;try{d=send?await send({columns:body,confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:body,confirm:true})})).json()}catch(x){d={err:"save failed"}}
+ if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";kanRef[name]=val;delete kanSent[name];clearTimeout(limTmr["kan:"+name]);delete limTmr["kan:"+name]}   // a refused column keeps its mark and its value in the draft; its timer is cleared so no pause resends the same body (#2433)
+ else{kanS=d.state||kanS;const st=(kanS&&kanS.columns)||[],landed=st.find(x=>x.name===name);
+  kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
+  kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
+ limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
   +kanCols().map(kanRow).join("")
   +`<p class=note>Project file: <code>${esc(kanS.file||"none")}</code>. The count comes from the loop's board cache, and an empty field means unlimited.</p></div>`
-  +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")}
+  +(kanMsg?`<div class="mx${kanMsg.startsWith("!")?" err":""}" role=status>${esc(kanMsg.replace(/^!/,""))}</div>`:"")
+  +(kanLine()?`<div class=klok role=status>${kanLine()}</div>`:"")}
 // }KAN
 /* Settings > Spend & limits · Machine slots (#2435): the slots of this machine, across every project. The page renders
    the read and asks; the hub validates, shows the diff and writes the project settings file on confirm (ADR-0137). The
@@ -7469,48 +7535,54 @@ const limCapFmt=n=>{const x=Number(n);if(n===""||n==null||!Number.isFinite(x))re
  for(const[u,d]of LIM_UNITS)if(x>=d)return String(+(x/d).toFixed(2))+u;return String(x)};
 const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s*([KMBT])$/i);   // the field takes the same units back (#2434)
  const x=m?+m[1]*LIM_SCALE[m[2].toUpperCase()]:/^\d+$/.test(t)?+t:NaN;return Number.isInteger(x)&&x>0?x:null};
-const limLine=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
+const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
-const limVals=()=>limPend||{guard:limG(),cap:($("#limc")||{}).value||"",factor:($("#limf")||{}).value||""};
-function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const s=limS,v=limPend||s,off=s.guard==="off";
+const limBusy=()=>{const a=typeof document!=="undefined"?document.activeElement:null;if(a&&a.id&&Object.keys(LIM_ID).some(k=>LIM_ID[k]==="#"+a.id))return true;return Object.keys(limTmr).length>0};   // a focused field, or any pending timer, holds text the page has not saved (#2433)
+function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k);   // the mark moves in place, so a focused input keeps what it holds (#2433)
+  if(limOK!==k){if(m&&m.remove)m.remove();else if(m)m.hidden=true;continue}   // the field that lost its mark loses the element, never a hidden leftover
+  if(m&&m.remove){m.hidden=false;continue}
+  const el=$(LIM_ID[k]),row=el&&el.parentNode;if(row&&row.insertAdjacentHTML)row.insertAdjacentHTML("beforeend",limMark(k))}
+ const st=$("#limstat");if(st)st.innerHTML=limLine()}   // and so does the saved line (#2433)
+function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
+ const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
+ if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
- ],`Profile: <code title="${esc(s.profile||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path on hover (#2434); the last change stays data, never a fifth fact
+ ],`Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434); the last change stays data, never a fifth fact
  +setSettings("lim",[
-  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${v.guard==="on"?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>`),
-  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limCapFmt(v.cap))}" aria-label="Daily token cap"> <small class=kstop>Accepts 6M, 250M, 1T.</small>`),
-  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${v.factor}" aria-label="Pause factor"> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limLine(v.cap,v.factor,s.window_h)))} tokens/h.</small>`),
- ]);
+  setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
+  setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
+  setRow("Pause factor",`<input id=limf type=number min=0.1 step=0.5 inputmode=decimal value="${limBad==="factor"&&badVal!==null?esc(badVal):v.factor}" aria-label="Pause factor"${limBadCls("factor")}${limBad==="factor"?" aria-invalid=true":""}> <small class=kstop>Pauses while the last hour burns over ${esc(String(+v.factor))} × (cap ÷ ${esc(String(s.window_h))}) = ${esc(limN(limBurn(v.cap,v.factor,s.window_h)))} tokens/h.</small>${limMark("factor")}`),
+ ],`<span id=limstat>${limLine()}</span>`);   // one line: the saved value and its age, or what the hub refused (#2433); the id lets a save patch it in place
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
- b.innerHTML=h;if(typeof setBar==="function")setBar()}
-async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limDiff=null;limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
+ b.innerHTML=h;if(typeof setBar==="function")setBar();limTickSync();kanTickSync()}
+async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
- limRender()}
-async function limPost(confirm){const vals=limVals(),cap=limCapParse(vals.cap),send={...vals,cap:cap==null?vals.cap:cap};   // the hub stores a plain integer whatever unit was typed (#2434)
- if(!confirm)limPend={guard:vals.guard,cap:vals.cap,factor:vals.factor};   // the diff is asked about what was typed, not about what is saved
- try{const r=await fetch("/api/limits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...send,confirm})}),d=await r.json();
- if(d.err){limDiff=null;limMsg="!"+d.err}
- else if(confirm){limS=d.state||limS;limDiff=null;limPend=null;limMsg=(d.diff||[]).length?"saved · the guard reads it on its next pass":"nothing changed"}
- else if((d.diff||[]).length)limDiff=d.diff;else{limMsg="nothing changed";limPend=null}}catch(x){limMsg="!save failed"}
  limRender()}
 async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slotCaps(),confirm})}),d=await r.json();
  if(d.err){slotMsg="!"+d.err;slotDiff=null;if(slotS)slotDraft=slotClone(slotS)}   // a refused payload never stays staged, so the next Save sends the server's value
  else if(confirm){slotS=d.state||slotS;slotDraft=slotClone(slotS);slotDiff=null;slotMsg=(d.diff||[]).length?"saved · the next run and gate read it":"nothing changed"}
  else if((d.diff||[]).length)slotDiff=d.diff;else{slotDraft=slotClone(slotS);slotDiff=null;slotMsg="nothing changed"}}catch(x){slotMsg="!save failed"}
- limRender()}
-$("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot;   // a Kanban row or a slot cap stages its value until Save (#2432, #2435)
- if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg=""}
- if(sp&&slotDraft)slotStage(sp,e.target.value);   // a cleared or out-of-range cap is refused here, never staged for a Save that the hub would refuse (#2435)
+ limRender();return d}
+$("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot;   // a Kanban row, a slot cap or a limit field saves on its own (#2432, #2433, #2435)
+ if(n&&kanDraft){const c=kanDraft.find(x=>x.name===n);if(c)c.max_cards=e.target.value===""?null:Number(e.target.value);kanMsg="";limQueue("kan:"+n)}
+ else if(sp&&slotDraft){if(slotStage(sp,e.target.value))limQueue("slot:"+sp)}   // a cleared or out-of-range cap is refused here, never queued for a write the hub would refuse (#2435)
+ else if(e.target.id&&LIM_FIELD[e.target.id])limQueue(LIM_FIELD[e.target.id]);   // a pause in typing saves the field (#2433)
  setBar()});
+$("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot,key=n?"kan:"+n:sp?"slot:"+sp:(e.target.id&&LIM_FIELD[e.target.id])||null;   // the blur saves its own field at once and leaves every other field's timer alone (#2433)
+ if(!key)return;
+ if(LIM_FIELD[e.target.id]==="factor"&&e.target.value===""&&+((limS||{}).factor||0)!==0)return;   // a phone reports a partly typed number as empty: no change, the pause timer keeps the text (#2433)
+ clearTimeout(limTmr[key]);
+ delete limTmr[key];
+ limWrite(key).catch(()=>{})});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7573,32 +7645,29 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  });
-async function kanPost(confirm){try{const r=await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:kanLimits(),confirm})}),d=await r.json();
- if(d.err){kanMsg="!"+d.err}
- else if(confirm){kanS=d.state||kanS;kanDraft=kanClone(kanS.columns||[]);kanMsg=(d.diff||[]).length?"saved · the dispatch and the review pass read it on their next pass":"nothing changed"}
- else kanMsg=(d.diff||[]).length?"":(kanDraft=kanClone(kanS.columns||[]),"nothing changed")}catch(x){kanMsg="!save failed"}
- limRender()}
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
-   the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Loop and
-   Access have no Save: the bar hides there. */
+   the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
+   writes each field on its own and keeps no button (#2433). Loop and Access have no Save: the bar hides there. */
 const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
-const SET_SAVE=["lim","mdl","slk","sub"];   // the themes the one Save writes; Loop and Access stage no file here
+const SET_SAVE=["mdl","slk","sub"];   // the themes the one Save writes; Loop, Access and Spend & limits stage no file here
 let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
-const limDirty=()=>kanDirty()||slotDirty()||(!!limS&&!!$("#limc")&&(()=>{const v=limVals();return String(v.guard)!==String(limS.guard)||String(limCapParse(v.cap)??v.cap)!==String(limS.cap)||String(v.factor)!==String(limS.factor)})());   // the Kanban rows, the slot caps and a cap typed in K, M, B or T are this theme's too (#2432, #2434, #2435)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
-const setDirty=()=>[["lim",limDirty()],["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
+const setDirty=()=>[["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
-   never a bar that disappears and leaves the reader guessing whether anything was lost. */
-function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme);bar.hidden=false;
+   never a bar that disappears and leaves the reader guessing whether anything was lost. Spend & limits hides the two
+   buttons there, because it writes each field on its own and a button would name a write that already happened (#2433). */
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme),solo=sTheme==="lim";bar.hidden=false;
  bar.classList.toggle("dirty",d.length>0&&!ro);
+ $("#ssave").hidden=solo;$("#sdisc").hidden=solo;
  $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
- $("#schg").textContent=RO?RO_WHY:!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+ $("#schg").textContent=RO?RO_WHY:solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
 function setTheme(sp){if(!STH[sp])sp="lop";sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
- document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar()}   // opening the panel loads its data, in its own toggle handler
+ document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar();
+ if(sp==="lim"){limTickStart();kanTickStart()}else{limTickStop();kanTickStop()}}   // the age tickers run only while the loaded theme is on screen (#2433)
 $(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
 $("#ssel").addEventListener("change",e=>setTheme(e.target.value));
 document.addEventListener("click",e=>{const a=e.target.closest&&e.target.closest("a[data-sp]");if(!a)return;
@@ -7608,17 +7677,13 @@ const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,
 /* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */
 $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
- if(d.includes("lim")){const v=limVals();limPend={guard:v.guard,cap:v.cap,factor:v.factor};groups.push(await setAskOne("/api/limits",limPend,"Spend & limits",(limS&&limS.file)||"(the profile file)"));
-  if(kanDirty())groups.push(await setAskOne("/api/columns",{columns:kanLimits()},"Kanban",(kanS&&kanS.file)||"(the project settings file)"));
-  if(slotDirty()){const g=await setAskOne("/api/slots",slotCaps(),"Machine slots",(slotS&&slotS.file)||"(the project settings file)");slotDiff=g.lines;groups.push(g)}}
  if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
-$("#sdno").onclick=()=>{sPend=null;limPend=null;$("#sdlg").close()};
+$("#sdno").onclick=()=>{sPend=null;$("#sdlg").close()};
 $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
- if(d.includes("lim")){await limPost(true);if(kanDirty())await kanPost(true);if(slotDirty())await slotPost(true)}
  if(d.includes("slk"))await slPost(true);
  if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
  setBar();barSay([mdlMsg,kanMsg,slotMsg,slMsg,subMsg])};
@@ -7627,9 +7692,10 @@ $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
 const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);if(!say.length)return;
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limPend=null;limMsg="";limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+// The explicit revert drops a refused value and redraws the saved state (#2433).
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";limRender()}
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
