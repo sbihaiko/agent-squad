@@ -2440,10 +2440,10 @@ def loop_started_after(at, path=None):
     except (ValueError, IndexError): return False
 
 def loop_health(live, now=None):
-    """The Loop theme's Now tiles (#1280): how many runs and gates are live, how old the last watch cycle is, and how
-    long a pending start has left. Each value is a fact one reader already measures; a missing cycle is None, never zero,
-    so the tile says "no cycle yet" instead of "0s". A cycle end in the future, from a skewed clock, clamps to 0 rather
-    than reading negative. `cycle_age` replaces the old `cycle_left` tile."""
+    """The loop answer's health (#1280): how many runs and gates are live, how old the last watch cycle is, and how
+    long a pending start has left; the Monitor's switch states the seconds left (#2515 removed the Loop theme's tiles).
+    Each value is a fact one reader already measures; a missing cycle is None, never zero. A cycle end in the future,
+    from a skewed clock, clamps to 0 rather than reading negative. `cycle_age` replaces the old `cycle_left` tile."""
     now = time.time() if now is None else now
     cyc = _cycle_state(now)
     age = max(0, int(round(now - cyc["end"]))) if cyc else None
@@ -2466,7 +2466,7 @@ def loop_view(a):
     rows = [r for r in project_contexts() if r.get("own") or (r.get("state") and pathlib.Path(r["state"]).is_dir())]
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
             "cause": loop_cause(),   # the loop-bug a drain waits on, or the owner's stop (#1708)
-            "health": loop_health(live),   # the Loop theme's Now tiles (#1280)
+            "health": loop_health(live),   # the live counts, the cycle age and the start window (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "projects": loop_projects(a, procs=procs, rows=rows),   # every project this hub serves, each on its own files (#1599)
@@ -7118,18 +7118,15 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
 @media (max-width:600px){body{height:auto}body.tkopen #win{margin-right:0}body.tkopen #board{width:auto}#win{display:block;overflow:visible}body.dockb #win{display:block;grid-template-columns:none;grid-template-rows:none}#side{width:auto;border-right:0;border-bottom:1px solid var(--line)}body.dockb #side{grid-row:auto;grid-column:auto}#main{min-height:50vh}body.dockb #main{grid-column:auto;grid-row:auto}#board{width:auto}body.dockb #board{grid-column:auto;grid-row:auto;height:60vh}#lbody input{width:92px}}
 /* The page frame of the mock (#889): the header with its tabs, and the sidebar cards. */
-/* The loop switch (#923): the strip's draining and starting states, Settings > Loop and Access, and the stop confirm.
-   The Monitor's copy is in the block the phone serves; these keep the Settings panel's own row and change log, and the
-   test fails when the switch rules of the two places drift apart (#1234). */
-#lopb .ls.draining,#lopb .ls.starting{color:var(--warn)}#lopb .ls{font-weight:600}
-#lopb .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
-#lopb .lsw[aria-checked=true]{background:var(--ok)}#lopb .lsw.dra[aria-checked=true]{background:var(--warn)}
-#lopb .lsw i{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:var(--radius-full);background:var(--highlight);transition:transform var(--motion-duration-short) var(--motion-entry-easing)}
-#lopb .lsw[aria-checked=true] i{transform:translateX(20px)}
-#lopb .lsw:disabled{opacity:.6;cursor:default}#lopb .lsw:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-#lopb .ls.on{color:var(--ok)}#lopb .ls.off{color:var(--warn)}
-#lopb .lnow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--inset);margin:6px 0}#lopb .lnow small{display:block;color:var(--mute)}#lopb .lnow button{margin-left:auto}
-#lopb .lwhy{color:var(--warn);margin:4px 0}#lopb .lerr{color:var(--err);margin:4px 0}#lopb ul.laud{list-style:none;margin:4px 0 0;padding:0}#lopb ul.laud li{padding:4px 0;border-bottom:1px solid var(--line)}#lopb ul.laud li:last-child{border:0}
+/* The loop switch (#923): the strip's draining and starting states and the stop confirm. The Monitor carries the switch
+   and its row (#1071); the Loop theme left Settings (#2515), and its change list lives in the Loop tab, drawn as the
+   Spend & limits Changes list is. */
+#lopaud{margin:18px 0 0;padding:12px 0 0;border-top:1px solid var(--line)}
+#lopaud details.aud>summary{display:flex;align-items:center;gap:6px;min-height:32px;cursor:pointer;font-size:var(--fs-body);color:var(--fg);list-style:none}
+#lopaud details.aud>summary::-webkit-details-marker{display:none}#lopaud details.aud>summary::before{content:"\25B8";color:var(--mute)}#lopaud details.aud[open]>summary::before{content:"\25BE"}
+#lopaud details.aud>summary .m{color:var(--mute)}
+#lopaud ul.laud{list-style:none;margin:4px 0 0;padding:0;font-size:var(--fs-caption);color:var(--mute)}#lopaud ul.laud li{padding:3px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}#lopaud ul.laud li:last-child{border:0}
+#lopaud ul.laud b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
 #accb .kr b{font-weight:600;font-size:var(--fs-caption);line-height:1.3;text-align:right}#accb .ok{color:var(--ok)}#accb .no{color:var(--warn)}#accb p{color:var(--mute);margin:8px 0 0}
 .sdev{padding:8px 0 0;border-top:1px solid var(--line)}.sdev h4{margin:0 0 4px;font-size:var(--fs-caption);color:var(--mute)}.sdev a{margin-right:10px}.sdev p{margin:6px 0 0}
 #ldg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);padding:16px;width:min(520px,92vw)}#ldg::backdrop{background:var(--scrim)}#ldg .lrad{display:flex;gap:8px;align-items:flex-start;padding:8px 0;cursor:pointer}#ldg .lrad small{display:block;color:var(--mute)}#ldg ul{margin:4px 0 0;padding-left:18px}#ldg .lact{display:flex;gap:6px;margin-top:10px}
@@ -7229,8 +7226,6 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .kbar .kfill.full{background:var(--warn)}
 #tab-set .knum{margin-left:0;font-variant-numeric:tabular-nums;color:var(--fg);white-space:nowrap}
 #tab-set .kbar+.knum{margin-left:8px}
-#tab-set .lstate{font-weight:600;font-size:var(--fs-body);margin:0 0 6px}
-#tab-set .lstate.on{color:var(--ok)}#tab-set .lstate.off,#tab-set .lstate.draining,#tab-set .lstate.starting{color:var(--warn)}
 #tab-set input,#tab-set select{font-size:var(--fs-body);height:var(--ctl-h)}
 #tab-set textarea{font-size:var(--fs-body);min-height:var(--ctl-h)}
 #tab-set .ro{color:var(--warn);background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);padding:6px 10px;margin:0 0 10px;max-width:1120px}#tab-set .ro[hidden]{display:none}
@@ -7290,8 +7285,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #inst .irw b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;text-align:right;min-width:0;overflow-wrap:anywhere}#inst .irw b.bad{color:var(--warn)}
 /* The Monitor's loop switch (#923, #1234): the phone serves this block alone, so the switch is styled here and not only
    in the sidebar block. #1071 moved the switch into the Monitor and left its styles beside the Settings panel, so the
-   desktop drew a bare button and the phone drew one with no styles at all. #lopb carries the same rules beside it, and
-   the test fails when the two lists drift apart. */
+   desktop drew a bare button and the phone drew one with no styles at all. The Monitor carries the only switch (#2515). */
 #inst .ls.draining,#inst .ls.starting{color:var(--warn)}#inst .ls{font-weight:600}
 #inst .lsw{position:relative;flex:none;width:52px;height:32px;padding:0;border:0;border-radius:var(--radius-xl);background:var(--edge);cursor:pointer;transition:background var(--motion-duration-short) var(--motion-entry-easing)}
 #inst .lsw[aria-checked=true]{background:var(--ok)}#inst .lsw.dra[aria-checked=true]{background:var(--warn)}
@@ -7347,14 +7341,13 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <div class=rkt id=flowtabs><button id=bflow title="the development flow: the cards in each column over time, from the flow history (SPEC 111)">Cumulative Flow</button><button id=blead title="the lead time of the closed cards, opened to closed (SPEC 111)">Lead Time</button></div>
 <div id=flowov hidden><div id=flowb></div></div>
 </section>
-<section id=tab-prof class=pane aria-label=Loop><div id=profb></div></section>
+<section id=tab-prof class=pane aria-label=Loop><div id=profb></div><div id=lopaud></div></section>
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lop>Loop<small id=lopnav>off</small></button><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lop>Loop</option><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
-<details id=lop class=sp data-sp=lop open><summary>Loop<span class=sr id=lopsr>off</span></summary><div class=sb id=lopb></div></details>
-<details id=lim class=sp data-sp=lim><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
+<details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
@@ -7954,10 +7947,11 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!
  });
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
-   writes each field on its own and keeps no button (#2433). Loop and Access have no Save: the bar hides there. */
-const STH={lop:"Loop",lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
-const SET_SAVE=["mdl","slk","sub"];   // the themes the one Save writes; Loop, Access and Spend & limits stage no file here
-let sTheme=STH[ls.sth]?ls.sth:"lop",sPend=null;   // Loop first: the question the owner asks most
+   writes each field on its own and keeps no button (#2433). Access has no Save: the bar says so. */
+const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
+const SET_FIRST="lim";   // the first theme left: a saved Loop link and a stored Loop theme open it (#2515)
+const SET_SAVE=["mdl","slk","sub"];   // the themes the one Save writes; Access and Spend & limits stage no file here
+let sTheme=STH[ls.sth]?ls.sth:SET_FIRST,sPend=null;   // a removed theme opens the first one left (#2515)
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
@@ -7970,7 +7964,7 @@ function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||
  $("#ssave").hidden=solo;$("#sdisc").hidden=solo;
  $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
  $("#schg").textContent=RO?RO_WHY:solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
-function setTheme(sp){if(!STH[sp])sp="lop";sTheme=sp;ls.sth=sp;save();
+function setTheme(sp){if(!STH[sp])sp=SET_FIRST;sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
  document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar();
@@ -8558,7 +8552,7 @@ new MutationObserver(flowTabs).observe($("#flowov"),{attributes:true});
 // "board items read N s ago": the item read's own stamp (#1661), never the browser's fetch time
 setInterval(()=>{const b=$("#bread");if(!b)return;b.classList.toggle("stale",readStale||!!lastPending);$("#bbody").classList.toggle("stale",readStale);b.textContent=lastRead?(lastBoardT?`board items read ${Math.max(0,Math.round(Date.now()/1000-lastBoardT))} s ago${lastBoardOver?" (overdue)":readStale?" (stale: "+lastBoardErr+")":""}${lastPending?` · ${lastPending} card(s) seen, not read yet`:""}`:"board items not read yet"):""},1000);   // the stale class names a card the fast read has seen and the full read has not written (#985)
 // loop-switch:start
-// The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The strip and Settings > Loop draw one view;
+// The loop switch (#923, ADR-0162): /api/loop is the one read and the one write. The Monitor and the Loop tab draw one view;
 // a start posts at once, a stop opens the confirm, which drains by default and lists every live run and gate a stop-now kills.
 // The renderers are pure: tests/test_hub_loop_switch_page.py runs them in node.
 let loopV=null,loopErr="";
@@ -8588,27 +8582,18 @@ function roAll(root){if(!root||!root.querySelectorAll)return;for(const el of roo
  el.disabled=true;if(el.tagName==="A"){el.setAttribute("aria-disabled","true");el.style.pointerEvents="none";el.tabIndex=-1}}}
 function roWatch(root){roAll(root);if(typeof MutationObserver!=="undefined"&&root)new MutationObserver(()=>roAll(root)).observe(root,{subtree:true,childList:true})}
 // }SETT
-const loopLast=v=>{const e=(v.log||[])[0];return e?[e.action,e.who,e.from,moment(e.at)].filter(Boolean).join(" · "):"none recorded"};   // no log entry names no action or source, so the tile never shows a partial who and when
 const loopTip=v=>!v.write?v.reason:v.state==="on"||v.state==="draining"?"turn off":v.state==="off"?"turn on":v.state==="starting"?"the loop is starting":"";
 const loopSw=v=>`<button type=button role=switch aria-label="Loop" aria-checked="${v.state!=="off"}" data-loop${v.write&&v.state!=="starting"?"":" disabled"} class="lsw${v.state==="draining"?" dra":""}"${loopTip(v)?` title="${esc(loopTip(v))}"`:""}><i aria-hidden="true"></i></button>`;   // a draining loop reads the warn colour on the switch itself, not only on the word beside it
 const loopAct=e=>e.failed?`${String(e.action||"")} failed: ${e.failed}`:e.action==="drain"&&e.issue?`drain for the loop-bug #${e.issue}`:e.action==="start"&&e.issue?`start: no loop-bug is open after #${e.issue}`:e.action==="drain"?"stop after the live runs and gates finish":e.action==="stop-now"?`stop now${e.killed?` (killed ${(e.killed.runs||[]).length} runs, ${(e.killed.gates||[]).length} gates${e.survived?`; ${(e.survived.runs||[]).length+(e.survived.gates||[]).length} not ended`:""})`:""}`:String(e.action||"");
 const loopRun=r=>String(r).split("/").filter(Boolean).pop()||String(r);
 const loopCause=v=>{const n=v.cause&&v.cause.issue;return !n?"":v.state==="draining"?` for the loop-bug #${n}`:v.state==="off"?` until the loop-bug #${n} closes`:""};   // why a drained loop is off (#1708)
-const loopStateLine=v=>`<div class="lstate ${esc(v.state)}">Loop ${esc(v.state)}${esc(loopCause(v))}</div>`;   // the theme's first line, the state before any other fact (#1280)
 const loopSetHtml=v=>{const h=v.health||{},left=v.state==="starting"&&h.starting_left!=null?` · ${span(h.starting_left)} left`:"";
  return `<div class=lnow>${loopSw(v)}<span class="ls ${esc(v.state)}">Loop ${esc(v.state)}${esc(loopCause(v))}${left}</span></div>`
  +(v.write?"":`<div class=lwhy>${esc(v.reason)}. The rule is in <a href="#set" data-sp=acc>Access</a>.</div>`)
  +(v.failed?`<div class=lerr role=alert>The last start failed: ${esc(v.failed)} <button type=button data-loop${v.write?"":" disabled"}>Try again</button></div>`:"")
  +(loopErr?`<div class=lerr role=alert>${esc(loopErr)}</div>`:"")};
-const loopLogHtml=v=>{const live=v.live||{},h=v.health||{};
- const runs=h.live_runs!=null?h.live_runs:(live.runs||[]).length,gates=h.live_gates!=null?h.live_gates:(live.gates||[]).length;
- const health=h.starting_left!=null?[`starting, ${span(h.starting_left)} left`,"warn"]:v.failed?[`last start failed: ${v.failed}`,"err"]:h.cycle_age!=null?[`cycle ${span(h.cycle_age)} ago`,"ok"]:["no cycle yet","neutral"];
- const now=setNow("lop",[
-  setTile("Live",`${runs} run${runs===1?"":"s"} · ${gates} gate${gates===1?"":"s"}`,"neutral"),
-  setTile("Health",health[0],health[1]),
-  setTile("Last change",loopLast(v),"neutral")]);
- return loopStateLine(v)+now+setSettings("lop",[],`The switch is in the Monitor. The rule for a write over the tailnet is in <a href="#set" data-sp=acc>Access</a>.`)
- +`<details class=aud><summary>Changes <span class=m>${(v.log||[]).length}</span></summary><h4>Changes</h4><ul class=laud>${v.log.length?v.log.map(e=>`<li><b>${esc(moment(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul></details>`};
+const loopLogHtml=v=>{const log=v.log||[];   // the Loop tab draws the change list alone: the state, the live count and the health stay in the Monitor (#2515)
+ return `<details class=aud><summary>Changes <span class=m>${log.length}</span></summary><ul class=laud>${log.length?log.map(e=>`<li><b>${esc(moment(e.at))}</b> · ${esc(e.who)} (${esc(e.from)}) · ${esc(loopAct(e))}</li>`).join(""):"<li class=m>no change yet</li>"}</ul></details>`};
 const loopConfirmHtml=v=>{const r=v.live.runs,g=v.live.gates,drain=v.state==="on";
  return `<b>Stop the loop?</b><p class=m>Live now: ${r.length} run${r.length===1?"":"s"}, ${g.length} gate${g.length===1?"":"s"}.</p>`
  +(drain?`<label class=lrad><input type=radio name=lm value=drain checked><span><b>Stop after the live runs and gates finish</b><small>No new dispatch. The live work runs to its end, then the loop stops. The safe default.</small></span></label>`:"")
@@ -8632,12 +8617,11 @@ const accDraw=()=>{if(!accV)return;const reach=accV.tailnet?"tailnet":"loopback"
  const c=$("#accb"),ah=accHtml(accV);if(c.dataset.h!==ah){c.dataset.h=ah;c.innerHTML=ah}};
 async function accPoll(){if(accBusy)return;accBusy=true;try{accV=await (await fetch("/api/access")).json();accDraw()}catch(e){}finally{accBusy=false}}
 // loop-switch:end
-// One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop panel keeps the change log,
+// One switch, in the Monitor where the owner looks (owner, from #1071's cleanup): the Loop tab keeps the change log,
 // and no second button carries the same id (ADR-0162). The run history left for the bottom of the Runs tab (#1277).
-function loopDraw(){if(!loopV)return;const hp=loopV.health||{},lr=hp.live_runs!=null?hp.live_runs:((loopV.live||{}).runs||[]).length;
- setChip("lop",loopV.state+(lr?` · ${lr} run${lr===1?"":"s"}`:""));
+function loopDraw(){if(!loopV)return;
  const a=$("#iloop"),h=loopSetHtml(loopV);if(a.dataset.h!==h){a.dataset.h=h;a.innerHTML=h}
- const b=$("#lopb"),lg=loopLogHtml(loopV);if(b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
+ const b=$("#lopaud"),lg=loopLogHtml(loopV);if(b&&b.dataset.h!==lg){b.dataset.h=lg;b.innerHTML=lg}}
 let liveWork=null;   // the hub's Live work answer (/api/live): the loop's state, the tagged rows and the board read's age
 async function livePoll(){try{liveWork=await (await fetch("/api/live")).json()}catch(e){liveWork={loop:"unknown",boardAge:null,lines:[{kind:"notice",id:"",text:"live work unreadable"}]}}refresh()}   // a failed read is named in the panel, never drawn as an empty tile (#1697)
 async function loopPoll(){try{loopV=await (await fetch("/api/loop")).json();loopDraw()}catch(e){}}
@@ -8755,7 +8739,7 @@ setInterval(pollIfVisible(squadChartTick),5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(pollIfVisible(endedPoll),30000);
-const themeHash=(location.hash.match(/^#set-(lop|lim|sub|mdl|slk|acc)$/)||[])[1];if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286)
+const themeHash=(location.hash.match(/^#set-(lim|sub|mdl|slk|acc)$/)||[])[1]||(location.hash==="#set-lop"?SET_FIRST:null);if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286); an old Loop link opens the first theme left (#2515)
 setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
