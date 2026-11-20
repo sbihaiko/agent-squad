@@ -7069,7 +7069,6 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-runs #main{min-height:60vh}
 #side .sp .sb{padding:0 10px 10px}#side .sp>summary::before{content:"\25B8";color:var(--mute);width:10px}#side .sp[open]>summary::before{content:"\25BE"}
 #side .sp>summary .sr{font-size:var(--fs-caption)}
-#lrun .lh{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 6px}   /* the card's header: the runs and the hand holds, never the cost (#2507) */
 #lrun .lr{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:3px 6px;border:1px solid var(--line);border-radius:var(--radius-lg);margin-bottom:6px;background:var(--card);min-width:0;padding:6px 8px;color:var(--fg);cursor:default}   /* one short row per item (#2507): the icon, the id with its chips, and the age; the chips join the id's line when they fit and stack under it when they do not */
 #lrun .lr:hover{border-color:var(--line-strong)}#lrun .lr[data-id]{cursor:pointer}
 #lrun .lr .lic{grid-column:1;flex:none;font-size:var(--fs-caption);line-height:1}
@@ -7086,7 +7085,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #lrun .lslot{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--ink-soft)}
 #lrun .lr.red{border-color:var(--err)}#lrun .lr.red .lid,#lrun .lr.red .lic{color:var(--err)}
 #lrun .lr.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .lr.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}
-#lrun .lpill{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 7px;font-size:var(--fs-caption);line-height:16px;color:var(--ink-soft)}#lrun .lpill b{color:var(--fg);font-variant-numeric:tabular-nums}
+#lrd>summary .sr{display:flex;gap:6px;align-items:center}#lrd .lpill{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 7px;font-size:var(--fs-caption);line-height:16px;color:var(--ink-soft)}#lrd .lpill b{color:var(--fg);font-variant-numeric:tabular-nums}
 #lrun .lf{margin-top:2px;color:var(--mute);font-size:var(--fs-caption);text-align:right}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}
 /*BOARD_LANES_CSS*/
@@ -7417,9 +7416,8 @@ const LIVE_ROWS=4;
 const LIVE_QUIET=300;   // a running run that has not written for five minutes reads `quiet`, never a fresh age
 function liveCard(live,shown){const IC={run:"🏃",hand:"✋",microscope:"🔬"},MK={done:"✓",current:"⏳",later:""};   // the icons a row wears (#2507): a loop run, a hand hold, a suite or gate the machine runs; and a delivery stage: done, in hand, still ahead
  const runs=live.filter(r=>r.kind!=="hold"),n=runs.length,rows=(liveWork&&liveWork.lines)||[];
- const held=live.length-n+rows.filter(t=>t.kind==="hold").length;   // a hold is work by hand, never a live run (#2168)
- const head=(n||held)?`${n} live${held?` · ${held} held`:""}`:"none";   // the collapsed summary states both counts; the spend left the card (#2507)
- const pills=`<div class=lh><span class=lpill title="the runs live now">🏃 <b>${n}</b></span><span class=lpill title="the cards held by hand">✋ <b>${held}</b></span></div>`;   // the header: the two counts, never the cost (#2507)
+ const held=new Set([...live.filter(r=>r.kind==="hold"),...rows.filter(t=>t.kind==="hold")].map(x=>x.id)).size;   // a hold is work by hand, never a live run (#2168); the run list and the rows name one hold by one id (#2523)
+ const head=`<span class=lpill title="the runs live now">🏃 <b>${n}</b></span><span class=lpill title="the cards held by hand">✋ <b>${held}</b></span>`;   // the summary's heading row carries the two counts, once, never the cost (#2507, #2523)
  const at=a=>a==null?"":`<span class=lage>${esc(age(a))}</span>`,chips=c=>`<span class=lchips>${c}</span>`;
  const item=t=>{const ic=IC[t.icon]||"",tt=t.title?` title="${iq(t.title)}"`:"";
    if(t.kind==="hold"){const ch=(t.stages||[]).map(s=>`<span class="lch ${esc(s.state)}" title="${iq(s.name+": "+s.state)}">${esc(s.name)} ${MK[s.state]||""}</span>`).join("");   // the five delivery chips, in the order the hub names them
@@ -7436,7 +7434,7 @@ function liveCard(live,shown){const IC={run:"🏃",hand:"✋",microscope:"🔬"}
  const extra=rows.filter(t=>!(t.kind==="run"&&live.some(r=>r.id===t.id))&&!(t.kind==="gate"&&drawn.some(r=>r.id===t.run))).map(item).join("");   // every other row is drawn once: a run row already drawn is not drawn twice, by identity (#1697)
  const board=(liveWork&&liveWork.boardAge!=null)?`<div class=lf>board read ${age(liveWork.boardAge)} ago</div>`:"";   // the footer: the age of the board read the hand-work rows came from (#1697)
  const body=drawn.map(r=>liveRow(r,shown)+own(r)).join("")+extra;   // the page's own run rows, each with its gate, and the hub's other rows, each drawn once
- return{head,html:pills+(body||(liveWork?"":"<div class=m>no live work</div>"))+board}}   // the empty state is the hub's own tagged row, never the page's: it names one only before the first read (#1697)
+ return{head,html:(body||(liveWork?"":"<div class=m>no live work</div>"))+board}}   // the empty state is the hub's own tagged row, never the page's: it names one only before the first read (#1697)
 // The liveness slot answers one question: is this run moving? `quiet` is a run that stopped writing, `no record` a run whose
 // record cannot be read, `starting` a run that has not written yet; otherwise the number is how long since its last write.
 // The dot mirrors it. A run that is not live (a verdict, needs-human, waiting) is never in this card: it reads in the Runs tab.
@@ -7461,7 +7459,7 @@ function liveRow(r,shown){
  const node=st?`<span class=lslot title="the node the run is at">${esc(st)}</span>`:"",act=` data-id="${esc(r.id)}" tabindex=0 role=button`;
  return `<div class="lr${on}${s.k?" "+s.k:""}"${act}${tip?` title="${iq(tip)}"`:""}${lc?` style="--lc:${lc}"`:""}><span class=lic>🏃</span><span class=lm><span class=lid>${lab}</span><span class=lchips>${node}${loadMark(r)}</span></span><span class=lage>${esc(s.k?s.text:age(r.age))}</span></div>`
 }
-function drawList(){const c=liveCard(runs.filter(r=>r.rank===0),new Set(slots)),el=$("#lrun");el.innerHTML=c.html;$("#lrs").textContent=c.head;
+function drawList(){const c=liveCard(runs.filter(r=>r.rank===0),new Set(slots)),el=$("#lrun");el.innerHTML=c.html;$("#lrs").innerHTML=c.head;
   [...el.querySelectorAll(".lr")].forEach(r=>{const lid=r.querySelector(".lid"),ch=r.querySelector(".lchips");if(lid&&ch&&ch.children.length&&ch.offsetHeight>lid.offsetHeight+2)r.classList.add("stack")})}   // the sidebar card: a bounded glance of the runs that are live now (#1276); a row whose chips do not fit the id's line stacks them under the id (#2507)
 // The Runs tab lists the live runs and the runs ended today; a row opens the run sheet, never an embedded dashboard (#984).
 // Live draws each live row once, in the full form (#1770): the childcc pass first, then the live runs and the hand holds,

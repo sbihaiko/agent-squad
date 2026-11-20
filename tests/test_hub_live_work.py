@@ -730,9 +730,44 @@ def test_the_card_header_counts_runs_and_holds_and_shows_no_cost(hub):
     """#2507: the header is two pills, the runs and the hand holds; the cost leaves it."""
     if NODE is None:
         pytest.skip("node is required")
-    html = json.loads(_card_run(hub, 'let liveWork={loop:"on",boardAge:null,lines:[]};', '[{id:"run-b",age:5,spend:2.5}]'))
-    assert "run-b" in html and "🏃" in html, html
-    assert "$" not in html and "0.00" not in html and "2.50" not in html, html   # the cost leaves the header
+    out = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:[]};', '[{id:"run-b",age:5,spend:2.5}]')
+    assert "run-b" in out["html"] and "🏃" in out["head"], out
+    assert "$" not in out["head"] + out["html"] and "0.00" not in out["head"] and "2.50" not in out["head"], out   # the cost leaves the header
+
+
+def _card_both(hub, prelude, live="[]"):
+    """The card's heading and body, as the JSON text node prints them: the summary's text and the panel's html."""
+    real_age = re.search(r"^const age=s=>[^\n]*", hub.PAGE, re.M).group(0)
+    real_iq = re.search(r"^const iq=[^\n]*", hub.PAGE, re.M).group(0)
+    script = ('const esc=s=>String(s);' + real_age + real_iq + 'const liveRow=(r,shown)=>"<row "+r.id+">";const LIVE_ROWS=4;\n'
+              + prelude + "\n" + _card_fn(hub) + f'\nconsole.log(JSON.stringify(liveCard({live},"")));\n')
+    out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_the_count_shows_once_in_the_pills_at_the_heading(hub):
+    """#2523: the run and hold pills sit in the summary's heading row, and the heading states no `N live` text, so the
+    run count shows once. The panel body carries no pill row."""
+    if NODE is None:
+        pytest.skip("node is required")
+    out = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:[]};',
+                     '[{id:"run-a",age:5,spend:0},{id:"run-b",age:9,spend:0},{id:"hold-1",kind:"hold",age:5,spend:0}]')
+    visible = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", out["head"])).strip()
+    assert "live" not in visible, f"the heading repeats the count as text: {visible}"
+    assert "🏃 <b>2</b>" in out["head"] and "✋ <b>1</b>" in out["head"], f"the pills are not in the heading: {out['head']}"
+    assert "class=lh" not in out["html"], "the pill row still sits under the heading"
+
+
+def test_a_hold_on_both_lists_is_counted_once(hub):
+    """#2523: the hub sends a hold in the run list and again as a Live work row, under one id. The held pill counts it once."""
+    if NODE is None:
+        pytest.skip("node is required")
+    hold_row = {"kind": "hold", "id": "hold-2439", "icon": "hand", "issue": 2439, "repo": "sbihaiko/agent-squad",
+                "text": "#2439", "age": 600, "stages": []}
+    out = _card_both(hub, 'let liveWork={loop:"on",boardAge:null,lines:[' + json.dumps(hold_row) + ']};',
+                     '[{id:"hold-2439",kind:"hold",age:600,spend:0}]')
+    assert "✋ <b>1</b>" in out["head"], f"a hold on both lists is counted twice: {out['head']}"
 
 
 def test_the_card_footer_shows_only_the_board_read_age(hub):
