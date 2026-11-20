@@ -292,18 +292,26 @@ def _linux_listing() -> list[int]:
     return [int(n) for n in names if n.isdigit()]
 
 
-def _linux_boot_time() -> int:
+def _linux_boot_time() -> float:
+    """The boot time in epoch seconds. /proc/uptime carries hundredths, so a start built on it is exact to a clock tick.
+    /proc/stat `btime` is a whole second, so a start built on it reads up to 1 s early: it is the fallback, never the first
+    read (#2591)."""
+    try:
+        with open("/proc/uptime") as f:
+            return time.time() - float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass   # no uptime on this kernel: the whole-second btime below is better than no read
     try:
         with open("/proc/stat") as f:
             for line in f:
                 if line.startswith("btime "):
-                    return int(line.split()[1])
+                    return float(line.split()[1])
     except (OSError, ValueError) as e:
         raise ReadError(f"cannot read the boot time: {e}") from e
     raise ReadError("cannot read the boot time: /proc/stat has no btime")
 
 
-def _linux_proc(pid: int, boot: int) -> Proc | None:
+def _linux_proc(pid: int, boot: float) -> Proc | None:
     try:
         with open(f"/proc/{pid}/stat") as f:
             stat = f.read()

@@ -5444,3 +5444,30 @@ def test_2582_the_kept_trip_view_is_the_fold_it_replaces(records):
     kept = json.dumps(mod.trip_view(86400, now, allowed=False), sort_keys=True)
     mod._TRIP_KEPT.clear()
     assert json.dumps(mod.trip_view(86400, now, allowed=False), sort_keys=True) == kept
+
+
+def test_2588_a_delivery_its_cleaned_child_tree_held_stays_in_the_trip(records, monkeypatch, tmp_path):
+    """AC 3 and 4 of #2588: a child tree holds its run folders, so wtclean.sh removes the record with the tree and the
+    trip bar forgot every delivery it made. The bar folds the copies the pass keeps in the state's run-archive/, a run
+    the live folder and the archive both hold counts once, and the delivery stays counted after the tree goes."""
+    mod, _ = records
+    monkeypatch.setattr(mod, "STATE", tmp_path / "st")
+    (tmp_path / "st" / "run-archive").mkdir(parents=True)
+    # The board's transition record lives under the hub's shared directory, and another case's card #7 must not read as the
+    # delivery of this run: the fold reads a store this case owns.
+    monkeypatch.setattr(mod._hist, "history_path", lambda *a, **k: tmp_path / "hist.jsonl")
+    mod._TRIP_KEPT.clear()
+    now = time.time()
+    run = pathlib.Path(mod.CHECKOUT) / "worktrees" / "child" / "gui-7" / "runs" / "run-20261120-010101-aaaaaa"
+    record(run, ev("run_start", now - 900), ev("call_start", now - 850, node="code.1", entry=1),
+           ev("outcome", now - 800, node="code.1", entry=1, outcome="pass"), ev("land", now - 500, outcome="pass"),
+           ev("verdict", now - 400, verdict="completed", exit_code=0, reasons=[]))
+    (run / "request.txt").write_text("Refs #7\n")
+    assert mod.trip_view(3600, now, allowed=False)["deliveries"] == 1, "the live record is one delivery"
+    arch = tmp_path / "st" / "run-archive" / run.name   # what wtclean.sh copies before it removes the tree
+    arch.mkdir()
+    for f in ("record.jsonl", "request.txt"):
+        shutil.copy2(run / f, arch / f)
+    assert mod.trip_view(3600, now, allowed=False)["deliveries"] == 1, "a run in both places counts once"
+    shutil.rmtree(pathlib.Path(mod.CHECKOUT) / "worktrees")
+    assert mod.trip_view(3600, now, allowed=False)["deliveries"] == 1, "the delivery went with the cleaned tree"
