@@ -415,3 +415,14 @@ def test_a_parked_run_with_a_hold_is_a_backlog_band_with_its_held_hours():
     assert sum(obs["columns"].values()) == pytest.approx(obs["flowing"] + obs["held"])
     names = [column["name"] for column in bh._columns.view_columns()]
     assert "Backlog" in names, "every band's column is a board column with a palette role"
+
+
+def test_2582_one_record_identity_folds_once_and_a_new_one_folds_again():
+    """AC F of #2582: the chart folds a record's intervals once per record identity, and a record that moved folds again."""
+    events = _timeline((10, 0, "added", {}), (10, 5, "status", {"status": "In Progress"}))
+    stamp = (234, T0)
+    first = bh.intervals(events, stamp)
+    assert bh.intervals([dict(e) for e in events], stamp) is first, "an unchanged record folded its intervals again"
+    moved = _timeline((10, 0, "added", {}), (10, 5, "status", {"status": "In Progress"}), (11, 0, "closed", {}))
+    later = bh.intervals(moved, (234, T0 + 60))
+    assert later is not first and later[-1]["column"] != first[-1]["column"], "a changed record answered the runs before it"

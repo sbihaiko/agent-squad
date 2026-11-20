@@ -5860,7 +5860,8 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
-    cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
+    columns_key = _file_key(pathlib.Path(__file__).resolve().parent / "board_columns.py")   # the column rules each fold reads
+    cards = [_hist.intervals(rec.get("events") or [], (rec.get("n"), rec.get("t"), columns_key)) for rec in store.values()
              if (rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty))
              and FLOW_MOVED not in _hist.labels_now(rec.get("events") or [])]   # a moved card is another board's work (#1663)
     zone = day_zone()
