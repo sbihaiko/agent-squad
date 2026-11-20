@@ -191,3 +191,39 @@ def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     # 2026-11-20, later: four gate slots, so the landing's two-slot gate runs beside a hand or child gate.
     assert overlay["caps"] == {"runs": 5, "children": 12, "gates": 4}
     assert overlay["limits"]["max_budget_usd"] == 30
+
+
+# --- A save changes only the key it sets (#2543). The file is hand-edited: its comments hold the owner's ruling on each
+# cap, so a writer that dumps the whole mapping destroys the ruling and copies the personal `.env` tailnet block into a
+# tracked, public file.
+COMMENTED = """\
+# Owner ruling: the caps below are the owner's, written by hand.
+caps:
+  runs: 5    # five runs: six ran ahead of the three gate slots
+  children: 12
+# A closing note that belongs to no key.
+"""
+
+
+def test_a_save_changes_only_the_key_it_sets_and_keeps_every_other_line(tmp_path):
+    path = Path(tmp_path) / "docs" / "squad" / "defaults.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(COMMENTED)
+    assert project_settings.set_key(tmp_path, "caps.runs", "4") is True
+    before, after = COMMENTED.splitlines(), path.read_text().splitlines()
+    assert len(after) == len(before), path.read_text()
+    assert [i for i in range(len(before)) if before[i] != after[i]] == [2], path.read_text()
+    assert after[2].startswith("  runs: 4") and "# five runs: six ran ahead of the three gate slots" in after[2]
+    assert yaml.safe_load(path.read_text()) == {"caps": {"runs": 4, "children": 12}}
+
+
+def test_a_save_never_writes_a_tailnet_key_that_came_from_the_env_file(tmp_path):
+    (tmp_path / ".env").write_text("SQUAD_TAILNET_HOST=my-mac.example-tailnet.ts.net\nSQUAD_TAILNET_ALLOW=owner@example.com\n")
+    path = Path(tmp_path) / "docs" / "squad" / "defaults.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Owner ruling: the caps below are the owner's.\ncaps:\n  runs: 5\n")
+    assert project_settings.set_key(tmp_path, "caps.runs", "4") is True
+    text = path.read_text()
+    assert "my-mac.example-tailnet.ts.net" not in text and "owner@example.com" not in text, text
+    assert "tailnet" not in text, text
+    assert text.startswith("# Owner ruling: the caps below are the owner's.\ncaps:\n  runs: 4\n"), text

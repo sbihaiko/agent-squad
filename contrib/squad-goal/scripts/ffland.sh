@@ -35,11 +35,16 @@ g checkout -q -B land "origin/$br" 2>/dev/null || fb "checkout failed"
 o=$(g rebase "origin/$base" 2>&1) || { g rebase --abort >/dev/null 2>&1; fb "rebase on $base conflicts: $(printf '%s' "$o" | tail -1)"; }
 [ "$(g rev-list --count "origin/$base..HEAD")" -gt 0 ] || { status "$(g rev-parse "origin/$br")" success "already in $base"; echo "FFLAND-FALLBACK nothing ahead of $base"; exit 1; }
 head=$(g rev-parse HEAD)
+# The landing's facts are every issue the pushed commits name, not only $iss: one branch can carry two issues (#2532).
+named=$(g log --format=%B "origin/$base..HEAD" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')
 pendsha=$(g rev-parse "origin/$br")
 status "$pendsha" pending "landing #$iss"
 o=$(g push -q origin "HEAD:refs/heads/$base" 2>&1) || {
   case "$o" in *GH006*|*GH013*|*"rule violations"*|*"protected branch"*|*"remote rejected"*) fb "a ruleset refused the push to $base: $(printf '%s' "$o" | tr '\n' ' ' | cut -c1-200)";; esac
   fb "the push to $base failed: $(printf '%s' "$o" | tail -1)"; }
 g push -q origin ":refs/heads/$br" >/dev/null 2>&1 || echo "FFLAND-NOTE branch $br was not deleted" >&2
+for ci in $(printf '%s\n' "$iss" $named | sort -un); do
+  python3 "$d/issue_ledger.py" landed "$SG_REPO#$ci" "$br" branch "$head" >/dev/null 2>&1 || echo "FFLAND-NOTE the landing fact of #$ci was not recorded" >&2
+done
 status "$head" success "landed #$iss"
 echo "FFLAND $head"

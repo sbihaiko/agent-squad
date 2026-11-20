@@ -559,6 +559,14 @@ def landed(key, ref, kind, sha):   # -> recorded|duplicate|floor: a landing pass
     return transition(key, {"op": "landed", "ref": ref, "kind": kind, "sha": sha})
 
 
+def landed_at(key, state=None):   # -> [epoch]: when each landing fact of the issue was recorded, from the ledger of `state`
+    o, r, n = parse(key)
+    d = pathlib.Path(state) if state is not None else state_dir()
+    try: rec = json.loads((d / "state" / f"{o}__{r}__{n}.json").read_text())
+    except (OSError, ValueError): return []
+    return [f["ts"] for f in (rec.get("landed") or {}).values() if isinstance(f, dict) and isinstance(f.get("ts"), (int, float))]
+
+
 def requeue(key, run, head):   # -> recorded|duplicate|floor: the head a run requeued the issue's child on
     return transition(key, {"op": "requeue", "run": run, "head": head})
 
