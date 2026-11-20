@@ -564,6 +564,19 @@ async def test_a_fix_run_whose_child_rebased_lands_its_branch(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_a_fix_run_with_two_children_keeps_both_landings(tmp_path):
+    """#2561: the second child of a fix run is cut before the first one landed, so the target's tip is no ancestor of its
+    branch. The target moved since the cut, so the second land merges and the first child's work stays."""
+    from tests.gitrepo import sibling_repo
+    repo = sibling_repo(tmp_path)
+    eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": writer("a.txt"),
+                          "route.router.2": writer("b.txt")}, target=repo, options={"fix_run": True})
+    await eng.run()
+    assert (repo / "a.txt").exists() and (repo / "b.txt").exists(), "a child's landed work was dropped"
+    assert not any(x["effect"].get("rewritten") for x in lands(tmp_path)), lands(tmp_path)
+
+
+@pytest.mark.anyio
 async def test_a_run_that_is_no_fix_run_still_fails_a_rebased_child_with_merge_conflict(tmp_path):
     """#2561: only a fix run replaces its target; any other run keeps the merge, and a conflict fails the land."""
     repo = rebase_target(tmp_path)

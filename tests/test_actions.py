@@ -223,11 +223,24 @@ def test_a_replace_land_moves_the_target_to_a_rebased_child(tmp_path):
     from squad import actions
     repo, wt = rebased_child(tmp_path)
     before = git.head(repo)
-    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)", replace=True)
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)", replace=before)
     assert r.ok and r.reasons == [], r
     assert git.head(repo) == git.head(wt) and r.head == git.head(wt)
     assert r.extra.get("rewritten") is True and r.extra.get("before") == before, r.extra
     assert (repo / "fix.txt").read_text() == "f\n" and not git.dirty(repo)
+
+
+def test_a_replace_land_keeps_the_merge_when_the_target_moved_since_the_cut(tmp_path):
+    """#2561: a target that moved since the fix run's cut (a sibling landed) is never reset, so the sibling's work stays."""
+    from squad import actions
+    repo, wt = rebased_child(tmp_path)
+    cut = git.head(repo)
+    (repo / "sibling.txt").write_text("s\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "a sibling's landing")
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)", replace=cut)
+    assert not r.ok and r.reasons == ["merge_conflict"] and "rewritten" not in r.extra, r
+    assert (repo / "sibling.txt").read_text() == "s\n" and git.unmerged(repo) == []
 
 
 def test_a_land_without_replace_still_fails_a_rebased_child_with_merge_conflict(tmp_path):
