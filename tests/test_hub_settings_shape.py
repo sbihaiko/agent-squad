@@ -20,7 +20,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HUB_PY = os.path.join(ROOT, "contrib", "squad-goal", "scripts", "hub.py")
-THEMES = ["lop", "lim", "sub", "mdl", "slk", "acc"]   # the Board theme left the list: its limits live in Spend & limits (#2432)
+THEMES = ["lim", "sub", "mdl", "slk", "acc"]   # the Board theme left for Spend & limits (#2432); the Loop theme left for the Loop tab (#2515)
 
 
 @pytest.fixture(scope="module")
@@ -172,12 +172,13 @@ def _blocks(html):
     return html[i:j], html[j:]
 
 
-def test_the_loop_theme_draws_now_tiles_and_no_input(hub):
-    now, settings = _blocks(_run(hub.PAGE, f"loopLogHtml({json.dumps(LOOP_VIEW)})"))
-    assert re.findall(r"<span class=tk>(.*?)</span>", now) == ["Live", "Health", "Last change"], now
+def test_the_loop_tab_draws_now_tiles_and_no_input(hub):
+    """The Loop tab keeps the facts the Loop theme showed, and it reads: the switch stays in the Monitor (#2515)."""
+    out = _run(hub.PAGE, f"loopLogHtml({json.dumps(LOOP_VIEW)})")
+    assert re.findall(r"<span class=tk>(.*?)</span>", out) == ["Live", "Health", "Last change"], out
     for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in now, f"the Loop Now block carries {ctl}"
-    assert "Settings" in settings and "Monitor" in settings, settings
+        assert ctl not in out, f"the Loop tab's Now block carries {ctl}"
+    assert "Monitor" in out and "Access" in out, out
 
 
 def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_none(hub):
@@ -399,7 +400,7 @@ def _set_bar(hub):
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
-    body = ('const out={};for(const t of ["lop","lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
+    body = ('const out={};for(const t of ["lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent,'
             'save:$("#ssave").hidden,disc:$("#sdisc").hidden}}'
             'RO=true;sTheme="mdl";setBar();out.ro={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,'
@@ -412,7 +413,7 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
     for theme in THEMES:
         assert out[theme]["hidden"] is False, f"{theme}: the Save bar hid"
         assert out[theme]["disabled"] is True, f"{theme}: Save was armed with nothing to write"
-    for theme in ("lop", "acc"):
+    for theme in ("acc",):
         assert out[theme]["text"] == "nothing to save here", f"{theme}: {out[theme]['text']!r}"
     # re-anchored (#1281): Subscriptions stages its edits like every other writable theme, so its bar reads as no change.
     assert out["sub"]["text"] == "Subscriptions: no change", out["sub"]["text"]
@@ -420,7 +421,7 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
     # re-anchored (#2433): Spend & limits writes each field on its own, so its bar keeps no button and says so.
     assert out["lim"]["text"] == "Spend & limits: each field saves as you set it", out["lim"]["text"]
     assert out["lim"]["save"] is True and out["lim"]["disc"] is True, out["lim"]
-    for theme in ("lop", "sub", "mdl", "slk", "acc"):
+    for theme in ("sub", "mdl", "slk", "acc"):
         assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
@@ -470,7 +471,7 @@ def test_the_themes_keep_one_order_in_the_nav_the_phone_select_and_the_panels(hu
     assert re.findall(r"value=(\w+)", sel) == THEMES, "the phone select does not follow the nav order"
     assert re.findall(r"<details id=(\w+) class=sp", view) == THEMES, "the panels do not follow the nav order"
     assert [t.replace("&amp;", "&") for t in re.findall(r"<button data-sp=\w+>(.*?)<small", nav)] == \
-           ["Loop", "Spend & limits", "Subscriptions", "Models & chains", "Communication", "Access"]
+           ["Spend & limits", "Subscriptions", "Models & chains", "Communication", "Access"]
 
 
 def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hub):
@@ -480,13 +481,12 @@ def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hu
         small = re.search(rf"<small id={t}nav>(.*?)</small>", nav).group(1)
         summ = re.search(rf"<summary>[^<]*<span class=sr id={t}sr>(.*?)</span>", view).group(1)
         assert small == summ, f"{t}: the nav line {small!r} disagrees with its chip {summ!r}"
-    out = _run(hub.PAGE, '(setChip("lop","on"),[STORE["#lopsr"].textContent,STORE["#lopnav"].textContent])')
-    assert out == ["on", "on"], "one chip update did not reach both places"
+    out = _run(hub.PAGE, '(setChip("acc","loopback"),[STORE["#accsr"].textContent,STORE["#accnav"].textContent])')
+    assert out == ["loopback", "loopback"], "one chip update did not reach both places"
 
 
-def test_a_loop_poll_writes_one_chip_text_to_the_nav_line_and_the_summary(hub):
-    """After `/api/loop` answers, the Loop chip carries the live count; the nav line and the summary must still agree,
-    because the reader compares them at a glance (#1278)."""
+def test_a_loop_poll_draws_the_monitor_switch_and_the_loop_tab_change_list(hub):
+    """After `/api/loop` answers, the Monitor's switch and the Loop tab's blocks both draw from the one answer (#2515)."""
     page = hub.PAGE
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     sett = page[page.index("// SETT{"):page.index("// }SETT")]
@@ -496,8 +496,10 @@ def test_a_loop_poll_writes_one_chip_text_to_the_nav_line_and_the_summary(hub):
             'let loopV=null,loopErr="";')
     body = "\n".join([stub, esc, sett, loop, draw,
                       f"loopV={json.dumps(LOOP_VIEW)};loopDraw();"
-                      "console.log(JSON.stringify([STORE['#lopsr'].textContent,STORE['#lopnav'].textContent]))"])
-    assert json.loads(_node(body)) == ["on · 2 runs", "on · 2 runs"]
+                      "console.log(JSON.stringify([STORE['#iloop'].innerHTML.includes('role=switch'),"
+                      "STORE['#lopaud'].innerHTML.includes('data-blk=now'),"
+                      "STORE['#lopaud'].innerHTML.includes('<details class=aud>')]))"])
+    assert json.loads(_node(body)) == [True, True, True]
 
 
 # ---------------------------------------------------------------- a page that may not write
@@ -562,7 +564,7 @@ class El{
  addEventListener(t,f){(this.L=this.L||{});(this.L[t]=this.L[t]||[]).push(f);this.bound=true;}
  fire(t){(this.L&&this.L[t]||[]).forEach(f=>f({target:this}));}
 }
-const DETAILS=["lop","lim","sub","mdl","slk","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
+const DETAILS=["lim","sub","mdl","slk","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
 const NAV=DETAILS.map(e=>new El(e.dataset.sp));
 const ELS={};DETAILS.forEach(e=>ELS[e.id]=e);
 const $=s=>{const id=String(s).replace(/^#/,"");return ELS[id]||(ELS[id]=new El(id));};
@@ -590,7 +592,7 @@ def test_an_opened_panel_loads_its_data_once_at_boot(hub):
         "mdl": ({"sth": "mdl"}, {"mdl": 1, "lim": 1, "slk": 0}),
         "lim": ({"sth": "lim"}, {"mdl": 1, "lim": 1, "slk": 0}),
         "slk": ({"sth": "slk"}, {"mdl": 1, "lim": 1, "slk": 1}),
-        "closed": ({"sth": "lop"}, {"mdl": 1, "lim": 1, "slk": 0}),
+        "a removed theme": ({"sth": "lop"}, {"mdl": 1, "lim": 1, "slk": 0}),
     }
     for name, (stored, want) in cases.items():
         assert _boot_loads(hub, stored) == want, f"{name}: {stored}"
