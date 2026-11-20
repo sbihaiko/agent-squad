@@ -266,6 +266,7 @@ def test_2596_a_start_one_second_after_the_record_is_still_alive(monkeypatch):
     started_ms = 1_700_000_000 * 1000 + 296
     monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001)   # one second after the record
     assert mod._alive_since(os.getpid(), started_ms) is True
+    assert mod._alive_since(os.getpid(), started_ms, "bg") is True   # a background job reads the same start, so it has the same slack
     monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_000 - 30)   # at the far edge: still alive
     assert mod._alive_since(os.getpid(), started_ms) is True
     monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001 + 30)   # a reused pid: the record is far older
