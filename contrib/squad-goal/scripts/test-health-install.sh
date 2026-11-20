@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 0.56
 # Regression test of health-install.sh (#2552): the launchd agent it writes starts health.sh, and health.sh starts the
 # supervisor, so the plist is the whole environment of every child the supervisor starts. A model gateway the installing
 # shell names must reach that environment, or each child call to a gateway model is refused after a machine restart.
