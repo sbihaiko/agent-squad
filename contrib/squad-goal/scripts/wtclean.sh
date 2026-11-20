@@ -120,7 +120,7 @@ quiet() { local w=$1 f t m=0 r; shift
   for f in "$($G -C "$w" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null)" "$w"/runs/*/record.jsonl; do
     [ -f "$f" ] || continue; t=$(mtime "$f"); [ "$t" -gt $m ] && m=$t; done
   for r; do f="${r%/}/record.jsonl"; [ -f "$f" ] || continue; t=$(mtime "$f"); [ "$t" -gt $m ] && m=$t; done
-  [ $(( now - m )) -ge "${SG_WT_ARCHIVE_SECONDS:-7200}" ]; }
+  [ $m -gt 0 ] && [ $(( now - m )) -ge "${SG_WT_ARCHIVE_SECONDS:-7200}" ]; }   # no reflog and no record prove nothing: the tree stays
 # active_in <dir>: a line of active-runs.txt names this folder or one inside it. Such a run keeps its tree, verdict or not.
 active_in() { local r d p; [ -f "$SG_STATE/active-runs.txt" ] || return 1
   p=$(cd "$1" 2>/dev/null && pwd -P) || p=$1   # the lines are compared resolved, as lsof answers
@@ -141,7 +141,7 @@ archive() { local c=$1 w=$2 sha td d rel ref spec
   ref="refs/archive/wt/$(printf '%s' "$rel" | tr '/' '_')/${sha:0:9}"; spec="$sha:$ref/head"
   if [ -n "$td" ]; then d=$($G -C "$w" stash create 2>/dev/null)
     [ -n "$d" ] || { kept "$c" "$w" archdirt "git stash create made no commit of the tracked dirt"; return 1; }
-    spec="$spec $d:$ref/dirty"; fi
+    spec="$spec +$d:$ref/dirty"; fi   # a stash commit is new each pass: an earlier dirty ref is replaced, never a refused push
   GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60 $G -C "$w" push -q "${SG_LAND_REMOTE:-origin}" $spec >/dev/null 2>&1 \
     || { kept "$c" "$w" archpush "archive push refused ($ref)"; return 1; }
   aref=$ref; }
