@@ -218,13 +218,19 @@ for p in recs:
     except OSError: pass
     # the key is the machine reason, flattened like the text; an empty reason is "?", so its TSV field is never empty (an empty field collapses under read)
     k = (flat(rs[0]) if rs else "")[:60] or "?"
-    g = groups.setdefault(k, {"n": 0, "iss": [], "why": (rs[1] if len(rs) > 1 else "")})
+    g = groups.setdefault(k, {"n": 0, "iss": [], "per": {}, "why": (rs[1] if len(rs) > 1 else "")})
     g["n"] += 1
+    for i in set(iss): g["per"][i] = g["per"].get(i, 0) + 1
     for i in iss:
         if i not in g["iss"]: g["iss"].append(i)
     g["why"] = g["why"] or (rs[1] if len(rs) > 1 else "")
+# An outside event kills every live run at once: a machine restart reaps them as killed/no-process, a signal or a hand kill
+# names itself (#2546). The issues did not cause it, so the group still alerts, but it freezes only an issue that by itself
+# holds the count of such runs. Every other reason, killed/age-cap-requeue too, freezes each issue of the group.
+def outside(k): return k == "killed/no-process" or k.startswith("killed/signal:") or k.startswith("killed/by-hand")
 for k, g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
     if g["n"] >= need:
+        if outside(k): g["iss"] = [i for i in g["iss"] if g["per"][i] >= need]
         # one line per group: every field is flattened to its own line, so a free text newline never reads as another group
         print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", flat(g["why"])[:220]))
 PY

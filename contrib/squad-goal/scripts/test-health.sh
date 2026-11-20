@@ -197,6 +197,27 @@ reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failu
 rep l1 13 no_such_issue; rep l2 13 no_such_issue; rep l3 13 no_such_issue
 bash "$T/s/health.sh" >/dev/null; nl=$(/usr/bin/grep -c 'issues/13/comments' "$T/comments.calls" 2>/dev/null || true)
 [ "${nl:-0}" = 0 ] && ok "#1292 a legacy path-safe marker still dedupes" || ko "#1292 the legacy marker was reposted ${nl:-0} time(s)"
+# #2546: an outside event (a machine restart, a signal, a hand kill) reaps many runs at once, and the issues did not cause it.
+# The outside kill reasons are killed/no-process, killed/signal:*, killed/by-hand*. Such a group alerts at the count, but it
+# freezes an issue only when that one issue holds the count of such runs. Every other reason, killed/age-cap-requeue too, freezes as before.
+ok2546() { reset; rm -f "$T"/st/auto/notstartable-* "$T"/st/auto/health-runs-repeating-failure*; : > "$T/comments.calls"; : > "$T/labels.calls"; rc; }
+frozen() { [ -n "$(/usr/bin/find "$T/st/auto" -name "notstartable-$1-*" 2>/dev/null)" ] || /usr/bin/grep -q "issues/$1/labels" "$T/labels.calls" 2>/dev/null; }
+outside_spread() {   # <reason> <tag>: three runs on three issues with one outside kill reason freeze none and still alert
+  ok2546; rep "$2a" 60 "$1"; rep "$2b" 61 "$1"; rep "$2c" 62 "$1"; o=$(bash "$T/s/health.sh")
+  printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason '$1'" && ok "#2546 '$1' on three issues still alerts" || ko "#2546 '$1' no alert: $o"
+  frozen 60 || frozen 61 || frozen 62 && ko "#2546 '$1' on three issues froze one: $(/bin/ls "$T/st/auto" | tr '\n' ' ') $(cat "$T/labels.calls")" || ok "#2546 '$1' on three issues freezes none"
+  /usr/bin/grep -q 'issues/6[012]/comments' "$T/comments.calls" && ko "#2546 '$1' on three issues commented" || ok "#2546 '$1' on three issues posts no comment"; }
+outside_spread killed/no-process np
+outside_spread killed/signal:SIGTERM sg
+outside_spread killed/by-hand bh
+ok2546; rep o1 63 killed/no-process; rep o2 63 killed/no-process; rep o3 63 killed/no-process; bash "$T/s/health.sh" >/dev/null
+[ -e "$T/st/auto/notstartable-63-killed-no-process" ] && /usr/bin/grep -q 'issues/63/labels' "$T/labels.calls" && ok "#2546 three outside kills on one issue freeze it" || ko "#2546 one issue not frozen: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+ok2546; rep o4 64 killed/no-process; rep o5 64 killed/no-process; rep o6 65 killed/no-process; bash "$T/s/health.sh" >/dev/null
+frozen 64 || frozen 65 && ko "#2546 an issue under the count of outside kills was frozen" || ok "#2546 two outside kills on one issue and one on another freeze none"
+for r in merge_conflict killed/age-cap-requeue; do
+  ok2546; rep c1 66 "$r"; rep c2 67 "$r"; rep c3 68 "$r"; bash "$T/s/health.sh" >/dev/null
+  frozen 66 && frozen 67 && frozen 68 && ok "#2546 '$r' on three issues freezes all three, as before" || ko "#2546 '$r' did not freeze: $(/bin/ls "$T/st/auto" | tr '\n' ' ')"
+done
 # #1294: every reason group at or over the count reports and marks its own issues; a later group never folds into an earlier
 # group's free text. The helper prints one line per group, so the shell must read the whole answer, not its first line.
 reset; rm -f "$T"/st/auto/notstartable-* "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"; rm -rf "$T/bodies"; mkdir -p "$T/bodies"
