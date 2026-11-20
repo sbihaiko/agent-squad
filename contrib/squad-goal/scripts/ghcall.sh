@@ -260,7 +260,7 @@ gh_dispatch_hold() {
   # the hour, so the live runs end before it opens, and none starts while the nightly runs. The hold ends when the day has
   # its nightly or its missed record, and once the hour has less time left than the suite needs (SG_NIGHTLY_NEED_MINUTES):
   # the dispatch never idles for a nightly that can no longer finish. The hold ends with the hour in any case.
-  local nhour=$((10#${SG_NIGHTLY_HOUR:-04})) np nwhy= nh nm ndrain=$((10#${SG_NIGHTLY_DRAIN_MINUTES:-40})) nneed=$((10#${SG_NIGHTLY_NEED_MINUTES:-45})) nday
+  local nhour=$((10#${SG_NIGHTLY_HOUR:-04})) np nwhy= nh nm ndrain=$((10#${SG_NIGHTLY_DRAIN_MINUTES:-40})) nneed=$((10#${SG_NIGHTLY_NEED_MINUTES:-45})) nday nbv nbvs nvkey
   if [ -z "${SG_NIGHTLY_OFF:-}" ]; then
     nh=$((10#$(TZ=America/Sao_Paulo date +%H))); nm=$(TZ=America/Sao_Paulo date +%M:%S); nm=$((10#${nm%%:*}))
     [ "$ndrain" -gt 59 ] && ndrain=59
@@ -274,6 +274,24 @@ gh_dispatch_hold() {
       if [ -n "$np" ] && kill -0 "$np" 2>/dev/null; then nwhy="the nightly runs (pid $np)"
       elif [ ! -e "$SG_STATE/auto/nightly-$nday" ] && [ ! -e "$SG_STATE/auto/nightly-missed-$nday" ] && [ $((60 - nm)) -ge "$nneed" ]; then
         nwhy="the nightly window is open"; fi
+    fi
+  fi
+  # (#2593) A nightly that ended bounded proved nothing, so its next window holds no dispatch: the runs keep the machine and
+  # the nightly shares it under the gate lock. The verdict names its local half in the fourth field, `bounded` for a suite a
+  # bound or a signal stopped (nightly.sh, ADR-0164). A pass, a fail or a verdict the loop cannot read holds the window as
+  # before. The reason is one line, said once per verdict -- keyed by the whole record -- so a bounded verdict that stands
+  # until the next nightly does not bury cycle.log.
+  if [ -n "$nwhy" ] && [ -r "$SG_STATE/nightly-verdict" ]; then
+    IFS=$'\t' read -r _ _ nbvs nbv _ _ < "$SG_STATE/nightly-verdict" 2>/dev/null
+    if [ "$nbv" = bounded ]; then
+      nvkey=$(cksum < "$SG_STATE/nightly-verdict" 2>/dev/null) || nvkey=
+      seen="$SG_STATE/nightly-bounded-release-noted"
+      if [ "$(cat -- "$seen" 2>/dev/null)" != "$nvkey" ]; then
+        if printf '%s\n' "$nvkey" > "$seen.$$" 2>/dev/null; then mv -f "$seen.$$" "$seen" 2>/dev/null || rm -f "$seen.$$"; fi
+        line="$(date -u '+%F %T') DISPATCH NOTE: the last nightly at ${nbvs:0:7} ended bounded: its next window holds no dispatch, and the nightly runs beside the runs"
+        printf '%s\n' "$line"; printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+      fi
+      nwhy=
     fi
   fi
   if [ -n "$nwhy" ]; then
