@@ -192,16 +192,21 @@ def test_a_green_settlement_clears_the_obligation_and_names_the_run(nightly):
     assert [line.split()[0] for line in lines] == ["mypy"]
 
 
-def test_a_case_runs_the_nightly_at_any_minute_of_its_hour(nightly, tmp_path):
-    """The hold that keeps a suite from starting too late in its hour reads the wall clock, so a case reads the minute
-    through a date that names minute 40 and still runs the nightly."""
+def test_a_case_runs_the_nightly_at_minute_forty_only_when_the_need_window_allows(nightly, tmp_path):
+    """The hold reads the wall-clock minute against the need window. A date shim names minute 40: the production 45-minute
+    window holds the nightly with 20 minutes left, and a 10-minute window runs it."""
     shim_dir = tmp_path / "bin"
     shim_dir.mkdir()
     real_date = shutil.which("date")
     _script(shim_dir / "date", f'if [ "$1" = "+%M:%S" ]; then echo "40:00"; exit 0; fi\nexec {real_date} "$@"\n')
-    res = nightly["run"](PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
-    assert res.returncode == 0, res.stderr
-    assert "held" not in res.stdout, res.stdout
+    path = f"{shim_dir}{os.pathsep}{os.environ['PATH']}"
+    held = nightly["run"](PATH=path, SG_NIGHTLY_NEED_MINUTES="45")
+    assert held.returncode == 0, held.stderr
+    assert "held" in held.stdout, held.stdout
+    assert not (nightly["st"] / "nightly-result").exists()
+    ran = nightly["run"](PATH=path, SG_NIGHTLY_NEED_MINUTES="10")
+    assert ran.returncode == 0, ran.stderr
+    assert "held" not in ran.stdout, ran.stdout
     assert (nightly["st"] / "nightly-result").is_file()
 
 
