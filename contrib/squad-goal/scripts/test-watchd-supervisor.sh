@@ -11,6 +11,8 @@ repo=$(cd "$d/../../.." && pwd)
 . "$d/watchd-fixture.sh"   # the squad package and the process reader a fake install needs (#1514)
 st=$T/st; S=$T/skill/scripts; mkdir -p "$st" "$S"
 fake_squad "$T/skill"; reader=$(fake_reader "$repo")
+idle_run_reader() { printf 'print("idle")\n' > "$1/squad/run_liveness.py"; }   # a stop with no live work stops at once (ADR-0162)
+idle_run_reader "$T/skill"
 cp "$d/watchd.sh" "$S/watchd.sh"
 printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read has no answer
 printf 'SG_STATE=%s; SG_PROFILE=; SG_SQUAD=%s; SG_LANE_BACKOFF=1; SG_LANE_BACKOFF_MAX=4\nexport SG_STATE SG_PROFILE SG_SQUAD SG_LANE_BACKOFF SG_LANE_BACKOFF_MAX\n%s\n' "$st" "$T/skill" "$reader" > "$S/env.sh"   # #1781: a short back-off keeps the relight cases fast
@@ -84,7 +86,7 @@ bash "$S/watchd.sh" reload >"$T/r2" 2>&1; rc=$?
 bash "$S/watchd.sh" status 2>/dev/null | /usr/bin/grep -q "^watchd not running"; } && ok "reload after a deliberate stop starts nothing" || ko "reload after a stop relit the loop: rc=$rc $(cat "$T/r2"); status: $(bash "$S/watchd.sh" status 2>&1)"
 
 # A lane is one profile's by its state directory's pid file, whichever copy of the skill it runs from (#1313).
-X=$T/cross; mkdir -p "$X/a" "$X/b"; fake_squad "$X"
+X=$T/cross; mkdir -p "$X/a" "$X/b"; fake_squad "$X"; idle_run_reader "$X"
 for c in repo live; do
   mkdir -p "$X/$c"; cp "$d/watchd.sh" "$X/$c/"
   printf 'gh_aggregate() { return 1; }\n' > "$X/$c/ghcall.sh"   # the one seam watchd.sh sources beside itself (ADR-0146)
