@@ -397,7 +397,8 @@ def test_the_monitor_carries_the_one_loop_switch_and_no_loop_tile():
     card = src.split("<details id=inst", 1)[1].split("</details>", 1)[0]
     assert "id=iloop" in card, "the Monitor carries the loop slot"
     assert src.count('{k:"Loop",text:') == 0, "the Monitor carries no Loop tile"
-    assert "<details id=lop" not in src, "the Settings page still carries a Loop panel (#2515)"
+    settings = src.split("<section id=tab-set", 1)[1].split("</section>", 1)[0]
+    assert "<details id=lop" not in settings, "the Settings section still carries a Loop panel (#2515)"
 
 
 def test_the_loop_switch_shows_the_state_and_the_log_keeps_who_and_when():

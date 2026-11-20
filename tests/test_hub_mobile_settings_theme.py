@@ -89,6 +89,20 @@ def test_the_phone_settings_link_carries_the_last_theme_or_the_first_one(stored,
     assert json.loads(_phone_link_href(stored)) == href
 
 
+def test_the_phone_theme_list_and_first_theme_match_the_desktop(hub):
+    """#2515: the phone handoff names the desktop's themes in the desktop's order and falls back to the desktop's first
+    theme, so the two defaults cannot drift."""
+    desktop = re.search(r"^const STH=\{(.*?)\};", hub.PAGE, re.M).group(1)
+    themes = re.findall(r"(\w+):", desktop)
+    first = re.search(r'^const SET_FIRST="(\w+)";', hub.PAGE, re.M).group(1)
+    block = _handoff_block(MOBILE_HTML.read_text())
+    phone_list = re.findall(r'"(\w+)"', re.search(r"SET_THEMES = \[(.*?)\]", block).group(1))
+    fallbacks = re.search(r't : "(\w+)"; \} catch \(e\) \{ return "(\w+)";', block)
+    assert fallbacks, "the phone handoff no longer falls back to a first theme"
+    assert phone_list == themes, f"the phone names {phone_list}, the desktop {themes}"
+    assert set(fallbacks.groups()) == {first}, f"the phone falls back to {fallbacks.groups()}, the desktop to {first!r}"
+
+
 @needs_node
 def test_an_old_loop_theme_link_opens_the_first_remaining_theme(hub):
     """#2515: a saved #set-lop link opens the first theme left, never a Settings page with no theme shown."""
