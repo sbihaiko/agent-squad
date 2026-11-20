@@ -627,11 +627,13 @@ RUN_TABLE_SECS = 2.5   # the run readers' window: the page's live poll is every 
 def run_table(now=None):
     """{pid: Proc} for every process, for the run readers: the run liveness, the gate slots and the loop rows all judge one
     read of the table (`RUN_TABLE_SECS`, squad/procscan.py `view`), so a page's poll costs one read however many of them
-    it asks (#2582). It is the same shared scan `process_table` derives from; the kill path (`_ps_rows`) reads fresh and
-    never this. {} when the read fails, logged once: a caller then sees no process, never a guessed one."""
+    it asks (#2582). It reads the same shared scan and the same view as `process_table` (`procscan.view("table", ...)`),
+    so a tick that reads both pays one read of the machine; the window is the run readers' own, the longer one. The kill
+    path (`_ps_rows`) reads fresh and never this. {} when the read fails, logged once: a caller then sees no process,
+    never a guessed one."""
     now = time.time() if now is None else now
     try:
-        return procscan.view("run-table", _same, RUN_TABLE_SECS, now, _machine_snapshot)[0]
+        return procscan.view("table", _same, RUN_TABLE_SECS, now, _machine_snapshot)[0]
     except Exception as e:
         log_once(f"hub: the process table could not be read for the run readers: {type(e).__name__}: {' '.join(str(e).split())}")
         return {}
@@ -2263,8 +2265,8 @@ def loop_live(state=None, checkout=None, procs=None):
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     try:
         RL = liveness()
-        table = _loop_procs(RL, procs if procs else run_table())   # an empty reading is no evidence: the one reader answers it
-        runs = RL.live_runs(base / "active-runs.txt", checkout, table or RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
+        table = _loop_procs(RL, procs if procs is not None else run_table())   # one read answers the rows; an empty table is no live run (#2582)
+        runs = RL.live_runs(base / "active-runs.txt", checkout, table, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
     except Exception as e:
         why = f"{type(e).__name__}: {' '.join(str(e).split())}"
         log_once(f"hub: the live runs are unknown: {why}")

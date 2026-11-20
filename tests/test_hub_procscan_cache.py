@@ -220,6 +220,18 @@ def test_the_run_readers_keep_one_read_for_25_seconds(hub, monkeypatch):
     assert hub.RUN_TABLE_SECS == 2.5
 
 
+def test_the_live_and_stats_readers_share_one_machine_read(hub, monkeypatch):
+    """AC D and step 3 of #2582: `/api/live`'s run readers and `/api/stats`'s table derive from one read of the machine in
+    one tick, both through `procscan`'s shared scan, never one scan per endpoint."""
+    clock(hub, monkeypatch)
+    reads = []
+    monkeypatch.setattr(hub, "procs_mod", lambda: FakeProcs({1: P(1)}, reads))
+    hub.run_table()
+    hub.process_table()
+    hub.read_procs()
+    assert len(reads) == 1, f"one tick read the machine's process table {len(reads)} times across the live and stats readers"
+
+
 def test_one_live_answer_reads_the_process_table_once(hub, monkeypatch):
     """AC D of #2582: one `/api/live` read reads the process table at most once, whatever its rows need."""
     clock(hub, monkeypatch)

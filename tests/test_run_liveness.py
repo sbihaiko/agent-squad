@@ -259,6 +259,32 @@ def test_the_hub_says_a_failed_read_is_unknown(hub, tmp_path, monkeypatch):
     assert got["runs"] == [] and "record" in got.get("unknown", "")
 
 
+def test_the_hub_live_answer_reads_an_empty_table_once(hub, tmp_path, monkeypatch):
+    """AC D of #2582: an empty shared scan is no second read. `run_table` answers the live runs, and a caller never goes
+    back to `read_processes` for a second look at the same machine."""
+    reads = []
+
+    class RL:
+        Proc = object
+
+        @staticmethod
+        def read_processes():
+            reads.append("read_processes")
+            return {}
+
+        @staticmethod
+        def live_runs(_listed, _checkout, procs, *_a, **_k):
+            if callable(procs):
+                procs()   # the real reader reads a callable source; a second read shows here
+            return []
+
+    monkeypatch.setattr(hub, "run_table", lambda now=None: (reads.append("run_table") or {}))
+    monkeypatch.setattr(hub, "liveness", lambda: RL)
+    got = hub.loop_live()
+    assert got["runs"] == [] and got["gates"] == []
+    assert reads == ["run_table"], f"one Live answer read the table as {reads}"
+
+
 def test_the_hub_holds_no_copy_of_the_reader():
     text = (SCRIPTS / "hub.py").read_text()
     for name in ("def loop_invocation", "PS_LSTART =", "re.search(LOOP_RUN_CMD"):
