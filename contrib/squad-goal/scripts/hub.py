@@ -7430,7 +7430,12 @@ const limAgeTxt=now=>`${span(((now||Date.now())-limAt)/1000)} ago`;
 function limLine(){if(limBad)return `<span class=lbad aria-hidden=true>!</span> ${esc(limBadMsg||limKName(limBad)+" was not saved")}`;
  if(!limOK)return "";return `<span class=lok aria-hidden=true>✓</span> Saved · ${esc(limKName(limOK))} ${esc(limVal)} · <span id=limage>${limAgeTxt()}</span>`}
 function limTick(now){const el=$("#limage");if(el&&limOK)el.textContent=limAgeTxt(now)}   // the age moves on with the clock, with no new write
-const limAgeTmr=setInterval(()=>limTick(),1000);if(limAgeTmr&&limAgeTmr.unref)limAgeTmr.unref();
+let limAgeTmr=null;   // the age ticker runs only while a saved value is shown in a visible theme (#2433)
+const limShown=()=>{const p=$("#lim");return !p||p.open===undefined||!!p.open};   // a collapsed theme ticks nothing
+function limTickStop(){if(limAgeTmr){clearInterval(limAgeTmr);limAgeTmr=null}}
+function limTickStart(){if(limAgeTmr||!limOK||!limShown())return;
+ limAgeTmr=setInterval(()=>{if(!limOK||!limShown()){limTickStop();return}limTick()},1000);if(limAgeTmr&&limAgeTmr.unref)limAgeTmr.unref()}
+const limTickSync=()=>{limOK?limTickStart():limTickStop()};
 /* The value the reader typed in the field's own input, or null when the page has not drawn it yet. */
 const limTyped=k=>{if(k==="guard"){const g=$("#limg");return g?limG():null}   // the guard is a switch: its checked state is the word the hub reads (#2434)
  const el=$(LIM_ID[k]);return el&&typeof el.value==="string"?el.value:null};
@@ -7453,7 +7458,7 @@ function limQueue(which,send){if(RO)return;clearTimeout(limTmr[which]);limTmr[wh
    (ADR-0137). A blank field is unlimited. The frontier reads Doing, the branch review pass reads Reviewing, and the
    Kanban header shows the count against the limit. */
 // KAN{ the Kanban sub-group's pure rules (#2432): its values, its dirty test, its chip and its html. Run in node by tests.
-let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanDiff=[],kanChain=Promise.resolve();   // kanSent holds the value each column last posted, so a timer save and a later blur send one request (#2433)
+let kanS=null,kanDraft=null,kanMsg="",kanOK="",kanVal="",kanAt=0,kanBad="",kanBadMsg="",kanSent={},kanRef={},kanDiff=[],kanChain=Promise.resolve();   // kanSent holds the value each column last posted, so a timer save and a later blur send one request; kanRef holds the value the hub refused, so a later pause never resends it (#2433)
 const kanClone=o=>JSON.parse(JSON.stringify(o));
 const kanCols=()=>kanDraft||(kanS&&kanS.columns)||[];
 const kanLimits=()=>Object.fromEntries(kanCols().map(c=>[c.name,c.max_cards==null?"none":String(c.max_cards)]));
@@ -7465,16 +7470,23 @@ const kanFull=()=>kanCols().filter(c=>c.max_cards!=null&&c.count>=c.max_cards).m
 const kanChip=()=>{const f=kanFull();return !f.length?(kanCols().some(c=>c.max_cards!=null)?"under its limit":"no limit"):f.length===1?`${f[0]} at its limit`:`${f.join(", ")} at their limit`};
 const kanRow=c=>setRow(`${c.name} · ${c.count} ${c.count===1?"card":"cards"}`,`<input data-kan="${esc(c.name)}" type=number min=1 max=100 step=1 inputmode=numeric value="${c.max_cards==null?"":c.max_cards}" placeholder=unlimited aria-label="${esc(c.name)} card limit"${kanBad===c.name?" class=bad aria-invalid=true":""}> <small class=kstop>${esc(c.stops||"no pass reads it yet")}</small>${kanOK===c.name?" <span class=lok aria-label=saved>✓</span>":""}`);
 const kanLine=()=>kanBad?`<span class=lbad aria-hidden=true>!</span> ${esc(kanBadMsg||kanBad+" was not saved")}`
- :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · ${span((Date.now()-kanAt)/1000)} ago`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
+ :kanOK?`<span class=lok aria-hidden=true>✓</span> Saved · ${esc(kanOK)} ${esc(kanVal)} · <span id=kanage>${span((Date.now()-kanAt)/1000)} ago</span>`+(kanDiff.length?` · ${esc(kanDiff.join(" · "))}`:""):"";   // the line also carries the diff the write landed, the confirm ADR-0137 asks for (#2433)
+function kanTick(now){const el=$("#kanage");if(el&&kanOK)el.textContent=span(((now||Date.now())-kanAt)/1000)+" ago"}   // a Kanban save's age moves with the clock, like the limits line (#2433)
+let kanAgeTmr=null;
+function kanTickStop(){if(kanAgeTmr){clearInterval(kanAgeTmr);kanAgeTmr=null}}
+function kanTickStart(){if(kanAgeTmr||!kanOK||!limShown())return;
+ kanAgeTmr=setInterval(()=>{if(!kanOK||!limShown()){kanTickStop();return}kanTick()},1000);if(kanAgeTmr&&kanAgeTmr.unref)kanAgeTmr.unref()}
+const kanTickSync=()=>{kanOK?kanTickStart():kanTickStop()};
 function kanWrite(name,send){const run=()=>kanWriteNow(name,send),p=kanChain.then(run,run);kanChain=p.catch(()=>{});return p}
 async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)return;
  const body=kanBody(name),val=String(body[name]??"");
- if(kanSent[name]===val){if(kanBad===name){kanBad="";kanBadMsg="";limRender()}return {skip:true}}   // the last write posted this column's value already (#2433)
+ if(kanSent[name]===val)return {skip:true};   // the last write posted this column's value already (#2433)
+ if(kanBad===name&&kanRef[name]===val)return {skip:true};   // the hub refused this value already, so a later pause never resends it (#2433)
  let d;try{d=send?await send({columns:body,confirm:true}):await (await fetch("/api/columns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({columns:body,confirm:true})})).json()}catch(x){d={err:"save failed"}}
- if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";delete kanSent[name]}
+ if(d.err){kanBad=name;kanBadMsg=d.err;kanOK="";kanRef[name]=val;delete kanSent[name];clearTimeout(limTmr["kan:"+name]);delete limTmr["kan:"+name]}   // a refused column keeps its mark and its value in the draft; its timer is cleared so no pause resends the same body (#2433)
  else{kanS=d.state||kanS;const st=(kanS&&kanS.columns)||[],landed=st.find(x=>x.name===name);
   kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
-  kanBad="";kanBadMsg="";kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
+  kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban <small id=kanchip>${esc(kanChip())}</small></h3>`
@@ -7527,19 +7539,21 @@ const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hou
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
 const limBusy=()=>{const a=typeof document!=="undefined"?document.activeElement:null;if(a&&a.id&&Object.keys(LIM_ID).some(k=>LIM_ID[k]==="#"+a.id))return true;return Object.keys(limTmr).length>0};   // a focused field, or any pending timer, holds text the page has not saved (#2433)
-function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k);if(m){m.hidden=limOK!==k;continue}   // the mark moves in place, so a focused input keeps what it holds (#2433)
-  const el=$(LIM_ID[k]),row=el&&el.parentNode;if(row&&row.insertAdjacentHTML&&limOK===k)row.insertAdjacentHTML("beforeend",limMark(k))}
+function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k);   // the mark moves in place, so a focused input keeps what it holds (#2433)
+  if(limOK!==k){if(m&&m.remove)m.remove();else if(m)m.hidden=true;continue}   // the field that lost its mark loses the element, never a hidden leftover
+  if(m&&m.remove){m.hidden=false;continue}
+  const el=$(LIM_ID[k]),row=el&&el.parentNode;if(row&&row.insertAdjacentHTML)row.insertAdjacentHTML("beforeend",limMark(k))}
  const st=$("#limstat");if(st)st.innerHTML=limLine()}   // and so does the saved line (#2433)
-function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";return}
+function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  setChip("lim",off?"guard off · never pauses":s.paused?"paused":"on",s.paused?"err":"");   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
- if(limBusy()){limPatch();if(typeof setBar==="function")setBar();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
+ if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
  let h=setNow("lim",[
   setTile("Dispatch",s.paused?"paused":"running",s.paused?"err":"ok"),
   setTile("Last hour",limN(s.hour_burn)+" tokens","neutral"),
   setTile("Window · "+s.window_h+" h",limN(s.window_burn)+" tokens","neutral"),
   setTile("Pauses over",off?"— guard off":limN(s.pause_line)+" tokens/h",off?"muted":"neutral"),   // no pause line exists while the guard is off (#2434)
- ],`Profile: <code title="${esc(s.profile||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path on hover (#2434); the last change stays data, never a fifth fact
+ ],`Profile: <code title="${esc(s.file||"none in force")}">${esc((s.profile||"none in force").split("/").pop())}</code>`)   // the row stays short: the file name, with the full path (the read's own `file`) on hover (#2434); the last change stays data, never a fifth fact
  +setSettings("lim",[
   setRow("Token guard",`<label class=swt><input id=limg type=checkbox role=switch aria-label="Token guard"${limBadCls("guard")}${(limBad==="guard"&&badVal!==null?badVal==="on":v.guard==="on")?" checked":""}> <small class=kstop>Off: dispatch never pauses on token burn.</small></label>${limMark("guard")}`),
   setRow("Daily token cap",`<input id=limc type=text inputmode=text spellcheck=false value="${esc(limBad==="cap"&&badVal!==null?badVal:limCapFmt(v.cap))}" aria-label="Daily token cap"${limBadCls("cap")}${limBad==="cap"?" aria-invalid=true":""}> <small class=kstop>Accepts 6M, 250M, 1T.</small>${limMark("cap")}`),
@@ -7548,7 +7562,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  if(limMsg)h+=`<div class="mx${limMsg.startsWith("!")?" err":""}" role=status>${esc(limMsg.replace(/^!/,""))}</div>`;
  h+=kanHtml();   // the Kanban sub-group below the token rows (#2432)
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
- b.innerHTML=h;if(typeof setBar==="function")setBar()}
+ b.innerHTML=h;if(typeof setBar==="function")setBar();limTickSync();kanTickSync()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
  try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
  try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
@@ -7564,7 +7578,11 @@ $("#lbody").addEventListener("input",e=>{limMsg="";const n=e.target.dataset&&e.t
  else if(e.target.id&&LIM_FIELD[e.target.id])limQueue(LIM_FIELD[e.target.id]);   // a pause in typing saves the field (#2433)
  setBar()});
 $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dataset.kan,sp=e.target.dataset&&e.target.dataset.slot,key=n?"kan:"+n:sp?"slot:"+sp:(e.target.id&&LIM_FIELD[e.target.id])||null;   // the blur saves its own field at once and leaves every other field's timer alone (#2433)
- if(!key)return;clearTimeout(limTmr[key]);delete limTmr[key];limWrite(key).catch(()=>{})});
+ if(!key)return;
+ if(LIM_FIELD[e.target.id]==="factor"&&e.target.value===""&&+((limS||{}).factor||0)!==0)return;   // a phone reports a partly typed number as empty: no change, the pause timer keeps the text (#2433)
+ clearTimeout(limTmr[key]);
+ delete limTmr[key];
+ limWrite(key).catch(()=>{})});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
 let slS=null,slDraft=null,slD=null,slMsg="";
@@ -7648,7 +7666,8 @@ function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||
 function setTheme(sp){if(!STH[sp])sp="lop";sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
- document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar()}   // opening the panel loads its data, in its own toggle handler
+ document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar();
+ if(sp==="lim"){limTickStart();kanTickStart()}else{limTickStop();kanTickStop()}}   // the age tickers run only while the loaded theme is on screen (#2433)
 $(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
 $("#ssel").addEventListener("change",e=>setTheme(e.target.value));
 document.addEventListener("click",e=>{const a=e.target.closest&&e.target.closest("a[data-sp]");if(!a)return;
@@ -7676,7 +7695,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
 // The explicit revert drops a refused value and redraws the saved state (#2433).
 $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
- if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanDiff=[];limRender()}
+ if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)

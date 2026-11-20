@@ -200,6 +200,42 @@ limWrite("cap",async()=>{n++;return {diff:["x"],state:{guard:"on",cap:2000,facto
     assert got["age"] == "7s ago", got
 
 
+def test_the_now_footer_names_the_profile_file_the_theme_writes(hub):
+    """The Now block keeps the one line naming the file: the theme's own file on hover, its name in view (#2434)."""
+    mod, _, _ = hub
+    got = _node(mod, """
+limS={guard:"on",cap:1000,factor:2,profile:"/p/squad.sh",file:"/p/squad.sh",paused:false,last_change:null};
+limRender();
+const h=STORE["#lbody"].innerHTML;
+console.log(JSON.stringify({foot:(h.match(/Profile: <code[^>]*>[^<]*<\\/code>/)||[""])[0]}))""")
+    assert got["foot"] == 'Profile: <code title="/p/squad.sh">squad.sh</code>', got
+
+
+def test_the_age_ticker_runs_only_while_a_saved_value_shows_in_a_visible_theme(hub):
+    """A page with nothing saved arms no ticker, and a cleared or hidden theme stops the one it had (#2433)."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let out={};limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
+limRender();out.before=!!limAgeTmr;
+limWrite("cap",async()=>({diff:[],state:{...limS,cap:2000}})).then(()=>{
+  out.on=!!limAgeTmr;
+  limOK="";limRender();out.cleared=!!limAgeTmr;
+  limOK="cap";STORE["#lim"]={open:false};limTickStart();out.hidden=!!limAgeTmr;
+  console.log(JSON.stringify(out))})""")
+    assert got == {"before": False, "on": True, "cleared": False, "hidden": False}, got
+
+
+def test_the_mark_of_the_field_that_lost_its_save_leaves_the_row(hub):
+    """One check mark shows at a time: the field that lost limOK loses its mark, never a hidden leftover (#2433)."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let gone=[];
+STORE["#limmk-cap"]={id:"limmk-cap",hidden:false,remove(){gone.push("cap")}};
+limOK="factor";limPatch();
+console.log(JSON.stringify({gone,status:/Saved · pause factor/.test(STORE["#limstat"].innerHTML)}))""")
+    assert got == {"gone": ["cap"], "status": True}, got
+
+
 # --- an invalid value marks the field and writes nothing
 
 def test_a_refused_value_marks_the_field_and_keeps_the_saved_state(hub):
@@ -219,12 +255,14 @@ limWrite("cap",async()=>({err:"token cap must be a positive whole number"})).the
 
 
 def test_a_refused_value_writes_nothing_through_the_route(hub):
-    mod, _, _ = hub
-    before = (hub[1] / "t.sh").read_text()
+    mod, prof, state = hub
+    ledger = state / "spend-limits-ledger.jsonl"
+    assert mod.limits_set({"guard": "on", "cap": "2000", "factor": "2", "confirm": True})["diff"]   # one valid change lands
+    before, lines = prof.joinpath("t.sh").read_text(), ledger.read_text().splitlines()
     out = mod.limits_set({"guard": "on", "cap": "1.5", "factor": "2", "confirm": True})
     assert "err" in out, out
-    assert (hub[1] / "t.sh").read_text() == before
-    assert not (hub[2] / "spend-limits-ledger.jsonl").exists()
+    assert prof.joinpath("t.sh").read_text() == before
+    assert ledger.read_text().splitlines() == lines   # a refused payload records no second change
 
 
 def test_one_field_saved_alone_writes_once_and_records_one_change(hub):
@@ -260,7 +298,7 @@ let n=0;
 kanS={file:"/p",columns:[{name:"Doing",max_cards:6,count:5,stops:""}]};kanDraft=kanClone(kanS.columns);
 const send=async()=>{n++;return {diff:["Kanban · Doing: 6 -> 5"],state:{file:"/p",columns:[{name:"Doing",max_cards:5,count:5,stops:""}]}}};
 kanWrite("Doing",send).then(()=>kanWrite("Doing",send)).then(()=>{
-  console.log(JSON.stringify({n,line:(kanHtml().match(/Saved · [^<]*/)||[""])[0]}))});""")
+  console.log(JSON.stringify({n,line:kanHtml().replace(/<[^>]*>/g,"")}))});""")
     assert got["n"] == 1, got
     assert "Kanban · Doing: 6 -&gt; 5" in got["line"], got["line"]   # the confirm ADR-0137 asks for shows on the line
 
@@ -312,6 +350,48 @@ def test_every_other_theme_keeps_its_save_and_discard_buttons(hub):
     out = _set_bar(hub[0])
     for theme in ("lop", "sub", "mdl", "slk", "acc"):
         assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
+
+
+def test_a_refused_kanban_value_is_never_resent_by_a_later_pause(hub):
+    """The refused value stays in its field, marked; a save in another field redraws the row and never resends it."""
+    mod, _, _ = hub
+    got = _node(mod, """
+let sent=[];limPauseMs=20;
+kanS={file:"/p",columns:[{name:"Doing",max_cards:9,count:1,stops:""}]};kanDraft=kanClone(kanS.columns);
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+const send=async b=>{sent.push(b.columns?b.columns.Doing:b.cap);
+  return (b.columns&&b.columns.Doing==="250")?{err:"card limit must be an integer from 1 to 100"}:{diff:[],state:{...limS,cap:+b.cap}}};
+(async()=>{
+  kanDraft[0].max_cards=250;await kanWrite("Doing",send);
+  STORE["#limc"].value="2000";await limWrite("cap",send);
+  limQueue("kan:Doing",send);
+  await new Promise(r=>setTimeout(r,120));
+  const h=kanHtml();
+  console.log(JSON.stringify({sent,bad:kanBad,mark:/class=bad/.test(h),draft:kanDraft[0].max_cards}))})();""")
+    assert got["sent"] == ["250", "2000"], got      # the refused body went once; the next request is the cap save
+    assert got["bad"] == "Doing" and got["mark"] is True, got   # and the field keeps its mark
+    assert got["draft"] == 250, got                 # with the refused value still in the draft
+
+
+def test_the_kanban_saved_age_grows_with_the_clock(hub):
+    """A Kanban save's age moves each second, like the limits line, with no new write (#2433)."""
+    mod, _, _ = hub
+    got = _node(mod, """
+kanS={file:"/p",columns:[{name:"Doing",max_cards:6,count:5,stops:""}]};kanDraft=kanClone(kanS.columns);
+kanWrite("Doing",async()=>({diff:[],state:{file:"/p",columns:[{name:"Doing",max_cards:5,count:5,stops:""}]}})).then(()=>{
+  kanAt=Date.now()-4000;
+  const drawn=(kanHtml().match(/<span id=kanage>([^<]*)<\\/span>/)||[])[1];kanTick(Date.now()+3000);
+  console.log(JSON.stringify({drawn,age:STORE["#kanage"].textContent}))})""")
+    assert got == {"drawn": "4s ago", "age": "7s ago"}, got
+
+
+def test_the_page_never_saves_a_number_field_the_browser_reports_empty(hub):
+    """A phone reports a partly typed number as the empty string; the blur keeps it for the pause timer (#2433)."""
+    page = hub[0].PAGE
+    handler = re.search(r'\$\("#lbody"\)\.addEventListener\("change".*?limWrite\(key\)', page, re.S).group(0)
+    guard = 'LIM_FIELD[e.target.id]==="factor"&&e.target.value===""&&+((limS||{}).factor||0)!==0)return'
+    assert guard in handler, "the blur saves the empty string a phone reports for a partly typed number"
+    assert handler.index(guard) < handler.index("limWrite(key)"), "the guard sits after the write"
 
 
 def test_the_page_saves_a_field_on_blur_and_after_a_pause_in_typing(hub):

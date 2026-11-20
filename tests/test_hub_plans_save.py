@@ -135,6 +135,7 @@ def _page_slices(page, stub=None):
                     'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
                     'let limS=null,slDraft=null,slS=null;const mdlChanged=()=>false,slDirty=()=>false,brdDirty=()=>false;'
                     'const mdlLoad=()=>{},limLoad=()=>{};'   # the two loaders the page answers on boot (#1278, #2432)
+                    'const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};'   # the theme's age tickers (#2433)
                     'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};')
     return "\n".join([stub, esc, usd, iq, sett, gauges, state])
 
@@ -148,6 +149,7 @@ _LIVE = ('const STORE={},HANDLERS={},SENT=[];'
          'function setBar(){};function save(){};const ls={};const RO=false,RO_WHY="";'
          'let limS=null,slDraft=null,slS=null;const mdlChanged=()=>false,slDirty=()=>false,brdDirty=()=>false;'
          'const mdlLoad=()=>{},limLoad=()=>{};'   # the two loaders the page answers on boot (#1278, #2432)
+         'const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};'   # the theme's age tickers (#2433)
          'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};'
          'globalThis.fetch=(u)=>{SENT.push(u);return Promise.resolve({json:async()=>({})})};'
          'globalThis.XMLHttpRequest=function(){this.open=(m,u)=>SENT.push(u);this.send=()=>SENT.push("sent");'

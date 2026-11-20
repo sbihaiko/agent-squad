@@ -446,7 +446,12 @@ def test_the_hub_names_each_path_the_dialog_shows(hub, monkeypatch):
     page = hub.PAGE
     assert "(mdl&&mdl.file)" in page and "(slS&&slS.file)" in page
     assert "(limS&&limS.file)" not in page, "the one dialog still carries a Spend & limits group"
-    assert 's.profile||"none in force"' in page, "the theme no longer names the profile file it writes"
+    # the theme's Now footer names the profile it writes: the read's `file` on hover, its name in view
+    lim = page[page.index("function limRender("):page.index("async function limLoad()")]
+    assert 'Profile: <code title="${esc(s.file||"none in force")}">' in lim, \
+        "the limits footer no longer names the file the read returned"
+    assert '(s.profile||"none in force").split("/").pop()' in lim, \
+        "the theme no longer names the profile file it writes"
     assert hub.models_get()["file"].endswith("models.json")
     limit_file = hub.pathlib.Path("/p/squad.sh")
     monkeypatch.setattr(hub, "profile_file", lambda: limit_file)
@@ -566,6 +571,7 @@ const RO=false,RO_WHY="";
 let mdln=0,limn=0,slkn=0;
 function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}
 const mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,slotDirty=()=>false;
+const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};   // the theme's age tickers, stubbed: this harness proves the loads, not the clock
 let mdl=null,limS=null,slS=null,slDraft=null,slotS=null,slotDraft=null;
 const ls=__STORED__,save=()=>{};
 """

@@ -4,7 +4,9 @@
 # The page parses a cap with limCapParse before it posts, so 6M, 250M and 1T reach the hub as whole integers and only text
 # the parse refuses leaves raw. A field whose value the last write already posted never posts again, so a timer save and
 # then a blur write once. A refused value in one field never holds another field's write, and the refused field keeps the
-# typed value and its error mark until a successful write or the explicit Discard resets it.
+# typed value and its error mark until a successful write or the explicit Discard resets it. A refused Kanban column keeps
+# its mark and its value, and a later pause never resends the same body. The saved age of a limits field and of a Kanban
+# column moves with the clock, and the one check mark shows only on the field the last write saved.
 # The theme's own sources are sliced out of hub.py by marker and run in node with a stub DOM: no browser, no server.
 # When node is not on PATH the run says so and exits non-zero, so a missing tool never reads as a pass. usage: bash test-hub-limits-autosave.sh [path/to/hub.py]
 # mirrors: hub.py
@@ -151,6 +153,35 @@ limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:nu
 kanDraft[1].max_cards=9;
 let seen=null;kanWrite("Doing",async b=>{seen=b;return {diff:[],state:{columns:kanS.columns}}}).then(()=>{
   console.log(JSON.stringify(seen.columns))})'
+
+# --- a refused Kanban value keeps its mark and its timer, and a later pause never resends it
+
+run "a refused Kanban value is marked and never resent by a later pause" '{"sent":2,"bad":"Doing","mark":true,"timer":0}' '
+let sent=[];limPauseMs=20;
+kanS={columns:[{name:"Doing",max_cards:9,count:1}],file:"p/s.yaml"};kanDraft=kanClone(kanS.columns);
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};limRender();
+const send=async b=>{sent.push(b.columns?b.columns.Doing:b.cap);
+  return (b.columns&&b.columns.Doing==="250")?{err:"card limit must be an integer from 1 to 100"}:{diff:[],state:{...limS,cap:+b.cap}}};
+(async()=>{kanDraft[0].max_cards=250;limQueue("kan:Doing",send);
+  await new Promise(r=>setTimeout(r,60));
+  STORE["#limc"].value="2000";await limWrite("cap",send);
+  limQueue("kan:Doing",send);await new Promise(r=>setTimeout(r,60));
+  console.log(JSON.stringify({sent:sent.length,bad:kanBad,mark:/class=bad/.test(kanHtml()),timer:Object.keys(limTmr).length}))})();'
+
+# --- the Kanban saved age moves with the clock, like the limits line
+
+run "a Kanban save age moves with the clock" '{"drawn":"4s ago","age":"7s ago"}' '
+kanS={columns:[{name:"Doing",max_cards:6,count:5}],file:"p/s.yaml"};kanDraft=kanClone(kanS.columns);
+kanWrite("Doing",async()=>({diff:[],state:{columns:[{name:"Doing",max_cards:5,count:5}]}})).then(()=>{
+  kanAt=Date.now()-4000;const drawn=(kanHtml().match(/<span id=kanage>([^<]*)<\/span>/)||[])[1];
+  kanTick(Date.now()+3000);
+  console.log(JSON.stringify({drawn,age:STORE["#kanage"].textContent}))});'
+
+# --- the check mark leaves the row of the field that lost its save
+
+run "the mark of the field that lost its save leaves the row" '{"gone":["cap"]}' '
+let gone=[];STORE["#limmk-cap"]={id:"limmk-cap",hidden:false,remove(){gone.push("cap")}};
+limOK="factor";limPatch();console.log(JSON.stringify({gone}))'
 
 # --- a missing node fails the guard, so a host without node never reads a pass
 
