@@ -319,14 +319,155 @@ def _parts(key):
 
 
 def _read(target):
+    """The file's own data: no `.env` key is folded in, so a write never copies a personal value into a tracked file."""
     path = path_for(target)
-    data, _ = load(target)
-    return path, data or {}
+    if not path.is_file():
+        return path, {}
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as e:
+        raise OptionError(f"{path} is not valid YAML: {e}") from e
+    return path, {} if data is None else data
+
+
+# A write keeps the file as the owner wrote it. The file is hand-edited: its comments hold the owner's ruling on each cap,
+# so a save that dumps the whole mapping destroys the ruling (#2543). One key changed means one line changed.
+_DEL = object()
+_KEY_LINE = re.compile(r"^(\s*)([^\s#][^:]*?):(?=\s|$)")
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def _key_at(line, indent):
+    """The key a line sets at exactly `indent`, or None: a comment line and a list item key nothing."""
+    if _indent(line) != indent or line.lstrip().startswith("#"):
+        return None
+    m = _KEY_LINE.match(line)
+    return m.group(2).strip() if m else None
+
+
+def _render(value):
+    """One value as one YAML token: a scalar or a flow list, never a block."""
+    text = yaml.safe_dump(value, default_flow_style=True)
+    return text.removesuffix("\n...\n").strip()
+
+
+def _replace_value(line, value):
+    """The line with its value replaced, every comment on it kept and the comment held at its old column."""
+    m = _KEY_LINE.match(line)
+    rest = line[m.end():]
+    lead = len(rest) - len(rest.lstrip(" \t"))
+    body = rest[lead:]
+    comment, col = "", 0
+    h = body.find("#")
+    if h > 0 and body[h - 1] in " \t":
+        j = h
+        while j > 0 and body[j - 1] in " \t":
+            j -= 1
+        comment, col = body[h:].strip(), m.end() + lead + h   # the '#' column the owner wrote
+        body = body[:j]
+    new = line[:m.end() + lead] + _render(value)
+    if comment:
+        new = new + " " * max(1, col - len(new)) + comment
+    return new
+
+
+def _new_line(indent, name, value):
+    return " " * indent + name + ": " + _render(value)
+
+
+def _block_end(lines, i, end, indent):
+    """The index after the last line of the block a key at `i` opens: its children and the blank lines among them."""
+    j, end = i + 1, min(end, len(lines))
+    while j < end:
+        if lines[j].strip() and _indent(lines[j]) <= indent:
+            break
+        j += 1
+    return j
+
+
+def _child_indent(lines, i, end, indent):
+    for j in range(i + 1, end):
+        if lines[j].strip() and not lines[j].lstrip().startswith("#") and _indent(lines[j]) > indent:
+            return _indent(lines[j])
+    return indent + 2
+
+
+def _insert_at(lines, start, end):
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return end
+
+
+def _no_key(lines, start, end):
+    return not any(_key_at(lines[j], _indent(lines[j])) for j in range(start, end) if lines[j].strip())
+
+
+def _apply_at(lines, start, end, indent, parts, value):
+    """Set, insert or (with `_DEL`) remove one key at `indent` inside `lines[start:end]`, touching no other line."""
+    name = parts[0]
+    end = min(end, len(lines))
+    i = next((j for j in range(start, end) if _key_at(lines[j], indent) == name), None)
+    if len(parts) == 1:
+        if value is _DEL:
+            if i is not None:
+                del lines[i]
+        elif i is not None:
+            lines[i] = _replace_value(lines[i], value)
+        else:
+            lines.insert(_insert_at(lines, start, end), _new_line(indent, name, value))
+        return
+    if i is not None:
+        bend = _block_end(lines, i, end, indent)
+        _apply_at(lines, i + 1, bend, _child_indent(lines, i, bend, indent), parts[1:], value)
+        if value is _DEL and _no_key(lines, i + 1, _block_end(lines, i, end, indent)):
+            del lines[i]      # a section left with no key goes too, so the mapping holds no empty parent
+        return
+    if value is _DEL:
+        return
+    at, pad, block = _insert_at(lines, start, end), indent, []
+    for k, p in enumerate(parts):
+        block.append(_new_line(pad, p, value) if k == len(parts) - 1 else " " * pad + p + ":")
+        pad += 2
+    lines[at:at] = block
+
+
+def _tree_flat(data, prefix=""):
+    """Every leaf key of a mapping; a mapping holds no leaf of its own."""
+    for k, v in (data or {}).items():
+        if isinstance(v, dict):
+            yield from _tree_flat(v, f"{prefix}{k}.")
+        else:
+            yield f"{prefix}{k}", v
+
+
+def _diff(old, new):
+    """The keys that differ, as (parts, value) with `_DEL` for a key the new mapping drops."""
+    oflat, nflat = dict(_tree_flat(old)), dict(_tree_flat(new))
+    return [(k.split("."), _DEL) for k in oflat if k not in nflat] + \
+           [(k.split("."), v) for k, v in nflat.items() if k not in oflat or oflat[k] != v]
 
 
 def _write(path, data):
+    """Make the file hold `data`, editing only the keys that differ. Every comment and every other line stays as it was."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=True, default_flow_style=False))
+    text = path.read_text() if path.is_file() else ""
+    old = (yaml.safe_load(text) if text.strip() else None) or {}
+    if old == data and path.is_file():
+        return
+    lines = text.splitlines()
+    for parts, value in _diff(old, data):
+        _apply_at(lines, 0, len(lines), 0, parts, value)
+    out = "\n".join(lines) + "\n" if lines else "{}\n"
+    try:
+        got = yaml.safe_load(out) or {}
+    except yaml.YAMLError:
+        got = None
+    if got != data:   # a shape the line edit cannot reproduce keeps its keys in a full dump: no comment loss unless the edit failed
+        out = yaml.safe_dump(data, sort_keys=True, default_flow_style=False)
+    path.write_text(out)
 
 
 def set_key(target, key, raw):
