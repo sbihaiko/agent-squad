@@ -7,6 +7,7 @@ writes its result before it settles anything, a red settlement is never turned g
 run already made, a default check over a tree without this repository's layout is reported unmeasured, and a stale red is
 pruned and holds only while it is current."""
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -28,6 +29,7 @@ def _run(cmd, env=None, **kw):
     clean = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
     clean["SG_NIGHTLY_HOUR"] = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%H")   # the suite runs in its window whatever the hour
     clean["SG_NIGHTLY_BOUND_SECONDS"] = "3600"   # the real minute never stops a case at its hour's end
+    clean["SG_NIGHTLY_NEED_MINUTES"] = "0"   # the real minute never holds a case short of the suite's time (#2527)
     clean["SG_GHREAD"] = "false"   # no case reads GitHub: the nightly verdict reads the GitHub half through this door (#1975)
     clean.update(env or {})
     return subprocess.run(cmd, capture_output=True, text=True, env=clean, timeout=120, **kw)
@@ -188,6 +190,19 @@ def test_a_green_settlement_clears_the_obligation_and_names_the_run(nightly):
     assert lines == [f"mypy {nightly['st'].parent / 'tree'} {nightly['sha']}"]
     # The full suite this run already made answers pytest at the tip, so no second suite runs there (ADR-0168).
     assert [line.split()[0] for line in lines] == ["mypy"]
+
+
+def test_a_case_runs_the_nightly_at_any_minute_of_its_hour(nightly, tmp_path):
+    """The hold that keeps a suite from starting too late in its hour reads the wall clock, so a case reads the minute
+    through a date that names minute 40 and still runs the nightly."""
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    real_date = shutil.which("date")
+    _script(shim_dir / "date", f'if [ "$1" = "+%M:%S" ]; then echo "40:00"; exit 0; fi\nexec {real_date} "$@"\n')
+    res = nightly["run"](PATH=f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+    assert res.returncode == 0, res.stderr
+    assert "held" not in res.stdout, res.stdout
+    assert (nightly["st"] / "nightly-result").is_file()
 
 
 def test_an_overdue_obligation_is_reported_by_name_and_still_measured(nightly):
