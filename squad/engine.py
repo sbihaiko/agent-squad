@@ -315,6 +315,7 @@ class Engine:
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
                            models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}), **({"kind_chains": self.kind_chains} if self.kind_chains else {}), **({"kind_efforts": self.kind_efforts} if self.kind_efforts else {}),
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}), **self._target_owned(),
+                           **({"target_head": git.head(self.target)} if self.options.get("fix_run") and self.has_git else {}),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"], "project_settings_method": P.METHOD} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
                            state_binding=self.state_binding,
@@ -339,6 +340,13 @@ class Engine:
         on the work branch, never in the target cut from the base, so its acceptance commands prove in the child's tree."""
         start = self.record.events[0] if self.record.events else {}
         return bool((start.get("engine_options") or {}).get("fix_run"))
+
+    @property
+    def fix_cut(self):
+        """The target tip a fix run was cut at (#2561), from `run_start`, or None. Only a target still on that tip may be replaced
+        by a rebased child: a sibling's landing or a node commit moved it, and that work is never dropped."""
+        start = self.record.events[0] if self.record.events else {}
+        return start.get("target_head") if self.fix_run else None
 
     def _target_branch(self):
         """The branch the target stands on at run start, or None (no git, a detached HEAD): a resume refuses a target on another branch."""

@@ -196,3 +196,58 @@ async def test_an_action_carries_a_deadline_and_a_timeout_is_the_deadline_outcom
 def test_the_validator_gives_an_action_a_deadline_and_a_when_field():
     d = flow([act("c", "commit", ws=".", when={"fact": "git", "op": "eq", "value": True})], ["c"])
     assert validate(d) == []
+
+
+def rebased_child(tmp_path):
+    """#2561: a fix run cuts its target at the work branch's old tip, and the child rebases that branch onto a newer base.
+    The newer base and the old tip both write `same.txt`, so the old tip is no ancestor of the child and a merge conflicts."""
+    repo = make_repo(tmp_path / "repo")
+    base = git.head(repo)
+    sh(repo, "git", "branch", "newer", base)
+    (repo / "same.txt").write_text("old tip\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "the work branch's old tip")
+    wt = tmp_path / "wt"
+    sh(repo, "git", "worktree", "add", "-q", "-b", "child", str(wt), "newer")
+    (wt / "same.txt").write_text("newer base\n")
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "commit", "-q", "-m", "the newer base")
+    (wt / "fix.txt").write_text("f\n")
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "commit", "-q", "-m", "the rebased fix")
+    return repo, wt
+
+
+def test_a_replace_land_moves_the_target_to_a_rebased_child(tmp_path):
+    """#2561: with `replace`, a child whose branch no longer holds the target's tip replaces the target, and the land says so."""
+    from squad import actions
+    repo, wt = rebased_child(tmp_path)
+    before = git.head(repo)
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)", replace=before)
+    assert r.ok and r.reasons == [], r
+    assert git.head(repo) == git.head(wt) and r.head == git.head(wt)
+    assert r.extra.get("rewritten") is True and r.extra.get("before") == before, r.extra
+    assert (repo / "fix.txt").read_text() == "f\n" and not git.dirty(repo)
+
+
+def test_a_replace_land_keeps_the_merge_when_the_target_moved_since_the_cut(tmp_path):
+    """#2561: a target that moved since the fix run's cut (a sibling landed) is never reset, so the sibling's work stays."""
+    from squad import actions
+    repo, wt = rebased_child(tmp_path)
+    cut = git.head(repo)
+    (repo / "sibling.txt").write_text("s\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", "a sibling's landing")
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)", replace=cut)
+    assert not r.ok and r.reasons == ["merge_conflict"] and "rewritten" not in r.extra, r
+    assert (repo / "sibling.txt").read_text() == "s\n" and git.unmerged(repo) == []
+
+
+def test_a_land_without_replace_still_fails_a_rebased_child_with_merge_conflict(tmp_path):
+    """#2561: only a fix run replaces its target. Any other land keeps the merge, and a conflict stays a conflict."""
+    from squad import actions
+    repo, wt = rebased_child(tmp_path)
+    before = git.head(repo)
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)")
+    assert not r.ok and r.reasons == ["merge_conflict"]
+    assert git.head(repo) == before and git.unmerged(repo) == [] and not git.dirty(repo)

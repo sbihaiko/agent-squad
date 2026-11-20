@@ -4,6 +4,7 @@
 baseline. It decides spawn requests ("decide these requests") and lands finished children ("land these
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
+import functools
 import importlib.util
 import os
 import pathlib
@@ -300,11 +301,15 @@ class Dispatch:
             r = actions.ActionResult(False, why, head_before)
         else:
             try:
-                r = await anyio.to_thread.run_sync(actions.merge_land, self.e.target, path, branch, f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)
+                r = await anyio.to_thread.run_sync(functools.partial(actions.merge_land, replace=self.e.fix_cut), self.e.target, path, branch,
+                                                   f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)    # a fix run's child may rebase its branch (#2561)
             except subprocess.TimeoutExpired:
                 r = actions.ActionResult(False, ["land_timeout"], head_before)
         if r.ok:
+            rewritten = r.extra.get("rewritten")
             r = await self.landing_check(name, head_before)
+            if rewritten:               # the landing check replaces the merge's result: keep the mark that the target moved to a rebased branch, on either outcome
+                r.extra["rewritten"] = True
         return review, rounds, r
 
     async def fix_regression(self, node, name, d, sc, r):
