@@ -90,7 +90,8 @@
 # commit changes), then its Python test delta through the gate lock and slots (`SG_WAVE_CHILD_PYTEST`, #1409). The first child whose suite fails leaves the wave -- its commits are dropped from the tip, its issue goes
 # back to the queue -- and the wave without it lands. A red tip no child's suite names is a landing that failed, as before.
 # Exit: 0 entered (or the wave branch was cut, or the wave landed), 1 not entered (requeued after a failed gate, a conflict or a
-# refused push; held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
+# refused push; held where it stands when the review did not approve the child), 2 a bad call, a wave branch that is not there,
+# or a broken board-column read (#2439).
 # Guards: `test-wave-entry.sh`, `test-wave-land.sh`, `test-wave-retry.sh`, `test-wave-aged.sh`, `test-wave-entrywait.sh`, `test-wave-obligation.sh`,
 # `test-wave-issue.sh`, `test-wave-tipcheck.sh`, `test-wave-testing.sh`, `test-wave-conflict.sh`, `test-wave-eviction.sh`,
 # `test-wave-testonly.sh`.
@@ -343,38 +344,39 @@ wave_cards() {
   done < <($G -C "$gs" log --format=%H "$range" 2>/dev/null)
 }
 
-# testing_wait <clone> <range> <run>...: print the cause and return 1 when a new wave may not enter its gate, because the
-# Testing column holds its card limit (#2439, SPEC 2427). Return 0 when the wave may enter: Testing has no limit, it holds
-# fewer cards than its limit, or the wave is already in its gate -- one of its own cards reads Testing, so the limit never
-# stops it. The limit is the Testing card limit of the one seam (columnlimit.sh); a limit or a board read that fails is a
-# defect, never "no limit": the wave waits, and the line names the failure.
+# testing_wait <cards>: may a new wave enter its gate now (#2439, SPEC 2427)? <cards> is the wave's own cards, one a line, as
+# `wave_cards` answers them, and a pass reads them once and hands the same list to `gating`. Sets TW_WHY and returns 0 when the
+# wave may enter: Testing has no limit, it holds fewer cards than its limit, or the wave is already in its gate -- one of its
+# own cards reads Testing, so the limit never stops it. Returns 1 when the Testing column holds its card limit. Returns 2 when
+# the limit or the board read itself failed: that is a defect, named as a defect and never as a full column, so the loop's
+# diagnosis names the broken seam instead of backpressure. The limit is the Testing card limit of the one seam
+# (columnlimit.sh), which names its own failure on stderr.
 testing_wait() {
-  local gs=$1 range=$2 tmax board own tn bt
-  shift 2
-  tmax=$(sg_column_limit Testing) || { echo "the Testing column limit is unreadable, a defect and not no limit, so no new wave enters its gate this pass"; return 1; }
+  local tmax board tn bt
+  TW_WHY=
+  tmax=$(sg_column_limit Testing) || { TW_WHY="the Testing column limit is unreadable, a defect and not no limit"; return 2; }
   case "$tmax" in ''|*[!0-9]*) return 0;; esac   # no limit: the column bounds nothing
-  board=$(python3 "$here/issue_state.py" 2>/dev/null) || { echo "the board did not answer, so the cards in Testing are unreadable and no new wave enters its gate this pass"; return 1; }
+  board=$(python3 "$here/issue_state.py" 2>/dev/null) || { TW_WHY="the board did not answer, so the cards in Testing are unreadable"; return 2; }
   # A wave already in its gate is never stopped by the limit: its cards stand in Testing before its gate starts (ADR-0170), so
   # one of the wave's own cards in Testing says this pass continues that gate.
-  own=" $(wave_cards "$gs" "$range" "$@" | tr '\n' ' ') "
-  printf '%s\n' "$board" | awk -F '\t' -v own="$own" 'BEGIN { m = split(own, a, " "); for (i = 1; i <= m; i++) if (a[i] != "") mine[a[i]] = 1 } $1 ~ /^[0-9]+$/ && $2 == "Testing" && ($1 in mine) { found = 1 } END { exit found ? 0 : 1 }' && return 0
-  bt=$(mktemp "${TMPDIR:-/tmp}/wave-testing-board.XXXXXX" 2>/dev/null) || { echo "no scratch file for the board read, so no new wave enters its gate this pass"; return 1; }
+  printf '%s\n' "$board" | awk -F '\t' -v cards="$1" 'BEGIN { m = split(cards, a, "\n"); for (i = 1; i <= m; i++) if (a[i] != "") mine[a[i]] = 1 } $1 ~ /^[0-9]+$/ && $2 == "Testing" && ($1 in mine) { found = 1 } END { exit found ? 0 : 1 }' && return 0
+  bt=$(mktemp "${TMPDIR:-/tmp}/wave-testing-board.XXXXXX" 2>/dev/null) || { TW_WHY="no scratch file for the board read, so the cards in Testing are unreadable"; return 2; }
   printf '%s\n' "$board" > "$bt"
   tn=$(sg_column_cards Testing "$bt"); rm -f "$bt"
-  case "$tn" in ''|*[!0-9]*) echo "the Testing column count is unreadable, so no new wave enters its gate this pass"; return 1;; esac
-  [ "$tn" -lt "$tmax" ] || { echo "the Testing column holds $tn card(s) of its limit $tmax, and no new wave enters its gate while Testing is full"; return 1; }
-  return 0
+  case "$tn" in ''|*[!0-9]*) TW_WHY="the Testing column count is unreadable"; return 2;; esac
+  [ "$tn" -lt "$tmax" ] && return 0
+  TW_WHY="the Testing column holds $tn card(s) of its limit $tmax, and no new wave enters its gate while Testing is full"
+  return 1
 }
 
-# gating <clone> <range> <run>...: before a wave's tip gate starts, the card of each child in the gate moves to Testing (ADR-0170).
-# A card moves when its child entered the wave of one of the runs (the ledger's entered fact) and the gated range carries
-# the child's commit. So a child the tip check dropped from the tree stays out of the column. board.py sends no write when the card
-# already carries Testing (ADR-0144), so a repeat pass after a red or unproven attempt moves nothing: the attempt is a marker.
-# The legacy vocabulary has no Testing column, so it writes nothing.
+# gating <cards>: before a wave's tip gate starts, the card of each child in the gate moves to Testing (ADR-0170). <cards> is
+# the wave's own cards as `wave_cards` answers them, read once by the pass that reads the limit. board.py sends no write when
+# the card already carries Testing (ADR-0144), so a repeat pass after a red or unproven attempt moves nothing: the attempt is a
+# marker. The legacy vocabulary has no Testing column, so it writes nothing.
 gating() {
   [ "${SG_BOARD_VOCAB:-}" = shipped ] || return 0
   local n
-  while read -r n; do board_write Testing "$n"; done < <(wave_cards "$@")   # the new name: board.py sends the option the board carries for it (#2315)
+  while read -r n; do [ -n "$n" ] && board_write Testing "$n"; done < <(printf '%s\n' "$1")   # the new name: board.py sends the option the board carries for it (#2315)
 }
 
 # proof_card <issue> <obligation path|"">: the card's proof fact (#1176, spec 1163). An unproven entry records the
@@ -1213,7 +1215,8 @@ child_gate() {
   child_pytest "$S" "$from" "$to" "$iss" "$log"
 }
 
-# wave_check <clone> <w>: the wave tip's check, and, when it is red, the child that broke it. Each child's own suite runs
+# wave_check <clone> <w> <cards>: the wave tip's check, and, when it is red, the child that broke it. <cards> are the wave's own
+# cards, already read by the pass, which the gate stands in Testing. Each child's own suite runs
 # again against the tip, the last entrant first; the first child whose suite fails leaves the wave -- its commits are dropped
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
 # the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before; 3: the check ran no
@@ -1324,7 +1327,7 @@ wave_check() {
     echo "WAVE CHECK RED $w: the tip's check was red twice on the same tree with the same failing tests ($(tr '\n' ' ' < "$mk.red.tests" 2>/dev/null)); held until the tip moves: no third check runs on this tree"
     return 7
   fi
-  gating "$S" "origin/$base..HEAD" "$run"   # the gate waits for a slot or runs from here, so its cards stand in Testing (ADR-0170)
+  gating "$3"   # the gate waits for a slot or runs from here, so its cards stand in Testing (ADR-0170)
   of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
   while :; do
     clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
@@ -1893,7 +1896,7 @@ wave_conflict() {
 }
 
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
-  local run=$1 w twhy SG_REQUEUE_RUN=$1 testmiss testpaths; w=$(wave_of "$run")
+  local run=$1 w cards twrc SG_REQUEUE_RUN=$1 testmiss testpaths; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
   # The run's own folder, as active-runs.txt records it: an absolute path (a loop run lives under its issue worktree) or a bare
   # name under the checkout's runs/. The caller passes it; without one the name is read as a bare name.
@@ -2079,9 +2082,15 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
     red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     # The Testing card limit holds a new wave out of its gate (#2439, SPEC 2427): at its limit the wave does not enter its
-    # gate, and the line names the limit. A wave already in its gate is never stopped, so a later pass continues it.
-    twhy=$(testing_wait "$S" "origin/$base..HEAD" "$run") || { echo "WAVE WAIT $w: $twhy; the wave enters its gate on a later pass"; rm -rf "$S"; return 1; }
-    wave_check "$S" "$w"; rc=$?
+    # gate, and the line names the limit. A wave already in its gate is never stopped, so a later pass continues it. A broken
+    # limit or board read is a defect, named as one, and never read as a full column.
+    cards=$(wave_cards "$S" "origin/$base..HEAD" "$run")   # read once: the limit reads it, and the gate stands these cards in Testing
+    testing_wait "$cards"; twrc=$?
+    [ $twrc = 1 ] && { echo "WAVE WAIT $w: $TW_WHY; the wave enters its gate on a later pass"; rm -rf "$S"; return 1; }
+    # 2: the limit or the board read is broken, never a full column. The line names the defect, so the loop's diagnosis reads a
+    # broken seam and not backpressure, and the pass stops.
+    [ $twrc = 2 ] && { echo "WAVE DEFECT $w: $TW_WHY; the pass stops instead of waiting on a broken read"; rm -rf "$S"; return 2; }
+    wave_check "$S" "$w" "$cards"; rc=$?
     # 8 (#2209): the check evicted every child. The loop repeats, and the empty-landing block above closes the wave.
     [ $rc = 8 ] && continue
     # The check ran no verdict: the one cause it met is named, with the check's own log, so the next pass reads the trace (#1700).
@@ -2322,7 +2331,7 @@ land_queue() {
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 early=0 dropped="" tipobl="" brc=0 self0 selfrd er erd hid why
-  local rows issues anyref rfs nontest twhy testmiss testpaths SG_REQUEUE_RUN
+  local rows issues anyref rfs nontest bcards c twrc testmiss testpaths SG_REQUEUE_RUN
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
     rs+=("$1"); rds+=("$rd")
@@ -2377,12 +2386,24 @@ land_batch() {
     # One tip gate on the exact stacked tip, as wave_check runs it, with the batch named for the gate history (SG_GATE_BATCH).
     # No child is blamed here: a red goes to the fallback, where each wave's own check keeps its red path.
     if [ -n "$tipgate" ]; then
-      # The Testing card limit holds a new wave out of its gate (#2439, SPEC 2427): a batch whose waves may not enter lands
-      # each run alone, and the single wave's own gate reads the limit again.
-      twhy=$(testing_wait "$S" "$bstart..HEAD" "${rs[@]}") || { echo "WAVE BATCH: $twhy; each run lands alone"; rm -rf "$S"; return 10; }
+      # The Testing card limit holds a new wave out of its gate (#2439, SPEC 2427): the batch enters its gate only when EVERY
+      # run of it may enter. A run already in its gate -- one of its own cards reads Testing -- never carries a new run past
+      # the limit, so a batch that holds a run that may not enter lands each run alone, and each run reads the limit itself.
+      bcards=""
+      for i in "${!rs[@]}"; do
+        c=$(wave_cards "$S" "$bstart..HEAD" "${rs[$i]}")
+        testing_wait "$c"; twrc=$?
+        case "$twrc" in
+          0) ;;
+          1) echo "WAVE BATCH: ${rs[$i]} may not enter its gate: $TW_WHY; each run lands alone"; rm -rf "$S"; return 10;;
+          *) echo "WAVE BATCH: ${rs[$i]} meets a broken read: $TW_WHY; each run lands alone"; rm -rf "$S"; return 10;;
+        esac
+        bcards="${bcards:+$bcards
+}$c"
+      done
       of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
       clog="$SG_STATE/wave-check-batch.log"; touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
-      gating "$S" "$bstart..HEAD" "${rs[@]}"   # the cards of every wave in the batch stand in Testing while its gate waits or runs (ADR-0170)
+      gating "$(printf '%s\n' "$bcards" | awk 'NF && !seen[$0]++')"   # the cards of every wave in the batch stand in Testing while its gate waits or runs (ADR-0170)
       (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
       # (#2330) A check that measured nothing makes the batch wait: a skip (73) that names a hold, or a bounded wait that ran out
