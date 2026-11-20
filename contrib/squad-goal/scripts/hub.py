@@ -7761,7 +7761,7 @@ function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k); 
 function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<span class=m>Loading the data.</span>";limTickSync();kanTickSync();return}
  const s=limS,v=s,off=s.guard==="off",badVal=limBad?limTyped(limBad):null;   // a refused field keeps the typed value and its error mark until a write succeeds or the Discard resets it (#2433)
  const chipTxt=off?"guard off · never pauses":s.paused?"paused":"on",chipCls=s.paused?"err":"";   // a paused dispatch is the chip's err tone, not a muted word (#1282); a guard off never pauses (#2434)
- if(limBusy()){limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the mark and the line move in place (#2433)
+ if(limBusy()){const tc=$("#limtok");if(tc){tc.textContent=chipTxt;tc.className="chip"+(chipCls?" "+chipCls:"")}limPatch();if(typeof setBar==="function")setBar();limTickSync();kanTickSync();return}   // a field with unsent text keeps its input; the chip, the mark and the line move in place (#2433)
  // The Tokens group draws its own heading and state chip (#2510), then the four Now tiles on one row, then the fields.
  let h=`<div class=setblk data-blk=tokens data-theme=lim><h3 class="blkh tokhead">Tokens <span id=limtok class="chip${chipCls?" "+chipCls:""}">${esc(chipTxt)}</span></h3></div>`
  +setNow("lim",[

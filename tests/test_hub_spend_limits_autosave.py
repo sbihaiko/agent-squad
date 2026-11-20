@@ -171,6 +171,19 @@ limWrite("cap",async()=>({diff:["x"],state:{guard:"on",cap:2000,factor:2}})).the
     assert "✓" in got["capRow"], got["capRow"]
 
 
+def test_a_busy_field_still_updates_the_tokens_state_chip(hub):
+    mod, _, _ = hub
+    got = _node(mod, """
+limS={guard:"on",cap:1000,factor:2,profile:"/p/t.sh",paused:false,last_change:null};
+limRender();
+document.activeElement={id:"limc"};
+limS={...limS,paused:true};
+limRender();
+console.log(JSON.stringify({text:STORE["#limtok"].textContent,cls:STORE["#limtok"].className}));""")
+    assert got["text"] == "paused", got
+    assert got["cls"] == "chip err", got
+
+
 def test_the_group_shows_one_line_that_names_the_saved_value_and_its_age(hub):
     mod, _, _ = hub
     got = _node(mod, """
