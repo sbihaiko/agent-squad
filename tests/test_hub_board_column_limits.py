@@ -3,6 +3,8 @@
 Spend & limits holds a Kanban sub-group: one row for each active column, its limit, the cards in the column now and the
 pass that stops at the limit. The Settings theme list carries no Board theme. The Kanban page shows `n / max` in the
 header of each column that has a limit. The sub-group's pure rules and the header's one function run in node as they ship.
+The group is the four-column table of the spec #2427 mockup (#2512); its renders at 1440 px and at 1000 px, and what each
+one shows, are in docs/evidence/2512: kanban-1440.png, kanban-1000.png and README.md.
 """
 import importlib.util
 import json
@@ -67,6 +69,7 @@ def test_the_route_answers_every_active_column_its_limit_and_its_count(hub):
     assert {c["name"]: c["max_cards"] for c in got["columns"]} == {"Backlog": None, "Todo": None, "Doing": 6, "Reviewing": 4, "Batching": None, "Testing": None}
     assert all(isinstance(c["count"], int) for c in got["columns"])
     assert got["file"].endswith("docs/squad/defaults.yaml")
+    assert got["file_label"] == "docs/squad/defaults.yaml", "the page has no repository path for the footer"
 
 
 def test_each_column_count_comes_from_the_loop_board_cache(hub):
@@ -175,12 +178,35 @@ def test_the_canban_sub_group_draws_one_row_per_active_column(hub):
                       "{name:'Doing',max_cards:6,count:3,stops:'the dispatch pass (autofrontier) claims no card past this'}]};"
                       "console.log(JSON.stringify({h:kanHtml()}))")
     h = got["h"]
-    rows = re.findall(r'<span class=sl>(.*?)</span>', h)
-    assert rows == ["Backlog · 2 cards", "Doing · 3 cards"], rows
+    rows = re.findall(r'<tr[^>]*data-kanrow="([^"]+)"', h)
+    assert rows == ["Backlog", "Doing"], rows
     assert 'data-kan="Backlog"' in h and 'data-kan="Doing"' in h
     assert "value=\"6\"" in h
     assert "autofrontier" in h, "the Doing row does not state what its limit stops"
-    assert "Closed" not in h and "Abandoned" not in h, "a finished column carries a field"
+    assert 'data-kan="Closed"' not in h and 'data-kan="Abandoned"' not in h, "a finished column carries a field"
+
+
+def test_the_kanban_group_is_the_table_the_spec_shows(hub):
+    # Issue #2512: the group is the mockup's four-column table, not a list of rows that wraps at 1000 px.
+    mod, _ = hub
+    got = _node(mod, "kanS={file:'/home/me/co/docs/squad/defaults.yaml',file_label:'docs/squad/defaults.yaml',columns:["
+                      "{name:'Backlog',max_cards:null,count:31,stops:'a new spec or ticket stays out of Backlog'},"
+                      "{name:'Doing',max_cards:6,count:6,stops:'dispatch (autofrontier, autobug) · a hand hold counts'},"
+                      "{name:'Reviewing',max_cards:4,count:3,stops:'a new branch review waits'}]};"
+                      "console.log(JSON.stringify({h:kanHtml()}))")
+    h = got["h"]
+    thead = re.search(r"<thead>.*?</thead>", h, re.S)
+    assert thead, "the group draws no column headers"
+    assert re.findall(r"<th scope=col[^>]*>(.*?)</th>", thead.group(0)) == ["Column", "Cards now", "Card limit", "What the limit stops"]
+    doing = re.search(r'<tr[^>]*data-kanrow="Doing".*?</tr>', h, re.S).group(0)
+    assert "kbar" in doing and "6 of 6" in doing, doing   # a limited column shows its bar and N of M
+    backlog = re.search(r'<tr[^>]*data-kanrow="Backlog".*?</tr>', h, re.S).group(0)
+    assert "kbar" not in backlog, "an unlimited column draws a bar"
+    assert "3 of 4" in h, "a partly used limit shows N of M"
+    head = re.sub(r"<[^>]*>", " ", re.search(r"<h3[^>]*>.*?</h3>", h, re.S).group(0))
+    assert "Kanban" in head and "· cards · this board" in head, head
+    assert "docs/squad/defaults.yaml" in h, "the footer does not name the project file by its repository path"
+    assert "/home/me/co" not in h, "the footer shows a home path"
 
 
 def test_an_empty_field_reads_unlimited_and_saves_as_none(hub):
