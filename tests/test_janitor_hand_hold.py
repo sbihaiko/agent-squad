@@ -242,3 +242,32 @@ def test_a_stale_hold_on_a_closed_issue_is_released_to_closed_by_the_pass_with_o
     log = (st / "cycle.log").read_text()
     assert log.count(f"HOLD-RELEASED #{N}:") == 1, log
     assert f"DELETE repos/x/y/issues/{N}/labels/ready-for-HAL9K" in writes(tmp_path)
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("card", ["Todo", "Doing", "Batching"])
+def test_a_held_card_with_a_live_gate_moves_to_testing_once(tmp_path, card):
+    """#2563: the hand gate names its issue by a marker; the pass moves the held card to Testing, and only once."""
+    bare(tmp_path, card)
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "gate", str(N), "--pid", str(os.getpid())).returncode == 0
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [f"STATUS o 4 Testing {N}"], writes(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_held_card_with_a_dead_gate_marker_does_not_move(tmp_path):
+    st = bare(tmp_path, "Doing")
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    (st / f"auto/gate-{N}").write_text("pid 999999\nstart 1\n")
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [], writes(tmp_path)
+
+
+@pytest.mark.heavy
+def test_a_card_in_testing_stays_there_under_a_hold_and_a_live_gate(tmp_path):
+    bare(tmp_path, "Testing")
+    assert hand(tmp_path, "hold", str(N)).returncode == 0
+    assert hand(tmp_path, "gate", str(N), "--pid", str(os.getpid())).returncode == 0
+    janitor(tmp_path, **SHIPPED)
+    assert moves(tmp_path) == [], writes(tmp_path)

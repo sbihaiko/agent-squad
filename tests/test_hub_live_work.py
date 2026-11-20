@@ -43,7 +43,7 @@ def clean(hub):
     """Each case starts with no hold and an empty board cache, so one case's hold never leaks into the next."""
     d = Path(hub.STATE) / "auto"
     d.mkdir(parents=True, exist_ok=True)
-    for p in d.glob("hold-*"):
+    for p in [*d.glob("hold-*"), *d.glob("gate-*")]:
         p.unlink()
     (d / "hold-alerts").unlink(missing_ok=True)
     (Path(hub.STATE) / "alerts.log").unlink(missing_ok=True)
@@ -867,3 +867,19 @@ def test_a_stopped_driver_is_one_red_row_on_the_card(hub):
     html = _card_html(hub, [row])
     assert "fastloop stopped" in html and "red" in html, html
     assert 'title="the loop\'s fastloop.sh lane names pid 999999, which is not alive"' in html, html
+
+
+def test_a_held_card_with_a_live_hand_gate_shows_its_gating_stage(hub):
+    """#2563: the hub reads the gate marker, so a hand gate marks its held issue as gating."""
+    from squad import handhold
+    _closed(hub)
+    _hold(hub, 2563)
+    assert handhold.gate(2563, os.getpid(), state=hub.STATE) == 0
+    seen = []
+    real = hub.delivery_stages
+    hub.delivery_stages = lambda n, base, closed=False, gating=False: (seen.append((n, gating)), real(n, base, closed=closed, gating=gating))[1]
+    try:
+        _answer(hub, [{"n": 2563, "i": "ITEM", "t": "t", "s": "open", "st": "Testing", "l": []}])
+    finally:
+        hub.delivery_stages = real
+    assert seen == [(2563, True)], seen

@@ -37,6 +37,15 @@ got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
 got=$(sg_column_cards Todo "$T/board" "$T/issues.json")
 [ "$got" = 1 ] && ok "another column counts its rows only" || ko "the Todo count answered '$got', not 1"
 
+# 2b2) A held issue whose card sits in Testing counts nowhere in Doing (#2563): a hand gate moved it out of Doing.
+printf '41\tDoing\n42\tDoing\n43\tIn Progress\n90\tTesting\n' > "$T/board"
+printf '[{"number":90,"labels":[{"name":"ready-for-human"}]}]' > "$T/issues.json"
+got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
+[ "$got" = 3 ] && ok "a held issue whose card sits in Testing adds nothing to Doing" || ko "the Testing hold counted in Doing: '$got'"
+printf '[{"number":90,"labels":[{"name":"ready-for-human"}]},{"number":91,"labels":[{"name":"ready-for-HAL9K"}]}]' > "$T/issues.json"
+got=$(sg_column_cards Doing "$T/board" "$T/issues.json")
+[ "$got" = 4 ] && ok "a held issue with no card still adds one beside a Testing hold" || ko "the other hold did not count: '$got'"
+
 # 2c) The publish rule (#2436): the column a publish adds its card to, and the refusal at a full column.
 printf 'columns:\n  Backlog:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
 got=$(sg_column_publish_column spec); rc=$?

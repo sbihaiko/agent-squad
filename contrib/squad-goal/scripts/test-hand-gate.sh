@@ -33,5 +33,20 @@ $G -C "$R" checkout -q gui/fix; echo 1 > "$R/c.txt"; $G -C "$R" add -A; $G -C "$
 out=$(SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -qx -- "-m pytest -p no:deepeval -n 6 -m not heavy" "$T/py.log" && ok "a delta above the small ceiling takes the count the hand gate declared" || ko "three files at 6: rc $rc: '$(cat "$T/py.log" 2>&1)' $out"
 
+# The gate marker (#2563): with SG_GATE_ISSUE and a live hold, the gate writes its marker before the exec; with no issue it
+# says so and writes none. The issue is never read from the branch name.
+root=$(cd "$d/../../.." && pwd); mkdir -p "$SG_STATE/auto"
+until=$(python3 -c 'import time;print(time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(time.time()+3600)))')
+printf 'by manual\nsince 2026-01-01T00:00:00Z\nuntil %s\n' "$until" > "$SG_STATE/auto/hold-77"
+out=$(SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q 'no issue declared: no card moves' <<<"$out" && [ ! -e "$SG_STATE/auto/gate-77" ] && ok "no issue declared: the gate runs and no marker is written" || ko "no issue: rc $rc: $out"
+out=$(SG_GATE_ISSUE=77 SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q '^pid [0-9][0-9]*$' "$SG_STATE/auto/gate-77" && /usr/bin/grep -q '^start [0-9][0-9]*$' "$SG_STATE/auto/gate-77" && ok "a declared issue with a live hold gets a marker with its pid and start time" || ko "marker: rc $rc: $out: $(cat "$SG_STATE/auto/gate-77" 2>&1)"
+[ "$(wc -l < "$SG_STATE/auto/hold-77" | tr -d ' ')" = 3 ] && ok "the hold file keeps its three lines" || ko "the hold file changed"
+got=$(PYTHONPATH=$root python3 -c 'import squad.handhold as H;print(sorted(H.gates()))')
+[ "$got" = "[]" ] && ok "the marker of a gate that ended is dropped by the reader" || ko "a dead gate still read as live: $got"
+out=$(SG_GATE_ISSUE=78 SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
+[ $rc = 0 ] && [ ! -e "$SG_STATE/auto/gate-78" ] && /usr/bin/grep -q 'no live hold' <<<"$out" && ok "an issue with no hold gets no marker, and the gate still runs" || ko "no hold: rc $rc: $out"
+
 rm -rf "$T"
 [ $fail = 0 ] && echo "test-hand-gate: all ok" || { echo "test-hand-gate: FAILED"; exit 1; }
