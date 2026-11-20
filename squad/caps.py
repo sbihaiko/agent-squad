@@ -83,10 +83,30 @@ def _count(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 1
 
 
+_RESOLVED: dict[tuple, dict] = {}   # (the plugin file's identity, the project file's identity) -> the resolution it answered
+
+
+def _pair(path):
+    """The identity of one file the resolution reads: its path, mtime and size, or its path alone when it is not there."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (str(path), None)
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
 def resolve(target=None, defaults_path=None):
     """Return {runs, children, gates, reviews, path, sha256, project}: the plugin values, lowered by the project file under `target`.
-    A missing block raises CapsError; a project value above the plugin value raises OptionError."""
+    A missing block raises CapsError; a project value above the plugin value raises OptionError.
+    The answer is kept while the two files it reads are unchanged (#2582): every reader of the ceiling — the engine's
+    admission, the loop's free slots and the hub panel — asks it on every poll, and each ask read and hashed both files.
+    The identity of a file is its path, mtime and size: a rewrite that preserves both is not seen, which no writer here
+    does."""
     path = Path(defaults_path or D.PATH)
+    key = (_pair(path), _pair(P.path_for(target)) if target else None)
+    kept = _RESOLVED.get(key)
+    if kept is not None:
+        return dict(kept)
     block = (D.load(path) or {}).get("caps")
     if not isinstance(block, dict) or not all(_count(block.get(k)) for k in KINDS):
         raise CapsError(f"{path}: no caps block (caps.runs, caps.children, caps.gates, caps.reviews); the machine-wide ceiling has no default")
@@ -99,7 +119,10 @@ def resolve(target=None, defaults_path=None):
         if v > out[k]:
             raise OptionError(f"project settings key caps.{k}: {v} is above the machine-wide ceiling {out[k]}; a project may only lower it")
         out[k] = v
-    return {**out, "path": str(path.resolve()), "sha256": D.digest(path), "project": prec}
+    if len(_RESOLVED) >= 32:   # a long-lived process may meet many targets: the memos of the ones it left go first
+        _RESOLVED.clear()
+    _RESOLVED[key] = answer = {**out, "path": str(path.resolve()), "sha256": D.digest(path), "project": prec}
+    return dict(answer)
 
 
 def folder():

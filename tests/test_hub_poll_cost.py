@@ -79,16 +79,41 @@ def get(port, path):
     return body
 
 
-def test_two_stats_reads_inside_the_poll_window_build_once(served):
-    """One page's two reads inside its poll window share one build; the next window builds again."""
+def test_two_stats_reads_with_unchanged_inputs_build_once(served, hub):
+    """AC B of #2582: the Spend answer is kept while its inputs are, and no window expires it."""
     port, stats_calls, _, clock = served
     first = get(port, "/api/stats?period=day&src=both")
     second = get(port, "/api/stats?period=day&src=both")
-    assert len(stats_calls) == 1, f"two reads inside one window built the spend answer {len(stats_calls)} times"
-    assert first == second, "the second read inside the window serves the same answer"
+    assert len(stats_calls) == 1, f"two reads with unchanged inputs built the spend answer {len(stats_calls)} times"
+    assert first == second, "the second read serves the same answer"
     clock[0] += 1000.0
     get(port, "/api/stats?period=day&src=both")
-    assert len(stats_calls) == 2, f"a read past the window built the answer {len(stats_calls)} times"
+    assert len(stats_calls) == 1, f"a later read with unchanged inputs built the answer {len(stats_calls)} times"
+
+
+def test_a_changed_stats_input_builds_the_answer_again(served, hub):
+    """AC C of #2582: a review call written to the ledger makes the next read build, never the answer before it."""
+    port, stats_calls, _, _ = served
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 1
+    (hub.STATE / "token-usage.tsv").write_text("2026-01-01T00:00:00\trun\tdeepseek-flash\t10\t5\t0\n")
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, f"a changed ledger built the answer {len(stats_calls)} times"
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, "the changed ledger is one change, so the read after it serves the build it made"
+
+
+def test_a_changed_operator_transcript_builds_the_answer_again(served, hub, monkeypatch):
+    """AC C of #2582: the operator fold is a named input beside the review ledger; a transcript that moved builds again."""
+    port, stats_calls, _, _ = served
+    monkeypatch.setattr(hub, "OPERATOR", None)
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 1
+    (hub.STATE / "operator-usage.json").write_text('{"files": {}}')
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, f"a changed operator transcript built the answer {len(stats_calls)} times"
+    get(port, "/api/stats?period=day&src=both")
+    assert len(stats_calls) == 2, "one transcript change is one rebuild"
 
 
 def test_the_spend_answer_is_kept_per_period_and_source(served):

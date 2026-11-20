@@ -674,3 +674,20 @@ def test_deepseek_flash_sees_images_and_runs_the_vision_chain():
     """DeepSeek V4.1 Flash read a test image 3 of 3 through the gateway, served by DeepSeek itself, so vision keeps it."""
     assert mr.compatible("deepseek-flash", "vision") == (True, None)
     assert mr.compatible("claude-deepseek-flash[1m]", "vision") == (True, None)
+
+
+def test_the_registry_path_is_resolved_once_per_env_value(monkeypatch):
+    """AC A of #2582: a second lookup for a value it already answered does no resolution work, and a new value answers anew."""
+    calls = []
+    real = mr._first_file
+    monkeypatch.setattr(mr, "_first_file", lambda cs: (calls.append(1), real(cs))[1])
+    monkeypatch.delenv("SG_MODELS_REGISTRY", raising=False)
+    mr._default_registry_path()
+    n = len(calls)
+    assert mr._default_registry_path() == mr._default_registry_path(), "the same value answers the same path"
+    assert len(calls) == n, "the second lookup resolved the path again"
+    monkeypatch.setenv("SG_MODELS_REGISTRY", str(REGISTRY))
+    assert mr._default_registry_path() == REGISTRY
+    assert len(calls) == n, "a registry the environment names needs no resolution"
+    monkeypatch.setenv("SG_MODELS_REGISTRY", str(SHIPPED_REGISTRY))
+    assert mr._default_registry_path() == SHIPPED_REGISTRY, "a new value of the variable answers its own path"

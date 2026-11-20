@@ -5420,3 +5420,27 @@ def test_each_lane_keeps_a_margin_inside_its_band_and_its_values_stand_off_the_p
 
 def trip_consts_font(src):
     return int(re.search(r"PROF_TRIP_FONT=(\d+)", src).group(1))
+
+
+def test_2582_the_trip_view_is_kept_until_a_record_it_read_moves(records):
+    """AC F of #2582: a trip built again over the same records answers the view its first build made, and a record that
+    moved builds again."""
+    mod, runs = records
+    record(runs / "run-20261115-010606-ffffff", ev("run_start", NOW - 600), ev("verdict", NOW - 100, verdict="completed", exit_code=0, reasons=[]))
+    now = time.time()
+    first = mod.trip_view(3600, now)
+    assert mod.trip_view(3600, now) is first, "the trip built again over unchanged records read them again"
+    record(runs / "run-20261115-010707-gggggg", ev("run_start", NOW - 300), ev("verdict", NOW - 50, verdict="failed", exit_code=1, reasons=["gate:red"]))
+    later = mod.trip_view(3600, now)
+    assert later is not first, "a new record answered the trip before it"
+    assert mod.trip_view(3600, now) is later, "the trip built again over the new records read them again"
+
+
+def test_2582_the_kept_trip_view_is_the_fold_it_replaces(records):
+    """AC H of #2582: the answer a page reads is the answer the fold gives for the same records, byte for byte."""
+    mod, runs = records
+    record(runs / "run-20261115-010808-hhhhhh", ev("run_start", NOW - 500), ev("verdict", NOW - 60, verdict="completed", exit_code=0, reasons=[]))
+    now = time.time()
+    kept = json.dumps(mod.trip_view(86400, now, allowed=False), sort_keys=True)
+    mod._TRIP_KEPT.clear()
+    assert json.dumps(mod.trip_view(86400, now, allowed=False), sort_keys=True) == kept

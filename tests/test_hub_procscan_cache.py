@@ -199,3 +199,43 @@ def test_two_fake_readers_in_one_tick_each_read_their_own_table():
     assert scan.table(new, TICK, 100.0)[0] == {"from": "new"}, "the new reader was answered with the old reader's scan"
     assert scan.view("profiler", dict, TICK, 100.0, new)[0] == {"from": "new"}
     assert scan.table(old, TICK, 100.0)[0] == {"from": "old"}, "one reader of the tick reads once"
+
+
+# ---------------------------------------------------------------- the run readers share the page's own window
+def test_the_run_readers_keep_one_read_for_25_seconds(hub, monkeypatch):
+    """AC D and step 3 of #2582: the run readers (liveness, the gate slots and the loop rows) derive from one read of the
+    table, kept for 2.5 s, so the page's 3 s live poll costs one read."""
+    c = clock(hub, monkeypatch)
+    reads = []
+    monkeypatch.setattr(hub, "procs_mod", lambda: FakeProcs({1: P(1, start=5.0)}, reads))
+    hub.run_table()
+    hub.run_table()
+    assert len(reads) == 1, f"two run readers read the machine {len(reads)} times"
+    c["t"] += 2.4
+    hub.run_table()
+    assert len(reads) == 1, "a read inside the window read the table again"
+    c["t"] += 0.2
+    hub.run_table()
+    assert len(reads) == 2, "a read past the window serves the kept scan"
+    assert hub.RUN_TABLE_SECS == 2.5
+
+
+def test_the_live_and_stats_readers_share_one_machine_read(hub, monkeypatch):
+    """AC D and step 3 of #2582: `/api/live`'s run readers and `/api/stats`'s table derive from one read of the machine in
+    one tick, both through `procscan`'s shared scan, never one scan per endpoint."""
+    clock(hub, monkeypatch)
+    reads = []
+    monkeypatch.setattr(hub, "procs_mod", lambda: FakeProcs({1: P(1)}, reads))
+    hub.run_table()
+    hub.process_table()
+    hub.read_procs()
+    assert len(reads) == 1, f"one tick read the machine's process table {len(reads)} times across the live and stats readers"
+
+
+def test_one_live_answer_reads_the_process_table_once(hub, monkeypatch):
+    """AC D of #2582: one `/api/live` read reads the process table at most once, whatever its rows need."""
+    clock(hub, monkeypatch)
+    reads = []
+    monkeypatch.setattr(hub, "procs_mod", lambda: FakeProcs({1: P(1), 2: P(2)}, reads))
+    hub.live_served(now=1000.0)
+    assert len(reads) == 1, f"one Live answer read the machine {len(reads)} times"

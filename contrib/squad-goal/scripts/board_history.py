@@ -147,10 +147,18 @@ def _key(e):
     return (e.get("t"), e.get("type"), e.get("status"), e.get("name"), e.get("spec"))
 
 
-def intervals(events):
+_INTERVALS = {}   # (the caller's stamp, the event count) -> the runs it folded
+
+
+def intervals(events, stamp=None):
     """Each run of one state between events: its column, hold and spec, and whether the card is on the board. Equal
     neighbours merge, and the last run is open (to None). Events sort by their UTC instant, and a repeated event counts once.
-    A run is `unknown` when the card took its column strictly before its add: the instant it took the column is not here."""
+    A run is `unknown` when the card took its column strictly before its add: the instant it took the column is not here.
+    `stamp` is the identity of the record the events came from, its own write instant and number: a second call for that
+    stamp answers the runs kept for it, so a chart built again folds only the cards whose record moved (#2582). The store
+    only appends a record, so the stamp and the event count name one list of events."""
+    key = None if stamp is None else (stamp, len(events))
+    if key is not None and key in _INTERVALS: return [dict(r) for r in _INTERVALS[key]]
     state = {"status": "", "status_t": None, "closed": False, "labels": set(), "spec": None, "on_board": False}
     out, seen = [], set()
     for _, e in sorted(enumerate(events), key=lambda p: (_instant(p[1]["t"]), p[0])):
@@ -168,6 +176,10 @@ def intervals(events):
         if out: out[-1]["to"] = e["t"]
         out.append({"from": e["t"], "to": None, **snap, "approx": e["type"] == "gone",
                     "unknown": e["type"] == "added" and bool(state["status"]) and state["status_t"] < _instant(e["t"])})
+    if key is not None:
+        if len(_INTERVALS) >= 4096: _INTERVALS.pop(next(iter(_INTERVALS)))   # the oldest record's runs go first, never another's
+        _INTERVALS[key] = out
+        return [dict(r) for r in out]   # a caller's copy: a mutation never poisons the kept runs
     return out
 
 

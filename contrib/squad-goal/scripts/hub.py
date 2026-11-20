@@ -622,6 +622,22 @@ def process_table(now=None):
         log_once(f"hub: the process table could not be read: {type(e).__name__}: {' '.join(str(e).split())}")
         return {}
 
+RUN_TABLE_SECS = 2.5   # the run readers' window: the page's live poll is every 3 s, so its own poll refills the scan before it expires
+
+def run_table(now=None):
+    """{pid: Proc} for every process, for the run readers: the run liveness, the gate slots and the loop rows all judge one
+    read of the table (`RUN_TABLE_SECS`, squad/procscan.py `view`), so a page's poll costs one read however many of them
+    it asks (#2582). It reads the same shared scan and the same view as `process_table` (`procscan.view("table", ...)`),
+    so a tick that reads both pays one read of the machine; the window is the run readers' own, the longer one. The kill
+    path (`_ps_rows`) reads fresh and never this. {} when the read fails, logged once: a caller then sees no process,
+    never a guessed one."""
+    now = time.time() if now is None else now
+    try:
+        return procscan.view("table", _same, RUN_TABLE_SECS, now, _machine_snapshot)[0]
+    except Exception as e:
+        log_once(f"hub: the process table could not be read for the run readers: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
+
 def _starts(snap):
     """The {pid: start} reading of one process snapshot. An empty snapshot is no evidence, so it raises as the one reader
     does: the caller then calls no run gone."""
@@ -2213,9 +2229,11 @@ def loop_record(run, checkout=None):
 
 def _loop_procs(RL, rows):
     """The process snapshot the loop switch reads: a fresh one when `rows` is None, a snapshot given as is, and a list of
-    (pid, ppid, command) rows as a snapshot with no start, so each pid answers by itself."""
+    (pid, ppid, command) rows as a snapshot with no start, so each pid answers by itself. One read of the machine's table
+    (`squad/procs.py`) is the same answer in its own shape, so it is converted and never read again (#2582)."""
     if rows is None: return RL.read_processes
-    if isinstance(rows, dict): return rows
+    if isinstance(rows, dict):
+        return {pid: p if hasattr(p, "cmd") else RL.Proc(p.start, p.command) for pid, p in rows.items()}
     return {pid: RL.Proc(None, cmd) for pid, _, cmd in rows}
 
 def loop_run_pid(run, rows=None):
@@ -2247,7 +2265,8 @@ def loop_live(state=None, checkout=None, procs=None):
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     try:
         RL = liveness()
-        runs = RL.live_runs(base / "active-runs.txt", checkout, procs or RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
+        table = _loop_procs(RL, procs if procs is not None else run_table())   # one read answers the rows; an empty table is no live run (#2582)
+        runs = RL.live_runs(base / "active-runs.txt", checkout, table, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
     except Exception as e:
         why = f"{type(e).__name__}: {' '.join(str(e).split())}"
         log_once(f"hub: the live runs are unknown: {why}")
@@ -2410,7 +2429,7 @@ def loop_projects(a, procs=None, now=None, rows=None):
     projects and the change log answer one request from the same list."""
     if rows is None: rows = project_contexts()
     if procs is None:
-        try: procs = _loop_procs(liveness(), _ps_rows())
+        try: procs = _loop_procs(liveness(), run_table())   # the run readers' one read, never the kill path's (#2582)
         except Exception: procs = None
     return sorted((loop_project(r, a, procs=procs, now=now) for r in rows), key=lambda p: str(p["slug"]))
 
@@ -2456,7 +2475,7 @@ def loop_view(a):
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
-    try: procs = _loop_procs(liveness(), _ps_rows())
+    try: procs = _loop_procs(liveness(), run_table())   # the run readers' one read, never the kill path's (#2582)
     except Exception: procs = None
     live = loop_live(procs=procs)
     rows = [r for r in project_contexts() if r.get("own") or (r.get("state") and pathlib.Path(r["state"]).is_dir())]
@@ -2966,6 +2985,21 @@ def load_rows_now():
         LOAD_STATE["record_rows"], LOAD_STATE["record_stamp"] = load_record_rows(), stamp
     return LOAD_STATE["record_rows"] or []
 
+TRIP_MEMO_SECS = 30.0   # the bar's own cadence: the Loop tab's file views are read every 30 s with the switch off
+_TRIP_KEPT = {}   # (the window, the refusal, the half minute, the inputs' identity) -> the trip view
+
+def trip_stamp(allowed=True):
+    """The identity of the inputs the trip bar folds (#2582): every run's record and request, the board's history stores,
+    the gate history, the review ledger and, for a caller the hub allowed, the minute record. A poll that finds them all
+    unchanged serves the view it built, so the fold runs when a record moves and not on every read of the tab."""
+    files = []
+    for root in run_roots(CHECKOUT):
+        try: files.extend(root.glob("run-*/record.jsonl"))
+        except OSError: continue
+    return (tuple(sorted((str(p), _pair(p), _pair(p.parent / "request.txt")) for p in files)),
+            _pair(_hist.history_path(BOARD, REPO)), _pair(_flow.history_path(BOARD, REPO)),
+            _pair(STATE / "gate-history"), _pair(STATE / "token-usage.tsv"), load_record_stamp() if allowed else None)
+
 def trip_view(window_s, now=None, allowed=True):
     """The Loop tab's trip bar (#1769, #2152): the board's six columns of a delivery over the chosen window, folded by the
     rule layer from the run records under this profile's run roots, the gate history, and the board transitions of the
@@ -2974,8 +3008,12 @@ def trip_view(window_s, now=None, allowed=True):
     records' call outcomes and the review token ledger as Tokens, and the minute record's whole-machine CPU and RAM, each
     sample placed in the column the card stood in at its time. `allowed` False is a caller the hub refused: then the
     minute record is not stat, the CPU and RAM lines read no row, and the payload asserts neither a peak nor a count of
-    silent minutes, as the load chart reads none."""
+    silent minutes, as the load chart reads none. The view is kept while its inputs and the half minute its `since` stands
+    in are unchanged (#2582): the Loop tab's sampler asks it every second, and the fold reads every record."""
     now = time.time() if now is None else now
+    key = (window_s, allowed, int(now // TRIP_MEMO_SECS), trip_stamp(allowed))
+    kept = _TRIP_KEPT.get(key)
+    if kept is not None: return kept
     since = now - window_s
     files = []
     for root in run_roots(CHECKOUT):
@@ -2992,13 +3030,15 @@ def trip_view(window_s, now=None, allowed=True):
                                         {n: w["closed"] for n, w in waits.items() if w.get("closed") is not None})
     spans = [s if k else None for s, k in zip(spans, keep, strict=True)]
     rework = [r for w in waits.values() for r in w.get("rework") or ()]
-    return {"window_s": window_s, "since": since,
+    if len(_TRIP_KEPT) >= 16: _TRIP_KEPT.clear()   # a long-lived process may stand in many windows: the old ones go first
+    _TRIP_KEPT[key] = out = {"window_s": window_s, "since": since,
             **hub_profiler.trip(spans, trip_gates(since), since,
                                 cards=[next((columns[n] for n in issues[p] if n in columns), None) for p in files],
                                 calls=[trip_calls_of(p) for p in files], review_calls=trip_review_calls(since),
                                 loads=load_rows_now() if allowed else None, now=now, cores=os.cpu_count(),
                                 mem_gb=mem_total_gb(), rework=rework,
                                 waves=[{"wave": p.parent.name, "issues": issues[p]} for p in files])}
+    return out
 
 PROMOTED_STG = re.compile(r"promote-pass:\s+(\S+)\s+promoted:")        # promote-pass.sh's dated success line
 PROMOTED_MAIN = re.compile(r"promote-main-pass:\s+(\S+)\s+promoted:")   # promote-main-pass.sh's own
@@ -4046,26 +4086,46 @@ def stats(period, src="both"):
 
 POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
                               # moves the view's own timestamps and leaves the age right. A test injects its own clock.
-STATS_POLL_SECS = 30.0   # the page's own spend poll (`pollStats` reads /api/stats every 30 s), so one window serves every page
-_STATS_KEPT = {}   # (period, src) -> (at, answer). The key carries no profile because the module is one per profile:
-                   # hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
+_STATS_KEPT = {}   # (period, src) -> (the input stamp it was built from, answer). The key carries no profile because the
+                   # module is one per profile: hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
 _STATS_LOCK = threading.Lock()
 
+def _pair(path):
+    """(mtime, size) of one input, or None when it is not there: its creation or its removal is a change of the state."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+def stats_stamp():
+    """The identity of the Spend answer's inputs (#2582): the review ledger, the operator fold, and every run record the
+    answer reads. The local hour rides along, since the day and month totals and the pace window move without a file."""
+    stamp = [time.strftime("%Y%m%d%H"), _pair(STATE / "token-usage.tsv"), _pair(STATE / "operator-usage.json"),
+             (OPERATOR.parsed, OPERATOR.walks, len(OPERATOR.files)) if OPERATOR is not None else None]
+    for d in sorted(project_dirs()):
+        stamp.append((str(d), _pair(d)))
+        for rd in sorted(d.glob("run-*")):
+            stamp.append(_pair(rd / "record.jsonl"))
+    return tuple(stamp)
+
 def stats_served(period, src="both", now=None):
-    """The Spend answer, built at most once per the page's own poll window (#2440).
+    """The Spend answer, built again only when one of its inputs moved (#2582).
 
     The build reads every run's record, the review ledger and the operator fold, and it cost 2.5 seconds of CPU. Every
-    open page and every client asks the same question for the same profile, so the answer is kept for the page's own
-    poll interval: any number of pages inside one window share one build, and the answer a page reads is never older
-    than the poll that would have refreshed it anyway. The key is the period and the billing source, so one pair's answer
-    never serves another pair. A build that raises keeps nothing, so the next read tries again."""
-    now = POLL_CLOCK() if now is None else now
+    open page and every client asks the same question for the same profile, so the answer is kept while its inputs are
+    unchanged: a state that has not moved serves every page and every client one build, and a new or changed record, a
+    ledger line or an operator transcript builds again. The key is the period and the billing source, so one pair's
+    answer never serves another pair. A build that raises keeps nothing, so the next read tries again."""
     key = (period, src)
     with _STATS_LOCK:
-        at, answer = _STATS_KEPT.get(key, (None, None))
-        if at is not None and now - at < STATS_POLL_SECS: return answer
+        if OPERATOR is None:
+            operator_calls([])   # the fold's first read is no change of the state, so it happens before the stamp
+        stamp = stats_stamp()
+        got = _STATS_KEPT.get(key)
+        if got is not None and got[0] == stamp: return got[1]
         answer = stats(period, src)
-        _STATS_KEPT[key] = (now, answer)
+        _STATS_KEPT[key] = (stamp, answer)
         return answer
 
 def spend_today(now=None):
@@ -4541,7 +4601,7 @@ def live_served(now=None):
     with _LIVE_LOCK:
         at = _LIVE_KEPT["at"]
         if at is not None and now - at < LIVE_POLL_SECS: return _LIVE_KEPT["answer"]
-        answer = live_work_lines(board_cache.get("items", []))
+        answer = live_work_lines(board_cache.get("items", []), procs=run_table())   # one read answers every row of the answer
         _LIVE_KEPT.update(at=now, answer=answer)
         return answer
 
@@ -4563,7 +4623,8 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     loop with nothing to show answers one `empty` row, `no live work`. A ready-for-human card waits on the owner and is no
     live work (#1701). Doing is the column the board draws, an old Status name and a recorded move included, never the
     row's raw Status (#1713). `boardAge` is how many seconds old the board read the `hand` rows came from is, so the panel
-    never claims a freshness it does not have."""
+    never claims a freshness it does not have. `procs` is one process table (`run_table`'s shape), read here when the
+    caller names none: every row of the answer judges that one read, so one poll costs one read of the machine (#2582)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
     moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
@@ -4571,10 +4632,14 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     rows, issues_of, held, gated = [], {}, set(), set()
     run_issues = {}   # the issues each live run names: a gate's issue is the issues of the run it checks (#2547)
     if st == "off": rows.append({"kind": "loop", "id": "loop", "text": "loop off"})
-    for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
+    table = procs if procs is not None else run_table()   # one read of the machine answers every row below (#2582)
+    try: seen = _loop_procs(liveness(), table)
+    except Exception: seen = {}
+    starts = {pid: p.start for pid, p in table.items()}
+    for entry in loop_live(state=base, checkout=checkout, procs=seen)["runs"]:
         folder = active_folder(entry)
         if not folder: continue
-        row, _ = run_row(folder, "", procs or {})
+        row, _ = run_row(folder, "", starts)
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         rows.append({"kind": "run", "id": row["id"], "icon": "run", "age": int(row["age"]),
                      "text": f"{issues} · node {row.get('stage') or '-'}",
@@ -4590,7 +4655,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         except OSError: continue   # one unreadable lock is no lock: it never fails the panel
         if not cmd: continue   # a lock that names no command is a loop driver's own: no live work, and no row (#1692, #2507)
         line = (argv or _holder_argv)(int(pid))
-        slots, since = gate_slots(int(pid), procs, now)   # the slots the gate under this lock holds (#2507)
+        slots, since = gate_slots(int(pid), table, now)   # the slots the gate under this lock holds (#2507)
         gated.update(run_issues.get(_gate_run(line), ()))   # a gate holds its lock while it runs or waits for its slots
         rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "icon": "microscope",
                      "text": suite_name(line), "slots": slots, "age": int(now - since) if since else None, "red": False,
@@ -5818,7 +5883,8 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     """The cumulative flow's numbers, counted per day by board_cfd from the history store's column intervals; the page draws
     them and computes none. `fw`, `fs`, `fk` and `ty` are the bar's values: the chart keeps only the cards the bar keeps (#904, #1024)."""
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
-    cards = [_hist.intervals(rec.get("events") or []) for rec in store.values()
+    columns_key = _file_key(pathlib.Path(__file__).resolve().parent / "board_columns.py")   # the column rules each fold reads
+    cards = [_hist.intervals(rec.get("events") or [], (rec.get("n"), rec.get("t"), columns_key)) for rec in store.values()
              if (rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty))
              and FLOW_MOVED not in _hist.labels_now(rec.get("events") or [])]   # a moved card is another board's work (#1663)
     zone = day_zone()

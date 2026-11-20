@@ -198,3 +198,14 @@ def test_1753_a_refused_task_info_read_keeps_none_as_the_cpu(monkeypatch):
     p = procs._darwin_proc(4321)
     assert p.cpu is None and p.cpu_known is False
     assert (p.pid, p.ppid, p.pgid, p.stat) == (4321, 1, 4321, "S")
+
+
+def test_2582_vis_prints_every_byte_as_the_listing_does():
+    """AC E of #2582: the reader's own escaping answers every byte exactly as before, so the faster fold changes no text."""
+    def reference(raw: bytes) -> str:
+        return "".join(chr(c) if 0x20 <= c < 0x7f else f"\\{c:03o}" for c in raw)
+    assert procs._vis(bytes(range(256))) == reference(bytes(range(256)))
+    for c in range(256):
+        assert procs._vis(bytes([c])) == reference(bytes([c])), c
+    assert procs._vis(b"") == ""
+    assert procs._vis(b"squad start \xc3\xa9\n\t") == r"squad start \303\251\012\011"

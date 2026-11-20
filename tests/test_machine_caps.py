@@ -993,3 +993,20 @@ def test_the_pack_reads_its_two_numbers_from_the_environment(tmp_path, monkeypat
     monkeypatch.setenv("SG_PACK_BUSY", "0")
     with pytest.raises(caps.CapsError, match="SG_PACK_BUSY"):
         caps.pack(c)
+
+
+def test_the_resolution_is_kept_while_its_two_files_are_unchanged(tmp_path, monkeypatch):
+    """AC F of #2582: an unchanged pair of files answers from the memo, and a changed file builds the resolution again."""
+    proj = project(tmp_path, runs=1)
+    calls = []
+    real_d, real_p = defaults.load, caps.P.load
+    monkeypatch.setattr(defaults, "load", lambda p: (calls.append("defaults"), real_d(p))[1])
+    monkeypatch.setattr(caps.P, "load", lambda t: (calls.append("project"), real_p(t))[1])
+    monkeypatch.setattr(defaults, "digest", lambda p: (calls.append("digest"), "d")[1])
+    assert caps.resolve(proj)["runs"] == 1
+    first = sorted(calls)
+    assert caps.resolve(proj)["runs"] == 1
+    assert sorted(calls) == first, f"an unchanged pair of files read again: {calls}"
+    (proj / "docs" / "squad" / "defaults.yaml").write_text(yaml.safe_dump({"caps": {"runs": 2}}))
+    assert caps.resolve(proj)["runs"] == 2, "a changed project file answered the resolution before it"
+    assert calls.count("project") == 2 and calls.count("digest") == 2
