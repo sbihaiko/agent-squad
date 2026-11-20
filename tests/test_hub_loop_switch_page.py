@@ -1,10 +1,10 @@
-"""The loop switch on the desktop hub (#923, ADR-0162): the Monitor card and Settings > Loop draw one view of `/api/loop`.
+"""The loop switch on the desktop hub (#923, ADR-0162): the Monitor card and the Loop tab draw one view of `/api/loop`.
 
 The route is tested over HTTP here, not only as functions: a loopback start writes one audit line, a cross-site write is
 refused, and a tailnet write is refused with its reason unless `tailnet.loop_write` is on. The page's renderers are run in
-node: the Monitor card and the Loop theme show the state, who changed it and when; the stop confirm lists every live run and gate;
-the Access theme holds the tailnet rule. The Loop theme has no Save. Its first line states the state, its three Now tiles carry
-the live counts, the health and the last change, and the health values come from the loop answer (#1280).
+node: the Monitor card shows the switch and the state, with the seconds left of a pending start from the loop answer
+(#1280); the Loop tab shows the change list, with who changed the state and when; the stop confirm lists every live run and
+gate; the Access theme holds the tailnet rule. Settings has no Loop theme (#2515), and the loop blocks have no Save.
 """
 import http.client
 import importlib.util
@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -281,7 +280,7 @@ def run_js(expr):
 
 VIEW = {"state": "on", "who": "owner", "when": "2026-10-31T16:02:00-03:00", "write": True, "reason": "",
         "live": {"runs": ["/x/runs/run-20261031-1", "run-20261031-2"], "gates": ["gate pid 4242"]},
-        "health": {"live_runs": 2, "live_gates": 1, "cycle_age": 45, "starting_left": None},
+        "health": {"starting_left": None},
         "log": [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start"}]}
 
 # The answer /api/access gives the Access theme (#1285): the reach, the two tailnet rules and the file they live in.
@@ -292,18 +291,12 @@ def js_view(**over):
     return json.dumps({**VIEW, **over})
 
 
-def test_the_loop_answer_carries_the_four_health_keys(hub, monkeypatch):
-    """The loop answer carries the health object, and its values are measured from the state: the cycle age and the live
-    counts the same answer reports, never four empty keys (#1280)."""
-    mod, port, _, _, state = hub
-    (state / "cycle.log").write_text(time.strftime("%H:%M:%S") + " CYCLE 30s\n")
-    monkeypatch.setattr(mod, "loop_live", lambda *a, **kw: {"runs": ["run-1"], "gates": ["gate pid 1"]})
+def test_the_loop_answer_carries_only_the_health_key_a_page_reads(hub):
+    """The loop answer's health carries the seconds left of a pending start, the one value the Monitor's switch reads
+    (#1280). The live counts and the cycle age left with the Loop theme's tiles (#2515): no page read them."""
+    _, port, _, _, _ = hub
     _, v = ask(port, "GET")
-    health = v["health"]
-    assert {"cycle_age", "starting_left", "live_runs", "live_gates"} <= set(health), health
-    assert isinstance(health["cycle_age"], int) and health["cycle_age"] >= 0, health
-    assert health["live_runs"] == len(v["live"]["runs"]) == 1, health
-    assert health["live_gates"] == len(v["live"]["gates"]) == 1, health
+    assert set(v["health"]) == {"starting_left"}, v["health"]
 
 
 @pytest.mark.heavy   # one node call over the four states: 2.3 s on a loaded runner, never on an idle one
@@ -332,17 +325,17 @@ def test_the_loop_tab_change_list_repeats_no_fact_the_monitor_shows():
     """The Loop theme repeated the Monitor: the state, the live count, the health and the last change (#2515). The Loop
     tab takes only the change list, so none of these lines comes back with it."""
     views = (js_view(), js_view(state="off", failed="watchd did not start"),
-             js_view(health={"live_runs": 2, "live_gates": 1, "cycle_age": 45, "starting_left": 62}))
+             js_view(health={"starting_left": 62}))
     outs = run_js("[" + ",".join(f"loopLogHtml({v})" for v in views) + "].join('\\u0000')")
     for out in outs.split("\u0000"):
-        for fact in ("2 runs · 1 gate", "cycle 45s ago", "starting, 62s left", "last start failed", "none recorded",
+        for fact in ("2 runs · 1 gate", "starting, 62s left", "last start failed", "none recorded",
                      "Loop on", "Loop off", "The switch is in the Monitor"):
             assert fact not in out, f"the change list repeats {fact!r}: {out}"
 
 
 def test_the_starting_switch_states_the_seconds_left():
     """A disabled switch is never a mystery: the seconds left in the starting window sit by it (#1280)."""
-    out = run_js(f"loopSetHtml({js_view(state='starting', health={'live_runs': 2, 'live_gates': 1, 'cycle_age': None, 'starting_left': 62})})")
+    out = run_js(f"loopSetHtml({js_view(state='starting', health={'starting_left': 62})})")
     assert "Loop starting · 62s left" in out and " disabled" in out, out
     assert re.search(r'role=switch[^>]*title="the loop is starting"', out), "the disabled starting switch carries its tooltip"
     assert run_js(f"loopTip({js_view(state='starting')})") == "the loop is starting"

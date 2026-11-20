@@ -96,8 +96,6 @@ def test_the_loop_change_list_is_reachable_from_the_loop_tab(hub):
     _, page = _get(port, "/")
     loop_tab = _between(page, "<section id=tab-prof", "</section>")
     assert "id=lopaud" in loop_tab, "the loop change list left the page with the Loop theme"
-    assert "const loopLogHtml=" in page, "the change list renderer went away with the Loop theme"
-    assert "loopLogHtml(loopV)" in page.split("function loopDraw(){", 1)[1], "the Loop tab never draws the change list"
 
 
 def test_the_sidebar_carries_no_control_that_writes_a_chain_and_no_link_to_settings(hub):

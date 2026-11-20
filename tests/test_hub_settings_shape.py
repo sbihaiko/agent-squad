@@ -13,7 +13,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from html.parser import HTMLParser
 
 import pytest
@@ -129,7 +128,7 @@ def _by_class(root, cls):
 
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "tailnet": False,
              "access": {"loop_write": False, "terminals_send": False},
-             "health": {"live_runs": 2, "live_gates": 0, "cycle_age": 45, "starting_left": None},
+             "health": {"starting_left": None},
              "live": {"runs": [], "gates": []}, "log": []}
 
 
@@ -183,18 +182,19 @@ def test_the_loop_tab_draws_the_change_list_and_no_monitor_fact(hub):
         assert ctl not in out, f"the Loop tab's change list carries {ctl}"
 
 
-def test_the_loop_health_reads_the_last_cycles_age_and_says_none_when_it_has_none(hub):
-    """The Now tiles' `cycle_age` is a fact of the cycle log: seconds since the last cycle's own line. A log with no cycle
-    is None, never zero, so the tile says "no cycle yet" (#1280, SPEC 1117)."""
-    log = hub.STATE / "cycle.log"
-    log.unlink(missing_ok=True)
-    assert hub.loop_health({}, now=1_700_000_000.0)["cycle_age"] is None
-    now = time.time()
-    log.write_text(time.strftime("%H:%M:%S", time.localtime(now - 90)) + " CYCLE 30s\n")
-    health = hub.loop_health({"runs": ["a", "b"], "gates": []}, now=now)
-    assert health["live_runs"] == 2 and health["live_gates"] == 0
-    assert 85 <= health["cycle_age"] <= 95, health["cycle_age"]
-    log.unlink()
+def test_the_loop_health_reads_the_start_window_and_says_none_when_it_is_closed(hub):
+    """The health's one key is the seconds left of a pending start, read from the hub's starting mark: no mark is None,
+    never zero, and the Monitor's switch states the seconds left (#1280, #2515)."""
+    mark = hub.LOOP_STARTING
+    mark.unlink(missing_ok=True)
+    assert hub.loop_health(now=1_700_000_000.0) == {"starting_left": None}
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.touch()
+    try:
+        assert hub.loop_health(now=mark.stat().st_mtime + 10) == {"starting_left": hub.LOOP_START_WINDOW - 10}
+        assert hub.loop_health(now=mark.stat().st_mtime + hub.LOOP_START_WINDOW + 1) == {"starting_left": None}
+    finally:
+        mark.unlink()
 
 
 def test_the_access_chip_is_written_by_the_client_alone(hub):
@@ -402,7 +402,7 @@ def _set_bar(hub):
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:null,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="Read-only over the tailnet";')
-    body = ('const out={};for(const t of ["lim","sub","mdl","slk","acc"]){sTheme=t;RO=false;setBar();'
+    body = ('const out={};for(const t of Object.keys(STH)){sTheme=t;RO=false;setBar();'
             'out[t]={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,text:$("#schg").textContent,'
             'save:$("#ssave").hidden,disc:$("#sdisc").hidden}}'
             'RO=true;sTheme="mdl";setBar();out.ro={hidden:$("#sbar").hidden,disabled:$("#ssave").disabled,'
@@ -576,7 +576,7 @@ class El{
  addEventListener(t,f){(this.L=this.L||{});(this.L[t]=this.L[t]||[]).push(f);this.bound=true;}
  fire(t){(this.L&&this.L[t]||[]).forEach(f=>f({target:this}));}
 }
-const DETAILS=["lim","sub","mdl","slk","acc"].map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
+const DETAILS=Object.keys(__STH__).map(sp=>{const e=new El(sp);e.dataset.sp=sp;return e});
 const NAV=DETAILS.map(e=>new El(e.dataset.sp));
 const ELS={};DETAILS.forEach(e=>ELS[e.id]=e);
 const $=s=>{const id=String(s).replace(/^#/,"");return ELS[id]||(ELS[id]=new El(id));};
@@ -592,7 +592,8 @@ const ls=__STORED__,save=()=>{};
     tail = """
 function drain(){let n=0;while(Q.length){if(++n>100)throw new Error("toggle storm");Q.shift().fire("toggle");}}
 drain();console.log(JSON.stringify({mdl:mdln,lim:limn,slk:slkn}));"""
-    src = "\n".join([harness.replace("__STORED__", json.dumps(stored)), sth, theme, acc, boot, tail])
+    themes = re.search(r"^const STH=(\{[^\n]*?\});", page, re.M).group(1)   # the page's own theme list, never a second copy
+    src = "\n".join([harness.replace("__STORED__", json.dumps(stored)).replace("__STH__", themes), sth, theme, acc, boot, tail])
     return json.loads(_node(src))
 
 

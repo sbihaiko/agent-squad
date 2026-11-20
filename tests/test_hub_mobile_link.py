@@ -58,7 +58,7 @@ def hub():
 @pytest.mark.node_bound
 def test_only_a_hash_that_names_one_issue_is_a_card_link():
     src = LINK_JS.read_text()
-    assert run_js(src, '[linkHash("#issue=7"), linkHash("issue=7"), linkHash("#issue="), linkHash("#set-lop"), linkHash("")]') \
+    assert run_js(src, '[linkHash("#issue=7"), linkHash("issue=7"), linkHash("#issue="), linkHash("#set-lim"), linkHash("")]') \
         == [7, None, None, None, None]
 
 
@@ -250,7 +250,7 @@ def test_a_hash_change_after_the_load_opens_the_named_card(hub):
         await __tick(10);
         const second = { open: !$("sheet").hidden, n: (offBoard || shown[view.card] || {}).n, col: $("col-name").textContent,
                          title: $("sh-title").textContent };
-        location.hash = "#set-lop"; __dispatch("hashchange", {});
+        location.hash = "#set-lim"; __dispatch("hashchange", {});
         await __tick(10);
         return { first, second, sheet: view.sheet, hidden: $("sheet").hidden, said: $("bmsg").textContent };
     """, board=[BOARD])

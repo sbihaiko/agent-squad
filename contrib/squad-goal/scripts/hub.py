@@ -2439,21 +2439,17 @@ def loop_started_after(at, path=None):
     try: return int(_read(path or LOOP_STARTED).split()[0]) > int(when)
     except (ValueError, IndexError): return False
 
-def loop_health(live, now=None):
-    """The loop answer's health (#1280): how many runs and gates are live, how old the last watch cycle is, and how
-    long a pending start has left; the Monitor's switch states the seconds left (#2515 removed the Loop theme's tiles).
-    Each value is a fact one reader already measures; a missing cycle is None, never zero. A cycle end in the future,
-    from a skewed clock, clamps to 0 rather than reading negative. `cycle_age` replaces the old `cycle_left` tile."""
+def loop_health(now=None):
+    """The loop answer's health (#1280): how long a pending start has left, which the Monitor's switch states. The live
+    counts, the cycle age and the unknown line left with the Loop theme's tiles (#2515): no page reads them, and the
+    `live` block and the foot line already carry them. No window open is None, never zero."""
     now = time.time() if now is None else now
-    cyc = _cycle_state(now)
-    age = max(0, int(round(now - cyc["end"]))) if cyc else None
     starting = None
     try:
         since = now - LOOP_STARTING.stat().st_mtime
         if since < LOOP_START_WINDOW: starting = int(LOOP_START_WINDOW - since)
     except OSError: pass
-    return {"live_runs": len(live.get("runs") or []), "live_gates": len(live.get("gates") or []),
-            "cycle_age": age, "starting_left": starting, "unknown": live.get("unknown", "")}
+    return {"starting_left": starting}
 
 def loop_view(a):
     last = (loop_audit_last(1) or [{}])[-1]
@@ -2466,7 +2462,7 @@ def loop_view(a):
     rows = [r for r in project_contexts() if r.get("own") or (r.get("state") and pathlib.Path(r["state"]).is_dir())]
     return {"state": state, "actions": list(LOOP_STATE_ACTIONS.get(state, [])) if write else [], "who": last.get("who", ""), "when": last.get("at", ""), "live": live,
             "cause": loop_cause(),   # the loop-bug a drain waits on, or the owner's stop (#1708)
-            "health": loop_health(live),   # the live counts, the cycle age and the start window (#1280)
+            "health": loop_health(),   # the start window the Monitor's switch states (#1280)
             "failed": last.get("failed", "") if state == "off" and not loop_started_after(last.get("at", "")) else "",
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "projects": loop_projects(a, procs=procs, rows=rows),   # every project this hub serves, each on its own files (#1599)

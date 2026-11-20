@@ -339,7 +339,7 @@ def _set_bar(mod):
     stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",disabled:false,hidden:false,'
             'classList:{toggle(){}}});const ls={};const mdlChanged=()=>false;const slDirty=()=>false;'
             'let RO=false;const RO_WHY="";')
-    body = ('const out={};for(const t of ["lim","sub","mdl","slk","acc"]){sTheme=t;setBar();'
+    body = ('const out={};for(const t of Object.keys(STH)){sTheme=t;setBar();'
             'out[t]={save:$("#ssave").hidden,disc:$("#sdisc").hidden,text:$("#schg").textContent}}'
             'console.log(JSON.stringify(out));')
     return _node_src(mod, "\n".join([stub, src, body]))
