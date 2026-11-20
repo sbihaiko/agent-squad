@@ -140,11 +140,19 @@ def _first_file(candidates):
     return candidates[-1]
 
 
-def _default_registry_path():
-    if os.environ.get("SG_MODELS_REGISTRY"):
-        return Path(os.environ["SG_MODELS_REGISTRY"])
+@functools.lru_cache(maxsize=8)
+def _registry_path_for(value):
+    """The registry a value of SG_MODELS_REGISTRY names, or the shipped one when it names none. The lookup runs `Path.resolve`
+    and two `is_file` calls, and the hub asks it on every answer it serves (#2582): one answer per value is kept, so a poll
+    costs no filesystem read."""
+    if value:
+        return Path(value)
     here = Path(__file__).resolve().parent
     return _first_file([here / "registry.json", here.parent / "config" / "models.registry.json"])
+
+
+def _default_registry_path():
+    return _registry_path_for(os.environ.get("SG_MODELS_REGISTRY") or "")
 
 
 def _default_models_path():
