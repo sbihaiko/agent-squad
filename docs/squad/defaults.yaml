@@ -17,5 +17,8 @@ caps:
                                     # one full gate and one child gate beside it: the landing no longer takes every slot, which
                                     # is what made three fail before. At six three gates ran at once and the load passed 140; at
                                     # two a gate ran slow (#1716).
+columns:
+  Doing: {max_cards: 8}             # owner 2026-11-20: a hand hold takes a Doing card (#2430), so four holds at six left the
+                                    # loop two cards; eight keeps four for the loop, within caps.runs.
 limits:
   max_budget_usd: 30
