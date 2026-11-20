@@ -119,20 +119,21 @@ rm -f "$T"/st/cq/*#2217-endclass* "$T/com-2217"   # the labels stand, but the co
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2217 run-owner219 "owner-only: criterion (1) needs a credential" own owner-only) 2>&1)
 [ "$(endfiles 2217 | /usr/bin/grep -c .)" = 1 ] && ok "N2b: a freeze whose comment is missing queues the comment again (debt 3)" || ko "N2b: the missing comment was not queued again: '$r'"
 case "$r" in *"already stands"*) ko "N2b: a freeze with no comment is named as standing: '$r'";; *) ok "N2b: a freeze with no comment is not named as standing";; esac
-nrb=$($G -C "$T/co" rev-parse --short=12 HEAD)
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr201 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
 e3=$(ls "$T/st/cq/"*#2201-endclass* 2>/dev/null)
-if /usr/bin/grep -q 'issues/2201/labels.*labels\[\]=frozen:not-startable' "$T/gh.log" \
-   && [ "$(printf '%s\n' "$e3" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF "SQUAD-NOT-STARTABLE: build=$nrb" "$e3"; then
-  ok "N3: a does-not-reproduce end freezes its issue at this build"
-else ko "N3: does-not-reproduce end did not freeze: '$r'"; fi
-printf 'SQUAD-NOT-STARTABLE: build=%s run run-nr201 ended failed: the defect does not reproduce at the base tip.\n\nReason: the defect does not reproduce at the tip\n' "$nrb" > "$T/com-2201"
+if /usr/bin/grep -q 'issues/2201/labels.*labels\[\]=frozen:owner' "$T/gh.log" \
+   && ! /usr/bin/grep -q 'issues/2201/labels.*frozen:not-startable' "$T/gh.log" \
+   && [ "$(printf '%s\n' "$e3" | /usr/bin/grep -c .)" = 1 ] && /usr/bin/grep -qF 'Reason: the defect does not reproduce at the tip' "$e3" \
+   && ! /usr/bin/grep -qF 'SQUAD-NOT-STARTABLE' "$e3"; then
+  ok "N3: a does-not-reproduce end freezes its issue for the owner with one comment that quotes the reason"
+else ko "N3: does-not-reproduce end did not freeze for the owner: '$r'"; fi
+printf 'Loop freeze: run run-nr201 ended no-repro.\n\nReason: the defect does not reproduce at the tip\n' > "$T/com-2201"
 w3=$(posts)
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr202 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
-[ "$(posts)" = "$w3" ] && ok "N3: the same build keeps its freeze and writes nothing again" || ko "N3: the same build froze the issue again: '$r'"
+[ "$(posts)" = "$w3" ] && ok "N3: a second no-repro end writes no second freeze" || ko "N3: a second no-repro end froze the issue again: '$r'"
 (cd "$T/co" && echo z > z && $G add z && $G -c user.email=a@b -c user.name=t commit -q -m "a later build")
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2201 run-nr203 "the defect does not reproduce at the tip" own does-not-reproduce) 2>&1)
-[ "$(freezes 2201)" = 2 ] && ok "N3: a later build writes the freeze again" || ko "N3: a later build wrote $(freezes 2201) freeze request(s): '$r'"
+[ "$(freezes 2201)" = 1 ] && ok "N3: a later build keeps the owner freeze and writes nothing" || ko "N3: a later build wrote $(freezes 2201) freeze request(s): '$r'"
 r=$((cd "$T/co" && bash "$T/s/wave.sh" fail 2202 run-gate202 "ac-verify:no_ac_commands" own) 2>&1)
 case "$r" in *"WAVE FAILED #2202"*) ok "N4: a gate reason is counted as before";; *) ko "N4: gate reason not counted: '$r'";; esac
 /usr/bin/grep -q 'issues/2202/labels.*labels\[\]=frozen' "$T/gh.log" && ko "N4: a gate reason froze its issue" || ok "N4: a gate reason freezes nothing"

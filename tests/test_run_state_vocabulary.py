@@ -177,3 +177,10 @@ def test_the_dashboard_chip_draws_its_row_mark_and_reads_the_class_from_the_tabl
     for mark in ("filled", "hollow", "bar"):
         assert re.search(rf"#vchip\[data-mk={mark}\]::before", src), mark
     assert 'chip.dataset.mk = (row && row.mark) || "none"' in src
+
+
+def test_a_no_repro_run_reads_neutral_and_apart_from_failed(hub):
+    rows = {r["state"]: r for r in hub.RUN_STATES}
+    assert rows["no-repro"]["color"] == "edge" and rows["no-repro"]["color"] != rows["failed"]["color"]
+    assert hub.state_of({"verdict": "no-repro", "reasons": [], "land": False}, 0) == "no-repro"
+    assert hub.badge_of("no-repro")["color"] == "edge"

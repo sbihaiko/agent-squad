@@ -40,7 +40,7 @@ def test_each_row_of_the_fold_gives_its_verdict_and_code(rows, obs, verdict, cod
 
 
 def test_exit_codes_are_a_pure_function_of_the_verdict():
-    assert V.EXIT == {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
+    assert V.EXIT == {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30, "no-repro": 40}
     for name, code in V.EXIT.items():
         assert V.exit_code(name) == code
     with pytest.raises(KeyError):

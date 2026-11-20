@@ -101,3 +101,20 @@ def test_two_children_that_disagree_on_the_class_give_no_class(tmp_path):
     assert v.verdict == "failed"
     assert v.end_class is None
     assert "end_class" not in line
+
+
+def test_a_does_not_reproduce_fail_with_no_commit_ends_no_repro():
+    evs = events(dict(out("a", "fail", ["the defect does not reproduce at the base tip"]), end_class="does-not-reproduce"),
+                 out("main", "fail", ["the defect does not reproduce at the base tip"]))
+    v = V.fold(evs)
+    assert (v.verdict, v.exit_code) == ("no-repro", 40)
+    assert v.end_class == "does-not-reproduce"
+    assert v.event_fields()["end_class"] == "does-not-reproduce"
+
+
+def test_a_does_not_reproduce_fail_after_a_commit_stays_failed():
+    commit = {"event": "workspace_commit", "node": "a", "status": "committed", "workspace": "w", "head": "abc"}
+    evs = events(commit, dict(out("a", "fail", ["the defect does not reproduce at the base tip"]), end_class="does-not-reproduce"),
+                 out("main", "fail", ["the defect does not reproduce at the base tip"]))
+    v = V.fold(evs)
+    assert (v.verdict, v.exit_code) == ("failed", 1)

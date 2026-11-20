@@ -232,6 +232,7 @@ A run ends with one verdict, and the exit code follows from it:
 | needs-human | 10 |
 | conflict | 20 |
 | stopped | 30 |
+| no-repro | 40 |
 
 ## The run dashboard
 

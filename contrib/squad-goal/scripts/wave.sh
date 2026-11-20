@@ -408,32 +408,26 @@ stop() {
 }
 
 # freeze_stand <issue> <class> <why>: 0 when the issue already carries the freeze this class writes for this reason (#2217).
-# The freeze stands only with both its labels and a comment that quotes the reason: owner-only needs frozen:owner and
-# needs-ratification; does-not-reproduce needs frozen:not-startable and a marker that names this build. A label with no
-# comment, the state a refused comment queue leaves, is not standing, so the next pass writes the comment again. A read
-# that does not answer is no proof of a freeze: the caller writes, and GitHub dedupes a label it already holds.
+# The freeze stands only with its labels and a comment that quotes the reason: owner-only needs frozen:owner and
+# needs-ratification; does-not-reproduce needs frozen:owner (ADR-0029). A label with no comment, the state a refused comment
+# queue leaves, is not standing, so the next pass writes the comment again. A read that does not answer is no proof of a
+# freeze: the caller writes, and GitHub dedupes a label it already holds.
 freeze_stand() {
-  local n=$1 cls=$2 why=$3 labels cur body
+  local n=$1 cls=$2 why=$3 labels body
   labels=$(gh_api "repos/$SG_REPO/issues/$n/labels" -q '[.[]?.name] | join(" ")' 2>/dev/null) || return 1
+  case " $labels " in *" frozen:owner "*) ;; *) return 1;; esac
   if [ "$cls" = owner-only ]; then
-    case " $labels " in *" frozen:owner "*) ;; *) return 1;; esac
     case " $labels " in *" needs-ratification "*) ;; *) return 1;; esac
-  else
-    case " $labels " in *" frozen:not-startable "*) ;; *) return 1;; esac
-    cur=$(sg_loop_build)
-    [ -n "$cur" ] || return 1
   fi
   body=$(gh_api "repos/$SG_REPO/issues/$n/comments?per_page=100" -q '.[].body' 2>/dev/null) || return 1
-  printf '%s\n' "$body" | /usr/bin/grep -qF "Reason: $why" || return 1
-  [ "$cls" = owner-only ] && return 0
-  printf '%s\n' "$body" | /usr/bin/grep -qF "SQUAD-NOT-STARTABLE: build=${cur} "
+  printf '%s\n' "$body" | /usr/bin/grep -qF "Reason: $why"
 }
 
 # freeze_class <issue> <run> <why> <class>: a failed run whose artifact named its end class freezes its issue in one comment that
 # quotes the reason (#2217). owner-only takes frozen:owner and needs-ratification in one label request, held until the owner
-# frees it; a request GitHub refuses freezes nothing, and the caller reports the partial state. does-not-reproduce writes the
-# not-startable marker at this build, so a later build dispatches the issue again. Sets froze=1 when it wrote the freeze and
-# froze=0 when the freeze already stood.
+# frees it; does-not-reproduce takes frozen:owner alone, and its comment carries the run's evidence. A request GitHub refuses
+# freezes nothing, and the caller reports the partial state. Sets froze=1 when it wrote the freeze and froze=0 when the
+# freeze already stood.
 freeze_class() {
   local n=$1 run=$2 why=$3 cls=$4 f out
   froze=0
@@ -444,10 +438,10 @@ freeze_class() {
     f=$(sg_cq_file "$n-endclass.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
     printf 'Loop freeze: run %s ended failed with an owner-only reason. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
   else
-    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:not-startable" 2>&1) || {
-      printf 'WAVE-FREEZE #%s frozen:not-startable refused: %s\n' "$n" "$out"; return 1; }
+    out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" 2>&1) || {
+      printf 'WAVE-FREEZE #%s frozen:owner refused: %s\n' "$n" "$out"; return 1; }
     f=$(sg_cq_file "$n-endclass.md" 2>/dev/null) || { printf 'WAVE-FREEZE #%s the freeze comment could not be queued\n' "$n"; return 1; }
-    printf 'SQUAD-NOT-STARTABLE: build=%s run %s ended failed: the defect does not reproduce at the base tip. A later build dispatches it again.\n\nReason: %s\n' "$(sg_loop_build)" "$run" "$why" > "$f"
+    printf 'Loop freeze: run %s ended no-repro: the defect does not reproduce at the base tip. The loop does not dispatch this issue again; the owner decides it.\n\nReason: %s\n' "$run" "$why" > "$f"
   fi
   froze=1
 }

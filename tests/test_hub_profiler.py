@@ -5400,3 +5400,10 @@ def test_each_lane_keeps_a_margin_inside_its_band_and_its_values_stand_off_the_p
 
 def trip_consts_font(src):
     return int(re.search(r"PROF_TRIP_FONT=(\d+)", src).group(1))
+
+
+def test_a_no_repro_run_is_counted_apart_from_failed(prof):
+    rows = [run_row(NOW - 300, NOW - 240, "no-repro"), run_row(NOW - 200, NOW - 140, "failed", ["gate:red"])]
+    t = prof.failed_run_table(rows, 3600, NOW)
+    assert t["failed_seconds"] == 60.0
+    assert {(r["verdict"], r["count"]) for r in t["rows"]} == {("no-repro", 1), ("failed", 1)}

@@ -6,7 +6,8 @@ The fold reads the record and the observation, never the graph.
 import shlex
 from dataclasses import dataclass, field
 
-EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
+EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30, "no-repro": 40}
+NO_REPRO_CLASS = "does-not-reproduce"
 # The join order of `each` and `dispatch`: an unfinished proof is worse than a pass and better than a hold, because
 # delivery outranks the proof (ADR-0164).
 WORST = ("fail", "deadline", "needs-human", "unproven", "pass")
@@ -153,9 +154,12 @@ def fold(events, observation=None, run_id=None, run_folder=None):
     unproven = _unproven(failing, kept, root) if failing and (kept or only_unproven) else None
 
     def make(v, rs, rem=True):
+        cls = _end_class(failing) if v == "failed" else None
+        if cls == NO_REPRO_CLASS and not _committed(events):
+            v = "no-repro"
         rem_list = remains if v != "completed" and rem else []
         msg = _message(v, rs, rem_list, _resume_ref(run_folder, run_id), opts)
-        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg, _end_class(failing) if v == "failed" else None)
+        return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg, cls if v in ("failed", "no-repro") else None)
 
     if pre.get("status") == "failed":
         return make("failed", [pre["reason"]])
@@ -198,6 +202,10 @@ def _end_class(failing):
     """The end class a failed run names: the one class its failing outcomes carry, or None when they name two or none (#2217)."""
     classes = {e["end_class"] for e in failing if e.get("end_class")}
     return next(iter(classes)) if len(classes) == 1 else None
+
+
+def _committed(events):
+    return any(e["event"] == "workspace_commit" and e.get("status") == "committed" for e in events)
 
 
 def _resume_ref(run_folder, run_id):
