@@ -499,6 +499,24 @@ out=$(COPY_FAIL=test-copy-brace.sh fg); rc=$?
 [ $rc -ne 0 ] && case "$out" in *test-copy-brace.sh*) true;; *) false;; esac && ok "a suite selected by the script it copies that goes red fails the gate and is named" || ko "copy red suite: rc $rc: $out"
 $G -C "$R" checkout -q dev   # the red above belongs to the gui/copy tip; the cases below start from a tip no gate has marked
 
+# (#2583) A suite that checks every script of the directory names no script, so it states `# guards: every-script` in its
+# leading comment block. A change to any .sh or .py script there runs it; a change outside the directory does not. The same
+# text inside a string after the first command is no header and selects nothing.
+printf '#!/bin/bash\n# guards: every-script\necho "test-everyguard.sh" >> "%s/ran.log"\n' "$T" > "$S/test-everyguard.sh"
+printf '#!/bin/bash\nH=$(mktemp -d); printf %s\n# guards: every-script\n%s > "$H/x.sh"\necho "test-everystring.sh" >> "%s/ran.log"\n' "\"#!/bin/bash" "\"" "$T" > "$S/test-everystring.sh"
+printf '#!/bin/bash\n# other\n' > "$S/other.sh"
+$G -C "$R" add -A; $G -C "$R" commit -q -m every-base
+$G -C "$R" checkout -q -b gui/every-script dev && printf '# changed\n' >> "$S/other.sh"
+$G -C "$R" add -A; $G -C "$R" commit -q -m every-script
+out=$(fg); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -qx "test-everyguard.sh" "$T/ran.log" && ok "a change to any script runs the suite whose header guards every script" || ko "every-script: rc $rc ran '$(cat "$T/ran.log" 2>/dev/null)': $out"
+/usr/bin/grep -qx "test-everystring.sh" "$T/ran.log" 2>/dev/null && ko "a header inside a string selected its suite" || ok "the header text inside a string after the first command selects no suite"
+$G -C "$R" checkout -q dev && $G -C "$R" checkout -q -b gui/every-outside dev && echo 'outside' >> "$R/docs/x.md"
+$G -C "$R" add -A; $G -C "$R" commit -q -m every-outside
+out=$(fg); rc=$?
+/usr/bin/grep -qx "test-everyguard.sh" "$T/ran.log" 2>/dev/null && ko "a change outside the scripts directory ran the every-script suite" || ok "a change outside the scripts directory runs no every-script suite"
+$G -C "$R" checkout -q dev
+
 # (spec 1163) The verdict: the history line carries the outcome, one reason, the checks that ran and the ones that did not. A tool
 # that is absent is unproven and names the tool, with no retry; a present check that reports a defect is fail; a clean battery passes.
 vstub() {  # <name> <body>: a battery stub that logs one line per call, then runs <body>
