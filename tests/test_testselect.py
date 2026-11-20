@@ -247,6 +247,28 @@ def test_an_evidence_image_a_test_names_still_selects_that_test(tmp_path):
     assert select(repo) == ["tests/test_names.py"]
 
 
+def test_an_evidence_image_a_script_names_is_no_change_that_needs_no_test(tmp_path):
+    """#2592: only a path that no test and no script names is placed with no reader (ADR-0169 rule 5). A script that names
+    the image is a reader, so when no test reaches that script the delta cannot cover the change: it answers `all`."""
+    path = "docs/evidence/2592/kanban-1000.png"
+    script = "contrib/squad-goal/scripts/render.sh"
+    repo = tip(tmp_path, {path: "changed\n"}, extra={path: "old\n", script: f'IMG="{path}"\n'})
+    lines = select(repo)
+    assert len(lines) == 1 and lines[0].startswith("all: ") and path in lines[0] and script in lines[0], lines
+
+
+def test_a_deleted_test_beside_an_evidence_image_never_passes_as_a_change_that_needs_no_test(tmp_path):
+    """#2592: the deletion of a test is never placed with no reader. The shard guard proves the partition, so the delta is
+    that guard, and a skip that would hide the deleted test behind an image beside it never answers (#1249)."""
+    repo = tip(
+        tmp_path,
+        {"tests/test_gamma.py": None, "docs/evidence/2592/kanban-1000.png": "png\n"},
+        extra={"tests/test_tooling.py": "X = 1\n"},
+    )
+    lines = select(repo)
+    assert skip_reason(lines) is None and lines == ["tests/test_tooling.py"], lines
+
+
 def test_a_base_that_does_not_resolve_answers_all_never_an_empty_list(tmp_path):
     repo = tip(tmp_path, {"squad/alpha.py": "VALUE = 2\n"})
     lines = select(repo, base="no-such-ref")
