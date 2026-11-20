@@ -254,4 +254,59 @@ case "$out" in *"TMP PRUNED"*) ko "T: a second pass pruned again: $out";; *) ok 
 mkdir -p "$T/dtmp/big" "$T/dtmp/small" "$T/dst"; head -c 3000000 /dev/zero > "$T/dtmp/big/f"; echo x > "$T/dtmp/small/f"
 out=$(TMPDIR="$T/dtmp" SG_STATE="$T/dst" SG_MIN_FREE_GB=999999 bash -c '. "$1"; gh_disk_stop' _ "$here/ghcall.sh" 2>&1)
 case "$out" in *"DISK STOP: "*"DISK TOP $T/dtmp/big: "*) ok "T: DISK STOP names the largest entries";; *) ko "T: no DISK TOP line: $out";; esac
+# ARCH (#2574): a tree whose issues are all closed and that nothing moved for SG_WT_ARCHIVE_SECONDS goes, even with commits
+# outside the base or tracked dirt. The pass first pushes HEAD to refs/archive/wt/<tree path>/<sha9>/head and the tracked dirt,
+# as a `git stash create` commit, to .../dirty. It reads closed issues from $SG_STATE/issue-facts.json only, and it never
+# archives an untracked file. An open issue, no issue, a stale facts file or a refused push keeps the tree. The origin is the
+# local bare repository: SG_LAND_REMOTE names it, so no push reaches github.com.
+cd "$T/co"; printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x SG_BASE=main SG_LAND_REMOTE=%s\n' "$T/co" "$T/st" "$T/remote.git" > "$T/s/env.sh"
+$G fetch -q origin; RB="$T/remote.git"
+facts() { python3 - "$T/st/issue-facts.json" "$1" <<'P'
+import json, sys, time
+s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - int(sys.argv[2])))
+f = lambda st: {"f": [st, "", "t", "", ""], "at": time.time()}
+json.dump({"repo": "x/y", "synced": s, "issues": {"7001": f("closed"), "7002": f("open"), "7003": f("closed"), "7004": f("closed"),
+    "7006": f("closed"), "7007": f("closed")}}, open(sys.argv[1], "w"))
+P
+}
+old() { for p in "$@"; do touch -t 202001010000 "$p"; done; }
+hl() { $G -C "$1" rev-parse --path-format=absolute --git-path logs/HEAD; }
+# ach <tree>: a child tree with one commit outside the base, quiet for years
+ach() { $G worktree add -q -b "gui/${1##*-}-a" "$1" origin/main; echo "$1" > "$1/own.txt"; $G -C "$1" add own.txt
+  $G -C "$1" -c user.email=a@b -c user.name=t commit -q -m "own work ${1##*/}"; old "$(hl "$1")"; }
+ach worktrees/child/gui-7001; ach worktrees/child/gui-7002; ach worktrees/child/gui-7003; ach worktrees/child/gui-7004; ach worktrees/child/c-noissue
+echo changed > worktrees/child/gui-7004/own.txt; echo loose > worktrees/child/gui-7004/untracked.txt
+# a closed top tree that holds an ended run, and that run's dirty child tree
+ach worktrees/child/gui-7006; N=worktrees/child/gui-7006/runs/run-n7006; mkdir -p "$N/ws"
+echo "CHILD — GitHub issue(s) 7006 (bug): work on it" > "$N/request.txt"; echo '{"event": "verdict", "verdict": "completed"}' > "$N/record.jsonl"
+ach "$N/ws/w"; echo dirt > "$N/ws/w/own.txt"; old "$N/record.jsonl"
+# a run tree whose run needs a human, for an issue that is now closed
+$G worktree add -q -b squad/run/k7007 worktrees/run/k7007 origin/main; mkdir -p worktrees/run/k7007/runs/run-k7007
+echo "GitHub issue #7007" > worktrees/run/k7007/runs/run-k7007/request.txt
+echo '{"event": "verdict", "verdict": "needs-human", "reasons": [], "remains": []}' > worktrees/run/k7007/runs/run-k7007/record.jsonl
+$G -C worktrees/run/k7007 -c user.email=a@b -c user.name=t commit -q --allow-empty -m "run work"; old worktrees/run/k7007/runs/run-k7007/record.jsonl "$(hl worktrees/run/k7007)"
+# the origin refuses the archive push of one tree
+printf '#!/bin/sh\nwhile read o n r; do case $r in *gui-7003*) echo refused >&2; exit 1;; esac; done; exit 0\n' > "$RB/hooks/pre-receive"; chmod +x "$RB/hooks/pre-receive"
+s1=$($G -C worktrees/child/gui-7001 rev-parse HEAD); s4=$($G -C worktrees/child/gui-7004 rev-parse HEAD); s6=$($G -C "$N/ws/w" rev-parse HEAD)
+aref() { $G -C "$RB" for-each-ref --format='%(refname) %(objectname)' "refs/archive/wt/$1/"; }
+facts 7200; out=$(bash "$T/s/wtclean.sh" 2>&1)   # STALE: a facts file synced two hours ago is no proof
+[ -d worktrees/child/gui-7001 ] && [ -z "$(aref worktrees_child_gui-7001)" ] && ok "ARCH: a stale facts file keeps the tree and pushes nothing" || ko "ARCH: a stale facts file freed gui-7001: $out"
+case "$out" in *"WT KEPT child gui-7001:"*"stale"*) ok "ARCH: the kept line says the facts are stale";; *) ko "ARCH: no stale reason: $out";; esac
+facts 300; out=$(bash "$T/s/wtclean.sh" 2>&1); o2=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d worktrees/child/gui-7001 ] && [ "$(aref worktrees_child_gui-7001)" = "refs/archive/wt/worktrees_child_gui-7001/${s1:0:9}/head $s1" ] && ok "ARCH: a closed issue's tree with commits outside the base is archived, then removed" || ko "ARCH: gui-7001 not archived and removed: $out | $(aref worktrees_child_gui-7001)"
+case "$out" in *"WT CLEAN child gui-7001"*"archived"*) ok "ARCH: the line names the archive";; *) ko "ARCH: no archive line for gui-7001: $out";; esac
+[ -d worktrees/child/gui-7002 ] && [ -z "$(aref worktrees_child_gui-7002)" ] && ok "ARCH: an open issue keeps the tree and pushes nothing" || ko "ARCH: gui-7002 went with its issue open: $out"
+case "$out" in *"WT KEPT child gui-7002:"*"#7002"*) ok "ARCH: the kept line names the open issue";; *) ko "ARCH: the open issue is not named: $out";; esac
+[ -d worktrees/child/gui-7003 ] && ok "ARCH: a refused push keeps the tree" || ko "ARCH: gui-7003 went with its push refused: $out"
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'WT KEPT.*gui-7003')" = 1 ] && case "$out" in *"WT KEPT child gui-7003:"*"archive push refused"*) ok "ARCH: one WT KEPT line names the refused push";; *) ko "ARCH: the refused push line has no reason: $out";; esac || ko "ARCH: not one WT KEPT line for gui-7003: $out"
+case "$o2" in *gui-7003*) ko "ARCH: a second pass names the refused push again: $o2";; *) ok "ARCH: a second pass says nothing more of the refused push";; esac
+d4=$($G -C "$RB" rev-parse -q --verify "refs/archive/wt/worktrees_child_gui-7004/${s4:0:9}/dirty" 2>/dev/null)
+[ ! -d worktrees/child/gui-7004 ] && [ -n "$d4" ] && [ "$($G -C "$RB" show "$d4:own.txt" 2>/dev/null)" = changed ] && ok "ARCH: the tracked dirt reaches the dirty ref" || ko "ARCH: gui-7004's dirt is not archived: $out | $(aref worktrees_child_gui-7004)"
+[ "$($G -C "$RB" rev-parse -q --verify "refs/archive/wt/worktrees_child_gui-7004/${s4:0:9}/head" 2>/dev/null)" = "$s4" ] && ok "ARCH: the dirty tree's HEAD reaches the head ref" || ko "ARCH: no head ref for gui-7004"
+$G -C "$RB" rev-list --all --objects 2>/dev/null | /usr/bin/grep -q 'untracked.txt' && ko "ARCH: an untracked file reached a ref" || ok "ARCH: an untracked file reaches no ref"
+[ -d worktrees/child/c-noissue ] && case "$out" in *"WT KEPT child c-noissue:"*"no issue"*) ok "ARCH: a tree no issue names stays, and says so";; *) ko "ARCH: c-noissue kept with no reason: $out";; esac || ko "ARCH: a tree no issue names was removed: $out"
+[ ! -d "$N/ws/w" ] && [ ! -d worktrees/child/gui-7006 ] && [ -n "$(aref worktrees_child_gui-7006_runs_run-n7006_ws_w)" ] && ok "ARCH: a dirty ws tree under a closed top is archived and freed, then its top" || ko "ARCH: the nested ws tree or its top stayed: $out"
+case "$out" in *"run-n7006 "*"archived"*"WT CLEAN child gui-7006"*) ok "ARCH: the ws tree goes before its top";; *) ko "ARCH: the ws tree did not go first: $out";; esac
+[ ! -d worktrees/run/k7007 ] && [ -n "$(aref worktrees_run_k7007)" ] && ok "ARCH: a closed issue lifts a needs-human hold, and the run tree is archived and removed" || ko "ARCH: k7007 kept: $out"
+rm -f "$RB/hooks/pre-receive"
 rm -rf "$T"; exit $fail
