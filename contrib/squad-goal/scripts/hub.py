@@ -622,6 +622,20 @@ def process_table(now=None):
         log_once(f"hub: the process table could not be read: {type(e).__name__}: {' '.join(str(e).split())}")
         return {}
 
+RUN_TABLE_SECS = 2.5   # the run readers' window: the page's live poll is every 3 s, so its own poll refills the scan before it expires
+
+def run_table(now=None):
+    """{pid: Proc} for every process, for the run readers: the run liveness, the gate slots and the loop rows all judge one
+    read of the table (`RUN_TABLE_SECS`, squad/procscan.py `view`), so a page's poll costs one read however many of them
+    it asks (#2582). It is the same shared scan `process_table` derives from; the kill path (`_ps_rows`) reads fresh and
+    never this. {} when the read fails, logged once: a caller then sees no process, never a guessed one."""
+    now = time.time() if now is None else now
+    try:
+        return procscan.view("run-table", _same, RUN_TABLE_SECS, now, _machine_snapshot)[0]
+    except Exception as e:
+        log_once(f"hub: the process table could not be read for the run readers: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
+
 def _starts(snap):
     """The {pid: start} reading of one process snapshot. An empty snapshot is no evidence, so it raises as the one reader
     does: the caller then calls no run gone."""
@@ -2213,9 +2227,11 @@ def loop_record(run, checkout=None):
 
 def _loop_procs(RL, rows):
     """The process snapshot the loop switch reads: a fresh one when `rows` is None, a snapshot given as is, and a list of
-    (pid, ppid, command) rows as a snapshot with no start, so each pid answers by itself."""
+    (pid, ppid, command) rows as a snapshot with no start, so each pid answers by itself. One read of the machine's table
+    (`squad/procs.py`) is the same answer in its own shape, so it is converted and never read again (#2582)."""
     if rows is None: return RL.read_processes
-    if isinstance(rows, dict): return rows
+    if isinstance(rows, dict):
+        return {pid: p if hasattr(p, "cmd") else RL.Proc(p.start, p.command) for pid, p in rows.items()}
     return {pid: RL.Proc(None, cmd) for pid, _, cmd in rows}
 
 def loop_run_pid(run, rows=None):
@@ -2247,7 +2263,8 @@ def loop_live(state=None, checkout=None, procs=None):
     gates = [f"gate pid {gate}"] if gate.isdigit() and _pid_alive(int(gate)) else []
     try:
         RL = liveness()
-        runs = RL.live_runs(base / "active-runs.txt", checkout, procs or RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
+        table = _loop_procs(RL, procs if procs else run_table())   # an empty reading is no evidence: the one reader answers it
+        runs = RL.live_runs(base / "active-runs.txt", checkout, table or RL.read_processes, time.time(), LOOP_LAUNCH_S, LOOP_RUN_CMD, os.getpid())
     except Exception as e:
         why = f"{type(e).__name__}: {' '.join(str(e).split())}"
         log_once(f"hub: the live runs are unknown: {why}")
@@ -2410,7 +2427,7 @@ def loop_projects(a, procs=None, now=None, rows=None):
     projects and the change log answer one request from the same list."""
     if rows is None: rows = project_contexts()
     if procs is None:
-        try: procs = _loop_procs(liveness(), _ps_rows())
+        try: procs = _loop_procs(liveness(), run_table())   # the run readers' one read, never the kill path's (#2582)
         except Exception: procs = None
     return sorted((loop_project(r, a, procs=procs, now=now) for r in rows), key=lambda p: str(p["slug"]))
 
@@ -2456,7 +2473,7 @@ def loop_view(a):
     tn = tailnet_block()
     write = a.allowed and (not a.tailnet or tn.get("loop_write") is True)
     state = loop_state(last)
-    try: procs = _loop_procs(liveness(), _ps_rows())
+    try: procs = _loop_procs(liveness(), run_table())   # the run readers' one read, never the kill path's (#2582)
     except Exception: procs = None
     live = loop_live(procs=procs)
     rows = [r for r in project_contexts() if r.get("own") or (r.get("state") and pathlib.Path(r["state"]).is_dir())]
@@ -4561,7 +4578,7 @@ def live_served(now=None):
     with _LIVE_LOCK:
         at = _LIVE_KEPT["at"]
         if at is not None and now - at < LIVE_POLL_SECS: return _LIVE_KEPT["answer"]
-        answer = live_work_lines(board_cache.get("items", []))
+        answer = live_work_lines(board_cache.get("items", []), procs=run_table())   # one read answers every row of the answer
         _LIVE_KEPT.update(at=now, answer=answer)
         return answer
 
@@ -4583,7 +4600,8 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     loop with nothing to show answers one `empty` row, `no live work`. A ready-for-human card waits on the owner and is no
     live work (#1701). Doing is the column the board draws, an old Status name and a recorded move included, never the
     row's raw Status (#1713). `boardAge` is how many seconds old the board read the `hand` rows came from is, so the panel
-    never claims a freshness it does not have."""
+    never claims a freshness it does not have. `procs` is one process table (`run_table`'s shape), read here when the
+    caller names none: every row of the answer judges that one read, so one poll costs one read of the machine (#2582)."""
     now = time.time() if now is None else now
     base = pathlib.Path(state) if state else STATE
     moves, window = (read_moves() if overlay_on() else {}), pending_window()   # the board's own column inputs, read once
@@ -4591,10 +4609,14 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
     rows, issues_of, held, gated = [], {}, set(), set()
     run_issues = {}   # the issues each live run names: a gate's issue is the issues of the run it checks (#2547)
     if st == "off": rows.append({"kind": "loop", "id": "loop", "text": "loop off"})
-    for entry in loop_live(state=base, checkout=checkout, procs=procs)["runs"]:
+    table = procs if procs is not None else run_table()   # one read of the machine answers every row below (#2582)
+    try: seen = _loop_procs(liveness(), table)
+    except Exception: seen = {}
+    starts = {pid: p.start for pid, p in table.items()}
+    for entry in loop_live(state=base, checkout=checkout, procs=seen)["runs"]:
         folder = active_folder(entry)
         if not folder: continue
-        row, _ = run_row(folder, "", procs or {})
+        row, _ = run_row(folder, "", starts)
         issues = " ".join(f"#{n}" for n in row["issues"]) or "no issue"
         rows.append({"kind": "run", "id": row["id"], "icon": "run", "age": int(row["age"]),
                      "text": f"{issues} · node {row.get('stage') or '-'}",
@@ -4610,7 +4632,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
         except OSError: continue   # one unreadable lock is no lock: it never fails the panel
         if not cmd: continue   # a lock that names no command is a loop driver's own: no live work, and no row (#1692, #2507)
         line = (argv or _holder_argv)(int(pid))
-        slots, since = gate_slots(int(pid), procs, now)   # the slots the gate under this lock holds (#2507)
+        slots, since = gate_slots(int(pid), table, now)   # the slots the gate under this lock holds (#2507)
         gated.update(run_issues.get(_gate_run(line), ()))   # a gate holds its lock while it runs or waits for its slots
         rows.append({"kind": "gate", "id": f"gate-{d.name}", "run": _gate_run(line), "icon": "microscope",
                      "text": suite_name(line), "slots": slots, "age": int(now - since) if since else None, "red": False,
