@@ -657,10 +657,15 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   # The state is read live (gh_api: a read that decides a write is never a snapshot). A read that does not answer keeps the requeue, named.
   st=$(gh_api "repos/$SG_REPO/issues/$n" -q '.state' 2>/dev/null) || st=""
   case "$st" in
-    closed) echo "WAVE KEEP #$n: the issue is closed, so $why does not put it back in the queue"; return 0;;
+    closed) [ -n "${SG_REQUEUE_RUN:-}" ] && recut_drop "$SG_REQUEUE_RUN" "$n" nosalvage
+            echo "WAVE KEEP #$n: the issue is closed, so $why does not put it back in the queue"; return 0;;
     open) ;;
     *) echo "WAVE NOTE #$n: its state could not be read, so the requeue goes on";;
   esac
+  # (#2559) Every later exit takes the issue out of the run's recut: requeued, held for a probe, or stopped, the run no longer
+  # waits for it. The salvage clause joins `why` only at the requeue below, so the count reads the reason as it was.
+  local rnote=""
+  [ -n "${SG_REQUEUE_RUN:-}" ] && recut_drop "$SG_REQUEUE_RUN" "$n"
   [ "${3:-}" != cap ] && probe_refuted "$n" "${SG_REQUEUE_RUN:-}" && return 0   # a refuting probe is held, never requeued (#888)
   # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
   # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it
@@ -685,24 +690,24 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     echo "WAVE KEEP #$n: run $SG_REQUEUE_RUN already sent it back to the queue once, so this landing starts no new run: $why"; return 0
   fi
   [ "${3:-}" = cap ] && [ -n "${SG_REQUEUE_RUN:-}" ] && { mkdir -p "$SG_STATE/auto" && : > "$SG_STATE/auto/empty-requeued-$SG_REQUEUE_RUN-$n"; }
-  [ -n "${SG_REQUEUE_RUN:-}" ] && recut_drop "$SG_REQUEUE_RUN" "$n"
+  [ -n "$rnote" ] && why="$why; $rnote"
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   SG_MOVE_REASON=no-landing SG_MOVE_EVENT="${SG_REQUEUE_RUN:-requeue-$n}" SG_MOVE_SHA="$(reset_sha "${SG_REQUEUE_RUN:-}")" board_write "${SG_TODO:-Todo}" "$n"   # a requeue landed nothing: the card leaves Batching as a no-landing move (#1340)
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }
 
-# recut_drop <run> <issue> (#2559): a requeue of a child the early close left out. The child's head goes to its salvage branch
-# and the requeue names it (salvage_note), so a commit after the close is kept. The issue leaves line 2 of the recut marker;
-# when no child is left out, the recut, its start clock and the run's wave marker go, so the run stops holding the issue.
-# An owed close keeps the wave marker: the next landing pass closes it. The requeue fact is not read here: runreview.sh writes
-# it after the requeue. It sets `why` in the caller's scope.
+# recut_drop <run> <issue> [nosalvage] (#2559): a requeue of a child the early close left out. The child's head goes to its
+# salvage branch, and `rnote` in the caller's scope names it (salvage_note), so a commit after the close is kept; a closed
+# issue gets no salvage. The issue leaves line 2 of the recut marker; when no child is left out, the recut, its start clock
+# and the run's wave marker go, so the run stops holding the issue. An owed close keeps the wave marker: the next landing pass
+# closes it. The requeue fact is not read here: runreview.sh writes it after the requeue.
 recut_drop() {
-  local run=$1 n=$2 m="$SG_STATE/auto/wave-recut-$1" lo rest="" k note
+  local run=$1 n=$2 m="$SG_STATE/auto/wave-recut-$1" lo rest="" k
   [ -s "$m" ] || return 0
   lo=$(sed -n 2p "$m" 2>/dev/null)
   case " $lo " in *" $n "*) ;; *) return 0;; esac
-  note=$(salvage_note "$run" "$n"); [ -n "$note" ] && why="$why; $note"
+  [ "${3:-}" = nosalvage ] || rnote=$(salvage_note "$run" "$n")
   for k in $lo; do [ "$k" = "$n" ] || rest="${rest:+$rest }$k"; done
   if [ -n "$rest" ]; then printf '%s\n%s\n' "$(head -1 "$m")" "$rest" > "$m.tmp" && mv "$m.tmp" "$m"; return 0; fi
   rm -f "$m" "$SG_STATE/auto/wave-start-$run"
@@ -719,7 +724,7 @@ sys.exit(0 if isinstance(f,dict) and f.get("state")=="delivered" else 1)' "$1" 2
 # recut_end <run> <wave> <run dir> (#2559): the end of a recut that no child can enter any more: the next cut passed the age
 # cap, or the run holds no run slot. It mirrors the capped empty landing: each child left out gets its salvage, a refused
 # wave fact and a cap hold, the markers of the run go, and retire_run ends the run before it requeues the children. A child
-# the run already requeued is salvaged too, so a commit it made after the close reaches a branch. A marker with no line 2
+# the run already requeued (requeued_in) is salvaged too, so a commit it made after the close reaches a branch. A marker with no line 2
 # (written before #2559) reads the children left out from the run: not delivered and not requeued.
 recut_end() {
   local run=$1 w=$2 rd=$3 m="$SG_STATE/auto/wave-recut-$1" lo n why note out="" lim=${SG_WAVE_MAX_AGE_SECONDS:-7200}
@@ -729,7 +734,7 @@ recut_end() {
   fi
   for n in $(run_issues "$rd"); do
     case " $lo " in *" $n "*) continue;; esac
-    delivered_in "$run" "$n" && continue
+    requeued_in "$run" "$n" || continue
     note=$(salvage_note "$run" "$n"); [ -n "$note" ] && echo "WAVE-NOTE #$n: run $run requeued it before; $note"
   done
   for n in $lo; do
@@ -1981,9 +1986,20 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # lands with the children that entered it. The age cap is the later one and decides first.
   local capped=0 early=0; expired "$run" && capped=1
   [ "$capped" = 1 ] || { entrywait "$run" && early=1; }
-  # (#2559) A recut whose next cut no child can enter any more ends here: the early close deleted the wave branch, so no fetch
-  # of it can land, and the children left out go back to the queue.
-  if [ -e "$SG_STATE/auto/wave-recut-$run" ] && { [ "$capped" = 1 ] || ! run_holds_slot "$rd"; }; then
+  # (#2559) A recut never fetches its wave branch: the early close deleted it. Past the age cap the recut ends. Under it, a
+  # run that holds its slot, or a childcc fix run of the run with no verdict (#667), may still put a child left out in the next
+  # cut, so the pass waits; otherwise no child can enter it any more, and the recut ends.
+  if [ -e "$SG_STATE/auto/wave-recut-$run" ]; then
+    if [ "$capped" != 1 ]; then
+      run_holds_slot "$rd" && { echo "WAVE WAIT $w: the wave closed early and run $run holds its run slot, so a child left out may still enter its next cut"; return 1; }
+      for fx in "$SG_STATE/auto/ccfix-$run"-*; do
+        [ -e "$fx" ] || continue
+        f=$(cat "$fx" 2>/dev/null)
+        [ -n "$f" ] && /usr/bin/grep -q '"event": "verdict"' "$f/record.jsonl" 2>/dev/null && continue
+        echo "WAVE WAIT $w: the wave closed early and the fix run of one of its children has no verdict yet, so the recut does not end"
+        return 1
+      done
+    fi
     recut_end "$run" "$w" "$rd"; return 0
   fi
   local S; S=$(mktemp -d) || { echo "WAVE-ERROR no scratch dir"; return 2; }
