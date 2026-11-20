@@ -35,7 +35,7 @@ GIT = "/usr/bin/git"
 COPY = (
     "wave.sh", "wavepause.py", "issue_ledger.py", "ghread.py", "child_issues.py", "address.sh", "gate.sh", "caps.sh",
     "serial.sh", "ghcall.sh", "drainpolicy.py", "base-battery.sh", "basecheck.sh", "fast-gate.sh", "quality-reading.py",
-    "siblings.py", "cluster.py", "autohunt.sh", "revformat.py", "workbranches.sh",
+    "siblings.py", "cluster.py", "autohunt.sh", "revformat.py", "workbranches.sh", "columnlimit.sh", "issue_state.py",
 )
 
 
