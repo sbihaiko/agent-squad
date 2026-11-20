@@ -256,13 +256,25 @@ gh_dispatch_hold() {
   # The promotion proof reserves the machine it measures (#739): promote-pass.sh writes $SG_STATE/promote-reserve while it
   # holds the gate lock, and it removes the file on exit, INT and TERM. A marker older than the lock's own bound is a proof
   # that died, and it never holds, by the same rule as the other guards here.
-  # (#1975, ADR-0153) The nightly owns the machine in its hour: no run starts from the hour's start until the nightly has run
-  # that day, and none starts while it runs. The hold ends with the hour, so a nightly that never finishes releases dispatch.
-  local nhour=${SG_NIGHTLY_HOUR:-04} np nwhy=
-  if [ -z "${SG_NIGHTLY_OFF:-}" ] && [ $((10#$(TZ=America/Sao_Paulo date +%H))) -eq $((10#$nhour)) ]; then
-    np=$(cat "$SG_STATE/locks/nightly/pid" 2>/dev/null)
-    if [ -n "$np" ] && kill -0 "$np" 2>/dev/null; then nwhy="the nightly runs (pid $np)"
-    elif [ ! -e "$SG_STATE/auto/nightly-$(date +%F)" ]; then nwhy="the nightly window is open"; fi
+  # (#1975, #2527, ADR-0153) The nightly owns the machine in its hour. No run starts from SG_NIGHTLY_DRAIN_MINUTES before
+  # the hour, so the live runs end before it opens, and none starts while the nightly runs. The hold ends when the day has
+  # its nightly or its missed record, and once the hour has less time left than the suite needs (SG_NIGHTLY_NEED_MINUTES):
+  # the dispatch never idles for a nightly that can no longer finish. The hold ends with the hour in any case.
+  local nhour=$((10#${SG_NIGHTLY_HOUR:-04})) np nwhy= nh nm ndrain=$((10#${SG_NIGHTLY_DRAIN_MINUTES:-40})) nneed=$((10#${SG_NIGHTLY_NEED_MINUTES:-45})) nday
+  if [ -z "${SG_NIGHTLY_OFF:-}" ]; then
+    nh=$((10#$(TZ=America/Sao_Paulo date +%H))); nm=$(TZ=America/Sao_Paulo date +%M:%S); nm=$((10#${nm%%:*}))
+    [ "$ndrain" -gt 59 ] && ndrain=59
+    nday=$(date +%F)
+    if [ "$nh" -eq $(( (nhour + 23) % 24 )) ] && [ "$nm" -ge $((60 - ndrain)) ] && [ "$ndrain" -gt 0 ]; then
+      [ "$nhour" -eq 0 ] && nday=$(date -v+1d +%F 2>/dev/null || date -d tomorrow +%F 2>/dev/null)
+      [ -e "$SG_STATE/auto/nightly-$nday" ] || [ -e "$SG_STATE/auto/nightly-missed-$nday" ] \
+        || nwhy="the nightly drain is open: the window opens at $(printf '%02d' "$nhour"):00"
+    elif [ "$nh" -eq "$nhour" ]; then
+      np=$(cat "$SG_STATE/locks/nightly/pid" 2>/dev/null)
+      if [ -n "$np" ] && kill -0 "$np" 2>/dev/null; then nwhy="the nightly runs (pid $np)"
+      elif [ ! -e "$SG_STATE/auto/nightly-$nday" ] && [ ! -e "$SG_STATE/auto/nightly-missed-$nday" ] && [ $((60 - nm)) -ge "$nneed" ]; then
+        nwhy="the nightly window is open"; fi
+    fi
   fi
   if [ -n "$nwhy" ]; then
     line="$(date -u '+%F %T') DISPATCH HOLD: $nwhy; no new run this pass"
