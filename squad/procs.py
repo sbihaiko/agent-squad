@@ -11,6 +11,7 @@ import dataclasses
 import functools
 import json
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -171,9 +172,14 @@ def _darwin_cpu(pid: int) -> float | None:
     return (user + system) * numer / denom / 1e9
 
 
+_NON_PRINTABLE = re.compile(r"[^\x20-\x7e]")   # the bytes a command's text escapes
+
+
 def _vis(raw: bytes) -> str:
-    """ps prints a command with each byte outside printable ASCII as an octal escape (a newline shows as \\012)."""
-    return "".join(chr(c) if 0x20 <= c < 0x7f else f"\\{c:03o}" for c in raw)
+    """The listing prints a command with each byte outside printable ASCII as an octal escape (a newline shows as \\012).
+    Latin-1 maps each byte to the code point of its own value, so one decode and one substitution answer what a per-byte
+    loop answered (#2582)."""
+    return _NON_PRINTABLE.sub(lambda m: "\\%03o" % ord(m.group()), raw.decode("latin-1"))
 
 
 def _parse_procargs2(raw: bytes) -> str | None:
