@@ -53,9 +53,13 @@ if [ "${1:-}" = --suite ]; then
   cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1; }
   echo "daysuites: load-at-start ${SG_DAYSUITES_LOAD:-$(load1)} cores ${SG_DAYSUITES_CORES:-$(cores)}"
   hm=$(mktemp -d) 2>/dev/null || hm=
+  # (#2484) The Python user site follows HOME, and the tree holds no .venv, so a suite's python3 lost the packages that live
+  # only there (pytest's pygments). The caller's user base is read before HOME moves and kept: it is an interpreter fact,
+  # never loop state.
+  ub=${PYTHONUSERBASE:-$(python3 -m site --user-base 2>/dev/null)}
   # Hermetic like shell-suites.sh: every inherited SG_* and SERIAL_* is cleared and HOME sits in its own temp dir, so the
   # live loop's state and profile never reach an assertion. The pass's own state is read before this line, never after.
-  env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="${hm:-/tmp}" bash "$suite"; rc=$?
+  env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="${hm:-/tmp}" ${ub:+PYTHONUSERBASE="$ub"} bash "$suite"; rc=$?
   [ -z "$hm" ] || rm -rf "$hm"
   exit "$rc"
 fi
