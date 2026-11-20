@@ -170,6 +170,16 @@ python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i f
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"would dispatch 1 cluster(s): [1228]"*) ok "2d one bug dispatches at once as one child";; *) ko "2d one bug did not dispatch as one child: '$r'";; esac
 rm -rf "$T/caps/gates"
+
+# 2e) (#2544, ADR-0158) A cluster larger than the free Doing cards splits, never drops: one card free in Doing and one
+#     cluster of two bugs that name one file. The run takes the first bug, and the second waits for a later pass.
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d+=[{"number":n,"title":"Core: shared crash %d"%n,"body":"step shared/z.py","created_at":"2026-09-01T15:30:00Z","labels":["bug","ready-for-agent"]} for n in (1232,1233)]; json.dump(d, open(p,"w"))' "$T/issues.json"
+printf 'caps:\n  runs: 2\ncolumns:\n  Doing:\n    max_cards: 2\n' > "$T/co/docs/squad/defaults.yaml"
+printf '1232\tTodo\n1233\tTodo\n900\tDoing\n' > "$T/cards.tsv"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 1 cluster(s): [1232] "*) ok "2e a cluster over the free Doing cards takes the bugs that fit";; *) ko "2e a cluster over the free Doing cards dispatched no fitting bug: '$r'";; esac
+[ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 1 ] && ok "2e the bug past the free cards waits, and bugs-waiting counts it" || ko "2e bugs-waiting reads '$(cat "$T/st/bugs-waiting" 2>/dev/null)', not 1"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"] not in (1232,1233)], open(p,"w"))' "$T/issues.json"
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; todo 1228 1229 1400 1401 60 61 62 70 71 72 73
 
 # 3) no startable bug: debt is dispatched
