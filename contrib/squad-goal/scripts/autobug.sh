@@ -203,9 +203,14 @@ ab_issue_gone() {   # <issue>: 0 when GitHub answers that the issue is deleted (
   printf '%s' "$(gh_api "repos/$SG_REPO/issues/$1" 2>&1)" | /usr/bin/grep -qiE "$AB_GONE_RE"
 }
 ab_resume() {   # the pending events of earlier passes: a Doing event launches its stored request once, and only while its issues still pass the gates
-  local groups run col req ids n board kept AB_ACTOR="autobug resume"
+  local groups line rest run col req ids n board kept AB_ACTOR="autobug resume"
   groups=$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null | awk -F'\t' 'NF>=5 { k=$2 "\t" $3 "\t" $5; ids[k]=ids[k] " " $1 } END { for (k in ids) print k "\t" substr(ids[k], 2) }')
-  while IFS=$'\t' read -r run col req ids <&3; do
+  # Each field is cut at its own tab (#2589): a tab is IFS whitespace, so `read` collapsed the empty request a writer such
+  # as `reconcile` records, the issue number landed in the request and no issue was left, and the row was skipped for good.
+  while IFS= read -r line <&3; do
+    run=${line%%$'\t'*}; rest=${line#*$'\t'}
+    col=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    req=${rest%%$'\t'*}; ids=${rest#*$'\t'}
     [ -n "$run" ] || continue
     kept=""; for n in $ids; do if ab_issue_gone "$n"; then ab_board_drop "$run" "$col" "$n"; echo "AUTOBUG $run: #$n is deleted; its pending $col write is dropped, nothing launches for it" >&2; else kept+="$n "; fi; done
     ids=${kept% }; [ -n "$ids" ] || continue
@@ -226,6 +231,29 @@ ab_resume() {   # the pending events of earlier passes: a Doing event launches i
       ab_free_refused "$run" "$req" $ids
     fi
   done 3<<<"$groups"
+}
+# A pending card write no later pass can land never clears on its own (#2589): an event whose issue left the open list is
+# dropped at once, and one older than SG_BOARD_PENDING_TTL (default 1800 s) is dropped with one cycle.log line. Both drops
+# go through `boardx`, the one drop path (ADR-0165), and they run before ab_resume reads the pending set, so the row
+# neither sets AB_PENDING nor rewrites a card. An open list this pass did not read drops nothing.
+ab_pending_prune() {   # drops the pending card writes whose issue closed, or that outlived the bound
+  local n run col instant req by open now ttl age
+  [ -s "$F/issues.json" ] && jq -e 'type == "array"' "$F/issues.json" >/dev/null 2>&1 || return 0
+  open=" $(jq -r '.[].number' "$F/issues.json" 2>/dev/null | tr '\n' ' ') "
+  now=$(date +%s); ttl=${SG_BOARD_PENDING_TTL:-1800}; case "$ttl" in ''|*[!0-9]*) ttl=1800;; esac
+  while IFS=$'\t' read -r n run col instant req by <&3; do
+    [ -n "$n" ] || continue
+    case "$open" in *" $n "*) ;; *)   # the issue is not open: no later pass can write its card
+      python3 "$here/issue_ledger.py" boardx "$SG_REPO#$n" "$run" "$col" >/dev/null 2>&1 || continue
+      printf 'AUTOBUG: dropped the pending %s/%s card write of #%s, its issue is closed\n' "$run" "$col" "$n" >> "$SG_STATE/cycle.log"
+      continue;;
+    esac
+    case "$instant" in ''|*[!0-9.]*) continue;; esac
+    age=$(awk -v a="$instant" -v b="$now" 'BEGIN { printf "%d", b - a }' 2>/dev/null)
+    [ -n "$age" ] && [ "$age" -gt "$ttl" ] 2>/dev/null || continue
+    python3 "$here/issue_ledger.py" boardx "$SG_REPO#$n" "$run" "$col" >/dev/null 2>&1 || continue
+    printf 'AUTOBUG: dropped the pending %s/%s card write of #%s, %ss old (bound %ss)\n' "$run" "$col" "$n" "$age" "$ttl" >> "$SG_STATE/cycle.log"
+  done 3<<<"$(python3 "$here/issue_ledger.py" pending "$SG_REPO" 2>/dev/null)"
 }
 # ---- The one line a pass writes to cycle.log (#1582) ---------------------------------------------------------------
 # A pass that dispatched nothing used to write nothing, and its own lines went to stderr: a stopped bug lane read as an
@@ -379,6 +407,7 @@ ab_check_open() {
     printf '%s' "$j" > "$F/body-$n.json"; live+=("$n")
   done
 }
+[ -n "${AB_DRY:-}" ] || ab_pending_prune
 [ -n "${AB_DRY:-}" ] || ab_resume
 [ "$free" -gt 0 ] || { AB_REASON="the run slots unit"; echo "AUTOBUG the run slots are full: $free of ${runs_cap:--} run slot(s) free; the run slots unit stopped the pass; nothing dispatched this pass" >&2; exit 0; }
 # A card limit on the Doing column (#2287, #2430): the lane starts no bug while the column holds its maximum, and says so
