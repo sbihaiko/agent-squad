@@ -441,6 +441,23 @@ python3 "$src" --answer "$T/r38.json" > "$T/r38.md" 2>/dev/null; arc=$?
 [ $arc = 0 ] && [ "$(python3 "$src" --summary "$T/r38.md")" = "blocking=1 debt=0" ] && /usr/bin/grep -q 'repro sandbox refused at abc1234' "$T/r38.err" && ! /usr/bin/grep -q 'repro passed' "$T/r38.md" \
   && ok "38 a sandbox that cannot apply keeps the finding Blocking and names the refusal, never 'repro passed'" \
   || ko "38 nested refusal: repro rc=$rc answer rc=$arc summary='$(python3 "$src" --summary "$T/r38.md" 2>&1)' err=$(cat "$T/r38.err")"
+# 41) #1960: the loop's own rebase-round review has one writer, and the landing pass reads it as changes, never malformed. Its
+# Blocking finding names a repro (ADR-0172) that exits non-zero while the branch conflicts with the ref and 0 once it is rebased.
+sd=$(cd "$(dirname "$src")" && pwd)
+for files in "g a.py" ""; do
+  python3 "$src" --round-review dev origin/dev "$files" > "$T/rr.md" 2>"$T/rr.err"; echo tip41 > "$T/rr.sha"
+  [ "$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)" = changes ] && /usr/bin/grep -q 'Rebase this branch on origin/dev,' "$T/rr.md" \
+    && ok "41 the round review ('${files:-no path}') classifies as changes" || ko "41 round review ('$files'): '$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)' $(cat "$T/rr.md" "$T/rr.err" 2>/dev/null)"
+done
+rp=$(sed -n 's/.* — repro: //p' "$T/rr.md" | head -1)
+G=/usr/bin/git; R=$T/rp; $G init -q -b dev "$R" && (cd "$R" && echo base > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m b \
+  && $G checkout -q -b w && echo mine > g && $G -c user.email=a@b -c user.name=t commit -q -am w && $G checkout -q dev && echo other > g \
+  && $G -c user.email=a@b -c user.name=t commit -q -am d && $G update-ref refs/remotes/origin/dev dev && $G checkout -q w)
+(cd "$R" && sh -c "$rp") >/dev/null 2>&1; c1=$?
+(cd "$R" && $G checkout -q -b clean origin/dev && sh -c "$rp") >/dev/null 2>&1; c2=$?
+[ -n "$rp" ] && [ "$c1" != 0 ] && [ "$c2" = 0 ] && ok "41 the repro fails while the branch conflicts and passes once rebased" || ko "41 repro '$rp': conflict rc=$c1, clean rc=$c2"
+n=$(/usr/bin/grep -l "Rebase this branch on" "$sd/wave.sh" "$sd/branchland.sh" 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" = 0 ] && ok "41 wave.sh and branchland.sh write no round review of their own" || ko "41 $n script(s) still write the round review text"
 # 42) #2565: a repro red at the head also runs at the base (--repro-base TREE SHA), and only then. Red at the head and green
 # at the base: Blocking, no note. Red at both: Blocking with a base note on its first round; Debt naming the base and both
 # heads when the previous answer (--repro-prev ANSWER SHA) holds the same repro. A base run that proves nothing keeps it Blocking.
@@ -495,21 +512,13 @@ shift 2; exec "$@"
 J
 chmod +x "$T/bin/sandbox-refuse-base"
 EXEC42=$T/bin/sandbox-refuse-base nothing42 refused 'sandbox refused' 'test -f headmark && exit 1; exit 1' 'pass' -- --repro-base "$T/b42" bbb1111
-# 41) #1960: the loop's own rebase-round review has one writer, and the landing pass reads it as changes, never malformed. Its
-# Blocking finding names a repro (ADR-0172) that exits non-zero while the branch conflicts with the ref and 0 once it is rebased.
-sd=$(cd "$(dirname "$src")" && pwd)
-for files in "g a.py" ""; do
-  python3 "$src" --round-review dev origin/dev "$files" > "$T/rr.md" 2>"$T/rr.err"; echo tip41 > "$T/rr.sha"
-  [ "$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)" = changes ] && /usr/bin/grep -q 'Rebase this branch on origin/dev,' "$T/rr.md" \
-    && ok "41 the round review ('${files:-no path}') classifies as changes" || ko "41 round review ('$files'): '$(python3 "$src" --classify "$T/rr.md" "$T/rr.sha" tip41 2>&1)' $(cat "$T/rr.md" "$T/rr.err" 2>/dev/null)"
-done
-rp=$(sed -n 's/.* — repro: //p' "$T/rr.md" | head -1)
-G=/usr/bin/git; R=$T/rp; $G init -q -b dev "$R" && (cd "$R" && echo base > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m b \
-  && $G checkout -q -b w && echo mine > g && $G -c user.email=a@b -c user.name=t commit -q -am w && $G checkout -q dev && echo other > g \
-  && $G -c user.email=a@b -c user.name=t commit -q -am d && $G update-ref refs/remotes/origin/dev dev && $G checkout -q w)
-(cd "$R" && sh -c "$rp") >/dev/null 2>&1; c1=$?
-(cd "$R" && $G checkout -q -b clean origin/dev && sh -c "$rp") >/dev/null 2>&1; c2=$?
-[ -n "$rp" ] && [ "$c1" != 0 ] && [ "$c2" = 0 ] && ok "41 the repro fails while the branch conflicts and passes once rebased" || ko "41 repro '$rp': conflict rc=$c1, clean rc=$c2"
-n=$(/usr/bin/grep -l "Rebase this branch on" "$sd/wave.sh" "$sd/branchland.sh" 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" = 0 ] && ok "41 wave.sh and branchland.sh write no round review of their own" || ko "41 $n script(s) still write the round review text"
+# the previous head equal to the head is no repeat: the finding stays Blocking with the base note
+printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py 'touch c.ran; false')" > "$T/r42d.json"
+r42 "$T/r42d.json" --repro-base "$T/b42" bbb1111 --repro-prev "$T/p42.json" hhh2222; rc=$?
+[ $rc = 0 ] && [ "$(bl42 "$T/r42d.json")" = "repro also fails at base bbb1111; y|" ] && [ "$(db42 "$T/r42d.json")" = "" ] \
+  && ok "42 a previous head equal to the head is no repeat" || ko "42 same head: rc=$rc blocking=$(bl42 "$T/r42d.json") debt=$(db42 "$T/r42d.json")"
+nothing42 signal 'signal' 'test -f headmark && exit 1; kill -9 $$' 'pass' -- --repro-base "$T/b42" bbb1111
+# a base run is capped at the budget left: a 5 s base run under a 1 s budget is killed, and proves nothing
+t42=$(date +%s); nothing42 cap 'exit 124' 'test -f headmark && exit 1; sleep 5' 'r.REPRO_BASE_BUDGET = 1' -- --repro-base "$T/b42" bbb1111
+[ $(( $(date +%s) - t42 )) -lt 4 ] && ok "42 a base run past the budget left is killed" || ko "42 budget cap: the base run took $(( $(date +%s) - t42 ))s"
 rm -rf "$T"; exit $fail

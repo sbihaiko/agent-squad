@@ -921,6 +921,21 @@ out=$(cd "$T/w65" && REPRO_CMD=$(rp36 "$MB" "$TIP") bash "$T/s/review.sh" --work
   && [ "$(git -C "$R" worktree list | wc -l | tr -d ' ')" = 2 ] \
   && ok "36 --worktree runs the base repro in a throwaway worktree of the merge-base, and removes it" \
   || ko "36 --worktree base repro: rc=$rc blocking=$(fails36 fix_65-x blocking) worktrees=$(git -C "$R" worktree list | wc -l) err=$(cat "$T/r65.err")"
+# One head run per review: a repro that turns green on its second run (a count file in the reviewed tree) runs once at the
+# head, so its finding stays Blocking with the base note.
+$G worktree add -q -b fix/66-x "$T/w66" "$MB"; echo h > "$T/w66/h"; git -C "$T/w66" add h; git -C "$T/w66" -c user.email=a@b -c user.name=t commit -q -m head
+rm -f "$T/st/review-fix_66-x".* "$T/st/cq/"*
+out=$(cd "$T/w66" && REPRO_CMD='echo x >> runs-2565; test $(wc -l < runs-2565) -ge 2' bash "$T/s/review.sh" --worktree dev 66 2>"$T/r66.err"); rc=$?
+[ "$(/usr/bin/wc -l < "$T/w66/runs-2565" 2>/dev/null | tr -d ' ')" = 1 ] && [ "$(fails36 fix_66-x blocking)" = "repro also fails at base $MB; the defect ships" ] \
+  && ok "36 a review runs each Blocking repro once at the head" \
+  || ko "36 head runs: rc=$rc runs=$(/usr/bin/wc -l < "$T/w66/runs-2565" 2>/dev/null) blocking=$(fails36 fix_66-x blocking) debt=$(fails36 fix_66-x debt) err=$(cat "$T/r66.err")"
+# no tree holds the base (its worktree add fails): no base repro runs, the finding stays Blocking, and stderr names the reason
+mkdir -p "$T/gitfail"; printf '#!/bin/bash\ncase " $* " in *" worktree add "*"$GIT_FAIL_SHA"*) exit 128;; esac\nexec /usr/bin/git "$@"\n' > "$T/gitfail/git"; chmod +x "$T/gitfail/git"
+rm -f "$T/st/review-fix_66-x".* "$T/st/cq/"*
+out=$(cd "$T/w66" && PATH=$T/gitfail:$PATH GIT_FAIL_SHA=$MB REPRO_CMD=false bash "$T/s/review.sh" --worktree dev 66 2>"$T/r66b.err"); rc=$?
+[ "$(fails36 fix_66-x blocking)" = "the defect ships" ] && /usr/bin/grep -q "no tree holds base $MB" "$T/r66b.err" \
+  && ok "36 a base with no tree keeps its Blocking finding and names the reason" \
+  || ko "36 no base tree: rc=$rc blocking=$(fails36 fix_66-x blocking) err=$(cat "$T/r66b.err")"
 # --branch: the checkout ($T/co) sits at the merge-base with dirty-2565; origin/dev is the base tip.
 C="git -C $T/co -c user.email=a@b -c user.name=t"; $C commit -q -am pre2565 >/dev/null 2>&1; MB=$(git -C "$T/co" rev-parse HEAD); : > "$T/co/dirty-2565"
 H1=$($C commit-tree "$MB^{tree}" -p "$MB" -m head2565); TIP=$($C commit-tree "$MB^{tree}" -p "$MB" -m tip2565); git -C "$T/co" update-ref refs/remotes/origin/dev "$TIP"
@@ -930,12 +945,18 @@ out=$(GH_SHA=$H1 SG_REVIEW_BASE=dev REPRO_CMD=$(rp36 "$MB" "$TIP") bash "$T/s/re
   && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
   && ok "36 --branch runs the base repro in a throwaway worktree of the merge-base, never the checkout, and removes it" \
   || ko "36 --branch base repro: rc=$rc blocking=$(fails36 fix_1-x blocking) worktrees=$(git -C "$T/co" worktree list | wc -l) err=$(cat "$T/r36.err")"
+# a previous head that is no ancestor of the head (a rebase) is no repeat: the finding stays Blocking with the base note
+H3=$($C commit-tree "$MB^{tree}" -p "$MB" -m head2565c)
+out=$(GH_SHA=$H3 SG_REVIEW_BASE=dev REPRO_CMD=$(rp36 "$MB" "$TIP") bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/r36d.err"); rc=$?
+[ "$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)" = "VERDICT: CHANGES" ] && [ "$(fails36 fix_1-x blocking)" = "repro also fails at base $MB; the defect ships" ] \
+  && ok "36 a previous head that is no ancestor of the head is no repeat" \
+  || ko "36 non-ancestor: rc=$rc blocking=$(fails36 fix_1-x blocking) debt=$(fails36 fix_1-x debt) err=$(cat "$T/r36d.err")"
 # the fix round: the same repro is red at the base and at a second head, so its finding moves to Debt and the debt-only
 # CHANGES saves as APPROVE (#653).
-H2=$($C commit-tree "$MB^{tree}" -p "$H1" -m head2565b)
+H2=$($C commit-tree "$MB^{tree}" -p "$H3" -m head2565b)
 out=$(GH_SHA=$H2 SG_REVIEW_BASE=dev REPRO_CMD=$(rp36 "$MB" "$TIP") bash "$T/s/review.sh" --branch fix/1-x 8 2>"$T/r36b.err"); rc=$?
 [ "$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)" = "VERDICT: APPROVE" ] && [ "$(fails36 fix_1-x blocking)" = "" ] \
-  && [ "$(fails36 fix_1-x debt)" = "repro fails at base $MB and at heads $H1, $H2; the defect ships" ] \
+  && [ "$(fails36 fix_1-x debt)" = "repro fails at base $MB and at heads $H3, $H2; the defect ships" ] \
   && [ "$(git -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] \
   && ok "36 a fix round whose only Blocking finding is red at the base and at two heads saves as APPROVE" \
   || ko "36 two heads: rc=$rc line1=$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null) blocking=$(fails36 fix_1-x blocking) debt=$(fails36 fix_1-x debt) err=$(cat "$T/r36b.err")"
