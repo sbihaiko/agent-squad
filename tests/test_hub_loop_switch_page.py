@@ -605,6 +605,17 @@ def test_the_settings_panel_keeps_no_loop_row():
     assert re.search(r"#inst \.lnow\{[^}]*border:0", src), "the Monitor row carries no box"
 
 
+def test_the_visual_check_renders_ride_beside_the_test():
+    """#2515's acceptance criteria hold the ego-browser renders and their README beside this test, so the proof of the
+    theme list and the change list's place travels with the change that makes it."""
+    for rel in ("docs/evidence/2515/settings-1440.png", "docs/evidence/2515/settings-1000.png",
+                "docs/evidence/2515/loop-1440.png", "docs/evidence/2515/loop-1000.png",
+                "docs/evidence/2515/loop-open-1440.png", "docs/evidence/2515/loop-open-1000.png",
+                "docs/evidence/2515/README.md"):
+        path = ROOT / rel
+        assert path.is_file() and path.stat().st_size > 0, rel
+
+
 # ---- loops per project (SPEC 1596, rule 8; #1599) ----
 # A project is one profile the seam lists, and each project keeps its own state directory: its supervisor pid, its drain
 # mark, its live-run list, its change log, its board cache and its loop-bugs. The loop fact lists every one of them, so no
