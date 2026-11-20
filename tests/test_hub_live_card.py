@@ -164,8 +164,9 @@ def test_the_control_routes_through_the_page_tab_handler(page):
 
 
 def test_the_card_says_none_and_draws_no_control_when_nothing_is_live(page):
+    """#2507, #2572: the runs pill keeps its zero count; a carrier's pill hides when its count is zero."""
     out = _card(page, [])
-    assert "🏃 <b>0</b>" in out["head"] and "✋ <b>0</b>" in out["head"]
+    assert "🏃 <b>0</b>" in out["head"] and "✋" not in out["head"] and "haleye" not in out["head"]
     assert "no live work" in _visible(out["html"])
     assert "id=lrmore" not in out["html"]
 
