@@ -9965,9 +9965,8 @@ def with_overlay(body, dash=False):
     i = body.rfind(b"</body>")
     return body[:i] + tag + body[i:] if i >= 0 else body + tag
 
-# The phone's content-security line (#1155): `blob:` admits the one preview a picked photo draws, a URL the page itself
-# holds; the page loads no image from another origin.
-MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:"
+# The phone's content-security line: the page loads no image from another origin.
+MOBILE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self'"
 
 GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js").read_text()
 # The phone's lead-time drawing (#1333): the desktop payload's numbers, laid out for the phone. Rules stay out of the
@@ -9980,17 +9979,9 @@ CARD_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-card.js").read_
 # The loop rules of the phone page (SPEC 1596, rule 8; #1599): the aggregate, one row per project and the one primary of a
 # loop page. A pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
 LOOP_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-loop.js").read_text()
-# The chat rules of the phone page (SPEC 1596, rules 9 and 10; #1601): one row per project, the chips, the receipts and
-# the one badge. A pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
-CHAT_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-chat.js").read_text()
-# The voice rules of the phone page (SPEC 1596, frames 17 and 19, rule 10; #1603): the hold's recording states with their
-# timer, waveform, cancel zone, hints and cap, and the one Kore clip per answer. A pure rule module, so the view binds and
-# delegates and holds no rule of its own (ADR-0137).
-VOICE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-voice.js").read_text()
 # The phone's card link (#1459): `#issue=N` names one card, and one module names the result the board answers. The page
 # binds the hash and opens the card, and holds no rule of its own (ADR-0137).
 LINK_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-link.js").read_text()
-QUESTION_JS = (pathlib.Path(__file__).resolve().parent / "hub-question-card.js").read_text()
 RUN_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-run.js").read_text()
 # Runs › Usage on the phone (SPEC 1596, #1604): the token bars and the model pie, shaped from the desktop's /api/stats.
 USAGE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-usage.js").read_text()
@@ -10011,135 +10002,8 @@ INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
                      *re.findall(r"^function ld(?:Num|Round|Cell|Cells)\(.*$", PAGE, re.M),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
 
-# The phone's one photo (#1155): the composer's image input, its chip and its send. The input accepts images and names
-# no capture, so the picker offers the camera and the library; the chip previews a blob the page owns; the send takes the
-# overlay's one attach route with the words in the same message. The page's own text send and 4000-character cap stay.
-MOBILE_PHOTO_CSS = """
-#termview-photo{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
-/* The one image input (#1155) sits out of the flow, so its label opens the picker with the camera and the library. */
-#termview-file{position:absolute;width:1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
-#termview-attach{display:flex;align-items:center;gap:8px}
-#termview-attach[hidden]{display:none}
-#termview-attach img{flex:none;width:44px;height:44px;object-fit:cover;background:var(--input);border:1px solid var(--line);border-radius:var(--radius-md)}
-#termview-attach-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
-#termview-attach-x{flex:none;min-width:44px;min-height:44px;padding:0;background:none;color:var(--mute);border:0;font:var(--fs-heading)/1 var(--font-ui)}
-"""
-MOBILE_PHOTO_MARKUP = (f"<style>{MOBILE_PHOTO_CSS}</style>\n"
-                       '<div id="termview-attach" role="group" aria-label="Photo" hidden><img id="termview-attach-img" alt="">'
-                       '<span id="termview-attach-name"></span><button id="termview-attach-x" type="button" '
-                       'aria-label="Remove the photo" title="Remove the photo"><svg class="ico" viewBox="0 0 12 12" '
-                       'aria-hidden="true" focusable="false"><path d="M3 3l6 6M9 3l-6 6"/></svg></button></div>\n')
-MOBILE_PHOTO_ROW = ('<label id="termview-photo" for="termview-file">Attach</label>'
-                    '<input id="termview-file" type="file" accept="image/*" aria-label="Take or choose a photo">'
-                    '<button id="termview-send" type="button">Send</button>')
-MOBILE_TEXTAREA = '<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>'
-MOBILE_SEND = '<button id="termview-send" type="button">Send</button>'
-MOBILE_PHOTO_JS = """
-// The phone's photo composer (#1155): one image input offers the camera and the library, one chip previews the picked
-// image from a blob this page owns, and the send takes the overlay's one attach route with the words in the same
-// message. A plain message keeps the page's own send (#834), and the text cap stays the textarea's 4000 characters.
-const PHOTO_TEXT_CAP = 4000;   // the phone's one text cap (#1006): a bigger text file is a file, not a message
-function photoDraft(sid) { const d = sid ? termDraft(sid) : null; if (d && d.photo === undefined) d.photo = null; return d; }
-// The chip belongs to the open session, so every paint names its session and leaves the DOM alone once another is open.
-function photoPaint(sid) {
-  if (sid !== termSid) return;
-  const d = photoDraft(sid), p = d && d.photo;
-  $("termview-attach").hidden = !p;
-  if (!p) { $("termview-attach-img").removeAttribute("src"); $("termview-attach-img").alt = ""; $("termview-attach-name").textContent = ""; return; }
-  $("termview-attach-img").src = p.url; $("termview-attach-img").alt = p.name;
-  $("termview-attach-name").textContent = p.ready ? p.name : "Reading " + p.name + "…";
-}
-function photoSync(sid) {
-  if (sid !== termSid) return;
-  const d = photoDraft(sid);
-  $("termview-send").disabled = !d || d.pending || !!(d.photo && !d.photo.ready);
-}
-function photoClear(sid) {
-  const d = photoDraft(sid);
-  if (d && d.photo) { if (d.photo.url) URL.revokeObjectURL(d.photo.url); d.photo = null; }
-  photoPaint(sid); photoSync(sid);
-}
-function photoSay(sid, msg) { const d = photoDraft(sid); if (!d) return; d.sent = msg; if (sid === termSid) $("termview-sent").textContent = msg; }
-async function photoStage(file) {
-  const sid = termSid, d = photoDraft(sid);
-  if (!file || !d) return;   // the composer takes one image, and only for the open session
-  photoClear(sid);           // one photo per message: a second pick replaces the first
-  const p = { name: String(file.name || "photo"), url: URL.createObjectURL(file), bytes: null, ready: false };
-  d.photo = p; photoPaint(sid); photoSync(sid);
-  let bytes = null;
-  try { bytes = await file.arrayBuffer(); } catch (e) { bytes = null; }
-  if (d.photo !== p) return;   // removed or replaced while it was read
-  if (!bytes) { photoSay(sid, "No photo: the file could not be read."); photoClear(sid); return; }
-  p.bytes = bytes; p.ready = true; photoPaint(sid); photoSync(sid);
-}
-$("termview-file").addEventListener("change", e => {
-  const file = e.target.files && e.target.files[0];
-  e.target.value = "";   // the same photo picked again is a new change
-  if (file) photoStage(file);
-});
-$("termview-attach-x").onclick = () => { if (termSid) photoClear(termSid); };
-// Every draft switch paints the open session's own chip, and the send waits while a read is in flight.
-const photoShowDraft = showDraft;
-showDraft = () => { photoShowDraft(); photoPaint(termSid); photoSync(termSid); };
-// A photo's send takes the overlay's one attach route (#1154), so the phone adds no second upload path (#1155). The
-// words ride in the same message under one client id, and the hub keeps the send's cap on the whole message.
-const photoSendText = $("termview-send").onclick;
-$("termview-send").onclick = async () => {
-  const sid = termSid, d = photoDraft(sid), photo = d && d.photo && d.photo.ready ? d.photo : null;
-  if (!photo) return photoSendText();
-  if (d.pending) return;
-  const text = $("termview-text").value.trim().slice(0, PHOTO_TEXT_CAP);
-  if (d.cidText !== text || d.cidPhoto !== photo) { d.cid = crypto.randomUUID(); d.cidText = text; d.cidPhoto = photo; }
-  d.pending = true; if (sid === termSid) photoSync(sid);
-  photoSay(sid, "Sending");
-  try {
-    const q = "kind=image&sid=" + encodeURIComponent(sid) + "&client_id=" + encodeURIComponent(d.cid) + "&text=" + encodeURIComponent(text);
-    const r = await writing(fetch("/api/sessions/attach?" + q, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: photo.bytes }));
-    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
-    const res = await r.json();
-    const word = { sent: "Sent: the session's inbox accepted the message and the photo", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
-    photoSay(sid, word + (res.reason ? " (" + res.reason + ")" : ""));
-    if (res.status === "sent" || res.status === "refused") { d.cid = null; d.cidText = null; d.cidPhoto = null; }
-    // A sent photo is answered and leaves. An uncertain send or a failed request is no answer, so the photo stays with
-    // its request id and the retry repeats the same message the hub answers once.
-    if (res.status === "sent") { d.text = ""; if (sid === termSid) $("termview-text").value = ""; photoClear(sid); }
-  } catch (err) { photoSay(sid, err.message); }
-  finally { d.pending = false; if (sid === termSid) photoSync(sid); }
-};
-// The attach sheet (frames 20 and 21; #1602): the thumb opens it from the bottom edge, and each door points the one image
-// input at its own picker. Cancel closes it and leaves the composer as it was. The three options are the chat module's
-// (ADR-0137): the page draws them and holds no list of its own.
-function attachOpen() { $("attach-sheet").hidden = false; }
-function attachClose() { $("attach-sheet").hidden = true; }
-function attachPick(o) {
-  const input = $("termview-file");
-  if (o.accept) input.setAttribute("accept", o.accept); else input.removeAttribute("accept");
-  if (o.capture) input.setAttribute("capture", o.capture); else input.removeAttribute("capture");
-  attachClose();
-  input.click();
-}
-function attachDraw() {
-  const cancel = document.createElement("button");
-  cancel.type = "button"; cancel.id = "attach-cancel"; cancel.textContent = "Cancel"; cancel.onclick = attachClose;
-  $("attach-sheet").replaceChildren(...chatAttach().map(o => {
-    const b = document.createElement("button");
-    b.type = "button"; b.id = "attach-" + o.id; b.textContent = o.label; b.onclick = () => attachPick(o);
-    return b;
-  }), cancel);
-}
-attachDraw();
-$("termview-photo").onclick = e => { if (e) e.preventDefault(); attachOpen(); };
-"""
-
-def mobile_photo(page):
-    """The served phone page with the one photo composer (#1155): the chip before the textarea, the label and the input
-    beside Send, and the script at the end of the terminals block, where the page's own send is already assigned."""
-    return (page.replace(MOBILE_TEXTAREA, MOBILE_PHOTO_MARKUP + MOBILE_TEXTAREA)
-                .replace(MOBILE_SEND, MOBILE_PHOTO_ROW)
-                .replace("// terminals:end", MOBILE_PHOTO_JS + "// terminals:end"))
-
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
-MOBILE_PAGE = mobile_photo((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--OVERLAY-->", overlay_tag(OVERLAY_HUB)).replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*QUESTION*/", QUESTION_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS).replace("/*CHAT*/", CHAT_JS).replace("/*VOICE*/", VOICE_JS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
+MOBILE_PAGE = ((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()

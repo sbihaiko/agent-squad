@@ -1,4 +1,4 @@
-"""The phone's warnings answer the keyboard, its message lines are announced, and its terminal list is a live region
+"""The phone's warnings answer the keyboard, its message lines are announced, and it carries no terminal list
 (#1457, part of #1115).
 
 The page is read as served for the markup facts, and booted under node over the stub DOM of the move tests for the
@@ -49,10 +49,9 @@ def test_every_message_line_carries_role_status(hub):  # noqa: F811
     assert unnamed == [], f"message lines without role=status: {unnamed}"
 
 
-def test_the_terminal_list_is_a_live_region(hub):  # noqa: F811
+def test_the_phone_page_carries_no_terminal_list(hub):  # noqa: F811
     row = next((a for tag, a in _tags(hub.MOBILE_PAGE) if a.get("id") == "sessions"), None)
-    assert row is not None, "the phone page carries no terminal list"
-    assert row.get("aria-live") == "polite", f"the terminal list is not a live region: {row}"
+    assert row is None, f"the phone page still carries a terminal list: {row}"
 
 
 DRIVER = """

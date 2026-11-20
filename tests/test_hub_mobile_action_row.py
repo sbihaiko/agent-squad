@@ -20,7 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 CARD_JS = SCRIPTS / "hub-mobile-card.js"
 HUB_PY = SCRIPTS / "hub.py"
-TABS = ["now", "work", "specs", "chat", "runs"]
+TABS = ["now", "work", "specs", "runs"]
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +66,8 @@ def test_every_root_draws_one_control_row(hub):
     for tab in TABS:
         v = out[tab]
         assert v["hidden"] is False, f"{tab} draws no control row: {v}"
-        assert v["seg"], f"{tab} draws no segmented filter: {v}"
+        if tab != "now":
+            assert v["seg"], f"{tab} draws no segmented filter: {v}"
         assert v["scope"] in ("All projects", "x"), f"{tab} names no scope: {v}"
 
 
@@ -78,7 +79,7 @@ def test_the_last_filter_option_says_what_it_includes(hub):
         return seen;
     """)
     for tab, options in out.items():
-        assert options[-1].startswith(("Any ", "Every ")), f"{tab} ends its filter with {options[-1]!r}"
+        assert not options or options[-1].startswith(("Any ", "Every ")), f"{tab} ends its filter with {options[-1]!r}"
 
 
 def test_the_control_row_sits_above_the_tab_bar(hub):
@@ -117,15 +118,15 @@ def test_the_work_segment_filters_the_card_list(hub):
 
 @pytest.mark.node_bound
 def test_a_root_with_one_view_offers_one_filter_option(hub):
-    """A root the page cannot filter presents no second segment: no button promises a filter that does not exist. Now
-    offers two: Needs you (rule 10) and the whole item list."""
+    """A root the page cannot filter presents no second segment: no button promises a filter that does not exist. Specs
+    offers one; Now offers none, because its waiting rows left the page with the chat (#2490)."""
     out = run_page(hub.MOBILE_PAGE, """
         show("now");
         const now = [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent);
         show("specs");
         return { now, specs: [...document.querySelectorAll("#cr-seg button")].map(b => b.textContent) };
     """)
-    assert out == {"now": ["Needs you", "Any item"], "specs": ["Any spec"]}, out
+    assert out == {"now": [], "specs": ["Any spec"]}, out
 
 
 @pytest.mark.node_bound

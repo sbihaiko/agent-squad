@@ -51,8 +51,10 @@ def test_the_profile_hub_page_carries_the_overlay_once(hub):
     assert 'window.SQUAD_OV_SOURCES' in page
 
 
-def test_the_mobile_page_carries_the_overlay_once(hub):
-    assert hub.MOBILE_PAGE.count(MARK) == 1
+def test_the_mobile_page_carries_no_overlay(hub):
+    """The overlay hosts a session composer, so it left the phone page with the chat (#2490)."""
+    assert hub.MOBILE_PAGE.count(MARK) == 0
+    assert "sq-ov-btn" not in hub.MOBILE_PAGE
 
 
 def test_the_index_carries_the_overlay_and_reads_each_repositorys_sessions():

@@ -1,8 +1,8 @@
 """The phone page on a notched screen (#1008): safe-area insets, per-tab scroll, and targets that never zoom.
 
-The full-screen run and terminal headers clear the top inset, and the terminal composer clears the bottom inset. A sheet
-sizes to the dynamic viewport. A tab keeps its own page scroll. The terminal textarea is at least 16 px, so iOS never
-zooms on focus; "Desktop page" is a 44 px target; the board says it is loading before the first read answers.
+The full-screen run header clears the top inset, and the run's action row clears the bottom inset. A sheet sizes to the
+dynamic viewport. A tab keeps its own page scroll. The search field is at least 16 px, so iOS never zooms on focus;
+"Desktop page" is a 44 px target; the board says it is loading before the first read answers.
 
 The styles are read from the page's own stylesheet, comments stripped; the behavior runs the served page under node over
 the stub DOM of the move tests.
@@ -25,13 +25,13 @@ def _decls(selector):
     return ";".join(out).replace(" ", "")
 
 
-@pytest.mark.parametrize("selector", ["#runview-head", "#termview-head"])
+@pytest.mark.parametrize("selector", ["#runview-head"])
 def test_a_full_screen_header_clears_the_top_inset(selector):
     assert "env(safe-area-inset-top)" in _decls(selector), f"{selector} does not clear the top safe area"
 
 
-def test_the_terminal_composer_clears_the_bottom_inset():
-    assert "env(safe-area-inset-bottom)" in _decls("#termview-compose")
+def test_the_run_action_row_clears_the_bottom_inset():
+    assert "env(safe-area-inset-bottom)" in _decls("#runview-actions")
 
 
 @pytest.mark.parametrize("selector", ["#sheet", "#psheet"])
@@ -39,9 +39,9 @@ def test_a_sheet_sizes_to_the_dynamic_viewport(selector):
     assert re.search(r"max-height:\d+dvh", _decls(selector)), f"{selector} does not use dvh"
 
 
-def test_the_terminal_textarea_never_triggers_the_ios_focus_zoom():
-    declarations = _decls("#termview-text")
-    assert "font-size:var(--fs-field)" in declarations, "the terminal textarea does not use the field token"
+def test_the_search_field_never_triggers_the_ios_focus_zoom():
+    declarations = _decls("#searchbar input")
+    assert "font-size:var(--fs-field)" in declarations, "the search field does not use the field token"
     assert "--fs-field:16px" in (PAGE.parent / "web-tokens.css").read_text(), "the field token is under 16 px"
 
 

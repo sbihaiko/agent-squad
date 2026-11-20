@@ -16,7 +16,7 @@ from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0
 SHA = "0123456789abcdef0123456789abcdef01234567"
-TABS = ["now", "work", "specs", "chat", "runs"]
+TABS = ["now", "work", "specs", "runs"]
 
 
 @pytest.fixture(scope="module")
@@ -130,7 +130,7 @@ def test_the_count_gauges_draw_on_a_390x844_phone(hub):
 
 
 @pytest.mark.parametrize("stored, tab", [(None, "now"), ("status", "now"), ("monitor", "now"), ("board", "work"),
-                                         ("terminals", "chat"), ("more", "now"), ("gone", "now")])
+                                         ("terminals", "now"), ("more", "now"), ("gone", "now")])
 def test_a_stored_tab_keeps_its_meaning(hub, stored, tab):
     """A tab stored by an older build opens the tab that draws it now, and an unknown name opens the first tab."""
     assert run_page(hub.MOBILE_PAGE, f"return tabOf({json.dumps(stored)});", routes=_routes(hub)) == tab

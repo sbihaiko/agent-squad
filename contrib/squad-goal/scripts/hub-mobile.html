@@ -303,92 +303,6 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #run-menu{position:absolute;right:14px;bottom:calc(62px + 8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
 #run-menu[hidden]{display:none}
 #run-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#runov-tail{margin:0;white-space:pre-line;font:var(--fs-caption) var(--font-mono);color:var(--mute);overflow-wrap:anywhere}
-#runov-session-row[hidden],#runov-open[hidden]{display:none}
-#runov-open{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
-#termview{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column}
-#termview[hidden]{display:none}
-#termview-head{display:flex;align-items:center;gap:8px;height:calc(52px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 12px 0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-bottom:1px solid var(--line)}
-#termview-back,#termview-older,#termview-send{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
-/* The terminal's back sits in its composer, at the bottom edge and in the thumb zone, by the Send it stands beside (#1142). */
-#termview-compose{display:grid;gap:6px;padding:8px 12px calc(64px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));border-top:1px solid var(--line)}
-#termview-row{display:flex;align-items:center;gap:8px}
-#termview-text{min-height:44px;font:inherit;font-size:var(--fs-field);background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
-#termview-name{font-size:var(--fs-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#termview-older{margin:8px 12px 0}
-#termview-facts{font-size:var(--fs-caption);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The quick answers sit between the thread and the composer, so they ride above the composer and above the keyboard. */
-#termview-chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 12px 8px;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
-#termview-chips[hidden]{display:none}
-#termview-chips .qchip{min-height:44px;flex:1 1 auto;background:var(--bg);color:var(--fg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font:var(--fs-body) system-ui,sans-serif;text-align:center}
-#termview-acted{min-height:44px;justify-self:start;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#termview-acted[hidden]{display:none}
-/* The mic and the recording row (SPEC 1596, frames 17 and 19; #1603): a hold draws the timer, the waveform, the cancel
-   zone and the three hints, and the release is the send. The row replaces the composer while it is up. */
-#termview-mic{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px}
-#termview-rec{display:grid;grid-template-columns:auto auto 1fr auto auto;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--panel)}
-#termview-rec[hidden]{display:none}
-#termview-rec .voicedot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--err)}
-#termview-rec #voice-time{font:var(--fs-body) var(--font-mono);color:var(--fg)}
-#termview-rec .voicewave{display:flex;align-items:center;gap:2px;min-height:24px}
-#termview-rec .voicewave span{width:3px;background:var(--err);border-radius:var(--radius-sm)}
-#termview-rec .voicecancel{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
-#termview-rec .voicecancel.into{color:var(--fg);border-color:var(--err);background:var(--tint-err)}
-#termview-rec .voicemic{align-self:end;color:var(--mute);font-size:var(--fs-caption)}
-#termview-rec .voicehints{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;margin:0;color:var(--mute);font-size:var(--fs-caption)}
-#termview-rec .voicehint b{color:var(--fg)}
-/* One Kore clip per answer (frame 17; #1603): one play or pause control, the waveform, the voice and elapsed over total. */
-.turn .clip{display:flex;align-items:center;gap:8px;margin-top:6px;padding:6px 8px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md)}
-.turn .clip-play{min-width:44px;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
-.turn .clip-voice{color:var(--mute);font-size:var(--fs-caption)}
-.turn .clip-time{color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-left:auto}
-/* The Chat root (SPEC 1596, rule 10; #1601): one row per project with its loop dot, last message, time and waiting mark. */
-.chatrow{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
-.chatrow .loopdot{width:10px;height:10px;border-radius:var(--radius-full);background:var(--mute);align-self:center}
-.chatrow .loopdot.on{background:var(--ok)}.chatrow .loopdot.off{background:var(--err)}.chatrow .loopdot.draining,.chatrow .loopdot.starting{background:var(--warn)}
-.chatrow .mut{color:var(--mute);font-size:var(--fs-caption)}
-.chatrow .waitmark{grid-column:1/-1;color:var(--warn);font-size:var(--fs-caption)}
-.chatrow .waitmark:empty{display:none}
-/* One badge, on Chat (rule 10): the waiting rows of the scope, drawn from the element's own attribute so no extra node
-   and no extra tap target reaches the bar. */
-nav [data-tab=chat]{position:relative}
-nav [data-tab=chat]::after{content:attr(data-badge);position:absolute;top:2px;right:6px;min-width:18px;height:18px;border-radius:var(--radius-full);background:var(--err);color:var(--on-tone);font-size:var(--fs-caption);line-height:18px;text-align:center;padding:0 4px}
-nav [data-tab=chat]:not([data-badge])::after,nav [data-tab=chat][data-badge=""]::after{content:none}
-#termview-turns{flex:1;overflow:auto;padding:8px 12px;display:grid;gap:8px;align-content:start}
-.turn{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif}
-.turn b{display:block;color:var(--mute);font-size:var(--fs-caption);margin-bottom:2px}
-.turn div{white-space:pre-wrap;overflow-wrap:anywhere}
-/* Rule 9 (#1602): a send the hub never answered stays in the thread with its mark, and one tap retries it. */
-.turn.failed{width:100%;text-align:left;color:var(--fg);border-color:var(--err);display:grid;gap:2px;cursor:pointer}
-.turn.failed .notsent{color:var(--err);font-size:var(--fs-caption)}
-/* Frame 17 (#1602): the attach route writes the image's path into the message, and the bubble draws the hub's file. */
-.turn a.sq-img,.turn a.img{display:block;margin:4px 0}
-.turn img.thumb{display:block;max-width:100%;max-height:220px;object-fit:cover;border-radius:var(--radius-md);background:var(--input);border:1px solid var(--line)}
-/* The composer names the kept draft (rule 9), and the banner names the outage and how many messages wait (#1602). */
-#termview-draft{font-size:var(--fs-caption);color:var(--mute);margin:0}
-#termview-draft[hidden]{display:none}
-#termview-outage{font-size:var(--fs-caption);color:var(--err);margin:0}
-#termview-outage[hidden]{display:none}
-/* Frames 20 and 21 (#1602): the attach sheet rises from the bottom edge, in the thumb's reach. */
-#attach-sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;display:grid;gap:8px;padding:8px 12px calc(12px + env(safe-area-inset-bottom));padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right));background:var(--panel);border-top:1px solid var(--line)}
-#attach-sheet[hidden]{display:none}
-#attach-sheet button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font:inherit;font-size:var(--fs-field)}
-#attach-sheet #attach-cancel{border-color:var(--acc)}
-.qcard{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px 10px;font:var(--fs-body) system-ui,sans-serif;display:grid;gap:8px;align-content:start}
-.qcard button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font:var(--fs-body) system-ui,sans-serif;text-align:left}
-.qcard .qtabs,.qcard .qctl{display:flex;flex-wrap:wrap;gap:6px}
-.qcard .qtab.active,.qcard .qopt.focused{border-color:var(--acc)}
-.qcard .qtab.answered{color:var(--fg)}.qcard .qtab:not(.answered){color:var(--mute)}
-.qcard .qopts{display:grid;gap:6px}
-.qcard .qopt{display:grid;gap:2px;width:100%;padding:6px 12px}
-.qcard .qopt.selected{border-left:3px solid var(--acc)}
-.qcard .qlabel{font-weight:600}
-.qcard .qdesc,.qcard .qbadge{color:var(--mute);font-size:var(--fs-caption)}
-.qcard .qbadge{color:var(--acc);font-weight:600}
-.qcard .qhead{font-weight:600;margin:0}.qcard .qbody{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
-.qcard .qwarn{color:var(--warn);margin:0}
-.qcard .qstate{color:var(--mute);margin:0}
-.qcard .qerr{color:var(--warn);margin:0}
 .card.armed{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
 .card .cmv{display:none;color:var(--ok);font-size:var(--fs-caption);margin-top:4px}
 .card.armed .cmv{display:block}
@@ -399,8 +313,6 @@ nav [data-tab=chat]:not([data-badge])::after,nav [data-tab=chat][data-badge=""]:
 #undo-text{flex:1;font-size:var(--fs-body)}
 #undo button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #undo button[hidden]{display:none}
-:root:has(#undo:not([hidden])){--sq-ov-bottom:calc(142px + env(safe-area-inset-bottom))}
-:root:has(#sheet:not([hidden])){--sq-ov-bottom:calc(60dvh + 12px)}
 /* Motion in the language of the desktop lane fade (owner, 2026-11-01): what comes in eases out, what goes eases in, and
    nothing waits on it. A sheet slides up from the bottom edge and back down. A card the last render did not draw fades in;
    a lane that shuts folds its cards away; reduced motion turns all of it off. */
@@ -471,11 +383,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id=bugs-msg class=msg role=status></p></div>
 <div id=bugs-actions><button id=bugs-backact data-actback type=button>Back</button></div>
 </article>
-<!-- Now › Needs you (SPEC 1596, rule 10; #1601): the same waiting rows the Chat badge counts, inside the scope, with no
-     badge of their own; answering a question clears it from here and from the badge. -->
-<div id="needs-you"></div>
-<p id="now-rest" class="mut" role="status" hidden></p>
-<p id="needs-you-msg" class="msg" role="status"></p>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
 <div class=tile><b id=t-spend>-</b><span>spend today</span></div>
@@ -486,7 +393,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=warn-detail hidden></div>
 <p id=msg role=status></p>
 </section>
-<!-- The phone has no Flow view: its tabs are Monitor, Board, Runs, Terminals and More, and the Cumulative Flow and
+<!-- The phone has no Flow view: its tabs are Now, Work, Specs and Runs, and the Cumulative Flow and
      Lead Time charts are desktop-only. So the desktop chart's Type and visible-state filters (#1356) have no control
      here; the phone reader opens the desktop page for them. -->
 <section data-panel="board" hidden>
@@ -522,13 +429,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="runs-rest" class="mut" role="status" hidden></p>
 <p id="runs-state" class="msg" role="status">The runs are loading.</p>
 <p id="runs-msg" class="msg" role="status"></p>
-</section>
-<section data-panel="terminals" hidden>
-<h2>Terminals</h2>
-<div id="sessions" class="runlist" role="status" aria-live="polite"></div>
-<p id="chat-rest" class="mut" role="status" hidden></p>
-<p id="sessions-state" class="msg" role="status">The terminal sessions are loading.</p>
-<p id="sessions-msg" class="msg" role="status"></p>
 </section>
 <section data-panel="more" hidden>
 <div id="more-head" data-role="header"><button id="more-backtop" data-topback="more" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>More</h2></div>
@@ -605,40 +505,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
 <div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
 </div>
-<section id="termview" hidden>
-<div id="termview-head"><button id="term-backtop" data-topback="term" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Chat</span></button><span id="termview-name"></span><span id="termview-facts"></span></div>
-<button id="termview-older" type="button" hidden>Older turns</button>
-<div id="termview-turns"></div>
-<!-- The quick answers (SPEC 1596, rule 9; #1601): one 44 px chip per option, above the composer and above the keyboard. -->
-<div id="termview-chips" hidden></div>
-<p id="termview-msg" class="msg" role="status"></p>
-<div id="termview-compose">
-<!-- The recording row (SPEC 1596, frames 17 and 19, rule 10; #1603): while the mic is held it names the timer, the
-     waveform, the cancel zone and the three hints. The row draws the rules of hub-mobile-voice.js (ADR-0137). -->
-<div id="termview-rec" hidden>
-<span class="voicedot" aria-hidden="true"></span>
-<span id="voice-time">0:00</span>
-<span id="voice-wave" class="voicewave" aria-hidden="true"></span>
-<span id="voice-cancel" class="voicecancel">cancel</span>
-<span class="voicemic" aria-hidden="true">Mic</span>
-<p id="voice-hints" class="voicehints"><span class="voicehint">Release to send</span><span class="voicehint">Slide left to cancel</span><span class="voicehint">max 2:00</span></p>
-</div>
-<p class="mut" id="termview-note">Your message arrives as a message from another session, not as your typed input or approval.</p>
-<!-- Rule 9 (#1602): the banner names the outage and the waiting count, and the line names the kept draft's start. -->
-<p id="termview-outage" role="alert" hidden></p>
-<p id="termview-draft" role="status" hidden></p>
-<textarea id="termview-text" maxlength="4000" rows="3" aria-label="Message to this session"></textarea>
-<div id="termview-row"><button id="termview-back" type="button">Back</button><button id="termview-mic" type="button" aria-label="Hold to record a spoken message">Mic</button><button id="termview-send" type="button">Send</button></div>
-<p id="termview-sent" class="msg" role="status"></p>
-<button id="termview-acted" type="button" hidden></button>
-</div>
-</section>
-<!-- Frames 20 and 21 (#1602): the attach sheet rises from the bottom edge with three doors and Cancel; the page draws
-     them from the chat module's list, so the view holds no option of its own. -->
-<div id="attach-sheet" role="dialog" aria-label="Attach" hidden></div>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><span id="runview-name"></span></div>
-<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p><p id="runov-session-row" class="runov-row" hidden><b>Session</b> <button id="runov-open" type="button">Open the session</button></p><pre id="runov-tail" class="runov-tail"></pre></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
+<div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
 <div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
 <div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
 </section>
@@ -655,12 +524,9 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-tab="now">Now</button>
 <button data-tab="work">Work</button>
 <button data-tab="specs">Specs</button>
-<button data-tab="chat">Chat</button>
 <button data-tab="runs">Runs</button>
 </nav>
-<!-- The session overlay (#898) sits above the tab bar; the page script stays the last one. -->
-<style>:root{--sq-ov-bottom:calc(72px + env(safe-area-inset-bottom))}</style>
-<!--OVERLAY-->
+<!-- The page script stays the last one. -->
 <script>
 /*STREAM*/
 const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, live: () => false };
@@ -676,9 +542,6 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
-/*CHAT*/
-/*VOICE*/
-/*QUESTION*/
 const $ = id => document.getElementById(id);
 // One icon builder (SPEC 1596, #1605): an icon the script draws is the inline SVG the markup carries, so the one .ico
 // rule gives it its stroke and its weight. A glyph is never an icon.
@@ -690,76 +553,6 @@ function icon(d) {
   const p = document.createElementNS(SVG_NS, "path"); p.setAttribute("d", d); s.append(p);
   return s;
 }
-// <question-card-view>
-// The one renderer of a question card: it draws the view the rule module answers and sends each control's action back to
-// the rule module. It checks no schema, answers nothing and decides no submit of its own (ADR-0137).
-const qnode = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
-function drawQuestionCard(doc, onSubmit) {
-  const el = qnode("div", "qcard");
-  el.tabIndex = 0;
-  let state = cardStart(doc);
-  const act = a => { state = cardStep(doc, state, a); paint(); };
-  const submit = () => {
-    const r = cardSubmit(doc, state);
-    state = r.state;
-    if (r.ok) Promise.resolve(onSubmit(r.answers, state.answers.slice())).then(outcome => { if (outcome === "refused") { state = cardUnsent(state); paint(); } });
-    paint();
-  };
-  const paint = () => el.replaceChildren(...qcardNodes(cardView(doc, state), act, submit));
-  el.addEventListener("keydown", e => {
-    const a = questionKey(e);
-    if (!a) return;
-    e.preventDefault();
-    act(a);
-  });
-  paint();
-  $("termview-turns").append(el);
-  return el;
-}
-function qcardNodes(v, act, submit) {
-  if (!v.ok) return [qnode("p", "qerr", v.errors.join("; "))];
-  const out = [];
-  if (v.tabs.length) {
-    const tabs = qnode("div", "qtabs");
-    for (const t of v.tabs) {
-      const b = qnode("button", "qtab", t.header);
-      b.type = "button";
-      b.classList.toggle("active", t.active);
-      b.classList.toggle("answered", t.answered);
-      b.addEventListener("click", () => act({ act: "goto", index: t.index }));
-      tabs.append(b);
-    }
-    out.push(tabs);
-  }
-  out.push(qnode("p", "qhead", v.header), qnode("p", "qbody", v.body));
-  const opts = qnode("div", "qopts");
-  v.options.forEach((o, j) => {
-    const b = qnode("button", "qopt");
-    b.type = "button";
-    b.classList.toggle("focused", o.focused);
-    b.classList.toggle("selected", o.selected);
-    b.append(qnode("span", "qlabel", o.label), qnode("span", "qdesc", o.description));
-    if (o.badge) b.append(qnode("span", "qbadge", o.badge));
-    b.addEventListener("click", () => act({ act: "pick", index: j }));
-    opts.append(b);
-  });
-  out.push(opts);
-  if (v.unanswered.length) out.push(qnode("p", "qwarn", "Not answered: " + v.unanswered.map(u => `${u.index + 1}. ${u.header}`).join(", ")));
-  if (v.cancelled) out.push(qnode("p", "qstate", "Cancelled"));
-  if (v.sent) out.push(qnode("p", "qstate", "Submitted: " + v.answers.map(a => `${a.header}: ${a.label}`).join("; ")));
-  if (v.controls.length) {
-    const ctl = qnode("div", "qctl");
-    for (const c of v.controls) {
-      const b = qnode("button", "", c.label);
-      b.type = "button";
-      b.addEventListener("click", () => (c.act === "submit" ? submit() : act(c.act)));
-      ctl.append(b);
-    }
-    out.push(ctl);
-  }
-  return out;
-}
-// </question-card-view>
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
@@ -777,14 +570,14 @@ $("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
 profMount("phone");
 setInterval(() => { if (!$("profpage").hidden && !document.hidden && profV && profV.on) profPoll(); }, 2000);
 
-// The phone's navigation shell (SPEC 1596, #1597): five tabs, one stack of screens per tab, and one history entry per
+// The phone's navigation shell (SPEC 1596, #1597): four tabs, one stack of screens per tab, and one history entry per
 // screen that names its tab and the address the location mirrors. A screen opens inside the tab whose list it came from,
 // so leaving a tab on a detail and coming back shows the same detail. Back, the action row's Back, the open tab's tap and
 // the browser's Back all leave by one pop.
-const TAB_LABEL = { now: "Now", work: "Work", specs: "Specs", chat: "Chat", runs: "Runs" };
+const TAB_LABEL = { now: "Now", work: "Work", specs: "Specs", runs: "Runs" };
 // The panel each tab draws, and the older names a stored tab still spells.
-const TAB_PANEL = { now: "monitor", work: "board", specs: "specs", chat: "terminals", runs: "runs" };
-const TAB_ALIAS = { monitor: "now", board: "work", terminals: "chat", more: "now" };
+const TAB_PANEL = { now: "monitor", work: "board", specs: "specs", runs: "runs" };
+const TAB_ALIAS = { monitor: "now", board: "work", more: "now" };
 const tabKey = n => TAB_LABEL[n] ? n : (TAB_ALIAS[n] || "now");
 // A tab stored by an older build keeps its meaning: the tab that draws it now opens.
 const tabOf = s => tabKey(s === "status" ? "now" : s);
@@ -802,7 +595,6 @@ const LAYER = {
     show() { $("psheet").hidden = false; $("profile").setAttribute("aria-expanded", "true"); },
     hide() { $("psheet").hidden = true; $("profile").setAttribute("aria-expanded", "false"); },
   },
-  term: { show(s) { showConversation(s.sid, s.name); }, hide() { hideConversation(); } },
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
   cost: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
   usage: { show() { showUsage(); }, hide() { hideUsage(); } },
@@ -818,13 +610,13 @@ const LAYER = {
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
 // screen a nested one stands on.
-const LAYER_TAB = { sheet: "work", term: "chat", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now", profiler: "now" };
-const LAYER_TITLE = { sheet: "Card", psheet: "Projects", term: "Session", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
+const LAYER_TAB = { sheet: "work", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now", profiler: "now" };
+const LAYER_TITLE = { sheet: "Card", psheet: "Projects", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
                       loops: "Loops", loop: "Loop", bugs: "Loop-bugs", profiler: "Loop" };
 const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop", profiler: "more" };
 const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
-const tabStacks = { now: [], work: [], specs: [], chat: [], runs: [] };
-const layerState = { now: {}, work: {}, specs: {}, chat: {}, runs: {} };
+const tabStacks = { now: [], work: [], specs: [], runs: [] };
+const layerState = { now: {}, work: {}, specs: {}, runs: {} };
 let tabActive = "now";
 let layers = tabStacks[tabActive];
 let layerBacks = 0, pendingSheet = null;
@@ -859,7 +651,6 @@ const queryOf = s => {
 const SEG = {
   sheet: s => "card=" + s.n,
   psheet: () => "profile",
-  term: s => withQuery("session=" + encodeURIComponent(s.sid), [["name", s.name]]),
   run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
   cost: () => "usage",   // the address `/usage` has always named, so an old link opens the same screen
   usage: () => "tokens",
@@ -872,7 +663,7 @@ const SEG = {
 };
 const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG[s.layer] ? "/" + SEG[s.layer](s) : "");
 function routeFromHash(hash) {
-  const m = /^#\/(now|work|specs|chat|runs)(?:\/([^/]+))?$/.exec(String(hash || ""));
+  const m = /^#\/(now|work|specs|runs)(?:\/([^/]+))?$/.exec(String(hash || ""));
   if (!m) return null;
   const tab = m[1], seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {} };
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
@@ -886,7 +677,6 @@ function routeFromHash(hash) {
   else if (head === "profiler") out.layer = "profiler";
   else if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
-  else if (head.startsWith("session=")) { out.layer = "term"; out.data = { sid: decodeURIComponent(head.slice(8)), name: q.name || "" }; }
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
   return out;
 }
@@ -895,21 +685,17 @@ function routeFromHash(hash) {
 // The segmented filter of each root, whose last option says what it includes (rule 4). A root with one view offers one
 // option, so no button presents a filter the page cannot apply (rule 6).
 const ROOT_FILTERS = {
-  now: ["Needs you", "Any item"],
   work: ["Live", "Any card"],
   specs: ["Any spec"],
-  chat: ["Waiting", "Every chat"],
   runs: ["Live", "Ended", "Any run"],
 };
-// Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a session waiting for the
-// owner, a live or an ended run. The last segment keeps every row.
+// Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a live or an ended run.
+// The last segment keeps every row.
 const ROOT_KEEP = {
-  now: [r => !!r.waiting, () => true],   // Now › Needs you keeps the rows that wait; "Any item" keeps every conversation
   work: [x => !!x.ho, () => true],
-  chat: [s => !!s.waiting, () => true],
   runs: [r => !!r.live, r => !r.live, () => true],   // Live is the hub's live-process fact, never a derived "running"
 };
-const rootFilter = { now: 0, work: 1, specs: 0, chat: 1, runs: 2 };
+const rootFilter = { work: 1, specs: 0, runs: 2 };
 const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
 // The last option of every filter names what it includes and hides no row, so only an earlier option draws the remainder
 // line, and the line always names the option the owner pressed (rule 4; #1600).
@@ -922,7 +708,7 @@ const filterRest = (tab, total, shown) => {
 // control row reads its open flag on every paint.
 const searchState = { open: false, tab: "", query: "" };
 // A segment change repaints the root it filters, never another one (rule 6).
-const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); else if (tab === "chat") drawSessions(); else if (tab === "now") drawNeedsYou(); };
+const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); };
 const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
 function paintControlRow() {
   const row = $("control-row");
@@ -1103,7 +889,6 @@ function show(name) {
   if (tabNow !== "board") cancelMove("tab");   // the Undo is on the Work tab: no move runs on unseen (#1007)
   if (tabNow === "board") loadBoard();
   if (tabNow === "runs") loadRuns();
-  if (tabNow === "terminals") loadSessions();
   if (tabNow === "monitor") { status(); loopView(); loadPoll(); }
   showStack(tab);
   paintBack();
@@ -1131,20 +916,18 @@ for (const b of document.querySelectorAll("[data-actback]")) b.onclick = popScre
 $("more-backtop").onclick = popScreen;
 $("sh-backtop").onclick = popScreen;
 $("ps-backtop").onclick = popScreen;
-$("term-backtop").onclick = popScreen;
 $("run-backtop").onclick = popScreen;
 $("cost-backtop").onclick = popScreen;
 $("lead-backtop").onclick = popScreen;
 $("now-more").onclick = () => openLayer("more");
 
 // The phone follows the hub's build as the desktop does (#1114). A new build reloads the page once, and the reload waits
-// while a write is in flight, a draft or photo is held in any session, or a move is staged (#1455).
+// while a write is in flight or a move is staged (#1455).
 const SERVED_BUILD = __BUILD__;
 let writesOpen = 0, buildStale = false, reloading = false;
 const writing = p => { writesOpen++; return p.finally(() => { writesOpen--; }); };
 function reloadHeld() {
-  return writesOpen > 0 || !!(pending && pending.live) || $("termview-text").value.trim() !== ""
-    || [...termDrafts.values()].some(d => d.text || d.photo);
+  return writesOpen > 0 || !!(pending && pending.live);
 }
 async function checkVersion() {
   let v;
@@ -1278,9 +1061,6 @@ setInterval(() => { if (!document.hidden) status(); }, 5000);
 // and the change log across them; the loop page writes to one project only, through that project's own route. The state
 // rules live in the rule module (loopAggregate, loopPrimary), never here (ADR-0137).
 let loopV = null, loopSlug = "";
-// The chat rows draw their loop dot and live runs from this fact: the chat section sets the hook, after the page has
-// declared its session list, so a loop read that lands later repaints the rows with the one answer (ADR-0137).
-var onLoop = null;
 const loopProjects = () => (loopV && loopV.projects) || [];
 const loopOf = slug => loopProjects().find(p => p.slug === slug) || null;
 const loopHere = () => loopOf(loopSlug);
@@ -1352,7 +1132,7 @@ function openBugs() {
 }
 async function loopView(fresh) {
   if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
-  try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); if (onLoop) onLoop(); }
+  try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); }
   catch (e) { $("loops-msg").textContent = e.message; }
 }
 async function loopAct(action, extra) {
@@ -2376,9 +2156,6 @@ async function loadRuns() {
 // Pause and resume: the one write the run screen makes. It posts through the hub's forward route to the run's own control
 // route, as the desktop page does, and it never starts a process (ADR-0118 rule 18). The decision is runControlView's.
 let runId = null, runReply = null, runBusy = false;
-// The run body's session (#1604): the record names the session the run last worked in, and the session route is the
-// conversation the chat screen reads. Nothing here invents a session, and a read that fails draws no row.
-const runBody = { sid: "", card: null, tail: [] };
 async function loadRunControl() {
   const id = runId;
   if (!id) return;
@@ -2393,43 +2170,11 @@ async function loadRunControl() {
   msg.className = "msg" + (runReply && !runReply.ok ? " err" : "");
   drawRunActions();
 }
-async function loadRunBody() {
-  const id = runId;
-  if (!id) return;
-  const u = runURLs(id);
-  let record = "";
-  try { record = await (await fetch(u.record, { cache: "no-store" })).text(); } catch (e) { record = ""; }
-  if (id !== runId) return;
-  runBody.sid = runSessionId(record);
-  runBody.card = null; runBody.tail = [];
-  if (runBody.sid) {
-    const q = "?sid=" + encodeURIComponent(runBody.sid);
-    const [card, page] = await Promise.all([
-      call("/api/sessions/card" + q).catch(() => ({ card: null })),
-      call("/api/sessions/conversation" + q).catch(() => ({ turns: [] })),
-    ]);
-    if (id !== runId) return;
-    runBody.card = (card && card.card) || null;
-    runBody.tail = runTailLines((page && page.turns) || []);
-  }
-  drawRunSession();
-  drawRunActions();
-}
-function drawRunSession() {
-  $("runov-tail").textContent = runBody.tail.join("\n");
-  $("runov-open").textContent = runBody.card ? "Answer the coder" : "Open the session";
-  $("runov-open").hidden = !runBody.sid;
-  $("runov-session-row").hidden = !runBody.sid;
-}
 function drawRunActions() {
-  const v = runPrimary(runRows[runId], runBody.card, runBody.sid);
+  const v = runPrimary();
   $("run-primary-label").textContent = v.label;
   $("run-primary").dataset.act = v.act;
   $("run-primary").hidden = !v.act;
-}
-function openRunSession() {
-  if (!runBody.sid) return;
-  openConversation(runBody.sid, ($("runview-name").textContent || "") || "Run session");
 }
 async function sendRunControl() {
   const b = $("runctl-btn"), act = b.dataset.act, id = runId;
@@ -2466,23 +2211,17 @@ function openRun(id, url, name) {
 }
 function showRun(s) {
   runId = s.id; runReply = null;
-  runBody.sid = ""; runBody.card = null; runBody.tail = [];
   $("runframe").src = s.url; $("runview-name").textContent = s.name; $("runview").hidden = false;
   const row = runRows[runId];
-  showDesk(!row); drawRunOverview(row); drawRunSession(); drawRunActions();
+  showDesk(!row); drawRunOverview(row); drawRunActions();
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
   $("run-menu").hidden = true;
   loadRunControl();
-  loadRunBody();
 }
 function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); $("run-menu").hidden = true; runId = null; }
 $("rundesk-btn").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
 $("run-dots").onclick = () => { $("run-menu").hidden = !$("run-menu").hidden; };
-$("runov-open").onclick = openRunSession;
-$("run-primary").onclick = () => {
-  if ($("run-primary").dataset.act === "session") openRunSession();
-  else { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); }
-};
+$("run-primary").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
 for (const id of ["runs-live", "runs-ended"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
 $("runview-back").onclick = () => closeLayer("run");
 $("runctl-btn").onclick = sendRunControl;
@@ -2496,599 +2235,12 @@ document.addEventListener("touchend", e => {
   if (g && g.act === "refresh" && runsShown() && $("runview").hidden) loadRuns();
 }, { passive: true });
 every("runs", () => { if ($("runview").hidden) loadRuns(); }, 10000);
-every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); loadRunBody(); } }, 10000);   // the run may pause, resume, ask a question or end while the screen is open
-// terminals:begin
-const termOpen = () => !$("termview").hidden;
-let termSid = null, termCursor = null, termBusy = false;
-const termDrawn = new Set();
-// One composer per session (#1006): its draft, its send feedback, its pending request, and the request id a retry reuses.
-const termDrafts = new Map();
-// A tab change keeps the draft, the thread's scroll and the receipts of each session (rule 9; #1602): they live in the
-// session's own draft state, and a send the hub never answered waits there with the words and the request id.
-const termDraft = sid => { if (!termDrafts.has(sid)) termDrafts.set(sid, { text: "", sent: "", pending: false, cid: null, cidText: null,
-  scroll: null, failed: [], why: "" }); return termDrafts.get(sid); };
-function keepDraft() {
-  if (!termSid) return;
-  const d = termDraft(termSid);
-  d.text = $("termview-text").value; d.sent = $("termview-sent").textContent;
-  d.scroll = $("termview-turns").scrollTop;
-}
-function paintDraftLine() {
-  const d = termDraft(termSid), line = chatDraftLine(d.text);
-  $("termview-draft").textContent = line; $("termview-draft").hidden = !line;
-}
-function showDraft() {
-  const d = termDraft(termSid);
-  $("termview-text").value = d.text; $("termview-sent").textContent = d.sent; $("termview-send").disabled = d.pending;
-  paintDraftLine(); paintFailed(); paintOutage();
-}
-// One project's row on the Chat root (SPEC 1596, rule 10; #1601): the loop dot, the name, the last message and the time,
-// and the waiting mark. The rules are hub-mobile-chat.js's; the row only draws them (ADR-0137).
-function chatRowNode(r) {
-  const b = document.createElement("button"), name = document.createElement("b"), dot = document.createElement("span"),
-        line = document.createElement("div"), mark = document.createElement("span");
-  b.type = "button"; b.className = "chatrow " + (r.loop || "");
-  b.dataset.project = r.project; b.dataset.sid = r.sid; b.dataset.loop = r.loop || ""; b.dataset.waiting = String(r.waiting);
-  dot.className = "loopdot " + (r.loop || "unknown");
-  dot.setAttribute("aria-label", r.loop ? "Loop " + loopStateWord(r.loop) : "Loop unknown");
-  name.textContent = r.project;
-  line.className = "mut"; line.textContent = chatRowLine(r);
-  mark.className = "waitmark"; mark.textContent = chatWaiting(r);
-  b.append(dot, name, line, mark);
-  b.onclick = () => openConversation(r.sid, r.project);
-  return b;
-}
-function turnRow(t) {
-  const d = document.createElement("div"), who = document.createElement("b"), text = document.createElement("div");
-  d.className = "turn"; d.dataset.k = t.k || ""; who.textContent = t.role;
-  const img = chatImage(t.text);
-  if (!img) {
-    text.textContent = t.text;
-    d.append(who, text);
-  } else {
-    // Frame 17 (#1602): the marker line names the file the attach route wrote, so the bubble draws the hub's image route.
-    const a = document.createElement("a"), pic = document.createElement("img");
-    a.className = "img"; a.href = chatImageSrc(termSid, img); a.target = "_blank"; a.rel = "noopener";
-    pic.className = "thumb"; pic.loading = "lazy"; pic.alt = "image"; pic.src = a.href;
-    a.append(pic);
-    text.textContent = chatImageWords(t.text);
-    d.append(who, a);
-    if (text.textContent) d.append(text);
-  }
-  // A spoken answer carries one Kore clip, drawn under its words: the answer's whole text, never its first sentence.
-  if (t.role === "answer" && String(t.text || "").trim()) d.append(clipRow(t));
-  return d;
-}
-// A send the hub never answered stays in the thread under a mark that retries on one tap (rule 9; #1602).
-function failedRow(f) {
-  const b = document.createElement("button"), text = document.createElement("div"), mark = document.createElement("span");
-  b.type = "button"; b.className = "turn failed"; b.dataset.cid = f.cid || "";
-  text.textContent = f.text; mark.className = "notsent"; mark.textContent = chatNotSent();
-  b.append(text, mark);
-  b.onclick = () => retrySend(f);
-  return b;
-}
-function paintFailed() {
-  const d = termDraft(termSid), el = $("termview-turns");
-  if (!d || !el) return;
-  for (const n of d.failedNodes || []) n.remove();
-  d.failedNodes = (d.failed || []).map(failedRow);
-  el.append(...d.failedNodes);
-}
-function paintOutage() {
-  const d = termDraft(termSid), line = chatOutage(d.failed, d.why);
-  $("termview-outage").textContent = line; $("termview-outage").hidden = !line;
-}
-// The chat list keeps what it last drew (#1445): the one helper draws the line, the error and then the rows it holds.
-const sessState = { ever: false, n: 0, error: "", groups: [],
-  loading: "The terminal sessions are loading.", empty: "No terminal sessions are drawn." };
-// The chat rows and the one badge, drawn from the session list and the loop fact through the chat module (rule 10).
-let sessRows = [], badgeRows = null;   // badgeRows: what the boot read drew before the list itself read
-// The project the page is scoped to, when the address names one the session list groups; anything else is All projects,
-// so the one count covers every waiting row (rule 10).
-const chatScope = (rows) => {
-  const me = location.pathname.split("/")[1];
-  return me && me !== "mobile" && (rows || sessRows).some(r => r.project === me) ? me : "";
-};
-function drawChat() {
-  sessRows = chatRows({ groups: sessState.groups }, loopProjects());
-  $("sessions").replaceChildren(...sessRows.filter(r => rootKeep("chat", r)).map(chatRowNode));
-  // One quiet line counts the conversations the segment hid (#1600).
-  const restText = filterRest("chat", sessRows.length, sessRows.filter(r => rootKeep("chat", r)).length);
-  $("chat-rest").textContent = restText; $("chat-rest").hidden = !restText;
-  drawBadge();
-  drawNeedsYou();
-  paintHeader();
-}
-// One badge, on Chat: the waiting rows of the scope, and no extra node in the bar (rule 10).
-function drawBadge(rows) {
-  const list = rows || sessRows;
-  if (rows) badgeRows = rows;
-  const b = document.querySelector("nav [data-tab=chat]"), n = chatBadge(list, chatScope(list));
-  if (!b) return;
-  b.dataset.badge = n ? String(n) : "";
-  if (n) b.setAttribute("aria-label", "Chat, " + n + " waiting for you"); else b.removeAttribute("aria-label");
-}
-// The bar carries the count from the first frame on every tab, so the page reads the list once at boot without touching
-// the Chat list's own four states: that list still says it is loading until its screen reads it (rule 10; #1445).
-async function loadBadge() {
-  try { drawBadge(chatRows(await call("/api/sessions"), loopProjects())); drawNeedsYou(); }
-  catch (e) { /* the Chat list names the error */ }
-}
-// Now › Needs you draws the same rows inside the scope and carries no badge of its own (rule 10). Answering a question
-// clears its row here as the hub's list changes, through the one count.
-function drawNeedsYou() {
-  const el = $("needs-you");
-  if (!el) return;
-  // Before the Chat list reads, the boot badge read already knows every waiting row, so Now is not empty on the first frame.
-  const list = sessState.ever ? sessRows : (badgeRows || []);
-  const rows = list.filter(r => rootKeep("now", r));
-  el.replaceChildren(...rows.map(chatRowNode));
-  const restText = filterRest("now", list.length, rows.length);
-  $("now-rest").textContent = restText; $("now-rest").hidden = !restText;
-  $("needs-you-msg").textContent = rows.length ? "" : "Nothing waits for you in this scope.";
-}
-onLoop = () => drawChat();
-function drawSessions() {
-  drawList(sessState, $("sessions-state"), $("sessions-msg"), drawChat);
-}
-// The conversation header names the project, its loop state and its live runs (rule 10; #1601).
-function paintHeader() {
-  if (!termOpen() || !termSid) return;
-  const row = sessRows.find(r => r.sid === termSid) || null;
-  if (!row) return;
-  $("termview-name").textContent = row.project;
-  $("termview-facts").textContent = chatHeader(row);
-  const acted = chatActedOn(row);
-  $("termview-acted").hidden = !acted;
-  if (acted) { $("termview-acted").dataset.run = acted.run; $("termview-acted").textContent = acted.label; }
-}
-function applySessions(d) {
-  const groups = d && Array.isArray(d.groups) ? d.groups : [];
-  sessState.ever = true; sessState.error = "";
-  sessState.groups = groups;
-  sessState.n = groups.reduce((k, g) => k + (g.sessions || []).length, 0);
-  drawSessions();
-}
-async function loadSessions() {
-  sessState.error = await call("/api/sessions").then(d => { applySessions(d); return ""; }, e => e.message);
-  drawSessions();
-}
-squadStream.on("sessions", applySessions);
-function readConversation(before) {
-  return call("/api/sessions/conversation?sid=" + encodeURIComponent(termSid) + (before ? "&before=" + before : ""));
-}
-// Each turn is drawn once: the drawn keys are the record, so a poll, a push and an older page never repeat one.
-function drawTurns(turns, live) {
-  const fresh = turns.filter(t => !termDrawn.has(t.k));
-  if (!fresh.length) return;
-  const nodes = fresh.map(turnRow);
-  $("termview-turns").append(...nodes);
-  for (const t of fresh) termDrawn.add(t.k);
-  paintFailed();   // a message the hub never answered stays at the thread's end (#1602)
-  // An answer that arrives while the conversation is open plays its one clip at once, as the answer streams (#1603). A
-  // turn read on opening the conversation waits for the owner's tap, so a page load never speaks a whole history.
-  if (live) for (const n of nodes) { const clip = n.querySelector(".clip"); if (clip) clipToggle(clip); }
-}
-async function loadConversation(force) {
-  if (termBusy || !termOpen() || !termSid) return;
-  if (!force && squadStream.live()) return;
-  termBusy = true;
-  const sid = termSid, el = $("termview-turns");
-  try {
-    const page = await readConversation(null);
-    if (sid !== termSid) return;
-    const atEnd = termDrawn.size === 0 || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    const kept = termDrawn.size === 0 ? chatScroll(termDraft(sid)) : null;   // the tab change's own scroll (#1602)
-    if (termDrawn.size === 0) termCursor = page.next;
-    drawTurns(page.turns);
-    if (kept !== null) el.scrollTop = kept;
-    else if (atEnd) el.scrollTop = el.scrollHeight;
-    if (force) squadStream.watch(sid, page.epoch, page.end);
-    $("termview-older").hidden = termCursor === null;
-    $("termview-msg").textContent = "";
-  } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
-  finally { termBusy = false; }
-}
-squadStream.on("conversation", d => {
-  if (d.sid !== termSid || !termOpen()) return;
-  const el = $("termview-turns"), atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  drawTurns(d.lines.split("\n").filter(Boolean).map(line => JSON.parse(line)), true);
-  if (atEnd) el.scrollTop = el.scrollHeight;
-});
-squadStream.on("gap", d => {
-  if (d.sid !== termSid) return;
-  $("termview-turns").replaceChildren();
-  termDrawn.clear();
-  loadConversation(true);
-});
-// The question card the open session waits on (#1093) belongs to the session: the page draws the one the hub reads, so a
-// card still pending when the page closed is answerable when it comes back.
-let termCard = null;   // { id, el } of the drawn card
-function dropCard() { if (termCard) termCard.el.remove(); termCard = null; }
-// The quick answers (rule 9; #1601): one 44 px chip per option of the question in view, above the composer. A chip pick
-// goes through the same card rules and the same answer route as the card's own controls; when every question is answered
-// the card submits, so a one-question card answers on one tap.
-let chipCard = null, chipState = null;
-function drawChips(card) {
-  // The card rules read the document itself, so the hub's id stays outside the questions they check.
-  chipCard = card ? { id: card.id, questions: card.questions } : null;
-  chipState = chipCard ? cardStart(chipCard) : null;
-  paintChips();
-}
-function paintChips() {
-  const el = $("termview-chips");
-  const v = chipCard && chipState ? cardView({ questions: chipCard.questions }, chipState) : null;
-  if (!v || !v.ok || v.sent || v.cancelled) { el.replaceChildren(); el.hidden = true; return; }
-  el.replaceChildren(...v.options.map((o, i) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "qchip"; b.dataset.index = String(i);
-    b.textContent = o.label;
-    if (o.recommended) b.dataset.recommended = "1";
-    if (o.selected) b.setAttribute("aria-pressed", "true");
-    b.onclick = () => answerChip(i);
-    return b;
-  }));
-  el.hidden = !v.options.length;
-}
-function answerChip(i) {
-  if (!chipCard || !chipState) return;
-  const card = chipCard, sid = termSid;
-  chipState = cardStep(card, chipState, { act: "pick", index: i });
-  const r = cardSubmit(card, chipState);
-  chipState = r.state;
-  paintChips();
-  if (r.ok) answerCard(sid, card.id, chipState.answers.slice());
-}
-async function loadCard() {
-  const sid = termSid;
-  const { card } = await call("/api/sessions/card?sid=" + encodeURIComponent(sid));
-  if (sid !== termSid) return;
-  if (termCard && (!card || termCard.id !== card.id)) dropCard();
-  if (card && !termCard) termCard = { id: card.id, el: drawQuestionCard({ questions: card.questions }, (answers, picks) => answerCard(sid, card.id, picks)) };
-  if ((chipCard && chipCard.id) !== (card ? card.id : "")) drawChips(card || null);
-}
-async function pollCard() {
-  const sid = termSid;
-  if (!termOpen() || !sid) return;
-  try { await loadCard(); } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
-}
-async function answerCard(sid, id, picks) {
-  const say = msg => { if (sid === termSid) $("termview-sent").textContent = msg; };
-  say("Sending");
-  try {
-    const r = await writing(fetch("/api/sessions/card/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, card_id: id, answers: picks }) }));
-    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
-    const res = await r.json();
-    const word = { sent: "Sent as a message from another session", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
-    say(word + (res.reason ? " (" + res.reason + ")" : ""));
-    return res.status === "refused" ? "refused" : "sent";
-  } catch (err) { say(err.message); return "refused"; }
-}
-async function loadOlder() {
-  if (termBusy || !termOpen() || termCursor === null) return;
-  termBusy = true;
-  const sid = termSid, el = $("termview-turns"), before = el.scrollHeight;
-  try {
-    const page = await readConversation(termCursor);
-    if (sid !== termSid) return;
-    const fresh = page.turns.filter(t => !termDrawn.has(t.k));
-    el.prepend(...fresh.map(turnRow));
-    for (const t of fresh) termDrawn.add(t.k);
-    el.scrollTop += el.scrollHeight - before;
-    termCursor = page.next;
-    $("termview-older").hidden = termCursor === null;
-  } catch (e) { if (sid === termSid) $("termview-msg").textContent = e.message; }
-  finally { termBusy = false; }
-}
-function openConversation(sid, name) {
-  if (tabActive !== "chat") show("chat");   // the session belongs to Chat: opening one shows its tab, whoever asked
-  openLayer("term", { sid, name });
-}
-function showConversation(sid, name) {
-  keepDraft();
-  termSid = sid; termCursor = null; termDrawn.clear(); dropCard(); drawChips(null);
-  $("termview-turns").replaceChildren();
-  $("termview-name").textContent = name;
-  $("termview-facts").textContent = "";
-  $("termview-acted").hidden = true;
-  $("termview-older").hidden = true;
-  $("termview-msg").textContent = "";
-  showDraft();
-  $("termview").hidden = false;
-  fitKeyboard();
-  paintHeader();
-  loadConversation(true);
-  pollCard();
-}
-function hideConversation() {
-  keepDraft(); $("termview").hidden = true;
-  if (termSid) squadStream.unwatch(termSid);
-  termSid = null; dropCard(); drawChips(null); $("termview-turns").replaceChildren();
-}
-// The quick answers and the composer stay above the keyboard (rule 9): while the keyboard is up, the visual viewport is
-// the conversation's own box, so the chips sit on the field's top edge instead of under the keyboard.
-function fitKeyboard() {
-  const vv = window.visualViewport, v = $("termview");
-  if (!vv || !v) return;
-  v.style.top = (vv.offsetTop || 0) + "px";
-  v.style.height = (vv.height || window.innerHeight) + "px";
-}
-if (window.visualViewport) {
-  window.visualViewport.addEventListener("resize", fitKeyboard);
-  window.visualViewport.addEventListener("scroll", fitKeyboard);
-}
-$("termview-acted").onclick = () => {
-  const id = $("termview-acted").dataset.run;
-  if (id) openRun(id, runURLs(id).page, "Run " + id);
-};
-$("termview-back").onclick = () => closeLayer("term");
-$("termview-older").onclick = loadOlder;
-$("termview-turns").onscroll = () => { if ($("termview-turns").scrollTop < 40) loadOlder(); };
-every("terminals", loadConversation, 3000);
-every("terminals", pollCard, 3000);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadConversation(); });
-// One text send, for the composer and for a waiting message's one-tap retry (rule 9; #1602): the request carries the
-// draft's own client id, so a retry is the same request and the hub answers it once. A send the hub never answered stays
-// in the thread under the not-sent mark, and the banner names the outage and how many messages wait.
-async function sendText(sid, text, d, waiting, clearField) {
-  if (d.pending) return;
-  const say = msg => { d.sent = msg; if (sid === termSid) $("termview-sent").textContent = msg; };
-  d.pending = true; if (sid === termSid) $("termview-send").disabled = true;
-  say("Sending");
-  try {
-    const r = await writing(fetch("/api/sessions/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid, text, client_id: d.cid }) }));
-    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
-    const res = await r.json();
-    const word = { sent: "Sent: the session's inbox accepted the message", uncertain: "Uncertain: the send was interrupted", refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
-    say(word + (res.reason ? " (" + res.reason + ")" : ""));
-    if (res.status === "sent" || res.status === "refused") { d.cid = null; d.cidText = null; }
-    if (res.status === "sent") {
-      d.failed = (d.failed || []).filter(f => f !== waiting); d.why = "";   // a later success clears the row and the banner
-      if (clearField) { d.text = ""; if (sid === termSid) $("termview-text").value = ""; }
-    }
-  } catch (err) {
-    d.why = err.message;
-    if (waiting) waiting.why = err.message;
-    else (d.failed = d.failed || []).push({ cid: d.cid, text, why: err.message });
-    say(err.message);
-  } finally {
-    d.pending = false;
-    if (sid === termSid) { $("termview-send").disabled = false; paintFailed(); paintOutage(); paintDraftLine(); }
-  }
-}
-function retrySend(f) {
-  const sid = termSid, d = sid ? termDraft(sid) : null;
-  if (!d || d.pending || !f) return;
-  d.cid = f.cid; d.cidText = f.text;
-  sendText(sid, f.text, d, f, false);
-}
-$("termview-send").onclick = async () => {
-  const text = $("termview-text").value.trim(), sid = termSid;
-  if (!text || !sid) return;
-  const d = termDraft(sid);
-  if (d.pending) return;
-  // A retry of the same text reuses its request id, so the hub answers it once; a new text is a new request.
-  if (d.cidText !== text || !d.cid) { d.cid = crypto.randomUUID(); d.cidText = text; }
-  await sendText(sid, text, d, null, true);
-};
-// The composer's own line follows the draft as it is typed, so the kept draft is named before the owner leaves the tab.
-$("termview-text").addEventListener("input", () => {
-  if (!termSid) return;
-  const d = termDraft(termSid);
-  d.text = $("termview-text").value;
-  paintDraftLine();
-});
-// The one badge and Now › Needs you read the session list on every tab, so this poll is not gated by a panel (rule 10).
-setInterval(() => { if (!document.hidden && !termOpen() && !squadStream.live()) loadSessions(); }, 10000);
-// The mic (SPEC 1596, frames 17 and 19, rule 10; #1603): holding it records one clip with the timer, the waveform, the
-// cancel zone and the three hints; the release outside the zone sends it, a slide into the zone cancels it, and the
-// two-minute cap stops and sends it. The rules are hub-mobile-voice.js's, the row only draws them (ADR-0137).
-let voiceRec = null;   // the hold in flight: its clock, its thumb, its recorder and its audio stream
-// The one word each hint carries in bold, as frames 17 and 19 draw them.
-const VOICE_HINT_BOLD = { "Release to send": "Release", "Slide left to cancel": "cancel", "max 2:00": "2:00" };
-const voiceSaid = msg => { if (termSid) $("termview-sent").textContent = msg; };
-// One client id for the send: the stub DOM has no Web Crypto, so the fallback keeps the same id shape on every page.
-const voiceId = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID()
-  : "voice-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-function drawVoiceWave(level, tick) {
-  const w = $("voice-wave");
-  if (!w) return;
-  w.replaceChildren(...voiceWave(level, tick).map(h => { const b = document.createElement("span"); b.style.height = h + "px"; return b; }));
-}
-// The one reading of the microphone's level: the analyser's RMS, scaled so ordinary speech fills the row. A browser with
-// no Web Audio, or an analyser that refuses, reads as silence rather than inventing a shape.
-function voiceLevel(r) {
-  const an = r && r.analyser;
-  if (!an || !an.getByteTimeDomainData) return 0;
-  const buf = r.waveBuf || (r.waveBuf = new Uint8Array(an.fftSize || 256));
-  an.getByteTimeDomainData(buf);
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
-  return Math.min(1, Math.sqrt(sum / (buf.length || 1)) * 4);
-}
-function paintVoice() {
-  const el = $("termview-rec");
-  if (!el) return;
-  if (!voiceRec || voiceRec.phase !== "recording") { el.hidden = true; return; }
-  const v = voiceRow(voiceRec, Date.now());
-  $("voice-time").textContent = v.time;
-  $("voice-cancel").dataset.into = v.into ? "1" : "";
-  $("voice-cancel").className = "voicecancel" + (v.into ? " into" : "");
-  $("voice-hints").replaceChildren(...v.hints.map(h => {
-    const s = document.createElement("span"), b = document.createElement("b"), rest = document.createElement("span");
-    const key = VOICE_HINT_BOLD[h] || "", i = key ? h.indexOf(key) : -1;
-    s.className = "voicehint";
-    if (i < 0) { s.textContent = h; return s; }
-    s.textContent = h.slice(0, i);
-    b.textContent = key; rest.textContent = h.slice(i + key.length);
-    s.append(b, rest);
-    return s;
-  }));
-  drawVoiceWave(voiceRec.level || 0, voiceRec.tick || 0);
-  el.hidden = false;
-}
-function voiceStep() {
-  if (!voiceRec || voiceRec.phase !== "recording") return;
-  const act = voiceTick(voiceRec, Date.now()).phase;
-  voiceRec.tick = (voiceRec.tick || 0) + 1;
-  voiceRec.level = voiceLevel(voiceRec);
-  paintVoice();
-  if (act === "send") voiceFinish("send");   // the two-minute cap stops the recording and sends it
-}
-// One close of the recorder: its last chunk, then its bytes. The handlers are set before stop(), so a recorder that
-// answers in the same turn and one that answers later both close the same way.
-function voiceClose(r) {
-  return new Promise(done => {
-    const parts = [];
-    const empty = () => done({ bytes: null, type: "audio/webm" });
-    r.rec.ondataavailable = e => { if (e && e.data) parts.push(e.data); };
-    r.rec.onstop = () => Promise.all(parts.map(p => p.arrayBuffer())).then(bufs => {
-      const total = bufs.reduce((n, b) => n + b.byteLength, 0);
-      if (!total) return empty();
-      const out = new Uint8Array(total);
-      let at = 0;
-      for (const b of bufs) { out.set(new Uint8Array(b), at); at += b.byteLength; }
-      done({ bytes: out, type: (parts[0] && parts[0].type) || "audio/webm" });
-    }, empty);
-    try { r.rec.stop(); } catch (e) { empty(); }
-  });
-}
-async function voiceSend(sid, clip) {
-  if (!clip || !clip.bytes) { voiceSaid("Nothing recorded: the microphone gave no sound."); return; }
-  const q = "sid=" + encodeURIComponent(sid) + "&client_id=" + encodeURIComponent(voiceId())
-    + "&mime=" + encodeURIComponent(clip.type);
-  voiceSaid("Sending");
-  try {
-    const r = await writing(fetch("/api/sessions/voice?" + q, { method: "POST", headers: { "Content-Type": clip.type }, body: clip.bytes }));
-    if (!r.ok) throw new Error("Not sent: the hub refused the request.");
-    const res = await r.json();
-    const word = { sent: "Sent: the session heard your recording", uncertain: "Uncertain: the send was interrupted",
-                   refused: "Refused: the send failed" }[res.status] || "Uncertain: the send was interrupted";
-    voiceSaid(word + (res.reason ? " (" + res.reason + ")" : ""));
-  } catch (err) { voiceSaid(err.message); }
-}
-// One close is bounded: a recorder whose stop() never answers onstop would otherwise hold the microphone, the timer and
-// the hold forever, and every later hold would be refused. Past the bound the hold clears anyway.
-const VOICE_CLOSE_MS = 1500;
-function voiceStop(r) {
-  try { (r.stream && r.stream.getTracks ? r.stream.getTracks() : []).forEach(t => t.stop()); } catch (e) { /* a dead stream */ }
-  try { if (r.ctx && r.ctx.close) r.ctx.close(); } catch (e) { /* an audio context that is already gone */ }
-}
-async function voiceFinish(act) {
-  if (!voiceRec || voiceRec.phase !== "recording") return;
-  const r = voiceRec, sid = termSid;
-  voiceRec.phase = act === "cancel" ? "cancelled" : "sending";
-  clearInterval(r.timer);
-  let clip = null;
-  try {
-    clip = await Promise.race([voiceClose(r), new Promise(done => setTimeout(() => done({ bytes: null, type: "audio/webm" }), VOICE_CLOSE_MS))]);
-  } finally {
-    voiceStop(r);   // the stream's tracks stop whatever the recorder answered
-    voiceRec = null;
-    paintVoice();
-  }
-  if (act === "send" && sid) await voiceSend(sid, clip);
-}
-async function voiceHold(ev) {
-  if (ev && ev.preventDefault) ev.preventDefault();
-  if (voiceRec) return;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
-    voiceSaid("No recording: this browser has no microphone here.");
-    return;
-  }
-  const r = voiceStart(Date.now());
-  r.x0 = Number(ev && ev.clientX) || 0; r.tick = 0;
-  try {
-    r.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    r.rec = new MediaRecorder(r.stream);
-    r.rec.start();
-    // The row's waveform is the level this stream measures, never a shape the tick invents (rule 10; #1603).
-    const AC = typeof AudioContext !== "undefined" ? AudioContext : (typeof webkitAudioContext !== "undefined" ? webkitAudioContext : null);
-    if (AC) {
-      try {
-        r.ctx = new AC();
-        r.analyser = r.ctx.createAnalyser();
-        r.ctx.createMediaStreamSource(r.stream).connect(r.analyser);
-      } catch (e) { r.analyser = null; voiceStop({ ctx: r.ctx }); r.ctx = null; }
-    }
-  } catch (e) { voiceSaid("No recording: the microphone was refused."); return; }
-  voiceRec = r;
-  r.timer = setInterval(voiceStep, 250);
-  paintVoice();
-}
-$("termview-mic").addEventListener("pointerdown", voiceHold);
-document.addEventListener("pointermove", ev => {
-  if (!voiceRec || voiceRec.phase !== "recording") return;
-  voiceRec = voiceSlide(voiceRec, (Number(ev.clientX) || 0) - voiceRec.x0);
-  paintVoice();
-});
-document.addEventListener("pointerup", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish(voiceRelease(voiceRec).phase); });
-document.addEventListener("pointercancel", () => { if (voiceRec && voiceRec.phase === "recording") voiceFinish("cancel"); });
-// One Kore clip per answer (frame 17; #1603): one play or pause control, and elapsed over total once the audio knows its
-// length. The clip is the whole answer, so a sentence boundary never draws a second control.
-function clipSource(t) { return "/api/sessions/clip?sid=" + encodeURIComponent(termSid) + "&k=" + encodeURIComponent(t.k); }
-function paintClip(box) {
-  const a = box.__audio, playing = box.dataset.playing === "1";
-  box.querySelector(".clip-play").textContent = clipLabel(playing);
-  box.querySelector(".clip-play").dataset.playing = playing ? "1" : "";
-  box.querySelector(".clip-play").setAttribute("aria-label", (playing ? "Pause" : "Play") + " the spoken answer");
-  const total = a && isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
-  box.querySelector(".clip-time").textContent = clipTime(a && a.currentTime ? a.currentTime : 0, total);
-}
-// A clip the hub cannot serve (no pipeline, no key, a refused synthesis, or a turn that is not an answer) comes back as a
-// 404, and the audio element reports it as an error. The control then returns to Play and the row says why, so a refused
-// clip never leaves a Pause over 0:00 / 0:00 on the answer for the life of the page.
-function clipFailed(box) {
-  box.dataset.playing = ""; box.dataset.waiting = ""; box.dataset.unavailable = "1";
-  paintClip(box);
-  voiceSaid("The spoken answer is unavailable: the hub could not speak it.");
-}
-async function clipToggle(box) {
-  const a = box.__audio;
-  if (box.dataset.playing === "1") {
-    if (a.pause) a.pause();
-    box.dataset.playing = ""; box.dataset.waiting = "";
-    paintClip(box);
-    return;
-  }
-  if (!a.src) a.src = clipSource(box.__turn);
-  box.dataset.waiting = "1";   // the tap is answered at once; play starts only when the media says it did
-  paintClip(box);
-  if (typeof a.play === "function") {
-    try { await a.play(); } catch (e) { return clipFailed(box); }
-  }
-  box.dataset.waiting = ""; box.dataset.playing = "1";
-  paintClip(box);
-}
-function clipRow(t) {
-  const box = document.createElement("div"), play = document.createElement("button");
-  const wave = document.createElement("span"), voice = document.createElement("span"), time = document.createElement("span");
-  const a = document.createElement("audio");
-  box.className = "clip"; box.dataset.k = t.k;
-  play.type = "button"; play.className = "clip-play"; play.dataset.playing = ""; play.textContent = clipLabel(false);
-  wave.className = "clipwave"; voice.className = "clip-voice"; voice.textContent = (voiceClip(t).voice);
-  time.className = "clip-time"; time.textContent = clipTime(0, 0);
-  a.preload = "none";
-  a.hidden = true; a.setAttribute("aria-hidden", "true");   // the control is the button: the audio stays out of the reading order
-  box.__audio = a; box.__turn = t;
-  play.addEventListener("click", () => clipToggle(box));
-  a.addEventListener("timeupdate", () => paintClip(box));
-  a.addEventListener("loadedmetadata", () => paintClip(box));
-  a.addEventListener("waiting", () => { box.dataset.waiting = "1"; box.dataset.playing = ""; paintClip(box); });
-  a.addEventListener("playing", () => { box.dataset.waiting = ""; box.dataset.playing = "1"; paintClip(box); });
-  a.addEventListener("error", () => clipFailed(box));
-  a.addEventListener("ended", () => { box.dataset.playing = ""; box.dataset.waiting = ""; paintClip(box); });
-  box.append(play, wave, voice, time, a);
-  paintClip(box);
-  return box;
-}
-// terminals:end
+every("runs", () => { if (runId && !$("runview").hidden) { loadRuns(); loadRunControl(); } }, 10000);   // the run may pause, resume or end while the screen is open
 // The first frame (#1445): every list says it is loading before its first reply, drawn through the same helper that draws
 // its later states.
 const route = routeFromHash(location.hash);
 const was = history.state || {};
-drawRuns(); drawSessions(); loadBadge();   // the Chat badge is read on every tab from the first frame (rule 10)
+drawRuns();
 drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
 // The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));

@@ -160,31 +160,27 @@ def test_back_from_a_card_sheet_restored_open_on_load_closes_it_before_navigatin
 MORE_TAP = 'const moreTap = d => document.querySelector(\'[data-panel="more"]\').onclick({ target: { closest: () => ({ dataset: d }) } });'
 
 LAYER_OPEN = {
-    "term": 'openConversation("s1", "Session one");',
     "run": 'openRun("r1", "/run/r1", "Run one");',
     "cost": 'moreTap({ more: "cost" });',
     "lead": 'moreTap({ more: "lead" });',
 }
 
 LAYER_BACK = {
-    "term": '$("termview-back").onclick();',
     "run": '$("runview-back").onclick();',
     "cost": 'moreTap({ back: "" });',
     "lead": 'moreTap({ back: "" });',
 }
 
 # A screen opens inside the tab whose list it came from (SPEC 1596): the owner stands on that tab before the open.
-LAYER_TAB_OPEN = {"term": 'show("chat");', "run": 'show("runs");', "cost": "", "lead": ""}
+LAYER_TAB_OPEN = {"run": 'show("runs");', "cost": "", "lead": ""}
 
 LAYER_HIDDEN = {
-    "term": '$("termview").hidden',
     "run": '$("runview").hidden',
     "cost": 'document.querySelector(\'[data-screen="cost"]\').hidden',
     "lead": 'document.querySelector(\'[data-screen="lead"]\').hidden',
 }
 
 RESTORE_STATE = {
-    "term": {"tab": "chat", "layer": "term", "depth": 1, "sid": "s1", "name": "Session one"},
     "run": {"tab": "runs", "layer": "run", "depth": 1, "id": "r1", "url": "/run/r1", "name": "Run one"},
     "cost": {"tab": "now", "layer": "cost", "depth": 1},
     "lead": {"tab": "now", "layer": "lead", "depth": 1},
@@ -247,7 +243,7 @@ def test_a_reload_with_a_layer_open_restores_it_without_a_second_push(hub, layer
                             else [0, [], True, None]}, out
 
 
-OWNER_TAB = {"term": "chat", "run": "runs", "cost": "now", "lead": "now"}
+OWNER_TAB = {"run": "runs", "cost": "now", "lead": "now"}
 
 
 @pytest.mark.node_bound
@@ -261,12 +257,13 @@ def test_a_cold_load_of_a_run_hash_restores_its_address_and_name(hub):
 
 
 @pytest.mark.node_bound
-def test_a_cold_load_of_a_session_hash_restores_its_name(hub):
+def test_a_cold_load_of_a_removed_chat_hash_lands_on_a_tab_the_page_has(hub):
+    """The chat address left the page (#2490): a reload of it lands on Now and opens no session screen."""
     out = run_page(hub.MOBILE_PAGE, """
         await loadBoard();
-        return { tab: tabActive, hidden: $("termview").hidden, name: $("termview-name").textContent };
+        return { tab: tabActive, term: !!$("termview"), chat: !!document.querySelector('[data-panel="terminals"]') };
     """, hash="#/chat/session=s1?name=Session%20one", board=[BOARD_ONE])
-    assert out == {"tab": "chat", "hidden": False, "name": "Session one"}, out
+    assert out == {"tab": "now", "term": False, "chat": False}, out
 
 
 @pytest.mark.node_bound

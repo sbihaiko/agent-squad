@@ -1,13 +1,14 @@
-"""The phone page draws what the push stream pushes (SPEC 1085, #1091): a conversation turn, a board change and a session-list
-change come from the pushed payload, with no read of their route; a gap clears the drawn turns. The page is booted under the
-node stub DOM of test_hub_mobile_move.py, whose EventSource records the stream the page opens; the driver emits its events.
+"""The phone page draws what the push stream pushes (SPEC 1085, #1091): a board change comes from the pushed payload, with
+no read of its route, and a pushed conversation turn reaches no screen.
+
+The chat left the page with its rule module (#2490), so the page asks the stream for the board alone and holds no thread
+to draw a turn into. The page is booted under the node stub DOM of test_hub_mobile_move.py, whose EventSource records the
+stream the page opens; the driver emits its events.
 """
 import json
 
 from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is the module fixture)
 
-SID = "sid-1"
-CONV_EMPTY = {"turns": [], "next": None, "activity": {}, "epoch": 9, "end": 0}
 BOARD_TWO = {"t": 2, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
              "groups": [{"name": "Backlog", "n": 0, "items": []},
                         {"name": "Todo", "n": 2, "items": [{"n": 8, "t": "pushed ticket", "l": [], "pm": False, "pmt": None},
@@ -25,23 +26,18 @@ def stream_page(mod, monkeypatch):
     return mod.mobile_html().decode()
 
 
-def test_a_pushed_turn_draws_with_no_conversation_read(hub, monkeypatch):  # noqa: F811
+def test_a_pushed_turn_reads_no_conversation_and_draws_no_thread(hub, monkeypatch):  # noqa: F811
     page = stream_page(hub, monkeypatch)
     driver = EMIT + """
-      openConversation(%(sid)s, "Session one");
       await __tick(5);
-      const before = __state.gets["/api/sessions/conversation"] || 0;
-      const opened = stream().url;
-      emit("conversation", { sid: %(sid)s, epoch: 9, at: 0, end: turnLine("t1", "hello").length, lines: turnLine("t1", "hello") });
-      await loadConversation();
+      emit("conversation", { sid: "sid-1", epoch: 9, at: 0, end: 1, lines: turnLine("t1", "hello") });
       await __tick(5);
-      const drawn = $("termview-turns").children.map(el => el.textContent);
-      return { opened, drawn, reads: (__state.gets["/api/sessions/conversation"] || 0) - before, live: squadStream.live() };
-    """.replace("%(sid)s", json.dumps(SID))
-    out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}]})
-    assert "conv=sid-1:9:0" in out["opened"], out["opened"]
-    assert out["drawn"] == ["ownerhello"], out["drawn"]
-    assert out["reads"] == 0, "a pushed turn must draw with no request to the conversation route"
+      return { reads: Object.keys(__state.gets).filter(p => p.startsWith("/api/sessions")),
+               term: !!document.getElementById("termview"), live: squadStream.live() };
+    """
+    out = run_page(page, driver)
+    assert out["reads"] == [], f"the phone page reads a session route: {out}"
+    assert out["term"] is False, "the phone page still holds a chat thread"
     assert out["live"] is True
 
 
@@ -57,55 +53,6 @@ def test_a_pushed_board_redraws_from_the_payload_with_no_board_read(hub, monkeyp
     out = run_page(page, driver)
     assert out["groups"] == [0, 2]
     assert out["reads"] == 0
-
-
-def test_a_pushed_session_list_redraws_from_the_payload_with_no_list_read(hub, monkeypatch):  # noqa: F811
-    page = stream_page(hub, monkeypatch)
-    sessions = {"groups": [{"project": "proj", "sessions": [{"sid": SID, "name": "Session one", "status": "idle", "last": ""}]}]}
-    driver = EMIT + """
-      await __tick(5);
-      const before = __state.gets["/api/sessions"] || 0;
-      emit("sessions", { v: 3, data: %(sessions)s });
-      await __tick(5);
-      return { rows: $("sessions").children.length, reads: (__state.gets["/api/sessions"] || 0) - before };
-    """.replace("%(sessions)s", json.dumps(sessions))
-    out = run_page(page, driver)
-    assert out["rows"] == 1
-    assert out["reads"] == 0
-
-
-def test_a_gap_clears_the_drawn_turns_and_the_window_redraws_from_its_start(hub, monkeypatch):  # noqa: F811
-    page = stream_page(hub, monkeypatch)
-    driver = EMIT + """
-      openConversation(%(sid)s, "Session one");
-      await __tick(5);
-      emit("conversation", { sid: %(sid)s, epoch: 9, at: 0, end: 1, lines: turnLine("t1", "first") });
-      emit("gap", { subject: "conversation", sid: %(sid)s, epoch: 9, start: 40 });
-      emit("conversation", { sid: %(sid)s, epoch: 9, at: 40, end: 80, lines: turnLine("t2", "second") });
-      await __tick(5);
-      return { drawn: $("termview-turns").children.map(el => el.textContent) };
-    """.replace("%(sid)s", json.dumps(SID))
-    out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}]})
-    assert out["drawn"] == ["ownersecond"], out["drawn"]
-
-
-def test_an_older_page_draws_only_the_turns_not_yet_drawn(hub, monkeypatch):  # noqa: F811
-    page = stream_page(hub, monkeypatch)
-    older = {"turns": [{"id": "t1", "k": "0:0", "role": "owner", "text": "first", "at": "", "m": None},
-                       {"id": "t0", "k": "-1:0", "role": "owner", "text": "old", "at": "", "m": None}],
-             "next": None, "activity": {}, "epoch": 9, "end": 0}
-    driver = EMIT + """
-      openConversation(%(sid)s, "Session one");
-      await __tick(5);
-      emit("conversation", { sid: %(sid)s, epoch: 9, at: 0, end: 1, lines: turnLine("t1", "first", "0:0") });
-      await __tick(5);
-      termCursor = 40;
-      await loadOlder();
-      await __tick(5);
-      return { drawn: $("termview-turns").children.map(el => el.textContent) };
-    """.replace("%(sid)s", json.dumps(SID))
-    out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}, {"body": json.dumps(older)}]})
-    assert out["drawn"] == ["ownerold", "ownerfirst"], out["drawn"]
 
 
 def test_the_phone_page_takes_the_desktop_chart_and_loss_events_without_error(hub, monkeypatch):  # noqa: F811
@@ -124,41 +71,6 @@ def test_the_phone_page_takes_the_desktop_chart_and_loss_events_without_error(hu
     assert out["live"] is True
 
 
-def test_the_polls_stay_as_the_fallback_when_no_stream_is_live(hub):  # noqa: F811
-    driver = """
-      openConversation(%(sid)s, "Session one");
-      await __tick(5);
-      const before = __state.gets["/api/sessions/conversation"] || 0;
-      await loadConversation();
-      return { reads: (__state.gets["/api/sessions/conversation"] || 0) - before, streams: __state.streams.length };
-    """.replace("%(sid)s", json.dumps(SID))
-    page = hub.mobile_html().decode()
-    out = run_page(page, driver, routes={"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}]})
-    assert out["streams"] == 0
-    assert out["reads"] == 1
-
-
-CARD = {"id": "card-1", "questions": [{"header": "Pick", "body": "Which one?", "options": [{"label": "a", "description": ""}]}]}
-
-
-def test_a_card_that_appears_after_open_draws_while_the_stream_is_live(hub, monkeypatch):  # noqa: F811
-    page = stream_page(hub, monkeypatch)
-    driver = EMIT + """
-      openConversation(%(sid)s, "Session one");
-      await __tick(5);
-      emit("ping", {});
-      document.querySelector('[data-panel="terminals"]').hidden = false;
-      for (const t of __intervals) if (t.ms === 3000) t.fn();
-      await __tick(5);
-      return { live: squadStream.live(), card: termCard && termCard.id, opened: stream().url };
-    """.replace("%(sid)s", json.dumps(SID))
-    routes = {"/api/sessions/conversation": [{"body": json.dumps(CONV_EMPTY)}],
-              "/api/sessions/card": [{"body": json.dumps({"card": None})}, {"body": json.dumps({"card": CARD})}]}
-    out = run_page(page, driver, routes=routes)
-    assert out["live"] is True
-    assert out["card"] == "card-1", out
-
-
 def test_a_board_that_is_not_ready_names_itself_and_the_other_listeners_still_run(hub, monkeypatch):  # noqa: F811
     page = stream_page(hub, monkeypatch)
     driver = EMIT + """
@@ -172,11 +84,12 @@ def test_a_board_that_is_not_ready_names_itself_and_the_other_listeners_still_ru
     assert out["later"] is True
 
 
-def test_the_stream_names_the_board_and_the_session_list_it_wants(hub, monkeypatch):  # noqa: F811
+def test_the_stream_names_the_board_alone(hub, monkeypatch):  # noqa: F811
     page = stream_page(hub, monkeypatch)
     driver = EMIT + """
       await __tick(5);
       return { url: stream().url };
     """
     out = run_page(page, driver)
-    assert out["url"].endswith("want=board,sessions"), out["url"]
+    assert out["url"].endswith("want=board"), out["url"]
+    assert "sessions" not in out["url"] and "conversation" not in out["url"], out["url"]
