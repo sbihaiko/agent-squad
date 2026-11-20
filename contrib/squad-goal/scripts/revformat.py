@@ -68,6 +68,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
 SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
@@ -426,6 +427,7 @@ REPRO_TIMEOUT = 60          # seconds a repro may run; a longer one did not run 
 REPRO_REFUSED = -71
 # #1525: SQUAD_REPRO_EXEC names a test seam: a double that takes the same argv (`-p <profile> sh -c <cmd>`), set only by a suite that runs inside a child sandbox.
 REPRO_EXEC = "/usr/bin/sandbox-exec"
+REPRO_BASE_BUDGET = 120     # seconds all base runs of one answer may take (#2565); a run past it proves nothing
 # The signal wall a child session runs under (squad/sandbox.py SIGNAL_PROFILE, #1469). review.sh is not launched with
 # SQUAD_SIGNAL_PROFILE set, so the same profile is the default here; a set variable wins.
 SIGNAL_PROFILE = "(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))"
@@ -544,7 +546,25 @@ def run_repro(cmd, checkout):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def repro_check(path, checkout, sha):
+def repro_key(cmd):
+    """A repro with its whitespace normalized: two rounds name the same repro when their keys are equal (#2565)."""
+    return " ".join(cmd.split())
+
+
+def prev_repros(prev):
+    """The repro keys of the Blocking findings of the previous answer `prev` (ANSWER, SHA), and its head SHA (#2565). A
+    previous answer that cannot be read holds none, so no finding is demoted for a repeat."""
+    if not prev:
+        return set(), None
+    try:
+        with open(prev[0], encoding="utf-8") as f:
+            return {repro_key(i[REPRO]) for i in parse_answer(f.read())["blocking"]}, prev[1]
+    except (OSError, ValueError) as exc:
+        print(f"revformat: the previous answer {prev[0]} is not readable ({exc}); no finding is a repeat", file=sys.stderr)
+        return set(), None
+
+
+def repro_check(path, checkout, sha, base=None, prev=None):
     """Run each Blocking finding's repro at `sha` in `checkout`, and rewrite the answer at `path` (#1521).
 
     A repro that exits 0 shows the defect is not present, so the finding moves to Debt with "repro passed at <sha>". A
@@ -552,23 +572,60 @@ def repro_check(path, checkout, sha):
     is a reproduction, and the finding stays Blocking. The rewrite is atomic; a failed read or write leaves the answer
     as it was, and the caller keeps its verdict. A repro whose sandbox cannot apply (REPRO_REFUSED) proved nothing: the
     finding stays Blocking and the reason is printed.
+
+    #2565: with `base` (TREE, SHA), a repro red at the head also runs at the base, in TREE, within REPRO_BASE_BUDGET for
+    all base runs. Green at the base: the finding stays Blocking. Red at the base: it stays Blocking with "repro also fails
+    at base <sha>", unless the previous answer `prev` (ANSWER, SHA) holds the same repro in its Blocking findings; then it
+    moves to Debt, naming the base and both heads. A base run that proves nothing keeps the finding Blocking, and the
+    reason is printed.
     """
     with open(path, encoding="utf-8") as f:
         answer = parse_answer(f.read())
-    blocking = []
+    seen, prev_sha = prev_repros(prev)
+    blocking, spent = [], 0.0
     for item in answer["blocking"]:
         rc = run_repro(item[REPRO], checkout)
+        defect = " ".join(item["defect"].split())
         if rc == REPRO_REFUSED:
             print(f"revformat: repro sandbox refused at {sha} (sandbox-exec exit 71, sandbox_apply: a nested sandbox): "
-                  f"{' '.join(item['defect'].split())}; the finding stays Blocking", file=sys.stderr)
+                  f"{defect}; the finding stays Blocking", file=sys.stderr)
             blocking.append(item)
             continue
         note = {0: "repro passed at", 124: "repro did not run at", 126: "repro did not run at",
                 127: "repro did not run at"}.get(rc)
         if note is None:
-            blocking.append(item)
+            if base is None:
+                blocking.append(item)
+                continue
+            btree, bsha = base
+            why = None
+            if not os.path.isdir(btree):
+                why = f"no base tree {btree}"
+            elif spent >= REPRO_BASE_BUDGET:
+                why = f"the base budget of {REPRO_BASE_BUDGET} s is spent"
+            else:
+                t0 = time.monotonic()
+                brc = run_repro(item[REPRO], btree)
+                spent += time.monotonic() - t0
+                if brc == 0:
+                    blocking.append(item)
+                    continue
+                if brc == REPRO_REFUSED:
+                    why = "repro sandbox refused (sandbox-exec exit 71)"
+                elif brc in (124, 126, 127):
+                    why = f"the repro did not run (exit {brc})"
+            if why:
+                print(f"revformat: no base run proves anything at {bsha} ({why}): {defect}; the finding stays Blocking",
+                      file=sys.stderr)
+                blocking.append(item)
+            elif prev_sha and repro_key(item[REPRO]) in seen:
+                reason = f"repro fails at base {bsha} and at heads {prev_sha}, {sha}"
+                print(f"revformat: {reason}: {defect}; the finding moves to Debt", file=sys.stderr)
+                answer["debt"].append(dict(item, failure=f"{reason}; {item['failure']}"))
+            else:
+                blocking.append(dict(item, failure=f"repro also fails at base {bsha}; {item['failure']}"))
             continue
-        print(f"revformat: {note} {sha}: {' '.join(item['defect'].split())}", file=sys.stderr)
+        print(f"revformat: {note} {sha}: {defect}", file=sys.stderr)
         answer["debt"].append(dict(item, failure=f"{note} {sha}; {item['failure']}"))
     answer["blocking"] = blocking
     tmp = path + ".tmp"
@@ -657,6 +714,11 @@ def main(argv=None):
     p.add_argument("--repro", nargs=3, metavar=("ANSWER", "CHECKOUT", "SHA"),
                    help="run each Blocking finding's repro at SHA in CHECKOUT and rewrite the JSON ANSWER: a finding whose"
                    " repro passes or cannot run moves to Debt; one whose sandbox cannot apply stays Blocking (#1525)")
+    p.add_argument("--repro-base", nargs=2, metavar=("TREE", "SHA"),
+                   help="with --repro, run a repro red at the head also at the base SHA in TREE (#2565): red there keeps the"
+                   " finding Blocking with a base note, or moves it to Debt when --repro-prev holds the same repro")
+    p.add_argument("--repro-prev", nargs=2, metavar=("ANSWER", "SHA"),
+                   help="with --repro-base, the previous round's JSON ANSWER and its head SHA (#2565)")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
@@ -679,8 +741,10 @@ def main(argv=None):
     if a.classify:
         print(classify(*a.classify, fix_round=a.fix_round))
         return 0
+    if (a.repro_base and not a.repro) or (a.repro_prev and not a.repro_base):
+        p.error("--repro-base needs --repro, and --repro-prev needs --repro-base")
     if a.repro:
-        repro_check(*a.repro)
+        repro_check(*a.repro, base=a.repro_base, prev=a.repro_prev)
         return 0
     if a.shape:
         print(shape(a.fix_round))

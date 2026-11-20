@@ -163,7 +163,7 @@ SHAPE_FIX="$(python3 "$(dirname "$0")/revformat.py" --shape --fix-round)"
 SCHEMA="$(python3 "$(dirname "$0")/revformat.py" --schema)"; printf '%s\n' "$SCHEMA" > "$p.schema"
 FMT="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
 $SCHEMA
-verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes), fix and repro. A Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present (a grep, a test or a script); a Blocking finding with no repro is moved to Debt. A Debt or resolved finding leaves repro empty. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes), fix and repro. A Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present (a grep, a test or a script); a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A Debt or resolved finding leaves repro empty. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FULL"
 # #1521: a plan review reads no code, so it names no repro: its prompt asks for none, and its answer is parsed with no
 # repro demotion (rflag, read by answer_check). A plan answer's Blocking finding stays Blocking.
@@ -175,7 +175,7 @@ rflag=""; [ "$mode" = --plan ] && rflag=--plan
 schemaargs=(--json-schema "$SCHEMA"); outschema=(--output-schema "$p.schema")
 FMTFIX="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
 $SCHEMA
-verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect, failure, fix and repro. A not-fixed Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present; a Blocking finding with no repro is moved to Debt. A resolved or Debt finding leaves repro empty. A previous finding that is fixed goes to resolved, its failure \"fixed: <one-line reason>\" and its fix the check that proves it. A previous finding that is not fixed stays in the list it was raised in (blocking or debt), its failure \"not fixed: <one-line reason>\" and its fix the failure it still causes. A new defect in the delta is a new finding in blocking or debt. A list with no finding is []. The loop renders the JSON into this short checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect, failure, fix and repro. A not-fixed Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present; a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A resolved or Debt finding leaves repro empty. A previous finding that is fixed goes to resolved, its failure \"fixed: <one-line reason>\" and its fix the check that proves it. A previous finding that is not fixed stays in the list it was raised in (blocking or debt), its failure \"not fixed: <one-line reason>\" and its fix the failure it still causes. A new defect in the delta is a new finding in blocking or debt. A list with no finding is []. The loop renders the JSON into this short checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FIX"
 prdata() { echo "$lbl: its diff is taken against $pbase"; }
 if [ -n "$delta" ]; then
@@ -247,6 +247,19 @@ repro_tree() { local d
   echo "$d/tree"; }
 # repro_drop <made> <tree>: removes the throwaway worktree repro_tree made; the tree the review reads is never removed.
 repro_drop() { [ "$1" = "$2" ] && return 0; git -C "$2" worktree remove --force "$1" >/dev/null 2>&1; rm -rf "$(dirname "$1")"; }
+# repro_base (#2565): reruns the repro step on $o.answer with the base: the merge-base of $head and $baseref (origin/$pbase,
+# or $wbase in --worktree mode), never the base tip, in a throwaway worktree of it, and the previous round's answer with its
+# head. It reads $tree0, $rt, $head and $last, and appends to $o.rp. No merge-base or no base tree: every finding stays Blocking.
+repro_base() { local bsha bt pa=
+  bsha=$(git -C "$tree0" merge-base "$head" "$baseref" 2>/dev/null) \
+    || { echo "REVIEW $lbl: no merge-base of $head and $baseref, so no base repro ran; its Blocking findings stay Blocking" >> "$o.rp"; return 0; }
+  bt=$(repro_tree "$tree0" "$bsha" 1) \
+    || { echo "REVIEW $lbl: no tree holds base $bsha, so no base repro ran; its Blocking findings stay Blocking" >> "$o.rp"; return 0; }
+  [ -s "$SG_STATE/review-$pr.answer.json" ] && [ -s "$last" ] && pa=$(cat "$last")
+  python3 "$(dirname "$0")/revformat.py" --repro "$o.answer" "$rt" "$head" --repro-base "$bt" "$bsha" \
+      ${pa:+--repro-prev "$SG_STATE/review-$pr.answer.json" "$pa"} 2>>"$o.rp" \
+    && python3 "$(dirname "$0")/revformat.py" --answer "$o.answer" > "$o.n" 2>/dev/null && mv -f "$o.n" "$o"
+  repro_drop "$bt" "$tree0"; }
 # repair_ask <complaint>: the one text a re-ask sends, on the direct lane and on the CLI lane alike.
 repair_ask() { echo "Your answer is outside the shape: $1. Answer again: the same findings, every line in the shape, nothing else."; }
 # format_fail <complaint>: one answer of model $m failed the format check -- revformat.py's shape or schema, or the CLI's
@@ -680,12 +693,15 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
     # worktree of the head in --branch mode (the checkout is never the repro's tree). A plan has no head to run in (its head
     # is a body hash), so a plan's answer has no repro step. No tree holds the head: no repro runs and the findings stay Blocking.
     # #1525: a sandbox that cannot apply (a nested one) is a run that proved nothing: the finding stays Blocking and revformat prints the refusal.
+    # #2565: a finding still Blocking after the head run reruns with its repro at the merge-base of the head and the base ref
+    # (repro_base, ADR-0172): red at the base and in the previous round's answer with the same repro, it moves to Debt.
     if [ $rc = 0 ] && [ -s "$o.answer" ] && [ "$(head -1 "$o")" = "VERDICT: CHANGES" ] && [ "$mode" != --plan ]; then
       tree0=$SG_CHECKOUT; fresh=; [ "$mode" = --worktree ] && tree0=$wt; [ "$mode" = --branch ] && fresh=1
       rt=$(repro_tree "$tree0" "$head" "$fresh")
       if [ -n "$rt" ]; then
         python3 "$(dirname "$0")/revformat.py" --repro "$o.answer" "$rt" "$head" 2>"$o.rp" \
           && python3 "$(dirname "$0")/revformat.py" --answer "$o.answer" > "$o.n" 2>/dev/null && mv -f "$o.n" "$o"
+        python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=[1-9]' && repro_base
         repro_drop "$rt" "$tree0"
       else echo "REVIEW $lbl: no tree holds $head, so no repro ran; its Blocking findings stay Blocking" > "$o.rp"; fi
       [ -s "$o.rp" ] && cat "$o.rp" >&2; rm -f "$o.n" "$o.rp"
