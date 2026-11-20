@@ -84,13 +84,21 @@ def _mkreq_real(tmp_path, name, body):
     return (tmp_path / "st" / "req" / f"{name}.txt").read_text()
 
 
+def _header_seconds(name):
+    """The cost a suite's own `# seconds:` header names: a re-measure changes the header, never this test."""
+    for line in (SCRIPTS / name).read_text(errors="ignore").splitlines()[:6]:
+        if line.startswith("# seconds:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"{name} carries no '# seconds:' header")
+
+
 def test_the_request_names_the_measured_cost_of_each_long_suite_and_no_short_one(tmp_path):
     """#1761: a child that re-runs a long suite spends its deadline in its own proofs, so the request names what each costs."""
     text = _mkreq_real(tmp_path, "cost", PR_BODY)
     cost = [ln for ln in text.splitlines() if ln.startswith("SUITE COST:")]
     assert len(cost) == 1, text
-    assert "test-branchland.sh 86.83 s" in cost[0], cost[0]
-    assert "test-autobug.sh 20.37 s" in cost[0], cost[0]
+    for name in ("test-branchland.sh", "test-autobug.sh"):
+        assert f"{name} {_header_seconds(name)} s" in cost[0], cost[0]
     assert "test-board-fast.sh" not in cost[0], cost[0]
     assert "a proof that cannot finish before your deadline is not a failure" in text.lower(), text
 
