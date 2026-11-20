@@ -28,7 +28,8 @@ S=$T/skill/scripts; mkdir -p "$S"
 fake_squad "$T/skill"; reader=$(fake_reader "$repo")
 cp "$d/watchd.sh" "$S/watchd.sh"
 printf 'gh_aggregate() { echo "[]"; }\n' > "$S/ghcall.sh"   # offline: the start's loop-bug read answers "none"
-printf ': "${SG_STATE:=%s}"; SG_PROFILE=; SG_SQUAD=%s\n%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$T/default" "$T/skill" "$reader" > "$S/env.sh"
+# The drain reads run liveness from squad/run_liveness.py under SG_CHECKOUT; with no active runs it answers idle (#2488).
+printf ': "${SG_STATE:=%s}"; SG_PROFILE=; SG_SQUAD=%s; SG_CHECKOUT=%s\n%s\nexport SG_STATE SG_PROFILE SG_SQUAD SG_CHECKOUT\n' "$T/default" "$T/skill" "$repo" "$reader" > "$S/env.sh"
 printf '#!/bin/bash\necho "watch" >> "$SG_STATE/lanes.log"\nmkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"\nwhile :; do sleep 0.5; done\n' > "$S/watch.sh"
 printf '#!/bin/bash\necho "fast" >> "$SG_STATE/lanes.log"\necho $$ > "$SG_STATE/fastloop.pid"\nwhile :; do sleep 0.5; done\n' > "$S/fastloop.sh"
 printf '#!/bin/bash\necho "cq" >> "$SG_STATE/lanes.log"\necho $$ > "$SG_STATE/cqflush.pid"\nwhile :; do sleep 0.5; done\n' > "$S/cqflush.sh"
