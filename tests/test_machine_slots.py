@@ -91,6 +91,7 @@ def test_the_gate_row_divides_the_cap_by_the_workers_of_one_gate(world):
     got = _read(proj, cfg, caps_dir)
     assert got["gates"]["workers"] == machine_slots.DEFAULT_GATE_WORKERS
     assert got["gates"]["gates_at_once"] == 1, "3 slots of 6 workers per gate fit one gate at a time"
+    assert got["gates"]["slots_per_gate"] == 3, "a gate takes min(6 workers, 3 slots) = 3 slots"
     assert _read(proj, cfg, caps_dir, workers=2)["gates"]["gates_at_once"] == 1
     (proj / "docs" / "squad" / "defaults.yaml").write_text(yaml.safe_dump({"caps": {"runs": 4, "gates": 6}}))
     assert _read(proj, cfg, caps_dir, workers=2)["gates"]["gates_at_once"] == 3

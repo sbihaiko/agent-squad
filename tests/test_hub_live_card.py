@@ -76,9 +76,9 @@ def _visible(html):
 def test_the_card_states_the_whole_count_and_never_the_spend(page):
     """#2507: the summary keeps the whole count even with the rows capped, and the cost leaves the card."""
     out = _card(page, LIVE)
-    assert out["head"] == "5 live", "the summary states the whole count, even with the rows capped"
-    assert "🏃 <b>5</b>" in out["html"], "the header carries the runs pill"
-    assert "$" not in out["html"] and "oldest" not in out["html"], "the spend and the oldest age leave the card"
+    assert "🏃 <b>5</b>" in out["head"], "the summary states the whole count, even with the rows capped"
+    assert "live" not in _visible(out["head"]), "the count shows once, in the pill"
+    assert "$" not in out["head"] + out["html"] and "oldest" not in out["html"], "the spend and the oldest age leave the card"
 
 
 def test_the_card_draws_at_most_four_rows_oldest_first(page):
@@ -92,7 +92,7 @@ def test_the_card_draws_at_most_four_rows_oldest_first(page):
 
 def test_the_count_is_not_the_row_count_when_rows_are_capped(page):
     out = _card(page, LIVE)
-    assert out["head"].startswith("5 live"), "the count keeps stating the whole truth"
+    assert "🏃 <b>5</b>" in out["head"], "the count keeps stating the whole truth"
     assert out["html"].count("data-id=") == 4
 
 
@@ -165,7 +165,7 @@ def test_the_control_routes_through_the_page_tab_handler(page):
 
 def test_the_card_says_none_and_draws_no_control_when_nothing_is_live(page):
     out = _card(page, [])
-    assert out["head"] == "none"
+    assert "🏃 <b>0</b>" in out["head"] and "✋ <b>0</b>" in out["head"]
     assert "no live work" in _visible(out["html"])
     assert "id=lrmore" not in out["html"]
 
@@ -176,7 +176,7 @@ def test_a_hand_hold_is_counted_apart_from_a_live_run(page):
     hold = {"id": "hold-2149", "label": "Manual · #2149", "kind": "hold", "age": 9999, "rank": 0, "spend": 0.0,
             "issues": ["2149"], "titles": {"2149": "An unproven wave tip holds its issue past the age cap"}}
     out = _card(page, [_run(60, "b", 0.25), hold])
-    assert out["head"] == "1 live · 1 held", f"the hold inflated the run count: {out['head']}"
+    assert "🏃 <b>1</b>" in out["head"] and "✋ <b>1</b>" in out["head"], f"the hold inflated the run count: {out['head']}"
     assert [h for h in re.findall(r'data-id="([^"]+)"', out["html"])] == ["run-20261103-1010b0-aaaa"], \
         "the hold is drawn as its own line, never as a run row"
 

@@ -142,10 +142,10 @@ def test_the_sub_group_is_labelled_this_machine_all_projects(hub):
 def test_the_gate_row_reads_the_slots_as_loop_gates_at_once(hub):
     mod, _ = hub
     got = _node(mod, "console.log(JSON.stringify(["
-                      "slotGateLine({cap:3,in_use:0,workers:3,gates_at_once:1,gates_running:0}),"
-                      "slotGateLine({cap:12,in_use:7,workers:6,gates_at_once:2,gates_running:1})]))")
-    assert got[0] == "3 slots ÷ 3 workers per gate = 1 gate at a time · none running", got[0]
-    assert "2 gates at a time" in got[1] and "1 gate running" in got[1], got[1]
+                      "slotGateLine({cap:3,in_use:0,workers:3,slots_per_gate:3,gates_at_once:1,gates_running:0}),"
+                      "slotGateLine({cap:12,in_use:7,workers:6,slots_per_gate:6,gates_at_once:2,gates_running:1})]))")
+    assert got[0] == "a gate takes 3 slots (3 asked, cap 3) = 1 gate at a time · none running", got[0]
+    assert "a gate takes 6 slots (6 asked, cap 12) = 2 gates at a time" in got[1] and "1 gate running" in got[1], got[1]
 
 
 def test_the_sub_group_states_a_run_carries_one_or_more_cards(hub):
@@ -218,3 +218,22 @@ def test_the_sub_group_chip_names_a_full_row(hub):
     got = _node(mod, "const mk=(r,g)=>({runs:{cap:4,in_use:r,holders:[]},gates:{cap:3,in_use:g,holders:[],workers:3,gates_at_once:1,gates_running:0}});"
                       "console.log(JSON.stringify([slotChip(mk(4,0))[0],slotChip(mk(2,0))[0],slotChip(mk(1,3))[0]]))")
     assert got == ["runs full", "under the caps", "gate workers full"], got
+
+
+def test_the_sub_group_is_a_table_with_four_headers_a_bar_and_issue_chips(hub):
+    """#2513: the group is a table of Slot, In use, Slots and Held by; In use draws a bar; Held by links each issue."""
+    mod, _ = hub
+    got = _node(mod, "slotS={file:'/p',file_label:'docs/squad/defaults.yaml',ceiling:{runs:10,gates:12},"
+                      "runs:{cap:4,in_use:1,holders:[{name:'run-a',issues:[2374,2420]}]},"
+                      "gates:{cap:3,in_use:0,holders:[],workers:6,slots_per_gate:3,gates_at_once:1,gates_running:0},children:12,reviews:4};"
+                      "slotDraft=slotClone(slotS);"
+                      "console.log(JSON.stringify({h:slotsHtml()}))")
+    h = got["h"]
+    for head in ("<th scope=col>Slot</th>", "<th scope=col>In use</th>", "<th scope=col>Slots</th>", "<th scope=col>Held by</th>"):
+        assert head in h, head
+    assert '<span class="slotbar"><i style="width:25%"></i></span>' in h, "the In use cell draws no bar"
+    assert 'href="https://github.com/__REPO__/issues/2374"' in h, "the issue chip does not link to the issue"
+    assert ">#2374</a>" in h and ">#2420</a>" in h, "the issue chips are missing"
+    assert "run-a" not in h, "Held by names the run folder instead of its issues"
+    assert "a gate takes 3 slots (6 asked, cap 3) = 1 gate at a time" in h, "the gate line hides the real arithmetic"
+    assert "3 slots ÷ 6 workers" not in h, "the gate line still shows the wrong division"

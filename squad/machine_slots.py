@@ -41,9 +41,14 @@ def gate_workers(value=None):
     return n if n >= 1 else DEFAULT_GATE_WORKERS
 
 
+def slots_per_gate(cap, per_gate):
+    """The gate worker slots one loop gate takes: `min(per_gate, cap)` (gate.sh)."""
+    return min(per_gate, cap)
+
+
 def gates_at_once(cap, per_gate):
-    """The loop gates that fit in `cap` gate worker slots, one gate taking `min(per_gate, cap)` slots (gate.sh)."""
-    slot = min(per_gate, cap)
+    """The loop gates that fit in `cap` gate worker slots."""
+    slot = slots_per_gate(cap, per_gate)
     return cap // slot if slot >= 1 else 0
 
 
@@ -82,7 +87,8 @@ def read(target=".", active_runs=None, folder=None, defaults_path=None, workers=
             "ceiling": plugin(defaults_path),
             "runs": {"cap": c.caps["runs"], "in_use": len(run_holders), "holders": run_holders},
             "gates": {"cap": cap, "in_use": len(gate_leases), "holders": gate_holders,
-                      "workers": per_gate, "gates_at_once": gates_at_once(cap, per_gate),
+                      "workers": per_gate, "slots_per_gate": slots_per_gate(cap, per_gate),
+                      "gates_at_once": gates_at_once(cap, per_gate),
                       "gates_running": len({h for h in gate_holders if LOOP_GATE.match(h)})},
             "children": c.caps["children"], "reviews": c.caps["reviews"]}
 
