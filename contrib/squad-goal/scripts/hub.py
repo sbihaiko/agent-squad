@@ -2697,7 +2697,6 @@ def profiler_sampler(stop):
     profile (#1790). A failed or empty read is counted and not folded: folded, it would count every process of the next
     reading as new. Each pass reads the sampler's own thread CPU time, so the fold shows it apart from the hub process
     that runs it, split into the table read and the window fold (#2581)."""
-    mark = time.thread_time()
     while not stop.is_set():
         started = time.thread_time()
         try: reading = {(pid, p.start): (p.ppid, p.cpu if getattr(p, "cpu_known", True) else None, p.command)   # a refused CPU read is seen and not read (#1753)
@@ -2706,12 +2705,10 @@ def profiler_sampler(stop):
         try: scope = profiler_scope() if reading else None
         except Exception: reading = None
         read_s = time.thread_time() - started
-        now_mark = time.thread_time()
         with PROFILER_LOCK:
             if stop.is_set() or not profiler_on() or not read_wanted(): break   # the switch file is the truth, whoever wrote it
-            if reading: PROFILER["window"].add(time.time(), reading, scope, sampler=(os.getpid(), now_mark - mark, read_s))
+            if reading: PROFILER["window"].add(time.time(), reading, scope, sampler=(os.getpid(), read_s))
             else: PROFILER["window"].fail()
-        mark = now_mark
         stop.wait(PROFILER_SECS)
 
 def profiler_ensure():

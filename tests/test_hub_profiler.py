@@ -357,28 +357,32 @@ def test_a_process_is_keyed_by_pid_and_start_time(prof, scope):
 HUBMUX = f"python3 {S}/hubmux.py"
 
 
-def hub_window(prof, scope, passes):
-    """A window of the hub process 40 whose sampler spent `passes` of (spent_s, read_s) between two readings."""
+def hub_window(prof, scope, reads):
+    """A window of the hub process 40 whose sampler read the table for `reads` seconds between two readings, each of
+    which gained it 0.5 s beside the sampler."""
     w = prof.Window()
     w.add(1000.0, rd({10: (1, 5.0, f"/bin/bash {S}/watchd.sh supervise"), 40: (1, 3.0, HUBMUX)}), scope)
     cpu = 3.0
-    for i, (spent, read) in enumerate(passes, start=1):
+    for i, read_s in enumerate(reads, start=1):
         cpu += 0.5
         w.add(1000.0 + i, rd({10: (1, 5.0, f"/bin/bash {S}/watchd.sh supervise"), 40: (1, cpu, HUBMUX)}), scope,
-              sampler=(40, spent, read))
+              sampler=(40, read_s))
     return w
 
 
-def test_two_sampler_passes_show_under_hubmux_and_leave_its_self_time(prof, scope):
-    """Two passes of known sampler thread time: hubmux.py keeps only the seconds it spent beside the sampler, and its
-    child row `cpu sampling` carries the sampler's seconds, split into the table read and the window fold (#2581)."""
-    w = hub_window(prof, scope, [(0.4, 0.15), (0.3, 0.1)])
+def test_two_sampler_passes_show_under_hubmux_and_leave_its_self_time(prof, scope, monkeypatch):
+    """Two passes of known thread time, the fake clock charging each fold 0.05 s: hubmux.py keeps only the seconds it
+    spent beside the sampler, and its child row `cpu sampling` carries the sampler's seconds, split into the table read
+    and the window fold (#2581)."""
+    ticks = iter(range(10 ** 6))
+    monkeypatch.setattr(prof.time, "thread_time", lambda: next(ticks) * 0.05)
+    w = hub_window(prof, scope, [0.15, 0.1])
     hubmux = node(w.tree(), "hubmux.py")
-    assert hubmux["self_s"] == pytest.approx(0.3), "the sampler's seconds stayed in hubmux.py's self time"
+    assert hubmux["self_s"] == pytest.approx(0.65), "the sampler's seconds stayed in hubmux.py's self time"
     sampling = node(hubmux, "cpu sampling")
-    assert sampling["self_s"] == 0 and sampling["total_s"] == pytest.approx(0.7)
+    assert sampling["self_s"] == 0 and sampling["total_s"] == pytest.approx(0.35)
     assert node(sampling, "table read")["total_s"] == pytest.approx(0.25)
-    assert node(sampling, "window fold")["total_s"] == pytest.approx(0.45)
+    assert node(sampling, "window fold")["total_s"] == pytest.approx(0.1)
 
 
 def test_a_window_with_no_sampler_pass_shows_no_cpu_sampling_row(prof, scope):
@@ -709,7 +713,7 @@ def test_switching_on_starts_the_sampler_and_the_route_returns_the_tree(hub):
 
 def test_the_sampler_reads_its_thread_time_and_the_tree_carries_the_row(hub, monkeypatch):
     """Each pass reads its own thread CPU time with `time.thread_time`, and the tree shows it as `cpu sampling` under the
-    hub process: the hub process keeps a quarter of its measured CPU, and the sampler the other three (#2581)."""
+    hub process: no second of the process's measured CPU is both its own and the sampler's (#2581)."""
     mod, port, _, _, table = hub
     ticks = iter(range(10 ** 9))
     monkeypatch.setattr(mod.time, "thread_time", lambda: next(ticks) * 0.25)
@@ -722,7 +726,8 @@ def test_the_sampler_reads_its_thread_time_and_the_tree_carries_the_row(hub, mon
     hubmux = next(c for c in v["tree"]["children"] if c["name"] == "hubmux.py")
     sampling = next(c for c in hubmux["children"] if c["name"] == "cpu sampling")
     assert sampling["self_s"] == 0 and sampling["total_s"] > 0
-    assert hubmux["self_s"] == pytest.approx(sampling["total_s"] / 3), "the hub process kept the sampler's seconds"
+    assert hubmux["self_s"] + sampling["total_s"] == pytest.approx(hubmux["total_s"], abs=0.002), \
+        "the hub process kept the sampler's seconds"
     reads = {c["name"]: c["total_s"] for c in sampling["children"]}
     assert set(reads) == {"table read", "window fold"} and sum(reads.values()) == pytest.approx(sampling["total_s"])
 

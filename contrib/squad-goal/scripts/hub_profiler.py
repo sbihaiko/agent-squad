@@ -29,6 +29,7 @@ import math
 import pathlib
 import re
 import shlex
+import time
 
 # The board definition is the one order of its columns (ADR-0170): the trip reads it from the vocabulary module beside
 # this script, so the panel never keeps a list that could disagree with the board (#2199).
@@ -383,14 +384,17 @@ def fold(prev, cur, scope, memo=_LABELS, sampler=None):
     place of its seconds: it is seen and not read, so it is no row here, and it counts nothing anywhere. `memo` keeps
     each process's label while the reading holds it, so the next reading reuses it instead of parsing the line again; a
     process the reading no longer holds leaves the memo, and with no memo every line is parsed. `sampler` is
-    `(pid, spent seconds, read seconds)` for the sampler thread of that process over this interval: those seconds leave
-    the process's own row and stand as `cpu sampling` under it, split into the table read and the window fold (#2581)."""
+    `(pid, read seconds)` for the sampler thread of that process over this interval: its table read and the seconds this
+    fold costs from that thread leave the process's own row and stand as `cpu sampling` under it, split into the table
+    read and the window fold (#2581)."""
+    started = time.thread_time() if sampler is not None else 0.0
     if memo is not None:
         live = set(cur)
         for key in list(memo):   # a snapshot: another profile's sampler can fold on its own thread in the same hub
             if (key[0], key[1]) not in live:
                 memo.pop(key, None)
     out = {}
+    sampler_parts = None
     rows, starts = {}, {}
     for (pid, start), row in cur.items():
         rows[pid], starts[pid] = row, start
@@ -405,25 +409,29 @@ def fold(prev, cur, scope, memo=_LABELS, sampler=None):
             continue
         parts = path(key[0])
         if sampler is not None and key[0] == sampler[0]:
-            used = _split_sampler(out, parts, used, sampler)
+            sampler_parts = parts
         cell = out.setdefault(parts, [0.0, 0])
         cell[0] += used
         cell[1] += 1 if new else 0
+    if sampler is not None and sampler_parts is not None:
+        _split_sampler(out, sampler_parts, max(0.0, float(sampler[1])), time.thread_time() - started)
     return out
 
 
-def _split_sampler(out, parts, used, sampler):
+def _split_sampler(out, parts, read, fold):
     """Take the sampler thread's seconds out of its process's own row and hang them under it: `cpu sampling` carries the
     whole of them through its two children, so the row itself holds none and no second counts twice. A sampler that spent
-    more than the process gained leaves the row at zero, never below it."""
-    spent = min(used, max(0.0, float(sampler[1])))
+    more than the process gained leaves the row at zero, never below it. The table read takes its share first, and the
+    window fold the rest."""
+    cell = out.get(parts)
+    spent = min(cell[0], read + fold) if cell is not None else 0.0
     if spent <= 0:
-        return used
-    read = min(spent, max(0.0, float(sampler[2])))
+        return
+    cell[0] -= spent
+    read = min(spent, read)
     out.setdefault(parts + (SAMPLER,), [0.0, 0])   # the row itself holds nothing: its two children carry every second
     for cell_parts, secs in ((parts + (SAMPLER, SAMPLE_READ), read), (parts + (SAMPLER, SAMPLE_FOLD), spent - read)):
         out.setdefault(cell_parts, [0.0, 0])[0] += secs
-    return used - spent
 
 
 def coverage(reading):
@@ -535,8 +543,8 @@ class Window:
 
     def add(self, now, reading, scope, sampler=None):
         """Take one reading. The first is the baseline: it holds every process and says nothing about the window. A
-        process whose CPU read was refused counts in the coverage and in no row. `sampler` is the sampler thread's own
-        cost over the interval that ends at this reading, passed to `fold` (#2581)."""
+        process whose CPU read was refused counts in the coverage and in no row. `sampler` is `(pid, read seconds)` for
+        the sampler thread that took this reading, passed to `fold` (#2581)."""
         if self.since is None:
             self.since = now
         if self.last is not None:
