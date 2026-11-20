@@ -1,7 +1,8 @@
 """The question card a session raises (#1093): read from the session's transcript, answered through the session's own send route.
 
 The card is the session's open AskUserQuestion call; an answer is a message the session's send route carries. No test here
-opens a socket or reads a real session: the transcript is a list of lines and the send route is replaced.
+opens a socket or reads a real session: the transcript is a list of lines and the send route is replaced. The phone page
+carries no card surface (#2490): it reads no card and answers none, and the hub's route stays for the desktop overlay.
 """
 import json
 import pathlib
@@ -106,11 +107,11 @@ def test_the_hub_answers_through_the_session_send_route(hub, monkeypatch):
     assert [(s, t) for s, t, _ in sent] == [("s1", "Answers: 1. Scope: Wide; 2. Depth: Deep")]
 
 
-def test_the_page_reads_the_session_card_and_answers_through_its_route(hub):
+def test_the_page_reads_no_session_card_and_answers_none(hub):
+    """The card surface left the phone page with the chat (#2490); the hub's route still answers for the overlay."""
     page = hub.MOBILE_PAGE
-    assert "/api/sessions/card?sid=" in page and "/api/sessions/card/answer" in page
-    assert "await loadCard();" in page, "the open conversation does not read the session's card"
-    assert 'outcome === "refused"' in page, "a refused answer leaves the card answerable"
+    assert "/api/sessions/card" not in page, "the phone page still names the card route"
+    assert "loadCard(" not in page and "cardAnswer(" not in page, "the phone page still reads or answers a card"
 
 
 def test_the_hub_refuses_an_unanswered_card_without_sending(hub, monkeypatch):
