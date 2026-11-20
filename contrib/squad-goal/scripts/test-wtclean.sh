@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 90.59
+# seconds: 90.55
 # Regression test for wtclean.sh's zombie-run rule (throwaway repos, no network). usage: bash test-wtclean.sh [path/to/wtclean.sh]
 # A run with no verdict is cleaned only when it is a zombie: record.jsonl idle >20 min AND no process inside its folder; the tree must be clean and HEAD on a remote branch.
 here=$(cd "$(dirname "$0")" && pwd -P); src=${1:-$here/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }

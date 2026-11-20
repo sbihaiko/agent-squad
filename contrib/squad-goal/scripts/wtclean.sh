@@ -13,6 +13,10 @@
 # case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
 # Every tree an ended run keeps is named once, with its reason, as WT KEPT (#676): a live process, a tree inside it, uncommitted
 # work or commits outside the base. An ended run with no open wave leaves active-runs.txt, whatever keeps its tree (rule A below).
+# #2574: uncommitted work or commits outside the base keep a tree only while one of its issues is open. A tree whose issues are
+# all closed, that nothing moved for SG_WT_ARCHIVE_SECONDS and that no active run names goes once its HEAD and its tracked dirt
+# are archived on the remote (archive below). The archived refs keep every commit, so the removal deletes no work but untracked files.
+sdir=$(cd "$(dirname "$0")" && pwd)
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
 # (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
@@ -75,21 +79,95 @@ kept() { grep -qxF "keep $3 $2" "$seen" && return 0; echo "WT KEPT $1 ${2##*/}: 
 # or resume): `completed`, `failed` with nothing in `remains`, or `failed` with remains and a record still for
 # SG_RUN_RESUME_HOLD_SECONDS (a day by default). The loop never resumes a run, so past that no resume is coming, and the tree
 # held for one stayed for good (#676). Else 1, and $why names the hold when there is one to name: a run with no verdict is live.
-ended() { local f="$1/record.jsonl" last; why=
+# liftable (#2574): the hold is one a closed issue lifts: needs-human, stopped, or failed with remains.
+ended() { local f="$1/record.jsonl" last; why=; liftable=
   wave_hold "${1##*/}" && return 1
   last=$(awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$f" 2>/dev/null)
   case $last in
     *'"verdict": "completed"'*) return 0;;
     *'"verdict": "failed"'*) printf '%s' "$last" | grep -qE '"remains": *\[ *\]' && return 0
       [ $(( now - $(mtime "$f") )) -ge "${SG_RUN_RESUME_HOLD_SECONDS:-86400}" ] && return 0
-      why="${1##*/} failed with remains a resume may still take";;
-    *'"verdict": "needs-human"'*) why="${1##*/} needs a human: the owner decides";;
-    *'"verdict": "stopped"'*) why="${1##*/} is paused: the owner resumes it";;
+      why="${1##*/} failed with remains a resume may still take"; liftable=1;;
+    *'"verdict": "needs-human"'*) why="${1##*/} needs a human: the owner decides"; liftable=1;;
+    *'"verdict": "stopped"'*) why="${1##*/} is paused: the owner resumes it"; liftable=1;;
     '') ;;
     *) why="${1##*/} ended with a verdict a resume may take";; esac
   return 1; }
-wt_remove() { wt_forced=; wt_sub=0; has_sub "$2" && wt_sub=1
+# run_issues <run folder>: the issues one run worked: its ws/issue-<n> tree names, its request's `--- issue #N`, `GitHub issue
+# #N` and CHILD `GitHub issue(s) a, b` lines, and the run's wave entries in the issue ledger.
+run_issues() { local r=${1%/} x
+  for x in "$r"/ws/issue-*; do x=${x##*/issue-}; case $x in ''|*[!0-9]*) ;; *) echo "$x";; esac; done
+  if [ -f "$r/request.txt" ]; then
+    grep -oE '^--- issue #[0-9]+|GitHub issue #[0-9]+' "$r/request.txt" | grep -oE '[0-9]+$'
+    grep '^CHILD' "$r/request.txt" | grep -oE 'GitHub issue\(s\) #?[0-9][0-9, ]*' | sed 's/^[^)]*) #*//' | tr ', ' '\n\n' | grep -E '^[0-9]+$'
+  fi
+  [ -z "$ledger" ] || printf '%s\n' "$ledger" | awk -F '\t' -v r="${r##*/}" '$1 == r || "run-" $1 == r {print $2}'; }
+# tree_issues <top> [run folder]: the issues of a tree: its gui-<n> name and the issues of every run folder inside it. A run of
+# the checkout's own runs/ has no tree of its own, so it reads that run alone.
+tree_issues() { local t=$1 n r
+  { if [ "$t" = "$SG_CHECKOUT" ]; then run_issues "$2"
+    else n=${t##*/}; case $n in gui-*) n=${n#gui-}; case $n in ''|*[!0-9]*) ;; *) echo "$n";; esac;; esac
+      for r in "$t"/runs/*/; do [ -d "$r" ] && run_issues "$r"; done; fi; } | sort -un | tr '\n' ' '; }
+# all_closed <issue>...: 0 when the list is not empty and the facts file says each issue is closed. Else 1: $cwhy names why
+# and $ctag is its short tag. An issue the file does not hold reads as not closed.
+all_closed() { local x; cwhy=; ctag=
+  [ "$facts" = 1 ] || { cwhy="the issue facts file is missing, stale or of another repository"; ctag=facts; return 1; }
+  [ $# -gt 0 ] || { cwhy="no issue names it"; ctag=none; return 1; }
+  for x; do case " $closed " in *" $x "*) ;; *) cwhy="issue #$x is not closed"; ctag="open$x"; return 1;; esac; done; }
+# quiet <tree> [run folder]...: nothing moved the tree's HEAD reflog or a run record for SG_WT_ARCHIVE_SECONDS. The directory
+# mtime is never read: a pass, a prune or a scratch file moves it.
+quiet() { local w=$1 f t m=0 r; shift
+  for f in "$($G -C "$w" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null)" "$w"/runs/*/record.jsonl; do
+    [ -f "$f" ] || continue; t=$(mtime "$f"); [ "$t" -gt $m ] && m=$t; done
+  for r; do f="${r%/}/record.jsonl"; [ -f "$f" ] || continue; t=$(mtime "$f"); [ "$t" -gt $m ] && m=$t; done
+  [ $(( now - m )) -ge "${SG_WT_ARCHIVE_SECONDS:-7200}" ]; }
+# active_in <dir>: a line of active-runs.txt names this folder or one inside it. Such a run keeps its tree, verdict or not.
+active_in() { local r d p; [ -f "$SG_STATE/active-runs.txt" ] || return 1
+  p=$(cd "$1" 2>/dev/null && pwd -P) || p=$1   # the lines are compared resolved, as lsof answers
+  while read -r r; do case "$r" in '') continue;; /*) d=$r;; *) d="$SG_CHECKOUT/runs/$r";; esac
+    d=$(cd "$d" 2>/dev/null && pwd -P) || continue
+    case $d in "$p"|"$p"/*) return 0;; esac; done < "$SG_STATE/active-runs.txt"; return 1; }
+# archive <class> <tree>: 0 when the removal loses no tracked work. No push when HEAD is in the base or on a remote branch and no
+# tracked file changed. Else one push writes HEAD to refs/archive/wt/<tree path>/<sha9>/head and the tracked dirt, as a `git
+# stash create` commit, to .../dirty. An untracked file is never archived. At most SG_WT_ARCHIVE_MAX pushes a pass. A refused
+# push keeps the tree, named once. $aref names the refs the push wrote.
+archive() { local c=$1 w=$2 sha td d rel ref spec
+  aref=; sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || return 1
+  td=$($G -C "$w" status --porcelain --untracked-files=no 2>/dev/null)
+  [ -z "$td" ] && { in_base "$w" || [ -n "$($G -C "$w" branch -r --contains "$sha" 2>/dev/null | head -1)" ]; } && return 0
+  [ "$(grep -c . "$arch")" -lt "${SG_WT_ARCHIVE_MAX:-10}" ] || { kept "$c" "$w" archcap "the pass reached its cap of ${SG_WT_ARCHIVE_MAX:-10} archive pushes"; return 1; }
+  echo push >> "$arch"
+  rel=${w#"$SG_CHECKOUT"/}; [ "$rel" = "$w" ] && rel=${w#/}
+  ref="refs/archive/wt/$(printf '%s' "$rel" | tr '/' '_')/${sha:0:9}"; spec="$sha:$ref/head"
+  if [ -n "$td" ]; then d=$($G -C "$w" stash create 2>/dev/null)
+    [ -n "$d" ] || { kept "$c" "$w" archdirt "git stash create made no commit of the tracked dirt"; return 1; }
+    spec="$spec $d:$ref/dirty"; fi
+  GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=60 $G -C "$w" push -q "${SG_LAND_REMOTE:-origin}" $spec >/dev/null 2>&1 \
+    || { kept "$c" "$w" archpush "archive push refused ($ref)"; return 1; }
+  aref=$ref; }
+# free_gate <class> <tree> <top> <tag> <reason> [run folder]: a tree kept for <reason> (uncommitted work, commits outside the
+# base) may go when every issue of <top> is closed, no active run line names it, it is quiet and its work is archived. Else it
+# stays, and the kept line names the reason and what holds the tree.
+free_gate() { local c=$1 w=$2 top=$3 tag=$4 txt=$5 ad=${6:-$2}
+  all_closed $(tree_issues "$top" "$ad") || { kept "$c" "$w" "$tag-$ctag" "$txt; $cwhy"; return 1; }
+  active_in "$ad" && { kept "$c" "$w" "$tag-act" "$txt; its run is still in active-runs.txt"; return 1; }
+  quiet "$w" ${6:+"$6"} || { kept "$c" "$w" "$tag-quiet" "$txt; it moved in the last ${SG_WT_ARCHIVE_SECONDS:-7200} s"; return 1; }
+  archive "$c" "$w"; }
+# free_archived <class> <tree> <run folder> <label>: the removal after free_gate, with one --force (uncommitted work goes, its
+# tracked part archived). $fb is the branch the tree had, for the caller's branch rule.
+free_archived() { local c=$1 w=$2 sha rc
+  fb=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
+  wt_remove "$SG_CHECKOUT" "$w" force "$3"; rc=$?
+  if [ $rc = 0 ]; then echo "WT CLEAN $4 ${fb:-detached} ${sha:-} (its issues are closed${aref:+; archived at $aref}; removed with --force)"; return 0; fi
+  kept "$c" "$w" archrm "${wt_why:-git refused to remove it}${aref:+; its work is at $aref}"; return 1; }
+wt_remove() { wt_forced=; wt_sub=0; wt_why=; has_sub "$2" && wt_sub=1
   local s; for s in $scratch; do $G -C "$2" status --porcelain -- "$s" 2>/dev/null | grep -qxF "?? $s" && rm -rf "${2:?}/$s"; done   # the caller proved it is all the dirt
+  if [ "$3" = force ]; then   # #2574: after an archive only; the tests that keep a tree run again right before the one --force
+    cwds=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+    in_use "$2" && { wt_why="a live process works in it"; return 1; }
+    inner "$2" && { wt_why="another worktree lies inside it"; return 1; }
+    active_in "${4:-$2}" && { wt_why="its run is still in active-runs.txt"; return 1; }
+    $G -C "$1" worktree remove --force "$2" 2>/dev/null; return; fi
   $G -C "$1" worktree remove "$2" 2>/dev/null && return 0
   [ $wt_sub = 1 ] || return 1
   $G -C "$1" worktree remove --force "$2" 2>/dev/null || return 2
@@ -131,6 +209,16 @@ tmp_prune   # before the cd: the prune needs no checkout
 cd "$SG_CHECKOUT" || exit 0
 SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.
 cwds=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test
+# #2574: the closed issues, read once a pass from the file the janitor writes (_facts_sync), never from GitHub. The file is proof
+# only when it names $SG_REPO and its last sync is under SG_WT_FACTS_MAX_SECONDS old; else facts=0 and every tree stays.
+facts=0; closed=$(python3 -I -c '
+import calendar, json, sys, time
+c = json.load(open(sys.argv[1])); t = calendar.timegm(time.strptime(c["synced"], "%Y-%m-%dT%H:%M:%SZ"))
+if not sys.argv[2] or c.get("repo") != sys.argv[2] or not time.time() - t < float(sys.argv[3]): sys.exit(1)
+print(" ".join(k for k, v in c["issues"].items() if isinstance(v, dict) and isinstance(v.get("f"), list) and v["f"][:1] == ["closed"]))
+' "$SG_STATE/issue-facts.json" "${SG_REPO:-}" "${SG_WT_FACTS_MAX_SECONDS:-1800}" 2>/dev/null) && facts=1
+ledger=; [ -f "$sdir/issue_ledger.py" ] && [ -n "${SG_REPO:-}" ] && ledger=$(python3 "$sdir/issue_ledger.py" entered "$SG_REPO" 2>/dev/null)
+arch="$SG_STATE/wt-arch.$$"; : > "$arch"   # one line per archive push this pass: the ws loop is a subshell
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\1#p' | while read -r w; do
   run=${w%%/ws/*}   # only after the RUN's verdict: the run's land step reads every child workspace (removing one early fails it with land_workspace_missing)
   # no verdict yet: only a ZOMBIE run (record.jsonl idle >20 min and no process whose cwd is inside the run folder) is cleaned, under the same clean-tree / HEAD-on-a-remote-branch rules below
@@ -145,7 +233,12 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
     continue; fi
   inner "$w" && { kept "${run##*/}" "$w" inner "another worktree lies inside it"; continue; }
   in_use "$w" && { kept "${run##*/}" "$w" use "a live process works in it"; continue; }
-  [ -z "$(dirt "$w")" ] || { kept "${run##*/}" "$w" dirt "uncommitted work in it"; continue; }
+  # #2574: uncommitted work keeps the tree while an issue of its top tree is open; else it is archived and the tree goes.
+  if [ -n "$(dirt "$w")" ]; then
+    top=$(cd "${run%/runs/*}" 2>/dev/null && pwd -P) || top=${run%/runs/*}   # the tree that holds the run folder, or the checkout
+    free_gate "${run##*/}" "$w" "$top" dirt "uncommitted work in it" "$run" && free_archived "${run##*/}" "$w" "$run" "${run##*/} ${w##*/}" || continue
+    case $fb in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$fb" >/dev/null 2>&1;; esac
+    continue; fi
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
   # #2020: a clean tree of an ended run whose commits are on no remote branch is salvaged, never kept for good. The ref holds the
@@ -187,7 +280,7 @@ for rel in worktrees/child .worktrees; do
     echo held >> "$tally"
     in_use "$w" && continue
     inner "$w" && { kept child "$w" inner "another worktree lies inside it"; continue; }
-    [ -z "$(dirt "$w")" ] || { kept child "$w" dirt "uncommitted work in it"; continue; }
+    ar=; [ -z "$(dirt "$w")" ] || ar="dirt uncommitted work in it"   # #2574: a keep reason a closed issue may lift (below)
     # A run folder inside the tree whose wave has not landed holds it (#477). The run folder is ignored, so the tree reads
     # clean, and its HEAD may already be in the base: between the run's verdict and its wave's landing only the marker keeps it.
     hold=; for r in "$w"/runs/*/; do [ -d "$r" ] && wave_hold "$(basename "$r")" && { hold=$(basename "$r"); break; }; done
@@ -196,7 +289,7 @@ for rel in worktrees/child .worktrees; do
     # #1637: a tree an in-flight dispatch cut is held before the run folder can name it.
     if disp_hold "$w"; then grep -qx "disp $w" "$seen" || { echo "WT HELD dispatch #$disp ${w##*/}: the dispatch of #$disp has not started its run; kept"; echo "disp $w" >> "$seen"; }
       continue; fi
-    in_base "$w" || { kept child "$w" ahead "commits not in origin/$SG_BASE"; continue; }
+    [ -n "$ar" ] || in_base "$w" || ar="ahead commits not in origin/$SG_BASE"
     # An active run folder inside the child itself owns this tree, even before it starts a process. The janitor drops a
     # missing folder from active-runs, so this pass only preserves a folder that still exists and has no verdict.
     live=0
@@ -213,6 +306,10 @@ for rel in worktrees/child .worktrees; do
       grep -qF "${w##*/}" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
     done; fi
     [ $live = 0 ] || continue
+    if [ -n "$ar" ]; then   # #2574: kept while an issue is open; else archived, then removed
+      free_gate child "$w" "$w" "${ar%% *}" "${ar#* }" && free_archived child "$w" "$w" "child ${w##*/}" || continue
+      echo free >> "$tally"; case $fb in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$fb" >/dev/null 2>&1;; esac
+      continue; fi
     b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
     wt_remove "$SG_CHECKOUT" "$w"; rc=$?
     if [ $rc = 0 ]; then echo free >> "$tally"; echo "WT CLEAN child ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
@@ -228,16 +325,23 @@ done
 # goes with the tree, and only once the tree is gone.
 for w in "$SG_CHECKOUT"/worktrees/run/*; do
   [ -e "$w/.git" ] || continue
-  n=0; end=1; why=
+  n=0; end=1; why=; lift=
   for r in "$w"/runs/*/; do [ -f "$r/record.jsonl" ] || continue; n=$((n + 1))
-    ended "${r%/}" || { end=0; break; }
+    ended "${r%/}" && continue
+    [ -n "$liftable" ] && ! active_in "$r" && { lift=$why; continue; }   # #2574: a closed issue may lift this hold
+    end=0; break
   done
-  [ -z "$why" ] || kept run "$w" hold "$why"
+  [ -z "$why" ] || [ $end = 1 ] || kept run "$w" hold "$why"
   [ $n -gt 0 ] && [ $end = 1 ] || continue
+  if [ -n "$lift" ]; then all_closed $(tree_issues "$w") && quiet "$w" || { kept run "$w" hold "$lift${cwhy:+; $cwhy}"; continue; }; fi
   in_use "$w" && { kept run "$w" use "a live process works in it"; continue; }
   inner "$w" && { kept run "$w" inner "another worktree lies inside it"; continue; }
-  [ -z "$(dirt "$w")" ] || { kept run "$w" dirt "uncommitted work in it"; continue; }
-  in_base "$w" || { kept run "$w" ahead "commits not in origin/$SG_BASE"; continue; }
+  ar=; [ -z "$(dirt "$w")" ] || ar="dirt uncommitted work in it"
+  [ -n "$ar" ] || in_base "$w" || ar="ahead commits not in origin/$SG_BASE"
+  if [ -n "$ar" ]; then   # #2574: kept while an issue is open; else archived, then removed
+    free_gate run "$w" "$w" "${ar%% *}" "${ar#* }" && free_archived run "$w" "$w" "run ${w##*/}" || continue
+    case $fb in squad/run/*) $G branch -D "$fb" >/dev/null 2>&1;; esac
+    continue; fi
   b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
   wt_remove "$SG_CHECKOUT" "$w"; rc=$?
   if [ $rc = 0 ]; then echo "WT CLEAN run ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
@@ -351,4 +455,4 @@ $G worktree prune
 # is written last, so a pass killed halfway leaves the previous reading in place instead of a half one.
 printf '{"total": %s, "cleanable": %s, "ts": %s}\n' \
   "$(grep -c '^held$' "$tally" 2>/dev/null || echo 0)" "$(grep -c '^free$' "$tally" 2>/dev/null || echo 0)" "$now" > "$SG_STATE/wt.json"
-rm -f "$tally"
+rm -f "$tally" "$arch"
