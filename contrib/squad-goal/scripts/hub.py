@@ -4046,26 +4046,46 @@ def stats(period, src="both"):
 
 POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
                               # moves the view's own timestamps and leaves the age right. A test injects its own clock.
-STATS_POLL_SECS = 30.0   # the page's own spend poll (`pollStats` reads /api/stats every 30 s), so one window serves every page
-_STATS_KEPT = {}   # (period, src) -> (at, answer). The key carries no profile because the module is one per profile:
-                   # hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
+_STATS_KEPT = {}   # (period, src) -> (the input stamp it was built from, answer). The key carries no profile because the
+                   # module is one per profile: hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
 _STATS_LOCK = threading.Lock()
 
+def _pair(path):
+    """(mtime, size) of one input, or None when it is not there: its creation or its removal is a change of the state."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+def stats_stamp():
+    """The identity of the Spend answer's inputs (#2582): the review ledger, the operator fold, and every run record the
+    answer reads. The local hour rides along, since the day and month totals and the pace window move without a file."""
+    stamp = [time.strftime("%Y%m%d%H"), _pair(STATE / "token-usage.tsv"), _pair(STATE / "operator-usage.json"),
+             (OPERATOR.parsed, OPERATOR.walks, len(OPERATOR.files)) if OPERATOR is not None else None]
+    for d in sorted(project_dirs()):
+        stamp.append((str(d), _pair(d)))
+        for rd in sorted(d.glob("run-*")):
+            stamp.append(_pair(rd / "record.jsonl"))
+    return tuple(stamp)
+
 def stats_served(period, src="both", now=None):
-    """The Spend answer, built at most once per the page's own poll window (#2440).
+    """The Spend answer, built again only when one of its inputs moved (#2582).
 
     The build reads every run's record, the review ledger and the operator fold, and it cost 2.5 seconds of CPU. Every
-    open page and every client asks the same question for the same profile, so the answer is kept for the page's own
-    poll interval: any number of pages inside one window share one build, and the answer a page reads is never older
-    than the poll that would have refreshed it anyway. The key is the period and the billing source, so one pair's answer
-    never serves another pair. A build that raises keeps nothing, so the next read tries again."""
-    now = POLL_CLOCK() if now is None else now
+    open page and every client asks the same question for the same profile, so the answer is kept while its inputs are
+    unchanged: a state that has not moved serves every page and every client one build, and a new or changed record, a
+    ledger line or an operator transcript builds again. The key is the period and the billing source, so one pair's
+    answer never serves another pair. A build that raises keeps nothing, so the next read tries again."""
     key = (period, src)
     with _STATS_LOCK:
-        at, answer = _STATS_KEPT.get(key, (None, None))
-        if at is not None and now - at < STATS_POLL_SECS: return answer
+        if OPERATOR is None:
+            operator_calls([])   # the fold's first read is no change of the state, so it happens before the stamp
+        stamp = stats_stamp()
+        got = _STATS_KEPT.get(key)
+        if got is not None and got[0] == stamp: return got[1]
         answer = stats(period, src)
-        _STATS_KEPT[key] = (now, answer)
+        _STATS_KEPT[key] = (stamp, answer)
         return answer
 
 def spend_today(now=None):
