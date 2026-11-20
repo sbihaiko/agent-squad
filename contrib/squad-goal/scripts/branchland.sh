@@ -84,6 +84,7 @@ salvage_round() { local br=$1 sha=$2 i=$3 files=$4 k km bs lt lb n why o sf c
       : > "$A/branchland-salvagestop-$k-${sha:0:9}"; rm -f "$sf"
       printf 'Status update — branch %s @ %s: its salvage rebase rounds stop, because %s, but the frozen:owner label write failed %s times, so the card is not frozen. Freeze it by hand. The last answer: %s\n' \
         "$br" "${sha:0:9}" "$why" "$c" "$o" > "$(sg_cq_status "$i" "branchlandstop$$")"
+      printf '%s BRANCHLAND ALERT %s @ %s (issue #%s): the frozen:owner label write failed %s times; rounds stop, the card is not frozen\n' "$(date '+%F %T')" "$br" "${sha:0:9}" "$i" "$c" >> "$SG_STATE/alerts.log"
       echo "BRANCHLAND ALERT $br @ ${sha:0:9} (issue #$i): the frozen:owner label write failed $c times; rounds stop, the card is not frozen"; return 0; fi
     rm -f "$sf"; : > "$A/branchland-salvagestop-$k-${sha:0:9}"
     printf 'Status update — branch %s @ %s is frozen for the owner (frozen:owner): its salvage rebase rounds stop, because %s. %s conflicts with %s %s; the last round ran on %s %s. The branch and its kept marker stay.\n' \

@@ -415,7 +415,7 @@ salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; r=$(stubwave sbl); 
 salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; r=$(LABELFAIL=1 stubwave sbl); devmv 2; sapprove; rm -f "$T/st/cq"/*; r=$(LABELFAIL=1 stubwave sbl)
 [ "$(/usr/bin/grep -c '^salvage ' "$SKM")" = 1 ] && head -1 "$T/st/review-$SK.md" | /usr/bin/grep -q APPROVE && ok "2571 a failed stop gets no round after dev moves" || ko "2571 a failed stop got a round after dev moved: '$(cat "$SKM" | tr '\n' '|')' '$r'"
 r=$(LABELFAIL=1 stubwave sbl); s=$(cat "$T/st/cq/"x__y#8-status~* 2>/dev/null)
-case "$r" in *"BRANCHLAND ALERT"*) case "$s" in *"label write failed 3 times"*) ok "2571 the third failed label write alerts once with a status line";; *) ko "2571 no status after three failed writes: '$s'";; esac;; *) ko "2571 no alert after three failed writes: '$r'";; esac
+case "$r" in *"BRANCHLAND ALERT"*) case "$s" in *"label write failed 3 times"*) /usr/bin/grep -q "BRANCHLAND ALERT $SB" "$T/st/alerts.log" 2>/dev/null && ok "2571 the third failed label write alerts once with a status line and an alerts.log line" || ko "2571 no alerts.log line";; *) ko "2571 no status after three failed writes: '$s'";; esac;; *) ko "2571 no alert after three failed writes: '$r'";; esac
 rm -f "$T/gh.log"; r=$(LABELFAIL=1 stubwave sbl)
 /usr/bin/grep -q 'issues/8/labels' "$T/gh.log" 2>/dev/null && ko "2571 a write past the try cap was sent again: '$r'" || ok "2571 a stop past the try cap sends no more label writes"
 # a salvage branch that ended with no landing (deleted by hand) leaves no marker; a kept wave marker is not the sweep's
