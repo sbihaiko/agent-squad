@@ -16,8 +16,8 @@
 # #2574: uncommitted work or commits outside the base keep a tree only while one of its issues is open. A tree whose issues are
 # all closed, that nothing moved for SG_WT_ARCHIVE_SECONDS and that no active run names goes once its HEAD and its tracked dirt
 # are archived on the remote (archive below). The archived refs keep every commit, so the removal deletes no work but untracked files.
-sdir=$(cd "$(dirname "$0")" && pwd)
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
+sdir=$(cd "$(dirname "$0")" && pwd)   # after env.sh: test-address.sh wants env.sh as the first command of a script that calls gh
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
 # (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
 # in a file and never in a variable.
