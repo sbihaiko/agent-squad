@@ -160,14 +160,23 @@ nmin=$(TZ=America/Sao_Paulo date +%M:%S); nmin=$((10#${nmin%%:*})); nneed=$((10#
 # SG_CHECKOUT; a bare run name resolves under SG_CHECKOUT/runs. Only `idle` on exit 0 lets the suite start: any other answer holds
 # it, since a held nightly costs one night and a suite beside a live run costs the run. A gate lock whose pid lives holds it too.
 # A hold writes no day marker, so the next idle cycle runs the suite.
-if [ -s "$st/active-runs.txt" ]; then
+# (#2593) A nightly that ended bounded proved nothing, so the next one takes no machine: it runs beside the live runs and a held
+# gate lock, and the dispatch keeps starting runs. The verdict names its local half in the fourth field, `bounded` for a suite a
+# bound or a signal stopped. A pass, a fail or a verdict the loop cannot read holds the nightly as before.
+bshare=; blocal=
+if [ -r "$st/nightly-verdict" ]; then
+  IFS=$'\t' read -r _ _ _ blocal _ _ < "$st/nightly-verdict" 2>/dev/null
+  [ "$blocal" = bounded ] && bshare=1
+fi
+if [ -z "$bshare" ] && [ -s "$st/active-runs.txt" ]; then
   lroot=; for r in "$(cd "$here/../../.." 2>/dev/null && pwd)" "${SG_SQUAD:-}" "${SG_CHECKOUT:-}"; do
     [ -n "$r" ] && [ -f "$r/squad/run_liveness.py" ] && { lroot=$r; break; }; done
   lv=; [ -z "$lroot" ] || lv=$(cd "$lroot" && perl -e 'alarm shift; exec @ARGV' "${SG_DRAIN_READ_S:-30}" python3 -m squad.run_liveness drain "$st/active-runs.txt" "${SG_CHECKOUT:-}" 2>/dev/null)
   [ "$lv" = idle ] || { echo "nightly: held: the run reader answers '${lv:-no answer}' for active-runs.txt; the suite runs once the loop is idle (#1527)"; exit 0; }
 fi
 gp=$(cat "$st/locks/gate/pid" 2>/dev/null)
-[ -n "$gp" ] && kill -0 "$gp" 2>/dev/null && { echo "nightly: held: the gate lock is held by pid $gp; the suite runs once the gate is free (#1527)"; exit 0; }
+[ -z "$bshare" ] && [ -n "$gp" ] && kill -0 "$gp" 2>/dev/null && { echo "nightly: held: the gate lock is held by pid $gp; the suite runs once the gate is free (#1527)"; exit 0; }
+[ -n "$bshare" ] && echo "nightly: the last nightly ended bounded: this one runs beside the live runs, and the dispatch keeps starting runs (#2593)"
 if [ "${1:-}" != --run ]; then   # the lock is taken once, around the suite, and never around the day check
   SERIAL_TRY=1 SERIAL_HOLD_SECONDS=${SERIAL_HOLD_SECONDS:-10800} \
     exec bash "$here/serial.sh" nightly bash "$0" --run
