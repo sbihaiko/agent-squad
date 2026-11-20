@@ -58,6 +58,29 @@ unwait() { printf '%s\n' "$1" | /usr/bin/grep '^serial: waiting for lock' >&2; p
 # keeps only the live line caps.py writes when the wait begins (#2452), so that line names a wait too. A 75 with no such line
 # is the gate's own hold deadline.
 slotwait() { [ "$1" = 75 ] && printf '%s\n' "$2" | /usr/bin/grep -qE '^serial: waited [0-9]+s for lock gate |^caps: .* is waiting for [0-9]+ slot\(s\): caps\.gates|^caps: .* waited [0-9.]+s for caps\.gates'; }
+# salvage_round <branch> <tip> <issue> <files> (#2571): the rebase round of a branch its salvage pusher marked (auto/salvaged-<key>).
+# The kept marker keeps origin/<land> on line 1 and one `salvage <tip> <base sha>` line per round, never a `round` line, so the
+# repeat rule of wave.sh never reads it. One round per tip, whatever base it meets. A new tip that conflicts on the base of the
+# last round, or a third conflict, stops the rounds: no review, frozen:owner and one status line, once per tip. The branch and
+# the marker stay: the branch is the only copy of its work. No approval carries over: the round review replaces it (ADR-0151).
+salvage_round() { local br=$1 sha=$2 i=$3 files=$4 k km bs lt lb n why o
+  k=$(printf '%s' "$br" | tr / _); km="$SG_STATE/auto/kept-$k"
+  bs=$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-gate/$land" 2>/dev/null)
+  read -r _ lt lb <<< "$(/usr/bin/grep '^salvage ' "$km" 2>/dev/null | tail -1)"; n=$(/usr/bin/grep -c '^salvage ' "$km" 2>/dev/null)
+  [ -n "$lt" ] && [ "$lt" = "$sha" ] && return 0
+  why=; [ -n "$lt" ] && [ "$lb" = "$bs" ] && why="its new tip conflicts again on the base of the last round"
+  [ -z "$why" ] && [ "${n:-0}" -ge 2 ] && why="this is a third conflict, after $n rounds"
+  if [ -n "$why" ]; then
+    [ -e "$A/branchland-salvagestop-$k-${sha:0:9}" ] && return 0
+    o=$(gh_send --method POST "repos/$SG_REPO/issues/$i/labels" -f "labels[]=frozen:owner") \
+      || { echo "BRANCHLAND SALVAGE STOP $br: the label write failed, a later pass retries: $o"; return 0; }
+    : > "$A/branchland-salvagestop-$k-${sha:0:9}"
+    printf 'Status update — branch %s @ %s is frozen for the owner (frozen:owner): its salvage rebase rounds stop, because %s. %s conflicts with %s %s; the last round ran on %s %s. The branch and its kept marker stay.\n' \
+      "$br" "${sha:0:9}" "$why" "$files" "$land" "${bs:0:9}" "$land" "${lb:0:9}" > "$(sg_cq_status "$i" "branchlandstop$$")"
+    echo "BRANCHLAND SALVAGE STOP $br @ ${sha:0:9} (issue #$i): $why; card frozen for the owner"; return 0; fi
+  [ -s "$km" ] || printf 'origin/%s\n' "$land" > "$km"; printf 'salvage %s %s\n' "$sha" "$bs" >> "$km"
+  python3 "$here/revformat.py" --round-review "$land" "origin/$land" "$files" > "$SG_STATE/review-$k.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$k.sha"; rm -f "$SG_STATE/review-$k.base"
+  echo "BRANCHLAND SALVAGE ROUND $br @ ${sha:0:9}: round $(( ${n:-0} + 1 )) of 2 asked on $land ${bs:0:9}"; }
 localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid cap
   base=$(/usr/bin/git ls-remote "$remote" "refs/heads/$land" 2>/dev/null | awk '{print substr($1,1,7)}')
   # One landing cycle is one gate attempt (#1255): the first gate, the rerun of what failed and the ruff-fix
@@ -83,6 +106,10 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid cap
     # A rebase branch kept by a wave conflict (#1344) gets one rebase round: a CHANGES verdict on its tip, which branchfixpass.sh
     # dispatches as a fix run on the same branch. Its review is read at this tip only, so the review pass does not replace it.
     rbk=$(printf '%s' "$br" | tr / _)
+    # (#2571) A salvage branch takes its rounds from its pusher's marker, never from its name, and its own stop (salvage_round).
+    if [ -e "$SG_STATE/auto/salvaged-$rbk" ] && { [ ! -s "$SG_STATE/auto/kept-$rbk" ] || /usr/bin/grep -q '^salvage ' "$SG_STATE/auto/kept-$rbk"; }; then
+      salvage_round "$br" "$sha" "$i" "$files"
+      say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; fi
     # (#1500) A kept landing branch whose round pushed a new head and still conflicts is the repeat rule's: wave.sh decides between the next
     # round, the loop bug and the fresh build. A head no round has touched is still in its round, and gets the review below.
     if [ -s "$SG_STATE/auto/kept-$rbk" ] && /usr/bin/grep -q '^round ' "$SG_STATE/auto/kept-$rbk" && [ -x "$here/wave.sh" ] \
@@ -239,7 +266,7 @@ EOT
   done
   case "$br" in fix/*-land-*) remote_run=${br#fix/*-land-}; /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "wave/$remote_run" >/dev/null 2>&1; rm -f "$SG_STATE/landround-$(printf '%s' "$br" | tr / _).head";; esac   # the retired wave branch goes with its landing (#1500)
   [ -n "$del" ] && /usr/bin/git -C "$SG_CHECKOUT" push -q "$remote" --delete "$br" >/dev/null 2>&1   # a branch the base already carried is not deleted by any push of ours (#1826)
-  rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)"   # a landed rebase round's branch is gone, so its kept marker is too (#1344)
+  rm -f "$SG_STATE/auto/kept-$(printf '%s' "$br" | tr / _)" "$SG_STATE/auto/salvaged-$(printf '%s' "$br" | tr / _)"   # a landed round's branch is gone, so its kept and salvage markers are too (#1344, #2571)
   sg_base_red "$land" >/dev/null   # the base right after the landing (#786): a red head it lands on is reported now, not at the next landing
   if [ -n "$closed" ]; then echo "BRANCHLAND LANDED $br as $ms into $land, closed #${closed// /, #}"
   else echo "BRANCHLAND LANDED $br as $ms into $land, closed no issue: no commit the base carries names one"; fi; }
