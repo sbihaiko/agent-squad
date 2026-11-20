@@ -1238,16 +1238,17 @@ waited_out() { printf '%s\n' "$1" | /usr/bin/grep -qE '^serial: waited [0-9]+s f
 # status, history and wave journal: it only passes the command's exit code through. `SG_WAVE_CHILD_PYTEST` replaces the
 # command (SG_WAVE_CHILD, _FROM and _TO are set); the default selects the files the child's commit reaches (squad.testselect, as
 # the fast gate does), read in a detached tree at the child's commit, and runs them in the clone. An empty selection passes: the
-# child changed nothing pytest covers. A change that needs no test (`skip:`) passes too: no test reads an image of the record. Exit 0: passed; 1: failed; 9: no verdict: the gate lock or slots were not free, so nothing
+# child changed nothing pytest covers. A change that needs no test (`skip:`) passes too, and logs `no test needed: <reason>` in
+# the check's log, as the fast gate does: no test reads an image of the record. Exit 0: passed; 1: failed; 9: no verdict: the gate lock or slots were not free, so nothing
 # ran, or the run was bounded and proved nothing (gate.sh exit 4, #1687). An unproven run is never the child's red, and its own
 # output goes to <log> with the cause in `cpwhy`, so the landing that waits keeps the trace of why it waited (#1700).
 child_pytest() {
-  local S=$1 from=$2 to=$3 iss=$4 log=${5:-} cmd out grc
+  local S=$1 from=$2 to=$3 iss=$4 log=${5:-} cmd out grc needed
   cpwhy=
   if [ -n "${SG_WAVE_CHILD_PYTEST:-}" ]; then cmd=$SG_WAVE_CHILD_PYTEST
   else
     cmd='sel=$(d=$(mktemp -d) && /usr/bin/git worktree add -q --detach "$d" "$SG_WAVE_CHILD_TO" && (cd "$d" && "$SG_WAVE_PY" -m squad.testselect --stage wave-tip --base "$SG_WAVE_CHILD_FROM"); r=$?; /usr/bin/git worktree remove --force "$d" 2>/dev/null; exit $r) || sel="all: the selector failed"
-case $sel in none:*|skip:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
+case $sel in none:*|"") exit 0;; skip:*) echo "no test needed: ${sel#skip: }"; exit 0;; all:*) set --;; *) set -f; set -- $sel; set +f;; esac
 "$SG_WAVE_PY" -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n "${SQUAD_GATE_WORKERS:-2}" -m "not heavy" "$@"'
   fi
   out=$(cd "$S" && SG_WAVE_PY=$py SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to SERIAL_TRY=1 SG_GATE_KIND=fast SG_GATE_STATUS=self SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} bash "$here/gate.sh" bash -c "$cmd" 2>&1); grc=$?
@@ -1261,7 +1262,16 @@ case $sel in none:*|skip:*|"") exit 0;; all:*) set --;; *) set -f; set -- $sel; 
   if [ $grc = 4 ] && printf '%s\n' "$out" | /usr/bin/grep -q '^gate: bounded: '; then   # bounded: it measured no red (#1687); a bare exit 4 is the command's own red (#1699)
     cpwhy="the run was bounded and proved nothing"
     [ -z "$log" ] || printf '%s\n' "$out" >> "$log" 2>/dev/null; return 9; fi
-  [ $grc = 0 ] && return 0
+  if [ $grc = 0 ]; then
+    # A child's change that needs no test is no silent pass: the landing's own output says why no pytest ran, as the fast gate
+    # records it, and the check's log keeps it for a reader of that round (#2592, ADR-0169 rule 5).
+    needed=$(printf '%s\n' "$out" | /usr/bin/grep -m 1 '^no test needed')
+    if [ -n "$needed" ]; then
+      printf '%s\n' "$needed"
+      [ -z "$log" ] || printf '%s\n' "$needed" >> "$log" 2>/dev/null
+    fi
+    return 0
+  fi
   printf '%s\n' "$out" | tail -5 >&2; return 1
 }
 

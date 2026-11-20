@@ -30,6 +30,10 @@
 # its reason, so the full battery runs and the record says why the delta refused: a cheaper scope never narrows a gate
 # (ADR-0018). <narrow> `yes` is the child's own gate (#2085): an `all` answer there runs no pytest and keeps the `delta`
 # scope, and the line names the change the delta cannot cover, so the gate ends unproven with that reason (ADR-0169 rule 4).
+# One line answers, and the answers never mix: `SG_TEST_SELECT=no` answers `all:` before the selector is asked, so a gate told to
+# run the whole battery never narrows; `all:` runs the full battery and names its reason; `skip:` runs no pytest and leaves a
+# pass; `none:` runs no pytest and leaves the gate unproven. The skip line carries its own why and prefix, so no later read of
+# the selected-0-files branch can take it for the empty selection (#1249).
 sg_battery_run() {
   local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} narrow=${6:-no} scope why="the selector named no test file" \
         out= defs= prefix="the selection is empty: " needed=
@@ -37,7 +41,7 @@ sg_battery_run() {
   if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
   case $files in none:*) why=${files#none: }; files=;; esac
-  case $files in skip:*) needed=${files#skip: }; files=;; esac
+  case $files in skip:*) needed=${files#skip: }; files=; why=$needed; prefix="the change needs no test: ";; esac
   case $files in
     all:*) if [ "$narrow" = yes ] && [ "$4" = yes ]; then
              line="selected 0 files"; scope=delta; why=${files#all: }; prefix="the delta cannot cover the change: "
