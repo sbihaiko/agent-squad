@@ -24,10 +24,16 @@ r=$(SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bi
 [ $rc = 0 ] && ok "W1409: the wave without the child whose pytest delta fails lands" || ko "W1409: exit $rc: '$r'"
 case "$r" in *"WAVE CHECK RED"*"#1941"*) ok "W1409: the red names the child whose pytest delta fails";; *) ko "W1409: no child named: '$r'";; esac
 [ "$(head -1 "$T/st/py.log" 2>/dev/null | cut -d' ' -f1)" = 1941 ] && ok "W1409: the newest child's delta runs first" || ko "W1409: pytest order: '$(cat "$T/st/py.log" 2>/dev/null)'"
-/usr/bin/grep -q '^1941 held=gate workers=[1-9]' "$T/st/py.log" 2>/dev/null && ok "W1409: the child's pytest runs under the gate lock with gate slots" || ko "W1409: lock/slots not held: '$(cat "$T/st/py.log" 2>/dev/null)'"
+/usr/bin/grep -q '^1941 held=gate workers=1$' "$T/st/py.log" 2>/dev/null && ok "W2594: the child's pytest takes one gate slot by default" || ko "W2594: the child gate's count: '$(cat "$T/st/py.log" 2>/dev/null)'"
 $O cat-file -e dev:g1941 2>/dev/null && ko "W1409: the failing child landed" || ok "W1409: the failing child did not land"
 $O cat-file -e dev:g1940 2>/dev/null && ok "W1409: the other child landed" || ko "W1409: the other child did not land"
 [ "$(/usr/bin/grep -c '^o 3 Todo 1941$' "$T/board.log")" = 1 ] && ok "W1409: the failing child is requeued once" || ko "W1409: requeue: '$(cat "$T/board.log")'"
+# W2594 (#2594): SG_WAVE_GATE_WORKERS names the count a wave child gate takes, so one wave no longer holds half a budget of four.
+W94=wave/run-94; start2 run-94 >/dev/null; child 1947 g1947 "origin/$W94"; en2 run-94 1947 >/dev/null
+printf 'run-94\n' > "$T/st/auto/disp-1947"; rm -f "$T/st/py.log"; : > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_GATE_WORKERS=2 SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 1947"' SG_WAVE_CHILD_PYTEST='echo "workers=${SQUAD_GATE_WORKERS:-none}" >> "$SG_STATE/py.log"; exit 0' land2 run-94 2>&1); rc=$?
+[ "$(/usr/bin/tail -1 "$T/st/py.log" 2>/dev/null)" = "workers=2" ] && ok "W2594: SG_WAVE_GATE_WORKERS names the child gate's count" || ko "W2594: named count: '$(cat "$T/st/py.log" 2>/dev/null)' (exit $rc)"
+
 # A green tip runs no child pytest.
 W95=wave/run-95; start2 run-95 >/dev/null; child 950 g950 "origin/$W95"; en2 run-95 950 >/dev/null
 rm -f "$T/st/py.log"
