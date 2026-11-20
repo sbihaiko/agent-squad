@@ -7067,14 +7067,14 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #lrun .lr a.lid{color:var(--acc)}#lrun .lr a.lid:hover{text-decoration:underline}
 #lrun .lr .lchips{display:flex;flex-wrap:wrap;align-items:center;gap:3px;min-width:0}
 #lrun .lr .lage{grid-column:3;color:var(--mute);font-size:var(--fs-caption);white-space:nowrap;font-variant-numeric:tabular-nums}
-#lrun .lch{border:1px solid var(--line-strong);border-radius:999px;padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--mute);background:transparent}
+#lrun .lch{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--mute);background:transparent}
 #lrun .lch.done{color:var(--ok);border-color:var(--ok)}
 #lrun .lch.current{color:var(--warn);border-color:var(--warn)}
 #lrun .lch.later{color:var(--mute);border-color:var(--line);opacity:.75}
-#lrun .lslot{border:1px solid var(--line-strong);border-radius:999px;padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--ink-soft)}
+#lrun .lslot{border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 6px;font-size:var(--fs-caption);line-height:16px;white-space:nowrap;color:var(--ink-soft)}
 #lrun .lr.red{border-color:var(--err)}#lrun .lr.red .lid,#lrun .lr.red .lic{color:var(--err)}
 #lrun .lr.quiet{box-shadow:inset 2px 0 0 var(--warn)}#lrun .lr.quiet.show{box-shadow:inset 3px 0 0 var(--acc),inset 5px 0 0 var(--warn)}
-#lrun .lpill{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line-strong);border-radius:999px;padding:0 7px;font-size:var(--fs-caption);line-height:16px;color:var(--ink-soft)}#lrun .lpill b{color:var(--fg);font-variant-numeric:tabular-nums}
+#lrun .lpill{display:inline-flex;align-items:center;gap:3px;border:1px solid var(--line-strong);border-radius:var(--radius-full);padding:0 7px;font-size:var(--fs-caption);line-height:16px;color:var(--ink-soft)}#lrun .lpill b{color:var(--fg);font-variant-numeric:tabular-nums}
 #lrun .lf{margin-top:2px;color:var(--mute);font-size:var(--fs-caption);text-align:right}
 #flowb svg{max-width:none}#tab-set details.sp{max-width:1120px}
 /*BOARD_LANES_CSS*/
