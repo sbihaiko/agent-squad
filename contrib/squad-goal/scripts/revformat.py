@@ -511,10 +511,11 @@ def write_wall(tree, scratch):
             + ' (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/") (regex #"^/dev/std(out|err)$"))')
 
 
-def run_repro(cmd, checkout):
+def run_repro(cmd, checkout, timeout=None):
     """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
     (its process group is killed with it), 127 when it could not start, REPRO_REFUSED when the sandbox could not apply
-    (a nested sandbox, #1525). The wall is the profile in SQUAD_SIGNAL_PROFILE,
+    (a nested sandbox, #1525). `timeout` caps the run below REPRO_TIMEOUT (a base run, #2565). The wall is the
+    profile in SQUAD_SIGNAL_PROFILE,
     else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh). A write wall (write_wall) refuses a
     write outside `checkout` and a scratch dir the repro's TMPDIR points at; the scratch dir is removed after the run.
     """
@@ -532,7 +533,7 @@ def run_repro(cmd, checkout):
             except OSError:
                 return 127
             try:
-                rc = proc.wait(timeout=REPRO_TIMEOUT)
+                rc = proc.wait(timeout=REPRO_TIMEOUT if timeout is None else timeout)
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
@@ -574,9 +575,9 @@ def repro_check(path, checkout, sha, base=None, prev=None):
     finding stays Blocking and the reason is printed.
 
     #2565: with `base` (TREE, SHA), a repro red at the head also runs at the base, in TREE, within REPRO_BASE_BUDGET for
-    all base runs. Green at the base: the finding stays Blocking. Red at the base: it stays Blocking with "repro also fails
-    at base <sha>", unless the previous answer `prev` (ANSWER, SHA) holds the same repro in its Blocking findings; then it
-    moves to Debt, naming the base and both heads. A base run that proves nothing keeps the finding Blocking, and the
+    all base runs, each capped at the budget left. Green at the base: the finding stays Blocking. Red at the base: it stays Blocking with "repro also fails
+    at base <sha>", unless the previous answer `prev` (ANSWER, SHA) holds the same repro in its Blocking findings and SHA
+    is another head; then it moves to Debt, naming the base and both heads. A base run that proves nothing keeps the finding Blocking, and the
     reason is printed.
     """
     with open(path, encoding="utf-8") as f:
@@ -605,7 +606,7 @@ def repro_check(path, checkout, sha, base=None, prev=None):
                 why = f"the base budget of {REPRO_BASE_BUDGET} s is spent"
             else:
                 t0 = time.monotonic()
-                brc = run_repro(item[REPRO], btree)
+                brc = run_repro(item[REPRO], btree, min(REPRO_TIMEOUT, REPRO_BASE_BUDGET - spent))
                 spent += time.monotonic() - t0
                 if brc == 0:
                     blocking.append(item)
@@ -614,11 +615,13 @@ def repro_check(path, checkout, sha, base=None, prev=None):
                     why = "repro sandbox refused (sandbox-exec exit 71)"
                 elif brc in (124, 126, 127):
                     why = f"the repro did not run (exit {brc})"
+                elif brc < 0:
+                    why = f"the repro was killed by signal {-brc}"
             if why:
                 print(f"revformat: no base run proves anything at {bsha} ({why}): {defect}; the finding stays Blocking",
                       file=sys.stderr)
                 blocking.append(item)
-            elif prev_sha and repro_key(item[REPRO]) in seen:
+            elif prev_sha and prev_sha != sha and repro_key(item[REPRO]) in seen:
                 reason = f"repro fails at base {bsha} and at heads {prev_sha}, {sha}"
                 print(f"revformat: {reason}: {defect}; the finding moves to Debt", file=sys.stderr)
                 answer["debt"].append(dict(item, failure=f"{reason}; {item['failure']}"))

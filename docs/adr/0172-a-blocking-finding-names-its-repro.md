@@ -26,13 +26,14 @@ check: a line that exits non-zero while the defect is present.
    a repro that makes one and then exits non-zero stays Blocking; a repro that swallows the refusal and exits 0 still
    moves its finding to Debt.
    A repro that fails at the head also runs at the base: the merge-base of the head and the base ref, never the base tip,
-   in a throwaway worktree of it that is removed after the run; never in the checkout or the reviewed tree. The base runs
-   share one budget per review. A repro that exits 0 at the base keeps its finding Blocking. A repro that fails at the base
+   in a throwaway worktree of it that is removed after the run; never in the checkout or the reviewed tree. A repro runs
+   once at the head in a review. The base runs share one budget per review, and each base run is capped at the budget
+   left. A repro that exits 0 at the base keeps its finding Blocking. A repro that fails at the base
    too keeps its finding Blocking on its first round, marked with the base sha, because a missing behavior also fails at
    the base. When the previous round's answer holds the same repro, its whitespace normalized, in its Blocking findings,
-   the repro fails at every tree the branch has shown, so no fix can clear it: the finding moves to Debt, marked with the
+   and the previous head is a strict ancestor of the head, the repro fails at every tree the branch has shown, so no fix can clear it: the finding moves to Debt, marked with the
    base and both heads. A base run that proves nothing (no merge-base, no base tree, a timeout, a repro that cannot run, a
-   refused sandbox, a spent budget) keeps the finding Blocking and the loop names the reason.
+   kill by a signal, a refused sandbox, a spent budget) keeps the finding Blocking and the loop names the reason.
 3. **A finding with no repro is Debt.** The parser moves it, so no reader sees a Blocking finding without a repro.
 4. **A markdown answer has no repro.** Its findings are read as before.
 5. **A plan review names no repro.** A plan reads no code, so its prompt asks for none, its answer is parsed with no
