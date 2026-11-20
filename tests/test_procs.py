@@ -200,6 +200,78 @@ def test_1753_a_refused_task_info_read_keeps_none_as_the_cpu(monkeypatch):
     assert (p.pid, p.ppid, p.pgid, p.stat) == (4321, 1, 4321, "S")
 
 
+class _File:
+    """A stand-in for an open /proc file: read() answers the whole body, iteration its lines."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def __iter__(self):
+        return iter(self.data.splitlines(True))
+
+    def read(self):
+        return self.data
+
+
+def _patch_proc(monkeypatch, files, now):
+    monkeypatch.setattr(procs, "open", lambda path, *a, **k: _File(files[path]), raising=False)
+    monkeypatch.setattr(procs.time, "time", lambda: now)
+
+
+def _sessions_module():
+    """contrib/squad-goal/scripts/sessions.py, loaded by path as the hub loads it."""
+    import importlib.util
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    spec = importlib.util.spec_from_file_location("sessions_2596", SCRIPTS / "sessions.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_2596_the_fractional_boot_read_moves_a_start_one_second_ahead(monkeypatch):
+    """#2596 cause: a start built on the whole-second `btime` truncates to the record's `ps lstart` second, while the
+    fractional uptime read carries the boot fraction. When the boot fraction and the process fraction sum past one,
+    procs reads the same process one second after the record's read."""
+    now, uptime = 1_700_000_000.0, 1234.50
+    boot = now - uptime   # 1699998765.5: the whole-second btime floors it to ...765
+    hz = os.sysconf("SC_CLK_TCK")
+    starttime = int(10.6 * hz)   # the process began 10.6 s after boot: the fractions 0.5 and 0.6 carry
+    fields = ["0"] * 20
+    fields[0], fields[1], fields[2], fields[19] = "S", "1", "4242", str(starttime)
+    files = {
+        "/proc/uptime": f"{uptime:.2f} 99999.99\n",
+        "/proc/stat": f"cpu  0 0 0 0\nbtime {int(boot)}\n",
+        "/proc/4242/stat": f"4242 (sleep) {' '.join(fields)}\n",
+        "/proc/4242/cmdline": b"sleep\x0030\x00",
+    }
+    _patch_proc(monkeypatch, files, now)
+    p = procs._linux_proc(4242, procs._linux_boot_time())
+    assert p is not None
+    whole_second_start = int(boot) + starttime // hz   # the second the record's whole-second read names
+    assert int(p.start) == whole_second_start + 1
+
+
+def test_2596_a_start_one_second_after_the_record_is_still_alive(monkeypatch):
+    """#2596: the record's startedAt comes from a whole-second read; procs names the start from the fractional boot and
+    may land one second after it. The start is the same process, never a reused pid, so the session stays alive; a start
+    past the window is still a reused pid."""
+    mod = _sessions_module()
+    started_ms = 1_700_000_000 * 1000 + 296
+    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001)   # one second after the record
+    assert mod._alive_since(os.getpid(), started_ms) is True
+    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_000 - 30)   # at the far edge: still alive
+    assert mod._alive_since(os.getpid(), started_ms) is True
+    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001 + 30)   # a reused pid: the record is far older
+    assert mod._alive_since(os.getpid(), started_ms) is False
+
+
 def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatch):
     """#2591: /proc/stat `btime` is a whole second, so a start built on it reads up to 1 s early and the session's reap
     takes a fresh leftover for an old process. /proc/uptime carries hundredths, so the boot time comes from there."""
@@ -216,24 +288,7 @@ def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatc
         "/proc/4242/cmdline": b"sleep\x0030\x00",
     }
 
-    class _File:
-        def __init__(self, data):
-            self.data = data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc):
-            return False
-
-        def __iter__(self):
-            return iter(self.data.splitlines(True))
-
-        def read(self):
-            return self.data
-
-    monkeypatch.setattr(procs, "open", lambda path, *a, **k: _File(files[path]), raising=False)
-    monkeypatch.setattr(procs.time, "time", lambda: now)
+    _patch_proc(monkeypatch, files, now)
     p = procs._linux_proc(4242, procs._linux_boot_time())
     assert p is not None
     age = now - p.start

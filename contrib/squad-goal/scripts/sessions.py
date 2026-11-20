@@ -133,7 +133,10 @@ def _alive_since(pid, started, kind=None):
     start = _proc_start(pid)
     if start is None: return False
     if kind == "bg": return started // 1000 >= start   # a background job claims a spare process started long before it (#1269); a reused pid starts after the record
-    return 0 <= started // 1000 - start <= 30   # startedAt (ms) is written a few seconds after the process starts
+    # startedAt (ms) is written a few seconds after the process starts. One second of slack on the early side: the record
+    # names a whole second while procs builds the start from the fractional boot, so the same process may read 1 s later
+    # (#2596); a reused pid still starts past the window.
+    return -1 <= started // 1000 - start <= 30
 
 def profiles_dir():
     """The profiles the address seam reads: SG_PROFILES_DIR when the runner exports it, else the global skill's own, so a
