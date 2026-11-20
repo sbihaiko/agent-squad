@@ -92,6 +92,9 @@ def _setup(hub, tmp_path, monkeypatch):
     projects = tmp_path / "projects"
     checkout = tmp_path / "co"
     (checkout).mkdir()
+    # The hub resolves squad from SG_SQUAD and SG_CHECKOUT first: a gate that exports either names another tree's copy.
+    monkeypatch.delenv("SG_SQUAD", raising=False)
+    monkeypatch.delenv("SG_CHECKOUT", raising=False)
     monkeypatch.setattr(hub, "CLAUDE_PROJECTS", projects, raising=False)
     monkeypatch.setattr(hub, "CHECKOUT", checkout, raising=False)
     monkeypatch.setattr(hub, "OPERATOR", None, raising=False)
@@ -328,9 +331,13 @@ def test_a_loop_call_is_never_taken_from_a_transcript(hub, tmp_path, monkeypatch
 
 def test_the_chart_and_the_pie_include_operator_as_its_own_consumer(hub, tmp_path, monkeypatch):
     now = hub.time.time()   # the stats' own clock: its today, month and bucket are the local time of this reading
+    # The lines sit in the hour and the day of `now`, never before them: a reading taken in the first minute of an hour put
+    # `now - 30` in the previous bucket, and the complete tier read an empty one (#2474).
+    lt = hub.time.localtime(now)
+    hour0 = hub.time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, 0, 0, 0, 0, -1))
     folder = _setup(hub, tmp_path, monkeypatch)
-    _write(folder, "s.jsonl", _line("m1", "claude-opus-5-5", 100, 50, 900, ts=now - 30))
-    run = {"id": "r", "t0": now - 600, "t1": now - 60, "spend": 0.0, "sub": 0.0, "api": 0.0, "dur": 9.0, "done": True,
+    _write(folder, "s.jsonl", _line("m1", "claude-opus-5-5", 100, 50, 900, ts=max(hour0 + 1, now - 30)))
+    run = {"id": "r", "t0": max(hour0 + 1, now - 600), "t1": max(hour0 + 1, now - 60), "spend": 0.0, "sub": 0.0, "api": 0.0, "dur": 9.0, "done": True,
            "mod": {"claude-sonnet-5-5": {"in": 10, "out": 0, "cache": 0, "spend": 0.0, "calls": 1}}, "calls": []}
     monkeypatch.setattr(hub, "all_runs", lambda: [run])
     s = hub.stats("day")

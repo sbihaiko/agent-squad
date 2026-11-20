@@ -53,6 +53,15 @@ def test_an_empty_root_before_the_real_one_is_skipped(hub, tmp_path):
     assert pathlib.Path(caps.__file__).resolve().is_relative_to(ROOT.resolve()), caps.__file__
 
 
+def test_a_path_root_resolves_as_its_string_does(hub, tmp_path):
+    """The hub's CHECKOUT is a Path wherever a caller sets one, and the resolving path named the roots by joining them: a
+    Path among them raised TypeError before any root was tried, so the operator panel counted nothing."""
+    caps, _ = hub.load_squad([tmp_path, ROOT])
+    assert pathlib.Path(caps.__file__).resolve().is_relative_to(ROOT.resolve()), caps.__file__
+    with pytest.raises(ModuleNotFoundError):
+        hub.load_squad([tmp_path])
+
+
 def _package(root, who):
     pkg = root / "squad"
     pkg.mkdir(parents=True)

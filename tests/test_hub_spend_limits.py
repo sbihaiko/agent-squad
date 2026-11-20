@@ -315,6 +315,7 @@ def lim_blocks(out):
     return html[i:j], html[j:]
 
 
+@pytest.mark.heavy   # serves the page and reads the block: 3.7 s on a loaded CI runner
 def test_the_now_block_holds_four_fact_tiles_and_no_input(ctx):
     now, _ = lim_blocks(lim_draw(ctx["hub"], LIM))
     tiles, note = now.split("<p class=note>", 1)
