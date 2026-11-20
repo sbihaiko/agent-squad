@@ -152,14 +152,19 @@ $O cat-file -e dev:g-run-w 2>/dev/null && $O cat-file -e dev:g-run-x 2>/dev/null
 [ -e "$T/st/auto/wland-run-w" ] && [ -e "$T/st/auto/wland-run-x" ] && ok "k: each fresh run gets its landed marker" || ko "k: markers: $(ls "$T/st/auto")"
 rm -f "$T/st/auto"/wland-*
 
-# l (#2288): a red base makes the batch wait before it stacks a wave: no gate runs and no wave lands.
+# l (#2288, #2597): a red base makes a wave that does not carry the red head wait before the batch stacks it: no gate runs and
+# no wave lands. A wave that carries the head lands past it, and test-wave-basered.sh proves that path.
 mkrun run-y 111; mkrun run-z 112; queue run-z; reset
+# The base moves past both wave tips, so no wave of the batch carries the head the red check names.
+rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
+(cd "$T/w3" && $G checkout -q dev && echo n > n && $G add n && $G -c user.email=a@b -c user.name=t commit -q -m moved && $G push -q origin HEAD:dev)
+: > "$T/pushes.log"   # the move is the setup's push, never the batch's
 printf 'red2 %s fast-battery ended failure\n' "$(date +%s)" > "$T/st/auto/basecheck-$($O rev-parse dev)"
 r=$(landq run-y); rc=$?
 [ $rc != 0 ] && ok "l: the pass waits on a red base" || ko "l: exit $rc: '$r'"
 [ ! -s "$TIPLOG" ] && ok "l: no gate runs on a red base" || ko "l: tip gates: '$(cat "$TIPLOG")': '$r'"
 [ "$(devpushes)" = 0 ] && ok "l: no wave lands on a red base" || ko "l: pushes: '$(cat "$T/pushes.log")'"
-case "$r" in *"WAVE WAIT batch run-y,run-z"*) ok "l: one wait line names the batch";; *) ko "l: no wait line: '$r'";; esac
+case "$r" in *"WAVE WAIT wave/run-y:"*"WAVE WAIT wave/run-z:"*) ok "l: one wait line names each wave that does not carry the head";; *) ko "l: no wait line: '$r'";; esac
 rm -f "$T/st/auto"/basecheck-* "$T/st/auto"/wland-*
 
 # m (#2295, ADR-0170): the batch gate moves the card of every wave in the batch to Testing before it starts, and the landing

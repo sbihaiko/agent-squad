@@ -1335,6 +1335,17 @@ red_write() { local f; f="$(tipred_file "$1").red"; mkdir -p "$SG_STATE/auto" 2>
 red_set() { awk '/^(FAILED|ERROR) /{ print $2; next } /^FAIL /{ sub(/^FAIL /, ""); print }' "$1" 2>/dev/null | sort -u; }
 # set_key <set>: the key of a failing-test set; "-" for an empty set, which counts as the same set as any other.
 set_key() { [ -n "$1" ] || { echo -; return 0; }; printf '%s\n' "$1" | cksum | awk '{ print $1 }'; }
+# A red base head is the wave's own landing problem (#2597): a wave built on that head, whose own tip check is green, lands past
+# it as branchland's redfix lands a branch (#809); a wave that does not carry the head waits. basered_head reads the head the
+# sg_base_red line names, and prints nothing when it names none.
+basered_head() { printf '%s' "$1" | sed -n 's/^base [^ ]* is red at \([0-9a-f]*\):.*/\1/p'; }
+# basered_wait <name> <head> <line>: one wait line per <name> and red <head> (#2597). The first pass on a head says it, and a
+# later pass on that same head and that same wave says nothing more.
+basered_wait() { local f said
+  f="$SG_STATE/auto/basered-$(printf '%s' "$1" | tr '/ :,' '____')"
+  said=$(cat "$f" 2>/dev/null)
+  mkdir -p "$SG_STATE/auto" 2>/dev/null && printf '%s\n' "$2" > "$f" 2>/dev/null
+  [ "$said" = "$2" ] || echo "WAVE WAIT $1: $3"; }
 # flake_release <wave> <sha>: a green rerun of the same suite released the red on this tree. The release is named and kept
 # in wave-flake.tsv, and the flaky check is filed as one bug through the loop's one filing door (autohunt.sh --file), once
 # per failing-test set: a set already filed is named, never filed again.
@@ -1435,14 +1446,18 @@ wave_check() {
           if [ -n "$r_k$r_sel$r_sc" ] && [ -n "$tk$tsel$tsc" ] && [ "$tk|$tsel|$tsc" != "$r_k|$r_sel|$r_sc" ] && { [ "$tsc" != full ] || [ "${tsel#all: }" = "$tsel" ]; }; then
             waitwhy="the rerun of the tip's check ran another suite ($tk, ${tsel:-no selection}, ${tsc:-no scope}) than the red ($r_k, ${r_sel:-no selection}, ${r_sc:-no scope}), and a narrower run never releases a red"; rm -f "$of"; return 3
           fi
+          pass_suite=$(tip_suite "$hsha" "$hb" 2>/dev/null)
           flake_release "$w" "$hsha"; rm -f "$clog" "$of" "$mk"; tipred_clear "$w"; return 0;;
       esac
     fi
     case "$oc" in
-      pass) rm -f "$clog" "$of" "$mk"; return 0;;
+      pass) pass_suite=$(tip_suite "$hsha" "$hb" 2>/dev/null); rm -f "$clog" "$of" "$mk"; return 0;;
       unproven) rm -f "$of" "$mk"; return 5;;   # the wave waits and the check runs again (#1802); the log stays, as it does for a red
       *) : ;;                             # fail, and any other exit: the red path below
     esac
+    # (#2597) A base red is no child's: this tip carries the red head and its own check measured a red too, so no child is blamed
+    # and no red marker is written. The wave waits, and a later tip that fixes the base red lands it.
+    if [ -n "$basered" ]; then rm -f "$of"; return 9; fi
     # Only before a child left in this pass: one marker cannot follow two tips (#1699). The pass row must name the tip check's
     # own kind, selection and scope, and the marker's write must land, or the next pass answers the same second look again and
     # the wave never lands (#1700).
@@ -2049,7 +2064,23 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # `dropped`: the issues whose child the tip check removed from the tree this landing pushes (#1416). Only this pass sets it,
   # so a refusal an earlier pass wrote never excludes an issue. wave_check adds to it; a repeat after a refused push keeps it.
   local out sha try=1 issues n anyref=0 files rc ob tipobl="" dropped="" rfs="" nontest="" br note testmiss="" testpaths=""
+  local pastred="" basered="" pass_suite="" red="" rh="" full=""
   while :; do
+    # The base's own check (#786): a red completed check on $base holds the landing until its head is green -- unless this wave
+    # carries the fix (#2597). A wave whose tip holds the red head lands past it when its own tip check is green, as
+    # branchland's redfix lands a branch (#809); a wave whose tip does not hold that head, or one that runs no tip check, waits,
+    # and the wait line is said once per head. The tip is read as the wave branch holds it, before the rebase adds the base. A
+    # wave with nothing ahead of the base lands empty whatever the base holds, so it takes no part in this check.
+    pastred=""; basered=""
+    if [ "$(sc rev-list --count "origin/$base..origin/$w" 2>/dev/null)" != 0 ] && red=$(sg_base_red "$base"); then
+      rh=$(basered_head "$red")
+      full=""; [ -n "$rh" ] && full=$(sc rev-parse -q --verify "$rh^{commit}" 2>/dev/null)
+      if [ -z "$full" ] || ! sc merge-base --is-ancestor "$full" "origin/$w" 2>/dev/null; then
+        basered_wait "$w" "${full:-$rh}" "$red"; rm -rf "$S"; return 1; fi
+      if [ -z "$tipgate" ]; then
+        basered_wait "$w" "$full" "$red; the wave runs no tip check, so no evidence carries it past"; rm -rf "$S"; return 1; fi
+      pastred=$rh; basered=1
+    fi
     out=$(sc rebase "origin/$base" 2>&1) || { files=$(sc diff --name-only --diff-filter=U | sort -u | tr '\n' ' ')
       sc rebase --abort >/dev/null 2>&1
       wave_conflict "$run" "$w" "$rd" "$S" "$out" "$files"; rm -rf "$S"; return 1; }
@@ -2164,8 +2195,6 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is. An unproven tip
     # holds the wave (#1802): with no entry battery, the tip check is the only proof the children get before the base.
-    # The base's own check (#786): a red completed check on $base holds the landing until its head is green.
-    red=$(sg_base_red "$base") && { echo "WAVE WAIT $w: $red"; rm -rf "$S"; return 1; }
     # The Testing card limit holds a new wave out of its gate (#2439, SPEC 2427): at its limit the wave does not enter its
     # gate, and the line names the limit. A wave already in its gate is never stopped, so a later pass continues it. A broken
     # limit or board read is a defect, named as one, and never read as a full column.
@@ -2200,9 +2229,14 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
       fi
       echo "WAVE WAIT $w: the tip's check is unproven, and an unproven tip never lands; the check runs again on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
+    # (#2597) The tip carries the red base head and its own check is red too: the wave does not fix the base, and no child is
+    # blamed for it. It waits; a later tip that fixes the base red lands it.
+    [ $rc = 9 ] && { basered_wait "$w" "$pastred" "$base is red at $pastred and the tip's check is red too, so the wave does not carry the fix; the wave lands on a later pass (its output is $SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log)"; rm -rf "$S"; return 1; }
     tipobl=
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
+    # (#2597) The wave lands past a red base: one line names the red head and the evidence that carried the tip.
+    [ -z "$pastred" ] || echo "WAVE PAST RED BASE $w: $base is red at $pastred; the tip ${sha:0:9} contains that head and its own check is green${pass_suite:+ (${pass_suite//$'\t'/, })}"
     land_read "origin/$base" HEAD
     # (#2418) A wave that changes test files only delivers the one issue its Refs name when that issue asks for a test
     # change: its text names test paths and no code path. A wave of tests alone then answers the issue (#533 held that it
@@ -2411,20 +2445,18 @@ land_queue() {
 # the first run last. A wave with nothing ahead of the base leaves the batch before it is sized and lands empty on its own
 # (`land`), after the batch's books; a run that owes a close or is past its age cap does the same (#2288). Exit 10: the batch does not fit --
 # fewer than two waves fit and carry commits, a wave conflicts on the stack, the gate is red or unproven, or the repeat is refused --
-# and the caller lands each run alone. Exit 1: the base is red, or the gate ran no verdict -- a skip that names a hold, or a slot or
-# lock wait that ran out -- so every run waits for a later pass with its queue kept. Exit 2: the network failed.
+# and the caller lands each run alone. Exit 1: no wave carries a red base head, or the gate ran no verdict -- a skip that names a hold, or a
+# slot or lock wait that ran out -- so every run waits for a later pass with its queue kept. Exit 2: the network failed.
 land_batch() {
   local -a rs=() rds=() ws=() tips=() ers=() erds=() kr=() krd=() kw=()
   local S i out fo try=1 of clog rc oc bstart ids k run w rd sha capped=0 early=0 dropped="" tipobl="" brc=0 self0 selfrd er erd hid why
   local rows issues anyref rfs nontest bcards c twrc testmiss testpaths SG_REQUEUE_RUN
+  local pastred="" red rh full ncarry redseen=""
   while [ $# -ge 2 ]; do
     rd=$2; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
     rs+=("$1"); rds+=("$rd")
     ws+=("$(wave_of "$1")"); shift 2; done
   self0=${rs[0]:-}; selfrd=${rds[0]:-}
-  # A red base fails every gate the batch or a lone run would start, so the batch waits before it stacks a wave, as the lone
-  # landing waits (#2288).
-  red=$(sg_base_red "$base") && { echo "WAVE WAIT batch $(IFS=,; printf '%s' "${rs[*]}"): $red; the batch lands on a later pass"; return 1; }
   # A run that owes a close or is past its age cap takes its own landing path, so it leaves the batch and lands alone after
   # it, as an empty wave does; the other runs stay in one batch (#2288). One such run used to send every run of the batch alone.
   kr=() krd=() kw=()
@@ -2459,6 +2491,31 @@ land_batch() {
     done
     rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
     [ "${#rs[@]}" -ge 2 ] || { echo "WAVE BATCH: ${#rs[@]} wave(s) with commits left, so each run lands alone"; rm -rf "$S"; return 10; }
+    # A red base fails every gate a wave would start, so only a wave whose tip carries the red head lands past it (#2597, as
+    # branchland's redfix lands a branch, #809): the one tip gate over the stack is the evidence, and a wave that does not carry
+    # the head leaves the batch and waits. The containment is a fact of the wave branch, read before the stack adds the base.
+    pastred=""
+    if red=$(sg_base_red "$base"); then
+      rh=$(basered_head "$red"); full=""
+      [ -n "$rh" ] && full=$(sc rev-parse -q --verify "$rh^{commit}" 2>/dev/null)
+      if [ -z "$tipgate" ]; then
+        basered_wait "batch $(IFS=,; printf '%s' "${rs[*]}")" "${full:-$rh}" "$red; the batch runs no tip check, so no evidence carries it past"
+        rm -rf "$S"; return 1
+      fi
+      kr=() krd=() kw=(); ncarry=0
+      for i in "${!ws[@]}"; do
+        if [ -n "$full" ] && sc merge-base --is-ancestor "$full" "origin/${ws[$i]}" 2>/dev/null; then
+          kr+=("${rs[$i]}"); krd+=("${rds[$i]}"); kw+=("${ws[$i]}"); ncarry=$((ncarry + 1))
+        elif [ -z "$redseen" ]; then   # a retry reads the red again, and a wave already sent back is named once
+          ers+=("${rs[$i]}"); erds+=("${rds[$i]}")
+          basered_wait "${ws[$i]}" "${full:-$rh}" "$red; the wave does not carry the red head, so it lands on a later pass"
+        fi
+      done
+      redseen=1
+      rs=("${kr[@]}"); rds=("${krd[@]}"); ws=("${kw[@]}")
+      [ $ncarry -ge 2 ] || { echo "WAVE BATCH: $ncarry wave(s) carry the red base head, so each run lands alone"; rm -rf "$S"; return 10; }
+      pastred=$rh
+    fi
     ids=$(IFS=,; printf '%s' "${rs[*]}")
     for i in "${!ws[@]}"; do
       k=$(sc rev-parse land)
@@ -2511,6 +2568,8 @@ land_batch() {
     [ "$try" = 1 ] || { echo "WAVE BATCH: the push of batch $ids to $base was refused twice, so each run lands alone"; rm -rf "$S"; return 10; }
     try=2
   done
+  # (#2597) The batch lands past a red base: one line names the red head and the evidence that carried the tip.
+  [ -z "$pastred" ] || echo "WAVE PAST RED BASE batch $ids: $base is red at $pastred; the tip $(sc rev-parse HEAD | cut -c1-9) contains that head and its one tip check is green"
   echo "WAVE BATCH $ids $(sc rev-parse HEAD) landed in $base (${#rs[@]} waves, one tip gate)"
   # Each run's books, in its own range of the stack: run i spans tips[i-1]..tips[i], the first run bstart..tips[0].
   for i in $(seq $(( ${#rs[@]} - 1 )) -1 0); do
