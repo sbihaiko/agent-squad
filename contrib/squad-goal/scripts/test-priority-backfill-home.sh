@@ -1,4 +1,5 @@
 #!/bin/bash
+# seconds: 4.19
 # usage: bash test-priority-backfill-home.sh   The priority backfill suite runs under a temp HOME with a bare python3 (#2484).
 here="$(cd "$(dirname "$0")" && pwd)"
 home=$(mktemp -d)
