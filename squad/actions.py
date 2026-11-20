@@ -54,7 +54,7 @@ def commit(path, message, timeout=None, exclude=None):
     return ActionResult(True, [], git.head(path))
 
 
-def merge_land(target, worktree, branch, message, timeout=None):
+def merge_land(target, worktree, branch, message, timeout=None, replace=False):
     """Commit pending work in the worktree, then merge its branch into the target's current branch.
 
     The result carries the tip the merge started from, so a reader compares it with the head it recorded: a landing that
@@ -62,11 +62,20 @@ def merge_land(target, worktree, branch, message, timeout=None):
     lands empty and moves no card, #464).
 
     The merge message carries each `Refs #N` line of the branch's own commits: a check that reads the head's message for its
-    issue reads the merge, not the child's commit (#818). A `Closes` line is never carried."""
+    issue reads the merge, not the child's commit (#818). A `Closes` line is never carried.
+
+    `replace` is set by a fix run (#2561): its target is cut at the work branch's old tip, and its child may rebase that branch
+    onto a newer base. When the target's tip is no ancestor of the branch, the target moves to the branch head and the result
+    carries `rewritten`. A merge would conflict with the branch's own old commits."""
     before = git.head(target)
     c = commit(worktree, message, timeout)
     if not c.ok:
         return c
+    if replace and git.run(["merge-base", "--is-ancestor", "HEAD", branch], target, timeout=timeout).returncode == 1:
+        r = git.run(["reset", "-q", "--hard", branch], target, timeout=timeout)
+        if r.returncode != 0:
+            return ActionResult(False, ["land_replace_failed"], git.head(target), {"stderr": r.stderr.strip()[-400:]})
+        return ActionResult(True, [], git.head(target), {"before": before, "rewritten": True})
     log = git.run(["log", "--format=%B", f"HEAD..{branch}"], target, timeout=timeout)
     refs = dict.fromkeys(m.group(0) for m in re.finditer(r"(?m)^Refs #\d+$", log.stdout if log.returncode == 0 else ""))
     if refs:
