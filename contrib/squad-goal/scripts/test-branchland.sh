@@ -28,6 +28,7 @@ case "\$*" in
   *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); [ -n "\${LANDBUG:-}" ] && n="\$n{\"number\":\$LANDBUG,\"title\":\"t\",\"body\":\"\",\"state\":\"OPEN\",\"labels\":{\"nodes\":[{\"name\":\"\${LANDBUG_LABEL:-loop-bug:landing}\"}]}},"; echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
   *"/actions/runs/"*"/jobs"*) echo '{"total_count":1,"jobs":[{"name":"check (3.11)","status":"completed","conclusion":"failure","steps":[{"name":"Run tests","number":1,"conclusion":"failure"}]}]}';;
   *"/check-runs"*) d=\$(/usr/bin/git -C $T/origin.git rev-parse -q --verify refs/heads/dev); x=\${CHECKS:-{\"check_runs\":[]\}}; case "\$*" in *"/commits/\$d/"*) x=\${BASECHECKS:-\$x};; esac; echo "\$x";;
+  *"issues/8/labels"*) [ -z "\${LABELFAIL:-}" ] || exit 1;;
   *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
 esac
@@ -396,10 +397,26 @@ s=$(cat "$T/st/cq/"x__y#8-status~* 2>/dev/null)
 case "$s" in *frozen:owner*g*"${dv4:0:7}"*"${dv3:0:7}"*) ok "2571 one status line names the stop, the files and both bases";; *) ko "2571 the stop status: '$s'";; esac
 devmv 5; sapprove; r=$(stubwave sbl)
 [ "$(/usr/bin/grep -c 'issues/8/labels.*frozen:owner' "$T/gh.log")" = 1 ] && ok "2571 the stop is said once per tip" || ko "2571 the stop repeated: $(/usr/bin/grep -c 'frozen:owner' "$T/gh.log")"
+# a status is one comment per issue, edited in place (#328): a stopped tip queues no conflict status over its stop reason
+/usr/bin/grep -qh 'BRANCHLAND CONFLICT' "$T/st/cq/"x__y#8-status~* 2>/dev/null && ko "2571 a stopped tip queued a conflict status: $(cat "$T/st/cq/"x__y#8-status~* | tr '\n' '|')" || ok "2571 a stopped tip queues no conflict status over its stop"
 # a new tip that conflicts on the base of the last round freezes the card
 salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; rm -f "$T/gh.log"; r=$(stubwave sbl)
 /usr/bin/grep -q 'issues/8/labels.*frozen:owner' "$T/gh.log" 2>/dev/null && [ "$(/usr/bin/grep -c '^salvage ' "$SKM")" = 1 ] && ok "2571 a new tip on the same base freezes the card and adds no round" || ko "2571 same base: '$(cat "$SKM" | tr '\n' '|')' '$r'"
 [ ! -e "$T/lc.called" ] && [ -n "$($O rev-parse -q --verify "refs/heads/$SB")" ] && [ -s "$SKM" ] && ok "2571 the same-base stop calls no wave.sh and keeps the branch and the marker" || ko "2571 same base: wave.sh '$(cat "$T/lc.called" 2>&1)' or residue gone"
+# a stop whose label write failed is tried again on the next pass, on the same base
+salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); newtip t2; rm -f "$T/gh.log"; r=$(LABELFAIL=1 stubwave sbl)
+case "$r" in *"label write failed"*) ok "2571 a failed label write is named";; *) ko "2571 the failed label write is silent: '$r'";; esac
+rm -f "$T/gh.log"; r=$(stubwave sbl)
+/usr/bin/grep -q 'issues/8/labels.*frozen:owner' "$T/gh.log" 2>/dev/null && [ -n "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 the next pass on the same base retries the stop" || ko "2571 the stop was not retried: '$r'"
+# a salvage branch that ended with no landing (deleted by hand) leaves no marker; a kept wave marker is not the sweep's
+salv8; touch "$T/st/auto/salvaged-$SK"; r=$(sbl); : > "$T/st/auto/branchland-salvagestop-$SK-0123456789"; printf 'origin/dev\n' > "$T/st/auto/kept-fix_9-rebase-gone"
+$O update-ref -d "refs/heads/$SB"; r=$(sbl)
+[ ! -e "$SKM" ] && [ ! -e "$T/st/auto/salvaged-$SK" ] && [ -z "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 a gone salvage branch's three markers are swept" || ko "2571 markers of a gone branch remain: $(ls "$T/st/auto" | /usr/bin/grep "$SK" | tr '\n' ' ')"
+[ -s "$T/st/auto/kept-fix_9-rebase-gone" ] && ok "2571 the sweep leaves a kept marker with no salvage marker" || ko "2571 the sweep removed a wave kept marker"; rm -f "$T/st/auto/kept-fix_9-rebase-gone"
+# a landed salvage branch drops all three markers
+salv8; (cd "$T/w" && $G checkout -q -B "$SB" origin/dev && echo s8 > s8 && $G add s8 && $G -c user.email=a@b -c user.name=t commit -q -m "salvage (Refs #8)" && $G push -q -f origin "$SB" 2>/dev/null); sapprove
+touch "$T/st/auto/salvaged-$SK"; printf 'origin/dev\nsalvage %s x\n' "$($O rev-parse "$SB")" > "$SKM"; : > "$T/st/auto/branchland-salvagestop-$SK-0123456789"; r=$(sbl)
+case "$r" in *"BRANCHLAND LANDED $SB"*) [ ! -e "$SKM" ] && [ ! -e "$T/st/auto/salvaged-$SK" ] && [ -z "$(ls "$T/st/auto/"branchland-salvagestop-"$SK"-* 2>/dev/null)" ] && ok "2571 a landed salvage branch drops its three markers" || ko "2571 a landed salvage branch left: $(ls "$T/st/auto" | /usr/bin/grep "$SK" | tr '\n' ' ')";; *) ko "2571 the clean salvage branch did not land: '$r'";; esac
 
 # A failed gate leaves no worktree and no staged residue, even when the gate staged files.
 reset; r=$(SG_LOCAL_GATE_CMD="echo a > staged1; /usr/bin/git add staged1; echo 'mypy: 1 error'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" CHECKS='{"check_runs":[]}' bl)

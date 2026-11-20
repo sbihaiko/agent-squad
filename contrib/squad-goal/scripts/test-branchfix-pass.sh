@@ -336,6 +336,13 @@ r=$(OPEN="50" fp)
   && ok "2571 the salvage round's head is pushed under the lease" || ko "2571 the salvage round was not pushed: remote $($O rev-parse "refs/heads/$sb") want $SH: '$r'"
 : > "$T/launch.log"; rev "$sb" CHANGES "h.sh:2 a finding on the rebased head"; r=$(OPEN="50" fp); q=$(/usr/bin/grep "work branch $sb " "$T/launch.log")
 case "$q" in *"REBASE ROUND"*) ko "2571 the head after the round got the rebase wording: '$q'";; *"commit on top of the branch your worktree has checked out"*) ok "2571 the head after the round gets the ordinary wording";; *) ko "2571 no round after the salvage round: '$q' '$r'";; esac
+# the ordinary round after the salvage round reads pass heads only: an unproven head is not the branch's, so it is not pushed
+rid=$(cat "$T/st/auto/branchfix-$sk-${SH:0:9}" 2>/dev/null); tg7=$T/tg7; rm -rf "$tg7"; $G clone -q "$T/origin.git" "$tg7" 2>/dev/null
+(cd "$tg7" && $G checkout -q dev && $G branch -q -f "squad/run/$rid" dev && $G checkout -q -b uh "$SH" && echo u > u50 && $G add u50 && $G -c user.email=a@b -c user.name=t commit -q -m "unproven (Refs #50)")
+UH50=$($G -C "$tg7" rev-parse HEAD); mkdir -p "$T/co/runs/$rid"
+printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n{"event": "outcome", "node": "route.router.1", "outcome": "unproven", "workspace": {"name": "worktrees/child", "head": "%s"}}\n{"event": "verdict", "verdict": "completed"}\n' "$tg7" "$rid" "$UH50" > "$T/co/runs/$rid/record.jsonl"
+r=$(OPEN="50" fp)
+[ "$($O rev-parse "refs/heads/$sb")" = "$SH" ] && ok "2571 an ordinary round after the salvage round pushes no unproven head" || ko "2571 the ordinary round pushed an unproven head: '$r'"
 # an empty salvage round drops its dispatch marker, and the stall rule stops the retries at two
 : > "$T/launch.log"; sb=fix/51-salvage-run-b; sk=fix_51-salvage-run-b
 push "$sb"; rev "$sb" CHANGES "g.sh:1 the rebase on dev conflicts"; S1=$($O rev-parse "$sb"); touch "$T/st/auto/salvaged-$sk"
