@@ -266,7 +266,7 @@ import json, sys, time
 s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - int(sys.argv[2])))
 f = lambda st: {"f": [st, "", "t", "", ""], "at": time.time()}
 json.dump({"repo": "x/y", "synced": s, "issues": {"7001": f("closed"), "7002": f("open"), "7003": f("closed"), "7004": f("closed"),
-    "7006": f("closed"), "7007": f("closed")}}, open(sys.argv[1], "w"))
+    "7006": f("closed"), "7007": f("closed"), "7008": f("closed"), "7009": f("closed")}}, open(sys.argv[1], "w"))
 P
 }
 old() { for p in "$@"; do touch -t 202001010000 "$p"; done; }
@@ -287,6 +287,11 @@ echo '{"event": "verdict", "verdict": "needs-human", "reasons": [], "remains": [
 $G -C worktrees/run/k7007 -c user.email=a@b -c user.name=t commit -q --allow-empty -m "run work"; old worktrees/run/k7007/runs/run-k7007/record.jsonl "$(hl worktrees/run/k7007)"
 # the origin refuses the archive push of one tree
 printf '#!/bin/sh\nwhile read o n r; do case $r in *gui-7003*) echo refused >&2; exit 1;; esac; done; exit 0\n' > "$RB/hooks/pre-receive"; chmod +x "$RB/hooks/pre-receive"
+# a closed dirty tree whose dirty ref an earlier pass already wrote (killed before the removal): the next push replaces it
+ach worktrees/child/gui-7008; echo again > worktrees/child/gui-7008/own.txt; s8=$($G -C worktrees/child/gui-7008 rev-parse HEAD)
+$G -C "$RB" update-ref "refs/archive/wt/worktrees_child_gui-7008/${s8:0:9}/dirty" "$($G -C "$RB" commit-tree "$($G -C "$RB" hash-object -t tree -w /dev/null)" -m stale)"
+# a closed tree with no reflog and no record: nothing proves it quiet, so it stays
+ach worktrees/child/gui-7009; rm -f "$(hl worktrees/child/gui-7009)"
 s1=$($G -C worktrees/child/gui-7001 rev-parse HEAD); s4=$($G -C worktrees/child/gui-7004 rev-parse HEAD); s6=$($G -C "$N/ws/w" rev-parse HEAD)
 aref() { $G -C "$RB" for-each-ref --format='%(refname) %(objectname)' "refs/archive/wt/$1/"; }
 facts 7200; out=$(bash "$T/s/wtclean.sh" 2>&1)   # STALE: a facts file synced two hours ago is no proof
@@ -308,5 +313,7 @@ $G -C "$RB" rev-list --all --objects 2>/dev/null | /usr/bin/grep -q 'untracked.t
 [ ! -d "$N/ws/w" ] && [ ! -d worktrees/child/gui-7006 ] && [ -n "$(aref worktrees_child_gui-7006_runs_run-n7006_ws_w)" ] && ok "ARCH: a dirty ws tree under a closed top is archived and freed, then its top" || ko "ARCH: the nested ws tree or its top stayed: $out"
 case "$out" in *"run-n7006 "*"archived"*"WT CLEAN child gui-7006"*) ok "ARCH: the ws tree goes before its top";; *) ko "ARCH: the ws tree did not go first: $out";; esac
 [ ! -d worktrees/run/k7007 ] && [ -n "$(aref worktrees_run_k7007)" ] && ok "ARCH: a closed issue lifts a needs-human hold, and the run tree is archived and removed" || ko "ARCH: k7007 kept: $out"
+[ ! -d worktrees/child/gui-7008 ] && [ -n "$($G -C "$RB" rev-parse -q --verify "refs/archive/wt/worktrees_child_gui-7008/${s8:0:9}/dirty^{tree}" 2>/dev/null)" ] && [ "$($G -C "$RB" show "refs/archive/wt/worktrees_child_gui-7008/${s8:0:9}/dirty:own.txt" 2>/dev/null)" = again ] && ok "ARCH: a dirty ref left by an earlier pass is replaced, and the tree goes" || ko "ARCH: gui-7008 stuck behind its old dirty ref: $out"
+[ -d worktrees/child/gui-7009 ] && [ -z "$(aref worktrees_child_gui-7009)" ] && ok "ARCH: a tree with no reflog and no record stays" || ko "ARCH: gui-7009 went with nothing proving it quiet: $out"
 rm -f "$RB/hooks/pre-receive"
 rm -rf "$T"; exit $fail
