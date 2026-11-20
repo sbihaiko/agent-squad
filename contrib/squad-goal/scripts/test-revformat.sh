@@ -441,6 +441,60 @@ python3 "$src" --answer "$T/r38.json" > "$T/r38.md" 2>/dev/null; arc=$?
 [ $arc = 0 ] && [ "$(python3 "$src" --summary "$T/r38.md")" = "blocking=1 debt=0" ] && /usr/bin/grep -q 'repro sandbox refused at abc1234' "$T/r38.err" && ! /usr/bin/grep -q 'repro passed' "$T/r38.md" \
   && ok "38 a sandbox that cannot apply keeps the finding Blocking and names the refusal, never 'repro passed'" \
   || ko "38 nested refusal: repro rc=$rc answer rc=$arc summary='$(python3 "$src" --summary "$T/r38.md" 2>&1)' err=$(cat "$T/r38.err")"
+# 42) #2565: a repro red at the head also runs at the base (--repro-base TREE SHA), and only then. Red at the head and green
+# at the base: Blocking, no note. Red at both: Blocking with a base note on its first round; Debt naming the base and both
+# heads when the previous answer (--repro-prev ANSWER SHA) holds the same repro. A base run that proves nothing keeps it Blocking.
+mkdir -p "$T/h42" "$T/b42"; : > "$T/h42/headmark"
+r42() { local a=$1; shift; env ${nested:+SQUAD_REPRO_EXEC=$T/bin/sandbox-pass} python3 "$src" --repro "$a" "$T/h42" hhh2222 "$@" 2>"$a.err"; }
+bl42() { jq -r '.blocking[].failure' "$1" | tr '\n' '|'; }
+db42() { jq -r '.debt[].failure' "$1" | tr '\n' '|'; }
+f42() { printf '{"location":"%s","defect":"d %s","failure":"y","fix":"z","repro":"%s"}' "$1" "$1" "$2"; }
+printf '{"verdict":"CHANGES","blocking":[%s,%s,%s],"debt":[],"resolved":[]}' "$(f42 a.py 'touch a.ran; test ! -f headmark')" \
+  "$(f42 b.py 'touch b.ran; test -f headmark')" "$(f42 c.py 'touch c.ran; false')" > "$T/r42.json"
+r42 "$T/r42.json" --repro-base "$T/b42" bbb1111; rc=$?
+[ $rc = 0 ] && [ "$(jq -r '[.blocking[].location]|join(",")' "$T/r42.json")" = "a.py,c.py" ] && [ "$(bl42 "$T/r42.json")" = "y|repro also fails at base bbb1111; y|" ] \
+  && ok "42 a repro red at the base and the head stays Blocking with the base sha; one red only at the head has no note" \
+  || ko "42 first round: rc=$rc blocking=$(bl42 "$T/r42.json") $(cat "$T/r42.json.err")"
+[ -e "$T/b42/a.ran" ] && [ -e "$T/b42/c.ran" ] && [ ! -e "$T/b42/b.ran" ] && [ "$(ls "$T/b42" | /usr/bin/wc -l | tr -d ' ')" = 2 ] \
+  && ok "42 a finding green at the head starts no base run" || ko "42 base runs: $(ls "$T/b42" | tr '\n' ' ')"
+# the previous answer holds the same repro, its whitespace changed: the finding moves to Debt and stderr names the demotion
+printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py 'touch  c.ran;   false')" > "$T/p42.json"
+printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py 'touch c.ran; false')" > "$T/r42b.json"
+r42 "$T/r42b.json" --repro-base "$T/b42" bbb1111 --repro-prev "$T/p42.json" ppp0000; rc=$?
+[ $rc = 0 ] && [ "$(bl42 "$T/r42b.json")" = "" ] && [ "$(db42 "$T/r42b.json")" = "repro fails at base bbb1111 and at heads ppp0000, hhh2222; y|" ] \
+  && /usr/bin/grep -q 'repro fails at base bbb1111 and at heads ppp0000, hhh2222' "$T/r42b.json.err" \
+  && ok "42 a repro red at the base and at two heads with the same text moves to Debt, naming the base and both heads" \
+  || ko "42 repeat: rc=$rc blocking=$(bl42 "$T/r42b.json") debt=$(db42 "$T/r42b.json") $(cat "$T/r42b.json.err")"
+# a reworded repro is a first appearance
+printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py 'touch c.ran; false || false')" > "$T/p42w.json"
+printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py 'touch c.ran; false')" > "$T/r42c.json"
+r42 "$T/r42c.json" --repro-base "$T/b42" bbb1111 --repro-prev "$T/p42w.json" ppp0000; rc=$?
+[ $rc = 0 ] && [ "$(bl42 "$T/r42c.json")" = "repro also fails at base bbb1111; y|" ] && [ "$(db42 "$T/r42c.json")" = "" ] \
+  && ok "42 a reworded repro keeps its finding Blocking" || ko "42 reworded: rc=$rc blocking=$(bl42 "$T/r42c.json") debt=$(db42 "$T/r42c.json")"
+# a base run that proves nothing keeps the finding Blocking and stderr names the reason, even with the same repro in the
+# previous answer. Each repro is red at the head (headmark) and proves nothing at the base.
+nothing42() {   # <name> <stderr pattern> <repro> [python preamble] -- [revformat args]
+  local n=$1 pat=$2 rp=$3 pre=$4; shift 5
+  printf '{"verdict":"CHANGES","blocking":[%s],"debt":[],"resolved":[]}' "$(f42 c.py "$rp")" > "$T/p42$n.json"
+  cp "$T/p42$n.json" "$T/n42$n.json"
+  env ${nested:+SQUAD_REPRO_EXEC=$T/bin/sandbox-pass} ${EXEC42:+SQUAD_REPRO_EXEC=$EXEC42} python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import revformat as r; $pre; sys.exit(r.main(sys.argv[2:]))" \
+    "$(cd "$(dirname "$src")" && pwd)" --repro "$T/n42$n.json" "$T/h42" hhh2222 "$@" --repro-prev "$T/p42$n.json" ppp0000 2>"$T/n42$n.err"; rc=$?
+  [ $rc = 0 ] && [ "$(bl42 "$T/n42$n.json")" = "y|" ] && [ "$(db42 "$T/n42$n.json")" = "" ] && /usr/bin/grep -q "$pat" "$T/n42$n.err" && /usr/bin/grep -q 'stays Blocking' "$T/n42$n.err" \
+    && ok "42 a base run that proves nothing ($n) keeps the finding Blocking and names the reason" \
+    || ko "42 $n: rc=$rc blocking=$(bl42 "$T/n42$n.json") debt=$(db42 "$T/n42$n.json") err=$(cat "$T/n42$n.err")"
+}
+nothing42 notree 'no base tree' 'test -f headmark && exit 1; exit 1' 'pass' -- --repro-base "$T/no-such-base" bbb1111
+nothing42 t124 'exit 124' 'test -f headmark && exit 1; sleep 5' 'r.REPRO_TIMEOUT = 1' -- --repro-base "$T/b42" bbb1111
+nothing42 t126 'exit 126' 'test -f headmark && exit 1; exit 126' 'pass' -- --repro-base "$T/b42" bbb1111
+nothing42 t127 'exit 127' 'test -f headmark && exit 1; exit 127' 'pass' -- --repro-base "$T/b42" bbb1111
+nothing42 budget 'budget' 'test -f headmark && exit 1; exit 1' 'r.REPRO_BASE_BUDGET = 0' -- --repro-base "$T/b42" bbb1111
+cat > "$T/bin/sandbox-refuse-base" <<'J'
+#!/bin/sh
+case $(pwd) in */b42) echo "sandbox-exec: sandbox_apply: Operation not permitted" >&2; exit 71;; esac
+shift 2; exec "$@"
+J
+chmod +x "$T/bin/sandbox-refuse-base"
+EXEC42=$T/bin/sandbox-refuse-base nothing42 refused 'sandbox refused' 'test -f headmark && exit 1; exit 1' 'pass' -- --repro-base "$T/b42" bbb1111
 # 41) #1960: the loop's own rebase-round review has one writer, and the landing pass reads it as changes, never malformed. Its
 # Blocking finding names a repro (ADR-0172) that exits non-zero while the branch conflicts with the ref and 0 once it is rebased.
 sd=$(cd "$(dirname "$src")" && pwd)
