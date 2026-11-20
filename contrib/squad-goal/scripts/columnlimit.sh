@@ -55,7 +55,7 @@ sg_column_cards() {   # <column> <board> [issues]: the cards of one column; a ha
   # The board answers one tab-separated row per card, `<issue>\t<column>`. Doing answers under both its names. A hand hold
   # is a person's own work on a card, so it takes its share of the Doing column: the hold file's label face on the issue
   # (ready-for-human, ready-for-HAL9K) counts one card, and a card already in Doing counts once. A pass reads only the
-  # label face (squad.handhold). A held issue whose card sits in Testing is a hand gate's: it adds nothing to Doing (#2563).
+  # label face (squad.handhold). Any held issue whose card sits in Testing leaves the Doing count, with or without a live gate (#2563).
   # An issue list that is absent or unreadable adds no hold, and names nothing.
   local col=$1 board=$2 issues=${3:-} rows n held=0 h x testing=""
   rows=$(awk -F '\t' -v c="$col" 'NF && ($2 == c || (c == "Doing" && $2 == "In Progress")) { print $1 }' "$board" 2>/dev/null)

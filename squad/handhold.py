@@ -386,8 +386,10 @@ def gate(issue, pid, state=None, now=None, procs=None):
         print(f"refused #{n}: process {pid} is not running", file=sys.stderr)
         return 1
     (st / "auto").mkdir(parents=True, exist_ok=True)
-    start = "" if p.start is None else int(p.start)
-    record.atomic_write(_gate_path(st, n), f"pid {int(pid)}\nstart {start}\n")
+    if p.start is None:
+        print(f"refused #{n}: process {pid} has no start time, so a reused pid could not be told apart", file=sys.stderr)
+        return 1
+    record.atomic_write(_gate_path(st, n), f"pid {int(pid)}\nstart {int(p.start)}\n")
     (st / "board-dirty").touch()
     print(f"gating #{n}: process {pid}")
     return 0
@@ -395,7 +397,8 @@ def gate(issue, pid, state=None, now=None, procs=None):
 
 def gates(state=None, procs=None):
     """The set of issue numbers (as strings) with a live hand gate. A marker is dropped when it is unreadable, when its
-    process is gone, or when the process started at another time than the marker names (a reused pid). Nothing is
+    process is gone, when either side has no start time, or when the process started at another time than the marker names
+    (a reused pid). Nothing is
     written."""
     st = _state(state)
     d = st / "auto"
@@ -418,8 +421,8 @@ def gates(state=None, procs=None):
         if proc is None or not n.isdigit():
             continue
         began = fields.get("start", "")
-        if proc.start is not None and began.isdigit() and abs(proc.start - int(began)) > RL.START_SLACK:
-            continue
+        if proc.start is None or not began.isdigit() or abs(proc.start - int(began)) > RL.START_SLACK:
+            continue   # no start time on either side: the pid alone proves nothing
         out.add(n)
     return out
 

@@ -1,10 +1,10 @@
 #!/bin/bash
-# seconds: 4.24
+# seconds: 5.26
 # Regression test for hand-gate.sh (#1169): a hand gate declares its worker count and its reason where it starts, and a
 # delta of at most two files takes at most two workers. A throwaway repository and a stub python that logs its argv: no
 # battery runs and no machine budget is taken for real.
 # usage: bash test-hand-gate.sh [scripts dir]
-unset SG_SERIAL_HELD SG_GATE_WORKERS SG_GATE_REASON SG_HAND_SMALL_WORKERS SG_HAND_SMALL_FILES
+unset SG_SERIAL_HELD SG_GATE_ISSUE SG_GATE_WORKERS SG_GATE_REASON SG_HAND_SMALL_WORKERS SG_HAND_SMALL_FILES
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st SQUAD_CAPS_DIR=$T/caps SG_FAST_LOG_DIR=$T/logs SG_FAST_MEMO=0
 mkdir -p "$SG_STATE" "$SG_FAST_LOG_DIR"
@@ -43,8 +43,11 @@ out=$(SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
 out=$(SG_GATE_ISSUE=77 SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
 [ $rc = 0 ] && /usr/bin/grep -q '^pid [0-9][0-9]*$' "$SG_STATE/auto/gate-77" && /usr/bin/grep -q '^start [0-9][0-9]*$' "$SG_STATE/auto/gate-77" && ok "a declared issue with a live hold gets a marker with its pid and start time" || ko "marker: rc $rc: $out: $(cat "$SG_STATE/auto/gate-77" 2>&1)"
 [ "$(wc -l < "$SG_STATE/auto/hold-77" | tr -d ' ')" = 3 ] && ok "the hold file keeps its three lines" || ko "the hold file changed"
-got=$(PYTHONPATH=$root python3 -c 'import squad.handhold as H;print(sorted(H.gates()))')
-[ "$got" = "[]" ] && ok "the marker of a gate that ended is dropped by the reader" || ko "a dead gate still read as live: $got"
+got=$(PYTHONPATH=$root python3 -c '
+import os, squad.handhold as H, squad.run_liveness as RL
+f = dict(l.split(" ", 1) for l in open(os.environ["SG_STATE"] + "/auto/gate-77").read().splitlines())
+print(sorted(H.gates(procs={}) | H.gates(procs={int(f["pid"]): RL.Proc(int(f["start"]) + 500, "other")})))')
+[ "$got" = "[]" ] && ok "the marker of a gate that ended, or whose pid another process reused, is dropped by the reader" || ko "a dead gate still read as live: $got"
 out=$(SG_GATE_ISSUE=78 SG_GATE_WORKERS=6 SG_GATE_REASON="three files" hg); rc=$?
 [ $rc = 0 ] && [ ! -e "$SG_STATE/auto/gate-78" ] && /usr/bin/grep -q 'no live hold' <<<"$out" && ok "an issue with no hold gets no marker, and the gate still runs" || ko "no hold: rc $rc: $out"
 
