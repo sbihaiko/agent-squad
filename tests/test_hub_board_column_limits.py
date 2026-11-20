@@ -288,6 +288,32 @@ def test_a_settings_page_with_no_board_read_shows_a_dash_in_every_cards_now_cell
     assert "board items not read yet" in h, "the status line does not name the missing board read"
 
 
+def test_the_kanban_counts_appear_after_a_board_read_without_a_reload(hub):
+    # Issue #2541: the page loads before the board read, so the Kanban group reads "cards not read yet" until a board read.
+    mod, _ = hub
+    before = {"read": False, "file": "/p", "columns": [{"name": "Doing", "max_cards": 6, "count": None, "stops": ""}]}
+    after = {"read": True, "file": "/p", "columns": [{"name": "Doing", "max_cards": 6, "count": 3, "stops": ""}]}
+    got = _node(mod, "kanS=" + json.dumps(before) + ";kanDraft=kanClone(kanS.columns);"
+                "globalThis.fetch=async()=>({json:async()=>(" + json.dumps(after) + ")});"
+                "(async()=>{await kanLoad();console.log(JSON.stringify({chip:kanChip(),h:kanHtml()}))})()")
+    assert "cards not read yet" not in got["chip"], got["chip"]
+    assert "cards not read yet" not in got["h"], got["h"]
+    assert re.search(r'data-kanrow="Doing".*?<b class=knum>3 of 6</b>', got["h"], re.S), got["h"]
+    assert "pollBoard" in mod.PAGE and "kanLoad()" in mod.PAGE[mod.PAGE.index("async function pollBoard"):mod.PAGE.index("async function pollBoard") + 4000], \
+        "the board read does not refresh the Kanban counts"
+
+
+def test_a_kanban_refresh_keeps_an_unsaved_card_limit_edit(hub):
+    # Issue #2541: a refresh replaces the saved state but keeps the limit the owner typed and did not save.
+    mod, _ = hub
+    saved = {"read": True, "file": "/p", "columns": [{"name": "Doing", "max_cards": 6, "count": 2, "stops": ""}]}
+    newer = {"read": True, "file": "/p", "columns": [{"name": "Doing", "max_cards": 6, "count": 5, "stops": ""}]}
+    got = _node(mod, "kanS=" + json.dumps(saved) + ";kanDraft=kanClone(kanS.columns);kanDraft[0].max_cards=9;"
+                "globalThis.fetch=async()=>({json:async()=>(" + json.dumps(newer) + ")});"
+                "(async()=>{await kanLoad();console.log(JSON.stringify({limit:kanDraft[0].max_cards,count:kanS.columns[0].count}))})()")
+    assert got == {"limit": 9, "count": 5}, got
+
+
 # --- the rendered table at 1000 px and 1440 px (issue #2526): a real layout, measured in ego-browser
 
 _RENDER_JS = """

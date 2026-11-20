@@ -7697,6 +7697,10 @@ async function kanWriteNow(name,send){if(RO)return {skip:true};if(!kanDraft)retu
   kanDraft=kanCols().map(c=>{const s=st.find(x=>x.name===c.name);return s?{...c,max_cards:c.name===name?s.max_cards:c.max_cards,count:s.count}:c});   // the landed column folds into the draft, so another column's staged edit stays and its count moves on (#2433)
   kanBad="";kanBadMsg="";delete kanRef[name];kanOK=name;kanVal=String(landed&&landed.max_cards!=null?landed.max_cards:body[name]??"");kanAt=Date.now();kanSent[name]=kanVal;kanDiff=Array.isArray(d.diff)?d.diff:[]}   // the column remembers the value the write landed (#2433)
  limRender();if(typeof setBar==="function")setBar();return d}
+async function kanLoad(){let s;try{s=await (await fetch("/api/columns")).json()}catch(e){kanMsg="!load failed";return false}
+ const was=(kanS&&kanS.columns)||[],typed=kanDraft||[];   // a refresh keeps a Card limit the owner typed and did not save (#2541)
+ kanDraft=kanClone(s.columns||[]).map(c=>{const d=typed.find(x=>x.name===c.name),w=was.find(x=>x.name===c.name);return d&&w&&d.max_cards!==w.max_cards?{...c,max_cards:d.max_cards}:c});
+ const changed=JSON.stringify(s)!==JSON.stringify(kanS);kanS=s;kanMsg=s.err?"!"+s.err:"";return changed}
 function kanHtml(){if(!kanS)return `<div class=setblk data-blk=kanban data-theme=lim><h3 class=blkh>Kanban</h3><span class=m>${esc(kanMsg.replace(/^!/,"")||"Loading the data.")}</span></div>`;   // a failed read says so here, never a sub-group that silently vanishes
  return `<div class=setblk data-blk=kanban data-theme=lim><h3 class="blkh khead"><span>Kanban <small class=ksub>· cards · this board</small></span> <small id=kanchip class=${kanS&&kanS.read===false?"":kanFull().length?"err":"ok"}>${esc(kanChip())}</small></h3>`
   +`<table class=ktab><colgroup><col class=kcol1><col class=kcol2><col class=kcol3><col class=kcol4></colgroup><thead><tr><th scope=col>Column</th><th scope=col>Cards now</th><th scope=col>Card limit</th><th scope=col>What the limit stops</th></tr></thead><tbody>`
@@ -7752,7 +7756,7 @@ const limCapParse=s=>{const t=String(s??"").trim(),m=t.match(/^(\d+(?:\.\d+)?)\s
 const limBurn=(cap,factor,wh)=>{const c=limCapParse(cap),f=+factor;   // the hourly burn that pauses dispatch: factor x the cap's hourly share (#2434)
  return c==null||!Number.isFinite(f)||f<=0||!(wh>0)?null:Math.floor(Math.floor(c/wh)*f)};
 const limG=()=>{const e=$("#limg");return e?(e.checked?"on":"off"):""};   // the guard is a switch: its checked state is the word the hub reads (#2434)
-const limBusy=()=>{const a=typeof document!=="undefined"?document.activeElement:null;if(a&&a.id&&Object.keys(LIM_ID).some(k=>LIM_ID[k]==="#"+a.id))return true;return Object.keys(limTmr).length>0};   // a focused field, or any pending timer, holds text the page has not saved (#2433)
+const limBusy=()=>{const a=typeof document!=="undefined"?document.activeElement:null;if(a&&a.id&&Object.keys(LIM_ID).some(k=>LIM_ID[k]==="#"+a.id))return true;if(a&&a.dataset&&(a.dataset.kan||a.dataset.slot))return true;return Object.keys(limTmr).length>0};   // a focused field, or any pending timer, holds text the page has not saved (#2433)
 function limPatch(){for(const k of Object.keys(LIM_ID)){const m=$("#limmk-"+k);   // the mark moves in place, so a focused input keeps what it holds (#2433)
   if(limOK!==k){if(m&&m.remove)m.remove();else if(m)m.hidden=true;continue}   // the field that lost its mark loses the element, never a hidden leftover
   if(m&&m.remove){m.hidden=false;continue}
@@ -7784,7 +7788,7 @@ function limRender(){const b=$("#lbody");if(!b)return;if(!limS){b.innerHTML="<sp
  h+=slotsHtml();   // the Machine slots sub-group below Kanban (#2435)
  b.innerHTML=h;if(typeof setBar==="function")setBar();limTickSync();kanTickSync()}
 async function limLoad(){try{limS=await (await fetch("/api/limits")).json();limMsg=""}catch(e){limMsg="!load failed"}   // the theme loads with the page, so its chip never reads a dash (#2432)
- try{kanS=await (await fetch("/api/columns")).json();kanDraft=kanClone(kanS.columns||[]);kanMsg=kanS.err?"!"+kanS.err:""}catch(e){kanMsg="!load failed"}
+ await kanLoad();
  try{slotS=await (await fetch("/api/slots")).json();slotDraft=slotClone(slotS);slotDiff=null;slotMsg=slotS.err?"!"+slotS.err:""}catch(e){slotMsg="!load failed"}
  limRender()}
 async function slotPost(confirm){try{const r=await fetch("/api/slots",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slotCaps(),confirm})}),d=await r.json();
@@ -8350,6 +8354,7 @@ all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&!g.end&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 const COLS=b.limits||{};   // the card limit of each column (#2287): the hub resolves it, and the header shows the count against it
+if(r.status!==304&&limS)kanLoad().then(ch=>{if(ch)limRender()});   // each board read refreshes the Kanban counts (#2541)
 lastRead=Date.now();lastBoardT=b.t||0;lastBoardOver=!!b.overdue;lastPending=b.pending_new||0;readStale=!!b.err||lastBoardOver;lastBoardErr=b.err||"";$("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=["status","structure","prs"].map(k=>{const p=(b.parts||{})[k];return k+" "+(p&&p.t?Math.round(Date.now()/1000-p.t)+"s":"never")+(p&&p.err?" !":"")}).join(" · ");
 const boardGroups=all.filter(g=>!isPR(g.name)),allRows=boardGroups.filter(g=>!g.end).flatMap(g=>g.items);   // every open card feeds the swimlane model and the spec colours (#969)
 const sOpts=specOptions(boardGroups,b.sum),SLOTS=specSlots(sOpts.filter(s=>s!=="none"));SPECLC=new Map(allRows.map(x=>[String(x.n),cardColor(SLOTS,x)]).filter(p=>p[1]!==SPEC_GREY));try{if(typeof window!=="undefined")window.SPECLC=SPECLC}catch(e){}try{drawList()}catch(e){}   // the board read may arrive after the runs: repaint the card so the numbers take their spec colour   // a finished spec is no option (#981); one color per spec option on the board (#917)
