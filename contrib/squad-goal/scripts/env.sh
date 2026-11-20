@@ -35,6 +35,9 @@ _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 # battery, and the entry records `skipped`; the wave's landing gate is the one batch gate that proves every child (#1797).
 # `on` runs the battery when the entry finds no reusable green verdict. A reuse hit enters as before.
 : "${SG_WAVE_ENTRY_GATE:=off}"
+# The gate slots a wave child gate takes (wave.sh, #2594). A child gate is a delta over one child's change, so one slot fits
+# it; at two, two waves held the whole budget of `caps.gates` and a third entry gate ended unproven for "budget is full".
+: "${SG_WAVE_GATE_WORKERS:=1}"
 # The review a loop run gives each passed child before it merges it (#601, ADR-0145 rule 9): the loop workflow's review gate
 # runs the script this names, and with none set (a run outside the loop) the gate answers "no review here".
 : "${SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh}"
@@ -93,7 +96,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
   unset SG_TOOLING_REPO
 fi
 export SG_STG_BRANCH SG_MAIN_BRANCH SG_PROMOTE
-export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_ENTRY_GATE SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_WAVE_ENTRY_WAIT_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY SG_BOARD_VOCAB
+export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_ENTRY_GATE SG_WAVE_GATE_WORKERS SG_RUN_REVIEW SG_WAVE_MAX_AGE_SECONDS SG_WAVE_ENTRY_WAIT_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL SG_PENDING_WINDOW_SECONDS SG_PENDING_OVERLAY SG_BOARD_VOCAB
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"
