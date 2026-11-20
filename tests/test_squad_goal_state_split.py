@@ -5,13 +5,14 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal"
+SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts"
 SEAM = ROOT / "scripts" / "address.sh"
 SHARED_LITERAL = re.compile(r"\.cache/squad-goal|SG_STATE_BASE")
 
 
 def shipped():
     yield ROOT / "SKILL.md"
-    for f in sorted((ROOT / "scripts").iterdir()):
+    for f in sorted(SCRIPTS.iterdir()):
         if f.is_file() and f.suffix in {".sh", ".py"} and not f.name.startswith("test-") and f != SEAM:
             yield f
 

@@ -17,6 +17,7 @@ from squad import procs
 ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = "/usr/bin/sandbox-exec"
 PS_ENV = {**os.environ, "LC_ALL": "C"}
+SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 
 
 @pytest.fixture
@@ -112,9 +113,8 @@ def test_1508_shell_reader_survives_a_space_in_the_checkout_and_the_interpreter(
 def test_1508_every_shell_reader_sources_the_seam_at_top_level():
     """`SG_PS` is a shell function, never exported, so a script that expands it must source caps.sh itself, at top level:
     a source inside one branch leaves another branch, or a fresh `bash script --run` child, with no reader at all."""
-    scripts = ROOT / "contrib/squad-goal/scripts"
     missing = []
-    for f in sorted(scripts.glob("*.sh")):
+    for f in sorted(SCRIPTS.glob("*.sh")):
         if f.name.startswith("test-") or f.name == "caps.sh":
             continue
         text = f.read_text()
