@@ -179,7 +179,7 @@ def _vis(raw: bytes) -> str:
     """The listing prints a command with each byte outside printable ASCII as an octal escape (a newline shows as \\012).
     Latin-1 maps each byte to the code point of its own value, so one decode and one substitution answer what a per-byte
     loop answered (#2582)."""
-    return _NON_PRINTABLE.sub(lambda m: "\\{:03o}".format(ord(m.group())), raw.decode("latin-1"))
+    return _NON_PRINTABLE.sub(lambda m: f"\\{ord(m.group()):03o}", raw.decode("latin-1"))
 
 
 def _parse_procargs2(raw: bytes) -> str | None:
