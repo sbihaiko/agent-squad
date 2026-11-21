@@ -60,9 +60,11 @@ def _css(page):
 
 
 def _decls(css, selector):
-    m = re.search(re.escape(selector) + r"\{([^}]*)\}", css)
-    assert m, f"the page serves no rule for {selector}"
-    return dict(re.findall(r"([\w-]+)\s*:\s*([^;}]+)", m.group(1)))
+    """The declarations of the rule that names this selector, alone or in a group."""
+    for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", re.sub(r"/\*[\s\S]*?\*/", "", css)):
+        if selector in [s.strip() for s in sel.split(",")]:
+            return dict(re.findall(r"([\w-]+)\s*:\s*([^;}]+)", body))
+    raise AssertionError(f"the page serves no rule for {selector}")
 
 
 def _tokens(css):
@@ -145,3 +147,17 @@ def test_the_bugs_layer_with_nothing_open_says_so_in_the_muted_color_and_keeps_i
     assert out["again"] == "No open loop-bug in this project.", "a redraw of the layer lost the message"
     assert _token(_css(hub.MOBILE_PAGE), "#bugs-msg") == "mute", \
         "the empty Loop-bugs message is not drawn in the muted color"
+
+
+def test_a_scrolling_loop_layer_ends_above_the_tab_bar(hub):
+    """The tab bar paints over every layer (56 px plus the home indicator). A layer that scrolls under it keeps a
+    bottom inset, so its last line is reachable in landscape, where the Loops list and a long Loop-bugs list overflow."""
+    css = _css(hub.MOBILE_PAGE)
+    bar = re.search(r"nav button\{[^}]*min-height:(\d+)px", css)
+    assert bar, "the tab bar names no height"
+    for selector in ("#loops-content", "#bugs-content"):
+        pad = _decls(css, selector).get("padding-bottom", "")
+        m = re.search(r"calc\((\d+)px \+ env\(safe-area-inset-bottom\)\)", pad)
+        assert m, f"{selector} leaves no room under its last line: padding-bottom is {pad!r}"
+        assert int(m.group(1)) >= int(bar.group(1)), \
+            f"{selector} clears {m.group(1)} px of a {bar.group(1)} px tab bar"
