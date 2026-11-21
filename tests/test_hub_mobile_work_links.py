@@ -5,7 +5,6 @@ Every expected value below comes from the fixture board the hub serves, read whe
 under the stub DOM of `tests/hub_mobile_stub.py`, and each assertion reads an element, its href, its chips or its
 text. A link that leaves the page is a plain anchor, and a card carries only the chips the hub's row facts name.
 """
-import json
 import re
 
 import pytest
