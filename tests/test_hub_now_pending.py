@@ -183,6 +183,8 @@ def connection(monkeypatch, hub, auth, repo="x/y", channel=None, profiles=None, 
     table.update({f"{p}:{repo}": ch for p, ch in (profiles or {}).items()})
     (voice / "channels.json").write_text(json.dumps(table))
     monkeypatch.setenv("VOICE_STATE", str(voice))
+    # The seam stands for the Keychain reader on every host: the Linux runner has none, and its absence is its own test.
+    monkeypatch.setattr(mod, "KEYCHAIN", True)
     monkeypatch.setattr(mod, "slack_token",
                         (lambda profile=None: (tokens or {}).get(profile or mod.profile_of()))
                         if tokens else (lambda profile=None: "xoxb-test"))
