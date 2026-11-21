@@ -49,7 +49,7 @@ def test_the_answer_carries_the_live_group_alone(hub):
         {"state": "completed", "live": False, "age": 600, "spend": 2.5, "agents": 0},
     ]
     groups = hub.run_groups(rows, {"runs": 6, "children": 20})
-    assert groups == [{"key": "running", "label": "WORKERS", "text": "RUNS 1/6 · AGENTS 1/20", "title": "$1.00", "empty": False}]
+    assert groups == [{"key": "running", "label": "WORKERS", "text": "Runs 1/6 · Agents 1/20", "title": "$1.00", "empty": False}]
 
 
 def test_run_groups_no_longer_builds_an_age_band_or_a_muted_line(hub):
@@ -76,9 +76,9 @@ def test_a_changed_cap_shows_after_one_answer(hub, monkeypatch):
     """The caps are read on every answer, not substituted at page load (#1277)."""
     monkeypatch.setattr(hub, "run_list", lambda: [LIVE])
     monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 6, "children": 20})
-    assert hub.runs_answer()["groups"][0]["text"] == "RUNS 1/6 · AGENTS 1/20"
+    assert hub.runs_answer()["groups"][0]["text"] == "Runs 1/6 · Agents 1/20"
     monkeypatch.setattr(hub, "loop_caps", lambda: {"runs": 3, "children": 10})
-    assert hub.runs_answer()["groups"][0]["text"] == "RUNS 1/3 · AGENTS 1/10"
+    assert hub.runs_answer()["groups"][0]["text"] == "Runs 1/3 · Agents 1/10"
 
 
 # --- the page's own code, run in node: the list and the three sections are read off the DOM ---
@@ -245,7 +245,7 @@ def test_a_waiting_childcc_pass_is_a_worker_and_never_counted(hub):
     cc = {"id": "childcc", "kind": "childcc", "state": "waiting", "live": False, "rank": 0, "age": 4000, "spend": 0, "agents": 0}
     groups = hub.run_groups([LIVE, cc], {"runs": 6, "children": 20})
     assert [g["key"] for g in groups if not g["empty"]] == ["running"], "the pass leaves every age band empty"
-    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 1/20", "the occupancy counts the pass"
+    assert groups[0]["text"] == "Runs 1/6 · Agents 1/20", "the occupancy counts the pass"
 
 
 def test_the_poll_answers_both_wire_shapes_without_blanking_the_list(hub):

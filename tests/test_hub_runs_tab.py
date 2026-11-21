@@ -27,7 +27,7 @@ ENDED = {"id": "run-20261103-080000-bbbb", "label": "gui-1268", "state": "needs-
          "badge": "ended · needs a decision", "rank": 5, "running": False, "spend": 3.4, "age": 3600}
 HOLD = {"id": "d-1710", "kind": "hold", "label": "HAL9k · #1710", "state": "held", "badge": "held",
         "rank": 0, "running": True, "spend": 0, "age": 30, "dur": 0, "port": ""}
-GROUPS = [{"key": "running", "label": "WORKERS", "text": "RUNS 1/4 · AGENTS 1/12", "title": "$1.25", "empty": False},
+GROUPS = [{"key": "running", "label": "WORKERS", "text": "Runs 1/4 · Agents 1/12", "title": "$1.25", "empty": False},
           {"key": "1h", "label": "≤ 1 h", "text": "1 · $3.40", "title": "$3.40", "empty": False}]
 
 
@@ -90,14 +90,14 @@ def _visible(html):
 def test_the_runs_tab_lists_live_then_ended_today(hub):
     html, = _draw(hub, [{"tab": "runs", "runs": [LIVE], "ended": [ENDED, LIVE], "groups": GROUPS}])
     assert _visible(html) == (
-        "Live RUNS 1/4 · AGENTS 1/12 "
+        "Live Runs 1/4 · Agents 1/12 "
         "running gui-1272 The tab draws each run once $1.25 · 7m · last write 12s ago · 0-aaaa · :50580 ○ "
         "Ended today ended · needs a decision gui-1268 $3.40 · last write 60m ago")
 
 
 def test_the_live_heading_carries_the_occupancy_and_its_title_from_the_answer(hub):
     html, = _draw(hub, [{"tab": "runs", "runs": [LIVE], "ended": [], "groups": GROUPS}])
-    assert '<span class=sr title="$1.25">RUNS 1/4 · AGENTS 1/12</span>' in html
+    assert '<span class=sr title="$1.25">Runs 1/4 · Agents 1/12</span>' in html
     assert "1 · $3.40" not in html, "an age band's header is drawn"
 
 
