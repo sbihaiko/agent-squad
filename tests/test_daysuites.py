@@ -58,7 +58,14 @@ class World:
         self.st.mkdir()
         self.runlog = tmp_path / "ran.log"
         self.slots = tmp_path / "slots.log"
+        self.path = os.environ["PATH"]
         self.set_suites(suites)
+
+    def pin_host_clock(self, hour):
+        """Put a `date` first on PATH whose +%H is `hour`: a case proves the host clock never decides the pass."""
+        _write(self.tmp / "bin" / "date",
+               f'#!/bin/bash\ncase "$1" in +%H) echo "{hour}";; *) exec /bin/date "$@";; esac\n')
+        self.path = f"{self.tmp / 'bin'}:{os.environ['PATH']}"
 
     def set_suites(self, suites):
         """The stubbed suite list, one `name: shell body` per entry, committed so the tree has one dev sha."""
@@ -77,7 +84,7 @@ class World:
             "SG_OWNER": "o", "SG_PROJECT": "4", "SG_TODO": "Todo", "SG_BASE": "dev",
             "SG_SQUAD": str(ROOT), "SQUAD_CAPS_DIR": str(self.tmp / "caps"),
             "FILED": str(self.filed), "RUNLOG": str(self.runlog), "SLOTS_SEEN": str(self.slots),
-            "SERIAL_POLL_SECONDS": "0.05", "PATH": os.environ["PATH"],
+            "SERIAL_POLL_SECONDS": "0.05", "PATH": self.path,
             # The host's own load never decides a case: a case that wants a loaded start names SG_DAYSUITES_LOAD itself.
             "SG_DAYSUITES_LOAD": "0.0",
         }
@@ -162,6 +169,17 @@ def test_a_red_suite_files_one_bug_with_its_name_first_fail_line_and_the_dev_sha
     assert "FAIL the widget did not settle" in block, "the body does not name the first FAIL line"
     assert "second line" not in block, "the body names more than the first FAIL line"
     assert w.sha in block, "the body does not name the dev sha"
+
+
+def test_the_host_clock_never_decides_a_case(tmp_path):
+    """Regression for #2635: the fixture left the pass's hour to the host clock, so a CI run inside the profile's nightly
+    hour (04:00, America/Sao_Paulo) held every pass and reddened six cases. The world names its hour, so a host clock in
+    the nightly hour changes nothing."""
+    w = World(tmp_path, {"test-alpha.sh": GREEN})
+    w.pin_host_clock("04")
+    done = w.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert [Path(p).name for p in w.ran()] == ["test-alpha.sh"], "the host clock held the pass"
 
 
 def test_the_pass_runs_outside_the_nightly_hour(tmp_path):
