@@ -88,9 +88,9 @@ def leaks(tree, since, rows=None):
             and (ppid == 1 or not _owned(pid, parents, commands, roots))]
 
 
-def reap(tree, since):
+def reap(tree, since, rows=None):
     """End every leak and its descendants; the answer is the pids of the leaks."""
-    rows = _table()
+    rows = _table() if rows is None else rows
     found = leaks(tree, since, rows)
     doomed = list(found)
     for pid in doomed:   # the list grows while it is read, so a child of a child is reached too
@@ -101,6 +101,32 @@ def reap(tree, since):
         except OSError:
             pass
     return found
+
+
+def _inside_a_session(rows, pid):
+    """True when an ancestor of `pid` runs pytest: another session started this one."""
+    parents = {row: ppid for row, ppid, _, _ in rows}
+    commands = {row: cmd for row, _, _, cmd in rows}
+    seen = set()
+    parent = parents.get(pid)
+    while parent and parent != 1 and parent not in seen:
+        seen.add(parent)
+        if " -m pytest" in commands.get(parent, ""):
+            return True
+        parent = parents.get(parent)
+    return False
+
+
+def session_reap(tree, since, rows=None, pid=None):
+    """What a pytest session does when it ends (tests/conftest.py): end the leftovers it started, and never one that
+    another session still owns. A session a test started (a nested session, its ancestry runs pytest) ends nothing: the
+    detached processes it sees are the outer session's, because a `nohup` child's parent is 1, so they read as leftovers
+    of this tree. Its end killed a live check the outer session had just started, eight-tenths of a second after it took
+    its pid (#2680). The outer session's own end, and the one by hand, still end every leftover."""
+    rows = _table() if rows is None else rows
+    if _inside_a_session(rows, os.getpid() if pid is None else pid):
+        return []
+    return reap(tree, since, rows)
 
 
 if __name__ == "__main__":

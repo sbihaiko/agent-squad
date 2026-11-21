@@ -303,11 +303,12 @@ def pytest_sessionstart(session):
 
 def pytest_sessionfinish(session):
     """The session ends the processes it started and left behind (#1722): a leftover of this tree whose parent is 1. A worker
-    never reaps: the controller does, once, after every worker ended."""
+    never reaps: the controller does, once, after every worker ended. A session a test started ends nothing (#2680): the
+    detached processes it sees belong to the session that started it."""
     if hasattr(session.config, "workerinput"):
         return
     from tests import reap_leaks
-    ended = reap_leaks.reap(session.config.rootpath, getattr(session.config, "_reap_since", time.time()))
+    ended = reap_leaks.session_reap(session.config.rootpath, getattr(session.config, "_reap_since", time.time()))
     if ended:
         print(f"\nreap-leaks: ended {len(ended)} leftover process(es) the session left behind: {ended}", file=sys.stderr)
 
