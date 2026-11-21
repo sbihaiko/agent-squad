@@ -521,4 +521,29 @@ nothing42 signal 'signal' 'test -f headmark && exit 1; kill -9 $$' 'pass' -- --r
 # a base run is capped at the budget left: a 5 s base run under a 1 s budget is killed, and proves nothing
 t42=$(date +%s); nothing42 cap 'exit 124' 'test -f headmark && exit 1; sleep 5' 'r.REPRO_BASE_BUDGET = 1' -- --repro-base "$T/b42" bbb1111
 [ $(( $(date +%s) - t42 )) -lt 4 ] && ok "42 a base run past the budget left is killed" || ko "42 budget cap: the base run took $(( $(date +%s) - t42 ))s"
+# 43) #2647: a repro runs in the gate's environment. The checkout's venv comes first on PATH, and pytest carries
+# -p no:deepeval, so a repro that names a test the gate passes is not red because the plugin dies at startup.
+mkdir -p "$T/p43" "$T/v43/.venv/bin" "$T/co43"
+printf '#!/bin/sh\nexit 1\n' > "$T/p43/tool2647"; printf '#!/bin/sh\nexit 0\n' > "$T/v43/.venv/bin/tool2647"
+printf '#!/bin/sh\ncase " $PYTEST_ADDOPTS " in *" -p no:deepeval "*) exit 0;; esac\nexit 1\n' > "$T/p43/pytest"
+chmod +x "$T/p43/tool2647" "$T/v43/.venv/bin/tool2647" "$T/p43/pytest"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"tool2647"},{"location":"b.py:2","defect":"x","failure":"y","fix":"z","repro":"pytest -q tests/test_b.py"}],"debt":[],"resolved":[]}' > "$T/r43.json"
+env PATH="$T/p43:$PATH" SG_CHECKOUT="$T/v43" ${nested:+SQUAD_REPRO_EXEC=$T/bin/sandbox-pass} SQUAD_SIGNAL_PROFILE="(version 1)(allow default)(deny signal)(allow signal (target self))(allow signal (target same-sandbox))" python3 "$src" --repro "$T/r43.json" "$T/co43" abc2647 2>"$T/r43.err"; rc=$?
+python3 "$src" --answer "$T/r43.json" > "$T/r43.md" 2>/dev/null
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/r43.md")" = "blocking=0 debt=2" ] \
+  && ok "43 a repro runs with the checkout venv first and pytest -p no:deepeval" \
+  || ko "43 repro env: rc=$rc summary='$(python3 "$src" --summary "$T/r43.md" 2>&1)' $(cat "$T/r43.err")"
+# 44) #2647: a markdown answer to a code review names no repro, so --demote-markdown moves its Blocking findings to Debt
+# with the reason, and the review keeps the shape.
+printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n## Debt\n- b.cs:2 — naming — nobody can tell — rename it\n' > "$T/m44.md"
+python3 "$src" --demote-markdown "$T/m44.md" 2>"$T/m44.err"; rc=$?
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/m44.md")" = "blocking=0 debt=2" ] && /usr/bin/grep -q '^- a.cs:1 — .*no repro: markdown answer' "$T/m44.md" \
+  && python3 "$src" "$T/m44.md" >/dev/null \
+  && ok "44 a markdown answer's Blocking findings move to Debt with the reason" \
+  || ko "44 demote: rc=$rc summary='$(python3 "$src" --summary "$T/m44.md" 2>&1)' check='$(python3 "$src" "$T/m44.md")' $(cat "$T/m44.md" "$T/m44.err")"
+printf 'VERDICT: CHANGES\n## Blocking\n### Theme\n- a.cs:1 — x — y — z\n' > "$T/m44b.md"
+python3 "$src" --demote-markdown "$T/m44b.md" 2>/dev/null; rc=$?
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/m44b.md")" = "blocking=0 debt=1" ] && python3 "$src" "$T/m44b.md" >/dev/null \
+  && ok "44 a Blocking section with no Debt section becomes the Debt section" \
+  || ko "44 no debt: rc=$rc $(cat "$T/m44b.md")"
 rm -rf "$T"; exit $fail

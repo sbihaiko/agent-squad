@@ -96,7 +96,9 @@ for mode in full fix; do
   rm -f "$T/st/review-fix_1-x".*; if [ $mode = fix ]; then echo ccc333 > "$T/st/review-fix_1-x.sha"; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-fix_1-x.md"; fi
   bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
   [ $mode = fix ] && { /usr/bin/grep -q 'FIX ROUND' "$T/prompt" && ok "fix mode really ran" || ko "fix mode did not run"; }
-  [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^## Blocking' "$T/st/review-fix_1-x.md" && /usr/bin/grep -q '^## Debt' "$T/st/review-fix_1-x.md" && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" && ok "$mode: both sections survive into the saved review" || ko "$mode saved review: $(cat "$T/st/review-fix_1-x.md")"
+  # #2647: the stub answers in markdown, which names no repro, so its Blocking finding is saved under Debt with the
+  # reason (ADR-0172) and the debt-only CHANGES is an approval (#653); both findings survive into the saved review.
+  [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && ! /usr/bin/grep -q '^## Blocking' "$T/st/review-fix_1-x.md" && /usr/bin/grep -q '^## Debt' "$T/st/review-fix_1-x.md" && /usr/bin/grep -q '^- a.cs:1 — .*no repro: markdown answer' "$T/st/review-fix_1-x.md" && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" && ok "$mode: both findings survive into the saved review" || ko "$mode saved review: $(cat "$T/st/review-fix_1-x.md")"
   # #1834: the fix round answers its previous findings in a '## Resolved' section, so only that mode's prompt asks
   # for it -- a full review has findings, not answers, and its prompt must not name the heading.
   case "$mode" in
@@ -584,8 +586,21 @@ cat > "$T/bin/claude" <<'J'
 cat > /dev/null; printf 'VERDICT: CHANGES\n'; [ -n "$CLAUDE_BLOCKING" ] && printf '## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n'
 printf '## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'
 J
+# #2647: a markdown answer names no repro, so its Blocking finding moves to Debt with the reason (ADR-0172), and the
+# debt-only CHANGES is then an approval by the #653 path. A JSON CHANGES whose repro fails stays CHANGES (31).
 rm -f "$T/st/review-fix_1-x".*; CLAUDE_BLOCKING=1 bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
-[ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && ok "24 a CHANGES with a Blocking finding is saved unchanged" || ko "24 blocking: '$(head -1 "$T/st/review-fix_1-x.md")'"
+[ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && [ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=2" ] \
+  && /usr/bin/grep -q '^- a.cs:1 — .*no repro: markdown answer' "$T/st/review-fix_1-x.md" \
+  && ok "24 a markdown CHANGES moves its Blocking finding to Debt and is saved as APPROVE" \
+  || ko "24 markdown blocking: $(cat "$T/st/review-fix_1-x.md")"
+# #2647: the prompt states the repro's polarity, so a grep for text the fix removes is written as ! grep -q.
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > "${CLAUDE_PROMPT:-/dev/null}"; printf 'VERDICT: APPROVE\n'
+J
+rm -f "$T/st/review-fix_1-x".*; : > "$T/prompt"; CLAUDE_PROMPT="$T/prompt" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -qF 'text that must be absent is `! grep -q' "$T/prompt" && /usr/bin/grep -qF 'text that must be present is `grep -q' "$T/prompt" \
+  && ok "24 the prompt states the grep polarity of a repro" || ko "24 polarity: $(/usr/bin/grep -o 'repro is one shell command[^.]*' "$T/prompt" | head -1)"
 
 # 25) #675: on the claude -p lane, the CLI's own --json-schema check can refuse every answer: the run ends
 # error_max_structured_output_retries. That is a format failure, not an infrastructure one: the same model answers once

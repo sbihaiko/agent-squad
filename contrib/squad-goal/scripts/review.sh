@@ -163,7 +163,7 @@ SHAPE_FIX="$(python3 "$(dirname "$0")/revformat.py" --shape --fix-round)"
 SCHEMA="$(python3 "$(dirname "$0")/revformat.py" --schema)"; printf '%s\n' "$SCHEMA" > "$p.schema"
 FMT="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
 $SCHEMA
-verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes), fix and repro. A Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present (a grep, a test or a script); a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A Debt or resolved finding leaves repro empty. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes), fix and repro. A Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present (a grep, a test or a script; text that must be absent is \`! grep -q …\`, text that must be present is \`grep -q …\`, and the last command's status decides); a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A Debt or resolved finding leaves repro empty. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FULL"
 # #1521: a plan review reads no code, so it names no repro: its prompt asks for none, and its answer is parsed with no
 # repro demotion (rflag, read by answer_check). A plan answer's Blocking finding stays Blocking.
@@ -175,7 +175,7 @@ rflag=""; [ "$mode" = --plan ] && rflag=--plan
 schemaargs=(--json-schema "$SCHEMA"); outschema=(--output-schema "$p.schema")
 FMTFIX="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
 $SCHEMA
-verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect, failure, fix and repro. A not-fixed Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present; a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A resolved or Debt finding leaves repro empty. A previous finding that is fixed goes to resolved, its failure \"fixed: <one-line reason>\" and its fix the check that proves it. A previous finding that is not fixed stays in the list it was raised in (blocking or debt), its failure \"not fixed: <one-line reason>\" and its fix the failure it still causes. A new defect in the delta is a new finding in blocking or debt. A list with no finding is []. The loop renders the JSON into this short checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect, failure, fix and repro. A not-fixed Blocking finding's repro is one shell command, run at the branch head, that exits non-zero while the defect is present (text that must be absent is \`! grep -q …\`, text that must be present is \`grep -q …\`, and the last command's status decides); a Blocking finding with no repro is moved to Debt. A repro that also fails at the merge-base of the head and the base, unchanged across two heads, moves its finding to Debt. A resolved or Debt finding leaves repro empty. A previous finding that is fixed goes to resolved, its failure \"fixed: <one-line reason>\" and its fix the check that proves it. A previous finding that is not fixed stays in the list it was raised in (blocking or debt), its failure \"not fixed: <one-line reason>\" and its fix the failure it still causes. A new defect in the delta is a new finding in blocking or debt. A list with no finding is []. The loop renders the JSON into this short checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FIX"
 prdata() { echo "$lbl: its diff is taken against $pbase"; }
 if [ -n "$delta" ]; then
@@ -709,6 +709,13 @@ for m in $chain; do fmt=0; timed_out=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9
         repro_drop "$rt" "$tree0"
       else echo "REVIEW $lbl: no tree holds $head, so no repro ran; its Blocking findings stay Blocking" > "$o.rp"; fi
       [ -s "$o.rp" ] && cat "$o.rp" >&2; rm -f "$o.n" "$o.rp"
+    fi
+    # #2647: a markdown answer names no repro, so none of its Blocking findings is proven (ADR-0172): they move to Debt
+    # with the reason, and the #653 downgrade below reads a debt-only CHANGES as an approval. A plan keeps its findings.
+    # A grok reviewer is exempt, as from #653: its CLI has no schema, so every answer is markdown, and the demotion would
+    # make each of its reviews an approval -- the habit #1848 measured (a real defect filed as Debt) made total.
+    if [ $rc = 0 ] && [ ! -s "$o.answer" ] && [ "$(head -1 "$o")" = "VERDICT: CHANGES" ] && [ "$mode" != --plan ] && [ "$vendor" != grok ]; then
+      python3 "$(dirname "$0")/revformat.py" --demote-markdown "$o"
     fi
     # #653: a CHANGES with no Blocking finding and at least one Debt finding is an approval (revformat.py --summary, the one
     # predicate), so it is saved as APPROVE: wave.sh, childcc and the fix round read line 1, and they must read it so too.

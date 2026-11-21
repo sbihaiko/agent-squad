@@ -13,8 +13,11 @@ check: a line that exits non-zero while the defect is present.
 ## Decision
 
 1. **A Blocking finding names a repro.** The finding carries one shell command, run at the branch head, that exits
-   non-zero while the defect is present.
-2. **The loop runs the repro under the signal wall and the write wall.** The signal wall refuses signals to any process
+   non-zero while the defect is present. The prompt states the polarity: text that must be absent is `! grep -q …`,
+   text that must be present is `grep -q …`, and the last command's status decides.
+2. **The loop runs the repro under the signal wall and the write wall, in the gate's environment.** The checkout's
+   venv comes first on `PATH`, and pytest carries `-p no:deepeval`, so a test the gate passes is not red at startup.
+   The signal wall refuses signals to any process
    outside the repro. The write wall refuses every file write except in the tree that holds the reviewed head and in the
    repro's own scratch directory, which is its `TMPDIR` and is removed after the run. The tree is the worktree of a
    `--worktree` review, else a throwaway worktree of the head in a `--branch` review; the checkout is never the repro's
@@ -35,7 +38,9 @@ check: a line that exits non-zero while the defect is present.
    base and both heads. A base run that proves nothing (no merge-base, no base tree, a timeout, a repro that cannot run, a
    kill by a signal, a refused sandbox, a spent budget) keeps the finding Blocking and the loop names the reason.
 3. **A finding with no repro is Debt.** The parser moves it, so no reader sees a Blocking finding without a repro.
-4. **A markdown answer has no repro.** Its findings are read as before.
+4. **A markdown answer has no repro, so its Blocking findings are Debt.** Each moves to Debt marked "no repro: markdown
+   answer", and a CHANGES left with no Blocking finding is an approval by the existing Debt path. A grok reviewer is
+   exempt: its CLI has no schema, so every answer it gives is markdown, and the same exemption holds for the Debt path.
 5. **A plan review names no repro.** A plan reads no code, so its prompt asks for none, its answer is parsed with no
    demotion, and no repro runs (ADR-0171).
 6. **The loop's own rebase-round review has one writer and names its repro.** A kept rebase or landing branch gets one
@@ -62,8 +67,11 @@ check: a line that exits non-zero while the defect is present.
 field, a finding with no repro key is refused, `--repro` keeps a failing repro Blocking and moves a passing or unrunnable
 one to Debt with its head; a repro red at the head runs at the base only then, keeps its finding Blocking with a base
 note on its first round, moves it to Debt naming the base and both heads when the previous answer holds the same repro,
-keeps it Blocking when reworded, and keeps it Blocking with a named reason when the base run proves nothing; and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `contrib/squad-goal/scripts/test-review.sh`:
-a review whose Blocking repro passes is saved with the finding in Debt, and a review whose every repro passes is an
+keeps it Blocking when reworded, and keeps it Blocking with a named reason when the base run proves nothing; and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `test-revformat.sh` also proves a repro runs with the checkout's venv first and pytest under `-p no:deepeval`, and
+that `--demote-markdown` moves a markdown answer's Blocking findings to Debt with the reason and keeps the shape.
+`contrib/squad-goal/scripts/test-review.sh`:
+a markdown CHANGES is saved with its Blocking finding in Debt and as an approval, the prompt states the repro's grep
+polarity, a review whose Blocking repro passes is saved with the finding in Debt, and a review whose every repro passes is an
 approval; the repro runs in the reviewed tree (a `--worktree` review), a throwaway worktree of the head, or not at all when
 no tree holds it, and never in the checkout of a `--branch` review; the base repro runs in a throwaway worktree of the
 merge-base, in `--worktree` and `--branch` reviews, which is removed after; a fix round whose only Blocking finding fails

@@ -35,9 +35,10 @@ case "$*" in
   *) echo stub;;
 esac
 J
+# #2647: a CHANGES answers in JSON with a repro that fails, so its Blocking finding stands; a markdown one would be Debt.
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "$CLAUDE_PROMPT"; if [ -n "$CLAUDE_CHANGES" ]; then printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n'; else echo "VERDICT: APPROVE"; fi
+cat > "$CLAUDE_PROMPT"; if [ -n "$CLAUDE_CHANGES" ]; then printf '%s' '{"result":"","structured_output":{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"diverges from ADR-0001","failure":"wrong","fix":"fix","repro":"exit 1"}],"debt":[],"resolved":[]},"is_error":false,"subtype":"success"}'; else echo "VERDICT: APPROVE"; fi
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH" GHLOG="$T/gh.log" GHHEAD="$T/head" CLAUDE_PROMPT="$T/prompt"
 echo aaa111 > "$T/head"; key=gui_7-x
@@ -108,7 +109,7 @@ cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$T/s/" 2>/dev/null; mkdi
 printf '#!/bin/bash\nprintf "wave.sh %%s\\n" "$*" >> "%s/wave.log"\n' "$T" > "$T/s/wave.sh"; rm -f "$T/st/review-$ck".*
 out=$(cd "$T/child" && SQUAD_CAPS_DIR="$T/caps" SG_SQUAD="$(cd "$d/../../.." && pwd)" CLAUDE_CHANGES=1 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" != 0 ] && [ "$rc" != 3 ] && ok "run: CHANGES exits non-zero, so the run holds the child" || ko "run: runreview exited $rc: $out"
-/usr/bin/grep -q '^wave.sh requeue 7 ' "$T/wave.log" && /usr/bin/grep -qx -- '- a.cs:1 — diverges from ADR-0001 — wrong — fix' "$T/wave.log" \
+/usr/bin/grep -q '^wave.sh requeue 7 ' "$T/wave.log" && /usr/bin/grep -q -- '^- a.cs:1 — diverges from ADR-0001 — .*wrong — fix — repro: exit 1$' "$T/wave.log" \
   && ok "run: the issue is requeued with the review's blocking finding" || ko "run: wave.log '$(cat "$T/wave.log" 2>/dev/null)'"
 [ "$(SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" requeued "x/y#7" run-1 2>/dev/null)" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "run: the requeue fact holds the reviewed head" \
   || ko "run: fact '$(SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" requeued "x/y#7" run-1 2>/dev/null)'"
