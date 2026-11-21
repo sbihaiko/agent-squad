@@ -3823,7 +3823,7 @@ def issue_url(n, repo=None):
 
 _ISSUE_STATE_KEPT = {}   # (repo, n) -> (monotonic at, the issue's state or None): the pending read's own closed-state memory (#2661)
 
-def issue_state(n, repo=None):
+def github_issue_state(n, repo=None):
     """The issue's own state from one GitHub REST read: `closed`, `open`, or None when the read did not answer. The answer
     is kept for one pending poll window, so the served answer reads each issue at most once per window (#2661)."""
     repo = repo or REPO
@@ -3852,7 +3852,7 @@ def settled_on_board(r):
     items = {i["n"]: i for i in board_cache.get("items") or [] if isinstance(i.get("n"), int)}
     closed = {n for n, i in items.items() if i.get("s") == "closed"}
     for n in sorted(issues - set(items)):             # off the cache (another project, or a missed item): ask GitHub
-        if issue_state(n) == "closed": closed.add(n)
+        if github_issue_state(n) == "closed": closed.add(n)
     return issues <= closed or bool(issues & landed)
 
 def pending_decisions():
