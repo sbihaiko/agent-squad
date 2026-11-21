@@ -5,6 +5,9 @@ and the screen the Today line opens. The served numbers are the fixture's, and t
 The Runs Usage view left the page (#2499): the Spend tab owns cost, and every saved address of the old view opens Spend.
 """
 import json
+import re
+
+import pytest
 
 import tests.test_hub_mobile_move as move
 from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is a fixture)
@@ -59,6 +62,14 @@ def test_the_old_usage_addresses_open_spend_and_replace_the_entry(hub):  # noqa:
     assert out["usage"] == {"tab": "spend", "layer": None, "data": {}, "replace": True}, out
     assert out["tokens"] == {"tab": "spend", "layer": None, "data": {}, "replace": True}, out
     assert out["runs"] == {"tab": "spend", "layer": None, "data": {}, "replace": True}, out
+
+
+@pytest.mark.node_bound
+def test_the_page_boots_with_no_cost_markup(hub):  # noqa: F811
+    """A page served without the cost screen still boots: every cost read finds no element and does no work (#2499)."""
+    page = re.sub(r'<article data-screen="cost".*?</article>', "", hub.MOBILE_PAGE, flags=re.S)
+    out = move.run_page(page, "return { booted: true };", routes=ROUTES)
+    assert out == {"booted": True}, out
 
 
 def test_the_today_line_on_now_opens_spend(hub):  # noqa: F811

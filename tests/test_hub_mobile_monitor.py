@@ -11,12 +11,11 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import HUB_PY, _module, run_js, run_page
+from tests.test_hub_mobile_move import HUB_PY, _module, route_tabs, run_js, run_page
 from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0
 SHA = "0123456789abcdef0123456789abcdef01234567"
-TABS = ["now", "work", "specs", "runs", "spend"]
 
 
 @pytest.fixture(scope="module")
@@ -46,10 +45,18 @@ def _routes(hub, loop=None):
 def test_the_monitor_draws_the_now_tab(hub):
     """The Monitor is what the Now tab draws (SPEC 1596): the bar names the tab, the panel keeps the card."""
     page = hub.MOBILE_PAGE
-    assert re.findall(r'data-tab="(\w+)"', page) == TABS
+    assert re.findall(r'data-tab="(\w+)"', page) == [tab for tab, _ in route_tabs(page)]
     assert re.search(r'<button data-tab="now">Now</button>', page)
     assert '<section data-panel="monitor">' in page, "the Now tab no longer draws the Monitor panel"
     assert 'data-panel="status"' not in page and 'data-tab="status"' not in page
+
+
+@pytest.mark.node_bound
+def test_the_page_boots_with_no_lead_markup(hub):
+    """A page served without the lead chart still boots: its read and its click find no element and do no work (#2499)."""
+    page = re.sub(r'<article data-screen="lead".*?</article>', "", hub.MOBILE_PAGE, flags=re.S)
+    out = run_page(page, "return { booted: true };", routes=_routes(hub))
+    assert out == {"booted": True}, out
 
 
 def test_the_phone_page_carries_the_desktop_card_from_one_source(hub):

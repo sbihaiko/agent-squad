@@ -579,7 +579,6 @@ const ROUTE = {
     [/^(usage|tokens)$/, { tab: "spend" }],
     [/^(more|settings)$/, { tab: "now" }],
     [/^session=/, { tab: "now" }],
-    [/^card=/, { tab: "now" }],   // the card sheet's saved address (#2498): the sheet is a tap on Work, never a bookmark
   ],
 };
 const TABS = Object.keys(ROUTE).filter(k => !["layers", "plain", "legacy"].includes(k) && ROUTE[k].panel);
@@ -669,6 +668,11 @@ function routeFromHash(hash) {
   const tab = tabKey(m[1]), seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {}, replace: false };
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
   if (!seg) return out;
+  // A card's saved address stays bound to the Work tab's sheet screen: the sheet is drawn, so a reload restores it (#2499).
+  if (head.startsWith("card=")) {
+    const n = Number(decodeURIComponent(head.slice(5)));
+    return { tab: ROUTE.layers.sheet.tab, layer: "sheet", data: Number.isInteger(n) ? { n } : {}, replace: false };
+  }
   for (const [test, target] of ROUTE.legacy) if (test.test(head)) return { ...target, layer: null, data: {}, replace: true };
   if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
@@ -917,6 +921,7 @@ function show(name) {
 }
 // A tap on the tab in view returns to its root and the next tap reaches the top; another tab opens where it was left, and
 // the tap replaces the entry (SPEC 2498, #2499), so Back never walks through a tab the owner already left.
+let tabEntryPushed = false;
 function tabTap(tab) {
   if (tab === tabActive) {
     if (layers.length) closeLayer(layers[0]);
@@ -924,7 +929,10 @@ function tabTap(tab) {
     return;
   }
   const entry = entryOf(tab);
-  history.replaceState(entry, "", routeHash(entry));   // the entry names the screen the tab was left on
+  // The first cross-tab tap pushes one entry, so Back returns to the route the owner arrived on; every later tap replaces
+  // it, so Back never walks through the tabs the owner already left (SPEC 2498, #2499).
+  if (tabEntryPushed) history.replaceState(entry, "", routeHash(entry));
+  else { tabEntryPushed = true; history.pushState(entry, "", routeHash(entry)); }
   show(tab);
 }
 tabs.forEach(b => b.onclick = () => tabTap(b.dataset.tab));
@@ -1943,14 +1951,17 @@ async function leadZoom(dir) {
     MLT.zr = z; MLT.zc = d; leadPin(null); leadDraw(); msg.textContent = "";
   } catch (e) { if (seq === MLT.seq) msg.textContent = e.message; }
 }
-leadEl().addEventListener("click", e => {
+// A page served without a screen keeps booting (#2499): every binding and every read finds no element and does no work.
+const leadScreen = leadEl();
+if (leadScreen) leadScreen.addEventListener("click", e => {
   const b = e.target ? e.target.closest("button") : null;
   if (!b) return;
   if (b.dataset.ltf) { ++MLT.seq; MLT.tf = b.dataset.ltf; MLT.zc = MLT.zr = null; leadPin(null); leadDraw(); }
   else if (b.dataset.ltzoom) leadZoom(b.dataset.ltzoom);
   else if (b.dataset.ltpin === "dismiss") leadPin(null);
 });
-document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click", e => {
+const leadPlot = document.querySelector('[data-screen="lead"] #ltplot');
+if (leadPlot) leadPlot.addEventListener("click", e => {
   const m = e.target ? e.target.closest("circle[data-lt-k]") : null, c = leadView();
   if (!m || !c) return;
   leadPin((c.clusters || [])[Number(m.dataset.ltK)]);
@@ -1973,6 +1984,7 @@ const costState = { ever: false, n: 0, error: "", data: null,
   loading: "Cost and usage are loading.", empty: "No model spend is drawn for this period." };
 const costEl = () => document.querySelector('[data-screen="cost"]');
 function drawCost(el) {
+  if (!el) return;
   drawList(costState, $("cost-state"), $("cost-msg"), () => { if (costState.data) MORE.cost(el, costState.data); });
 }
 // Spend reads its own panel (SPEC 2498, #2499): the period buttons change the bars, and the read refreshes while the tab
@@ -1991,7 +2003,8 @@ async function loadCost() {
   }
   drawCost(el);
 }
-costEl().addEventListener("click", e => {
+const costScreen = costEl();
+if (costScreen) costScreen.addEventListener("click", e => {
   const b = e.target ? e.target.closest("[data-period]") : null;
   if (b) { period = b.dataset.period; loadCost(); }
 });
@@ -2000,6 +2013,7 @@ setInterval(() => { const el = document.querySelector('[data-screen="lead"]'); i
 // The lead-time chart stands on Now (SPEC 2498, #2499): it reads its own payload while its screen shows.
 async function loadLead() {
   const el = document.querySelector('[data-screen="lead"]'), seq = ++moreSeq;
+  if (!el) return;
   try {
     const d = await call(el.dataset.src);
     if (seq !== moreSeq) return;
@@ -2195,6 +2209,10 @@ show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getI
 // A card link in the address opens its card once the board's read answers (#1459). The saved issue address names Work at
 // the card, so the entry becomes Work's root and the card's own entry lands over it (SPEC 2498, #2499).
 if (linkHash(location.hash) !== null) { linkOpen(); history.replaceState({ tab: "work" }, "", "#/work"); }
+// The arrival entry names the tab the page shows, so a Back from a tab has the route the owner arrived on to return to
+// (SPEC 2498, #2499).
+if (!history.state || (!history.state.layer && !TAB_LABEL[history.state.tab]))
+  history.replaceState({ tab: tabActive }, "", routeHash({ tab: tabActive }));
 // A reload restores the screens its entry names on that entry: the entry it landed on holds the bottom screen of the chain
 // and each screen above it gets an entry of its own, so Back still closes the top and lands on the screen under it (#1450).
 // An address typed straight in has no entry under it (`direct`), so its Back opens the parent in the table (#2499).
@@ -2202,7 +2220,12 @@ const restored = was.layer && LAYER[was.layer] ? { layer: was.layer, data: field
   : route && route.layer ? { layer: route.layer, data: route.data, direct: true } : null;
 if (restored) {
   if (restored.layer === "sheet") {
-    if (Number.isInteger(restored.data.n)) pendingSheet = restored.data.n;
+    if (Number.isInteger(restored.data.n)) {
+      // A saved card address has no entry under it: its own entry marks itself, so its Back opens Work (#2499).
+      if (restored.direct) history.replaceState({ tab: "work", layer: "sheet", depth: 1, n: restored.data.n, direct: true },
+                                                "", routeHash({ tab: "work", layer: "sheet", n: restored.data.n }));
+      pendingSheet = restored.data.n;
+    }
   } else {
     const chain = [...screenChain(restored.layer), restored.layer];
     for (const [i, name] of chain.entries())

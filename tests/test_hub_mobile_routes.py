@@ -12,12 +12,10 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import run_page
+from tests.test_hub_mobile_move import route_tabs, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-TABS = ["now", "work", "specs", "runs", "spend"]
-TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "runs": "Runs", "spend": "Spend"}
 
 # A board where the search names one card and the carousel draws two columns, so a column and a query are facts to leave.
 ROUTE_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
@@ -42,9 +40,12 @@ def hub():
 
 
 def test_the_tab_bar_names_the_five_tabs_in_order(hub):
-    assert re.findall(r'data-tab="(\w+)"', hub.MOBILE_PAGE) == TABS
-    for tab in TABS:
-        assert re.search(rf'<button data-tab="{tab}"[^>]*>{TAB_NAME[tab]}</button>', hub.MOBILE_PAGE), tab
+    """The bar holds the five tabs in the order #2498 names, and each button carries its route table's label."""
+    tabs = route_tabs(hub.MOBILE_PAGE)
+    assert [tab for tab, _ in tabs] == ["now", "work", "specs", "runs", "spend"], tabs
+    assert re.findall(r'data-tab="(\w+)"', hub.MOBILE_PAGE) == [tab for tab, _ in tabs]
+    for tab, label in tabs:
+        assert re.search(rf'<button data-tab="{tab}"[^>]*>{label}</button>', hub.MOBILE_PAGE), tab
 
 
 def test_the_page_keeps_no_chat_more_or_settings_screen(hub):
@@ -72,8 +73,7 @@ def test_the_spend_tab_draws_the_cost_screen(hub):
     ("#/now/more", "now", "#/now"),                            # More left the page
     ("#/work/settings", "now", "#/now"),                       # Settings left the phone
     ("#/now/session=s2", "now", "#/now"),                      # a saved session address
-    ("#/work/card=7", "now", "#/now"),                         # the card sheet's saved address: a tap on Work, not a route
-], ids=["usage", "tokens", "chat", "more", "settings", "session", "card"])
+], ids=["usage", "tokens", "chat", "more", "settings", "session"])
 def test_each_dropped_address_opens_its_screen_and_replaces_the_entry(hub, hash_, tab, address):
     out = run_page(hub.MOBILE_PAGE, """
         return { tab: tabActive, hash: location.hash, entries: history.entries.length, index: history.index };
@@ -96,16 +96,21 @@ def test_a_saved_issue_link_opens_work_at_the_card(hub):
 
 @pytest.mark.node_bound
 def test_a_tab_tap_replaces_the_entry_so_back_never_walks_through_tabs(hub):
+    """A cross-tab tap pushes one entry the first time and replaces it after, so the entry count grows once and Back lands
+    on the route the owner arrived on, never on a tab the owner already left (SPEC 2498, #2499)."""
     out = run_page(hub.MOBILE_PAGE, """
         const tap = t => document.querySelector(`nav [data-tab="${t}"]`).onclick();
-        const base = history.entries.length;
+        const base = { entries: history.entries.length, index: history.index, hash: location.hash };
         tap("work"); tap("specs"); tap("runs");
-        const walked = { grew: history.entries.length - base, hash: location.hash, index: history.index };
+        const walked = { grew: history.entries.length - base.entries, hash: location.hash,
+                         moved: history.index - base.index, under: history.entries[history.index - 1].url };
         history.back(); __popAll();
-        return { walked, after: { hash: location.hash, tab: tabActive, moved: history.index } };
+        return { base, walked, after: { hash: location.hash, tab: tabActive, moved: history.index - base.index } };
     """, board=[ROUTE_BOARD])
-    assert out["walked"] == {"grew": 0, "hash": "#/runs", "index": 0}, out
-    assert out["after"]["moved"] == 0, out["after"]   # Back never lands on a tab the owner already left
+    assert out["base"] == {"entries": 1, "index": 0, "hash": "#/now"}, out
+    assert out["walked"] == {"grew": 1, "hash": "#/runs", "moved": 1, "under": "#/now"}, out
+    # Back reaches the route the owner arrived on, and it is one screen, not the tabs the owner walked through.
+    assert out["after"] == {"hash": "#/now", "tab": "now", "moved": 0}, out
 
 
 @pytest.mark.node_bound
@@ -113,7 +118,8 @@ def test_a_tab_tap_replaces_the_entry_so_back_never_walks_through_tabs(hub):
     ("#/now/loops", "loops", "Now", "#/now"),
     ("#/now/loop=agent-squad", "loop", "Loops", "#/now/loops"),
     ("#/runs/run=r1?url=%2Frun%2Fr1&name=Run%20one", "run", "Runs", "#/runs"),
-], ids=["loops", "loop", "run"])
+    ("#/work/card=7", "sheet", "Work", "#/work"),
+], ids=["loops", "loop", "run", "card"])
 def test_a_direct_entry_on_a_detail_route_backs_to_its_parent(hub, hash_, layer, label, parent):
     """A detail entered straight from the address opens with one Back that names its parent, and that Back opens the parent
     even when no entry stands under it: the address becomes the parent, and the page never leaves on a Back. A parent that
@@ -182,5 +188,5 @@ def test_one_table_names_every_tab_and_its_root(hub):
     assert "const ROUTE = {" in page, "the page has no route table"
     route = page[page.index("const ROUTE = {"):]
     route = route[:route.index("\n};") + 3]
-    for tab in TABS:
+    for tab, _ in route_tabs(page):
         assert re.search(rf"\b{tab}:\s*\{{\s*panel:", route), f"the route table has no row for {tab}"

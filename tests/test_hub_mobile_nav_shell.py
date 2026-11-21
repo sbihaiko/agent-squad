@@ -12,12 +12,10 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import BOARD_ONE, run_page
+from tests.test_hub_mobile_move import BOARD_ONE, route_tabs, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-TABS = ["now", "work", "specs", "runs", "spend"]
-TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "runs": "Runs", "spend": "Spend"}
 
 
 @pytest.fixture(scope="module")
@@ -37,9 +35,10 @@ TAP = 'const tap = t => document.querySelector(`nav [data-tab="${t}"]`).onclick(
 
 
 def test_the_bar_names_four_tabs_in_order(hub):
-    assert re.findall(r'data-tab="(\w+)"', hub.MOBILE_PAGE) == TABS
-    for tab in TABS:
-        assert re.search(rf'<button data-tab="{tab}"[^>]*>{TAB_NAME[tab]}</button>', hub.MOBILE_PAGE), tab
+    tabs = route_tabs(hub.MOBILE_PAGE)
+    assert re.findall(r'data-tab="(\w+)"', hub.MOBILE_PAGE) == [tab for tab, _ in tabs]
+    for tab, label in tabs:
+        assert re.search(rf'<button data-tab="{tab}"[^>]*>{label}</button>', hub.MOBILE_PAGE), tab
 
 
 def test_the_bar_is_drawn_above_every_screen(hub):
@@ -56,14 +55,14 @@ def test_every_root_draws_the_bar_and_names_its_tab(hub):
     out = run_page(hub.MOBILE_PAGE, f"""
         {TAP}
         const seen = {{}};
-        for (const t of {TABS!r}) {{
+        for (const t of {[tab for tab, _ in route_tabs(hub.MOBILE_PAGE)]!r}) {{
           tap(t);
           const cur = document.querySelector("nav [aria-current=page]");
           seen[t] = {{ nav: !document.querySelector("nav").hidden, current: cur && cur.dataset.tab, hash: location.hash }};
         }}
         return seen;
     """, board=[BOARD_ONE])
-    for tab in TABS:
+    for tab, _ in route_tabs(hub.MOBILE_PAGE):
         assert out[tab]["nav"] is True, out
         assert out[tab]["current"] == tab, out
 
@@ -123,6 +122,12 @@ def test_the_address_mirrors_the_screen_and_a_reload_lands_on_it(hub):
         return { tab: tabActive, open: !$("sheet").hidden, n: (shown[view.card] || {}).n, hash: location.hash };
     """, board=[BOARD_ONE], hash="#/work/card=7", history_state={"tab": "work", "layer": "sheet", "depth": 1, "n": 7}, history_below=True)
     assert reloaded == {"tab": "work", "open": True, "n": 7, "hash": "#/work/card=7"}, reloaded
+    # A saved address with no entry under it (a bookmark, a pasted address) opens the same card sheet on Work (#2499).
+    saved = run_page(hub.MOBILE_PAGE, """
+        await __tick(20);
+        return { tab: tabActive, open: !$("sheet").hidden, n: (shown[view.card] || {}).n, hash: location.hash };
+    """, board=[BOARD_ONE], hash="#/work/card=7")
+    assert saved == {"tab": "work", "open": True, "n": 7, "hash": "#/work/card=7"}, saved
 
 
 @pytest.mark.node_bound
