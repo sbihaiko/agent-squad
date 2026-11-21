@@ -27,12 +27,10 @@ GESTURE_JS = SCRIPTS / "hub-mobile-gesture.js"
 FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended", "/api/version",
-          "/api/sessions", "/api/sessions/card", "/api/sessions/card/answer", "/api/sessions/conversation", "/api/sessions/send",
-          "/api/sessions/attach", "/api/sessions/image", "/api/sessions/clip", "/api/sessions/voice", "/api/promote", "/api/loop", "/api/profiler",
+          "/api/promote", "/api/loop", "/api/profiler",
           "/api/load", "/api/chart/lead", "/api/leadtime"}
-# the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the phone's photo takes the one
-# attach write (#1155); a bubble's thumbnail reads the image route the overlay already serves (#1602); the phone's voice
-# reads one clip and writes one recording (#1603); the lead chart and its zoom read the routes the desktop draws (#1333)
+# the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the lead chart and its zoom read
+# the routes the desktop draws (#1333)
 
 
 def run_js(src, expr, prelude=""):
@@ -188,14 +186,6 @@ def test_the_mobile_page_reads_only_the_existing_routes(hub):
     assert 'fetch(runURLs(id).control, { method: "POST"' in hub.MOBILE_PAGE, "the run screen's write is not the run's control route"
     for gone in ('"/api/sessions/send"', '"/api/sessions/attach', '"/api/sessions/voice', '"/api/sessions/card/answer"'):
         assert gone not in hub.MOBILE_PAGE, f"the phone page still names {gone}"
-    # The session overlay (#898) rides on the page and posts six routes through the source the page names: its send route,
-    # its screenshot route (#903), the one attach route a staged file takes (#1154), and its hosted terminal's attach,
-    # input and start routes (#1216). Each carries the word once.
-    overlay = hub.OVERLAY_JS.count("method:")
-    assert overlay == 6 and 'fetch(s.src.api + "/send", { method: "POST"' in hub.OVERLAY_JS and 'fetch(s.src.api + "/screenshot?sid="' in hub.OVERLAY_JS
-    assert 'fetch(s.src.api + "/attach?" + q, { method: "POST"' in hub.OVERLAY_JS, "the overlay's attach write is not the one attach route"
-    assert '"/terminals/attach", { method: "POST"' in hub.OVERLAY_JS and '"/terminals/write", { method: "POST"' in hub.OVERLAY_JS
-    assert '"/terminals/start", { method: "POST"' in hub.OVERLAY_JS
     assert hub.MOBILE_PAGE.count("method:") == 4, "the mobile page holds a fifth write, or a method outside the four fetches"
 
 

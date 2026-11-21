@@ -7,7 +7,6 @@ import os
 import pathlib
 import shutil
 import signal
-import subprocess
 import sys
 import tempfile
 import threading
@@ -21,7 +20,6 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
-OVERLAY_JS = (SCRIPTS / "hub-overlay.js").read_text()
 sys.path.insert(0, str(SCRIPTS))
 
 TAILNET = "hub.tail1234.ts.net"
@@ -217,15 +215,6 @@ def test_refused_supervisor_start_keeps_its_reason_and_the_hub_keeps_serving(hub
     assert str(error) in capsys.readouterr().err
 
 
-def test_refused_supervisor_start_reaches_the_panel_on_the_project_route_and_the_hub_serves(hub, monkeypatch):
-    h = hub(ensure_error=RuntimeError("supervisor did not answer in /tmp/state"))
-    monkeypatch.setattr(h.mod.sessions, "project_sessions", lambda profile, checkout, profiles_of=None: [])
-    h.mod.start_terminal_supervisor()
-    status, body = request(h.port, "GET", "/api/sessions/project", host=f"127.0.0.1:{h.port}", login=None, origin=None)
-    assert status == 200
-    assert json.loads(body)["supervisor"] == {"state": "refused", "why": "supervisor did not answer in /tmp/state"}
-
-
 def test_a_terminal_call_after_the_daemon_died_starts_it_again_and_answers(hub):
     h = hub(call_errors=[OSError("no socket")])
     status, _ = request(h.port, "GET", READ, host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
@@ -234,16 +223,12 @@ def test_a_terminal_call_after_the_daemon_died_starts_it_again_and_answers(hub):
     assert [op for op, _ in h.fake.calls] == ["read", "read"]
 
 
-def test_a_refused_restart_answers_503_with_the_reason_and_the_panel_reads_it(hub, monkeypatch):
+def test_a_refused_restart_answers_503_with_the_reason(hub):
     h = hub(call_errors=[OSError("no socket"), OSError("still no socket")],
             ensure_error=RuntimeError("start command refused"))
-    monkeypatch.setattr(h.mod.sessions, "project_sessions", lambda profile, checkout, profiles_of=None: [])
     status, body = request(h.port, "GET", READ, host=f"127.0.0.1:{h.port}", login=None, origin=f"http://127.0.0.1:{h.port}")
     assert status == 503
     assert json.loads(body)["err"] == "the terminal supervisor is not running: start command refused"
-    status, body = request(h.port, "GET", "/api/sessions/project", host=f"127.0.0.1:{h.port}", login=None, origin=None)
-    assert status == 200
-    assert json.loads(body)["supervisor"] == {"state": "refused", "why": "start command refused"}
 
 
 def test_a_real_refused_start_keeps_its_reason(monkeypatch, tmp_path, socket_dir):
@@ -355,47 +340,3 @@ def test_a_hub_start_brings_the_real_supervisor_up_and_read_and_attach_answer(hu
         assert status == 200
     finally:
         stop_real_supervisor(state)
-
-
-NODE = shutil.which("node")
-
-
-def node_json(expr):
-    script = f"{OVERLAY_JS}\nconst SQ=module.exports;\nconsole.log(JSON.stringify({expr}));"
-    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    return json.loads(p.stdout)
-
-
-def supervisor_line(info):
-    return node_json(f"SQ.supervisorLine({json.dumps(info)})")
-
-
-def supervisor_view(info):
-    return node_json(f"SQ.supervisorView({json.dumps(info)})")
-
-
-@pytest.mark.node_bound
-def test_panel_names_a_refused_supervisor_in_one_sentence():
-    line = supervisor_line({"state": "refused", "why": "supervisor did not answer in /tmp/state"})
-    assert line == "The terminal supervisor is not running: supervisor did not answer in /tmp/state."
-
-
-@pytest.mark.node_bound
-@pytest.mark.parametrize("info", [{"state": "up", "why": ""}, {"state": "starting", "why": ""}, None])
-def test_panel_says_nothing_about_a_supervisor_that_is_up_or_starting(info):
-    assert supervisor_line(info) == ""
-
-
-@pytest.mark.node_bound
-def test_panel_keeps_the_supervisor_sentence_in_its_own_element():
-    assert 'id="sq-ov-supervisor"' in OVERLAY_JS
-    view = supervisor_view({"state": "refused", "why": "supervisor did not answer in /tmp/state"})
-    assert view == {"hidden": False,
-                    "text": "The terminal supervisor is not running: supervisor did not answer in /tmp/state."}
-
-
-@pytest.mark.node_bound
-@pytest.mark.parametrize("info", [{"state": "up", "why": ""}, {"state": "starting", "why": ""}, None])
-def test_panel_hides_the_supervisor_element_when_the_supervisor_is_up_or_starting(info):
-    assert supervisor_view(info) == {"hidden": True, "text": ""}
