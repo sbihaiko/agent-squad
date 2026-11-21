@@ -1,4 +1,4 @@
-"""The three list states on the phone's Runs, Terminals and Cost screens (#1445, part of SPEC 1115).
+"""The two list states on the phone's Runs and Cost screens (#1445, part of SPEC 1115).
 
 Each list draws 'loading' before its first reply, names an empty reply in one sentence, and draws one error line with
 role 'status' under its own heading. A read that fails keeps what the list already drew, keeps the loading line away and
@@ -50,7 +50,7 @@ def boot(hub, driver, routes):  # noqa: F811
 # --- loading before the first reply -----------------------------------------------------------------------------------
 
 LOADING_DRIVER = """
-  return [["runs", "runs-state"], ["terminals", "sessions-state"], ["cost", "cost-state"]].map(([k, id]) => ({
+  return [["runs", "runs-state"], ["cost", "cost-state"]].map(([k, id]) => ({
     key: k, text: $(id).textContent, hidden: $(id).hidden, role: $(id).getAttribute("role") }));
 """
 
@@ -58,7 +58,7 @@ LOADING_DRIVER = """
 @pytest.mark.node_bound
 def test_each_list_says_loading_before_its_first_reply(hub):  # noqa: F811
     out = boot(hub, LOADING_DRIVER, {})
-    assert [o["key"] for o in out] == ["runs", "terminals", "cost"]
+    assert [o["key"] for o in out] == ["runs", "cost"]
     for o in out:
         assert "loading" in o["text"], o
         assert not o["hidden"], f"the {o['key']} loading line is drawn before its first reply"
@@ -71,15 +71,6 @@ def test_an_empty_run_list_names_the_missing_data(hub):  # noqa: F811
     out = boot(hub, RUNS_DRIVER, {"/api/runs": [{"body": "[]"}], "/api/ended": [{"body": "[]"}]})
     assert "No runs" in out["state"] and not out["stateHidden"], out
     assert out["msg"] == "", "an empty reply is no error"
-
-
-@pytest.mark.node_bound
-def test_an_empty_terminal_list_names_the_missing_data(hub):  # noqa: F811
-    out = boot(hub, 'await loadSessions(); return { text: $("sessions-state").textContent, '
-                    'hidden: $("sessions-state").hidden, msg: $("sessions-msg").textContent };',
-               {"/api/sessions": [{"body": json.dumps({"groups": []})}]})
-    assert "No terminal sessions" in out["text"] and not out["hidden"], out
-    assert out["msg"] == ""
 
 
 @pytest.mark.node_bound
@@ -99,16 +90,6 @@ def test_a_failed_first_run_list_read_draws_one_error_line(hub):  # noqa: F811
     out = boot(hub, RUNS_DRIVER, {"/api/runs": [BROKEN], "/api/ended": [{"body": "[]"}]})
     assert out["msg"] == ERR and not out["state"], "the error line replaces the loading line"
     assert out["msgRole"] == "status", "the error line is announced as a status"
-
-
-@pytest.mark.node_bound
-def test_a_failed_first_terminal_read_draws_one_error_line(hub):  # noqa: F811
-    out = boot(hub, 'await loadSessions(); return { state: $("sessions-state").textContent, '
-                    'stateHidden: $("sessions-state").hidden, msg: $("sessions-msg").textContent, '
-                    'role: $("sessions-msg").getAttribute("role") };',
-               {"/api/sessions": [BROKEN]})
-    assert out["msg"] == ERR and out["stateHidden"], out
-    assert out["role"] == "status"
 
 
 @pytest.mark.node_bound

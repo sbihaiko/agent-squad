@@ -1,7 +1,7 @@
 """Truthful filters, the named scope and Search on the phone (SPEC 1596, rules 4, 5 and 6; #1600).
 
-Every expected value below is written out from the fixture facts the hub serves: the board rows (`t`, `n`, `l`), the
-run rows (`live`, `running`), and the session groups (`waiting`). The page is booted under the stub DOM of
+Every expected value below is written out from the fixture facts the hub serves: the board rows (`t`, `n`, `l`) and the
+run rows (`live`, `running`). The chat's Waiting filter left the page with the chat (#2490). The page is booted under the stub DOM of
 `tests/test_hub_mobile_move.py`, so the labels, the predicates and the remainder line are read where the owner sees them.
 The search rule is one pure module with no DOM and no client, run under node alone (ADR-0137).
 
@@ -21,13 +21,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEARCH_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "hub-mobile-search.js"
 NODE = shutil.which("node")
 
-TABS = ["now", "work", "specs", "chat", "runs"]
+TABS = ["now", "work", "specs", "runs"]
 # The filter of each root, stated as the owner reads it: the last option says what it includes.
 FILTERS = {
-    "now": ["Needs you", "Any item"],
+    "now": [],
     "work": ["Live", "Any card"],
     "specs": ["Any spec"],
-    "chat": ["Waiting", "Every chat"],
     "runs": ["Live", "Ended", "Any run"],
 }
 
@@ -103,37 +102,11 @@ def test_live_lists_only_runs_with_a_live_process(hub):  # noqa: F811
     assert out["rest"] == "1 hidden by Live" and out["restHidden"] is False, out
 
 
-SESSIONS = {"waiting": 2, "groups": [
-    {"project": "alpha", "sessions": [{"sid": "s1", "name": "one", "waiting": True, "last": "Which scope?", "t": 1, "run": ""}]},
-    {"project": "beta", "sessions": [{"sid": "s2", "name": "two", "waiting": True, "last": "Thanks", "t": 2, "run": ""}]},
-    {"project": "gamma", "sessions": [{"sid": "s3", "name": "three", "waiting": False, "last": "All clear", "t": 3, "run": ""}]},
-]}
-
-
-@pytest.mark.node_bound
-def test_waiting_lists_only_conversations_with_a_message_waiting_for_the_owner(hub):  # noqa: F811
-    out = run_page(hub.MOBILE_PAGE, f"""
-        show("chat"); await loadSessions();
-        {CLICK}
-        tap("Waiting");
-        return {{ rows: [...$("sessions").querySelectorAll(".chatrow")].map(b => b.dataset.project),
-                 rest: $("chat-rest").textContent, restHidden: $("chat-rest").hidden }};
-    """, routes={"/api/sessions": [{"body": json.dumps(SESSIONS)}]})
-    assert out["rows"] == ["alpha", "beta"], f"Waiting lists a conversation nothing waits on: {out}"
-    assert out["rest"] == "1 hidden by Waiting" and out["restHidden"] is False, out
-
-
-@pytest.mark.node_bound
-def test_a_filter_that_hides_nothing_draws_no_remainder_line(hub):  # noqa: F811
-    out = run_page(hub.MOBILE_PAGE, f"""
-        show("chat"); await loadSessions();
-        {CLICK}
-        tap("Every chat");
-        return {{ rows: [...$("sessions").querySelectorAll(".chatrow")].map(b => b.dataset.project),
-                 rest: $("chat-rest").textContent, restHidden: $("chat-rest").hidden }};
-    """, routes={"/api/sessions": [{"body": json.dumps(SESSIONS)}]})
-    assert out["rows"] == ["alpha", "beta", "gamma"], out
-    assert out["rest"] == "" and out["restHidden"] is True, out
+def test_the_phone_page_offers_no_chat_filter(hub):  # noqa: F811
+    """The Waiting filter and the session list left the page with the chat (#2490)."""
+    body = hub.MOBILE_PAGE
+    assert "Waiting" not in body and "Every chat" not in body, "the phone page still offers the chat filter"
+    assert 'id="sessions"' not in body and 'id="chat-rest"' not in body, "the phone page still holds a session list"
 
 
 # --- (3) Search on Work and Specs ----------------------------------------------------------------------------------
@@ -212,7 +185,7 @@ def test_leaving_work_with_search_open_brings_the_control_row_back(hub):  # noqa
         await loadBoard(); show("work");
         $("work-search").onclick();
         const open = $("control-row").hidden;
-        show("chat");
+        show("specs");
         return { open, after: $("control-row").hidden, bar: $("searchbar").hidden };
     """)
     assert out == {"open": True, "after": False, "bar": True}, out
@@ -297,4 +270,4 @@ def test_the_remainder_line_counts_what_the_filter_hides():
     src = SEARCH_JS.read_text()
     assert run_js(src, 'restLine(5, 3, "Live")') == "2 hidden by Live"
     assert run_js(src, 'restLine(1, 0, "Waiting")') == "1 hidden by Waiting"
-    assert run_js(src, 'restLine(3, 3, "Every chat")') == ""
+    assert run_js(src, 'restLine(3, 3, "Any card")') == ""

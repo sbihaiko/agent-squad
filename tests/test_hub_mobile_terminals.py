@@ -1,90 +1,28 @@
-"""The mobile Terminals tab (#840): the session list, a full-screen conversation that polls its read route, older turns on
-request, and every turn drawn as text. The page is read as source; the server rules are in test_sessions.py.
+"""The phone page carries no Terminals screen and no terminal control (#2490).
+
+The Terminals tab, its session list and its conversation screen left the page. The server's terminal routes stay for the
+desktop page, and the server rules are in test_sessions.py. The page is read as the hub serves it.
 """
-import pathlib
-import re
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "contrib/squad-goal/scripts"
-PAGE = SCRIPTS / "hub-mobile.html"
+from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is the page fixture)
 
 
-def page():
-    return PAGE.read_text()
+def page(hub_):
+    return hub_.mobile_html().decode()
 
 
-def terminals_panel():
-    m = re.search(r'<section data-panel="terminals"[^>]*>(.*?)</section>', page(), re.S)
-    assert m, "no terminals panel"
-    return m.group(0)
+def test_the_phone_page_has_no_terminals_panel(hub):  # noqa: F811
+    body = page(hub)
+    assert 'data-panel="terminals"' not in body, "the phone page still holds a Terminals panel"
+    assert "Terminals" not in body, "the phone page still names Terminals"
 
 
-def terminals_js():
-    m = re.search(r"// terminals:begin(.*?)// terminals:end", page(), re.S)
-    assert m, "no terminals script"
-    return m.group(1)
+def test_the_phone_page_holds_no_terminal_control(hub):  # noqa: F811
+    body = page(hub)
+    for name in ("termview", "terminals/write", "terminals/start", "terminals/attach"):
+        assert name not in body, f"the phone page still carries {name}"
 
 
-def test_the_terminals_tab_has_no_placeholder():
-    assert "Placeholder" not in terminals_panel()
-
-
-def test_the_session_list_reads_the_list_route():
-    assert "/api/sessions\"" in terminals_js() or "/api/sessions?" in terminals_js()
-
-
-def test_a_tap_on_a_session_opens_its_conversation_read_route():
-    assert "/api/sessions/conversation?sid=" in terminals_js()
-
-
-def test_the_open_conversation_polls_its_read_route():
-    js = terminals_js()
-    assert 'every("terminals", loadConversation' in js, "the conversation polls while its panel is shown (#1004)"
-
-
-def test_the_open_conversation_refreshes_the_moment_the_tab_is_visible_again():
-    """#1079: every() skips ticks while the page is hidden, so the return to a visible tab reads the conversation at once."""
-    js = terminals_js()
-    listener = next(row for row in js.splitlines() if "visibilitychange" in row)
-    assert 'document.visibilityState === "visible"' in listener and "loadConversation()" in listener, listener
-    assert 'every("terminals", loadConversation, 3000);' in js
-
-
-def test_older_turns_come_on_request_with_a_cursor():
-    assert 'id="termview-older"' in page()
-    assert "before=" in terminals_js()
-
-
-def test_turns_are_drawn_as_text_only():
-    js = terminals_js()
-    assert "textContent" in js
-    assert "innerHTML" not in js and "insertAdjacentHTML" not in js and "outerHTML" not in js
-
-
-def test_the_terminals_script_loads_nothing_from_outside_the_hub():
-    assert "https://" not in terminals_js() and "http://" not in terminals_js()
-
-
-def test_the_composer_says_the_message_arrives_as_from_another_session():
-    panel = terminals_panel() + page()
-    assert "arrives as a message from another session" in panel
-    assert "not as your typed input or approval" in panel
-
-
-def test_the_composer_posts_one_message_to_the_send_route_with_a_client_id():
-    js = terminals_js()
-    assert "/api/sessions/send" in js
-    assert "client_id" in js and "crypto.randomUUID" in js
-
-
-def test_the_composer_limits_the_text_to_4000_characters():
-    assert 'id="termview-text"' in page()
-    assert 'maxlength="4000"' in page()
-
-
-def test_the_composer_shows_only_sent_uncertain_or_refused():
-    js = terminals_js()
-    for word in ("Sent", "Uncertain", "Refused"):
-        assert f'"{word}' in js
-    for word in ("held", "delivered", "expired", "seen"):
-        assert word not in js.lower()
+def test_the_phone_page_opens_no_conversation(hub):  # noqa: F811
+    body = page(hub)
+    assert "openConversation(" not in body, "the phone page still opens a conversation"
+    assert "/api/sessions/conversation" not in body, "the phone page still names the conversation route"

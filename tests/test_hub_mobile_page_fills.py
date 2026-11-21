@@ -12,8 +12,6 @@ MODULES = (
     ("hub-mobile-loop.js", "LOOP_RULES"),
     ("hub-mobile-usage.js", "USAGE"),
     ("hub-mobile-specs.js", "SPECS"),
-    ("hub-mobile-chat.js", "CHAT"),
-    ("hub-mobile-voice.js", "VOICE"),
 )
 
 

@@ -61,18 +61,6 @@ HOLDS = {
         """,
         "release(); await __tick(30);",
     ),
-    "a draft in another session": (
-        'termDraft("other-session").text = "half a sentence";',
-        'termDraft("other-session").text = "";',
-    ),
-    "a draft typed in the open composer": (
-        '$("termview-text").value = "half a sentence";',
-        '$("termview-text").value = "";',
-    ),
-    "an attachment in another session": (
-        'termDraft("other-session").photo = { name: "photo.jpg", url: "", bytes: null, ready: true };',
-        'termDraft("other-session").photo = null;',
-    ),
     "a staged move": (
         """
         await loadBoard();
@@ -99,6 +87,19 @@ def test_the_reload_waits_for_the_hold_and_follows_when_it_clears(hub, hold):
     """, hub.BOOT + NEW_BUILD_GAP)
     assert out["held"] == 0, f"the phone reloaded while {hold}: {out}"
     assert out["after"] == 1, f"the reload did not follow once {hold} cleared: {out}"
+
+
+@pytest.mark.node_bound
+def test_a_reload_reads_no_removed_composer_and_logs_no_error(hub):
+    """The composer left the page with the chat (#2490): a boot reads no composer and the page opens no draft."""
+    out = reloads_after(hub, """
+      let errors = 0;
+      console.error = () => { errors++; };
+      await __tick(20);
+      return { text: !!document.getElementById("termview-text"), draft: typeof termDraft,
+               attach: !!document.getElementById("attach-sheet"), errors };
+    """, hub.BOOT)
+    assert out == {"text": False, "draft": "undefined", "attach": False, "errors": 0}, out
 
 
 @pytest.mark.node_bound

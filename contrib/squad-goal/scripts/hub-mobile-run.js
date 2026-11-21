@@ -3,11 +3,10 @@
 // ADR-0152): the phone names no loopback port and no tailnet host, so the tailnet entry stays disabled until #713 proves
 // the forwarded headers, and only squad/tailnet_access.py changes if it disagrees.
 const RUN_LIMITS = "A pause lets a running call finish. A resume does not restart a run whose process ended.";
-// The four paths of one run, all under the hub's forward route: the page, the one write, and the two reads it decides on.
+// The three paths of one run, all under the hub's forward route: the page, the one write, and the read it decides on.
 const runURLs = id => {
   const run = "/dash/" + encodeURIComponent(id);
-  return { page: run + "/", control: run + "/run/control", state: run + "/run/control.json", info: run + "/run/info.json",
-           record: run + "/run/record.jsonl" };
+  return { page: run + "/", control: run + "/run/control", state: run + "/run/control.json", info: run + "/run/info.json" };
 };
 // The body of one request, the desktop page's own shape. No nodes is the whole run, and the phone asks for nothing else.
 const controlBody = (action, nodes) => JSON.stringify(nodes && nodes.length ? { action, nodes } : { action });
@@ -27,31 +26,9 @@ const runAgeLabel = (row, now) => {
   if (row.running) return row.started ? "running for " + runSpan(Math.max(0, now - row.started)) : "no start recorded";
   return row.ended ? "ended " + runSpan(Math.max(0, now - row.ended)) + " ago" : "no end recorded";
 };
-// The one primary of the run's action row follows the run's own state: a question the coder waits on comes first, then the
-// session the run last worked in, and a run that offers neither keeps the dashboard it always has. The pause and its
-// resume stay the row's one secondary, so the primary never repeats it.
-const runPrimary = (row, card, sid) => {
-  if (card) return { act: "session", label: "Answer the coder" };
-  if (row && row.running !== false && sid) return { act: "session", label: "Open the session" };
-  return { act: "desk", label: "Desktop dashboard" };
-};
-// The session the run last worked in, named by the newest record line that carries one; a line that is no JSON is skipped.
-const runSessionId = text => {
-  let sid = "";
-  for (const line of String(text || "").split("\n")) {
-    if (!line.trim()) continue;
-    let ev;
-    try { ev = JSON.parse(line); } catch (e) { continue; }
-    if (ev && typeof ev.session === "string" && ev.session) sid = ev.session;
-  }
-  return sid;
-};
-// The last lines of the session's conversation, with who spoke: the record of the run, cut to what one phone screen shows.
-const RUN_TAIL = 6, RUN_WHO = { owner: "You", answer: "Coder", system: "System" };
-const runTailLines = (turns, n) => (turns || [])
-  .filter(t => t && typeof t.text === "string" && t.text.trim())
-  .slice(-(n || RUN_TAIL))
-  .map(t => (RUN_WHO[t.role] || "Coder") + ": " + t.text.trim().replace(/\s+/g, " "));
+// The one primary of the run's action row is the dashboard the run always has: the phone offers no session action, and
+// the pause and its resume stay the row's one secondary.
+const runPrimary = () => ({ act: "desk", label: "Desktop dashboard" });
 // The verdict an ended run shows, and the issues the overview lists, one line each with the title the row carries.
 const runVerdict = row => row.running ? "" : row.verdict || (row.running === false ? "killed, no verdict" : "");
 const runIssueLines = row => (row.issues || []).map(n => "#" + n + (row.titles && row.titles[n] ? " " + row.titles[n] : "")).join("\n");

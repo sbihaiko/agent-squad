@@ -1,4 +1,4 @@
-"""The phone's navigation shell (SPEC 1596, #1597): five tabs on every screen, one stack per tab, two Backs, and the
+"""The phone's navigation shell (SPEC 1596, #1597): four tabs on every screen, one stack per tab, two Backs, and the
 location mirrored in the URL hash.
 
 The page is booted under the stub DOM of test_hub_mobile_move, which keeps the address of every history entry, so a route
@@ -16,8 +16,8 @@ from tests.test_hub_mobile_move import BOARD_ONE, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-TABS = ["now", "work", "specs", "chat", "runs"]
-TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "chat": "Chat", "runs": "Runs"}
+TABS = ["now", "work", "specs", "runs"]
+TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "runs": "Runs"}
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +36,7 @@ def hub():
 TAP = 'const tap = t => document.querySelector(`nav [data-tab="${t}"]`).onclick();'
 
 
-def test_the_bar_names_five_tabs_in_order(hub):
+def test_the_bar_names_four_tabs_in_order(hub):
     assert re.findall(r'data-tab="(\w+)"', hub.MOBILE_PAGE) == TABS
     for tab in TABS:
         assert re.search(rf'<button data-tab="{tab}"[^>]*>{TAB_NAME[tab]}</button>', hub.MOBILE_PAGE), tab
@@ -113,11 +113,11 @@ def test_the_address_mirrors_the_screen_and_a_reload_lands_on_it(hub):
         const card = location.hash;
         $("sh-backtop").onclick(); __popAll();
         const root = location.hash;
-        tap("chat");
-        const chat = location.hash;
-        return {{ card, root, chat }};
+        tap("specs");
+        const specs = location.hash;
+        return {{ card, root, specs }};
     """, board=[BOARD_ONE])
-    assert opened == {"card": "#/work/card=7", "root": "#/work", "chat": "#/chat"}, opened
+    assert opened == {"card": "#/work/card=7", "root": "#/work", "specs": "#/specs"}, opened
     reloaded = run_page(hub.MOBILE_PAGE, """
         await __tick(20);
         return { tab: tabActive, open: !$("sheet").hidden, n: (shown[view.card] || {}).n, hash: location.hash };
@@ -176,11 +176,11 @@ def test_the_browser_back_matches_the_two_backs(hub):
 
 def test_the_first_button_of_an_action_row_is_a_back(hub):
     page = hub.MOBILE_PAGE
-    # The chat's action row is the composer's bottom row, where the thumb is (SPEC 1596, rule 2; #1605).
-    for row in ("sheet-actions", "psw-footer", "termview-row", "runview-actions", "cost-actions", "lead-actions"):
+    # Every action row puts its Back where the thumb is (SPEC 1596, rule 2; #1605).
+    for row in ("sheet-actions", "psw-footer", "runview-actions", "cost-actions", "lead-actions"):
         m = re.search(rf'<div id="{row}">(.*?)</div>', page, re.S)
         assert m, row
-        assert re.search(r'^\s*<button[^>]*(?:data-actback|data-back|id="(?:termview|runview)-back")', m.group(1)), \
+        assert re.search(r'^\s*<button[^>]*(?:data-actback|data-back|id="runview-back")', m.group(1)), \
             f"the first button of {row} is no Back: {m.group(1)[:80]}"
 
 
@@ -214,7 +214,7 @@ def test_a_second_tap_on_the_current_tab_reaches_the_top(hub):
 @pytest.mark.node_bound
 def test_the_bar_hides_while_a_text_field_has_focus_and_returns_on_blur(hub):
     out = run_page(hub.MOBILE_PAGE, """
-        const bar = document.querySelector("nav"), text = $("termview-text");
+        const bar = document.querySelector("nav"), text = $("search-input");
         __dispatch("focusin", { target: text }); const typing = bar.hidden;
         __dispatch("focusout", { target: text }); const blurred = bar.hidden;
         __dispatch("focusin", { target: $("retry") }); const button = bar.hidden;

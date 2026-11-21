@@ -480,8 +480,7 @@ def test_the_mobile_page_holds_no_column_list(hub):
 
 
 @pytest.mark.node_bound
-def test_the_harness_runs_the_overlay_script_the_page_loads(hub):
-    """The served page carries the session overlay's script tag before its own. The harness runs every tag in order, so
-    the overlay's symbols are reachable from the page context."""
-    out = run_page(hub.MOBILE_PAGE, "return { overlay: window.__sqOverlay === true, context: typeof window.squadPageContext === 'function' };")
-    assert out == {"overlay": True, "context": True}
+def test_the_phone_page_carries_no_session_overlay(hub):
+    """The phone page shows no chat, so the session overlay's script left it with the chat (#2490)."""
+    out = run_page(hub.MOBILE_PAGE, "return { overlay: window.__sqOverlay === undefined, context: typeof window.squadPageContext };")
+    assert out == {"overlay": True, "context": "undefined"}
