@@ -26,17 +26,19 @@ def stream_page(mod, monkeypatch):
     return mod.mobile_html().decode()
 
 
-def test_a_pushed_turn_reads_no_conversation_and_draws_no_thread(hub, monkeypatch):  # noqa: F811
+def test_the_phone_page_takes_no_session_or_conversation_subject(hub, monkeypatch):  # noqa: F811
     page = stream_page(hub, monkeypatch)
     driver = EMIT + """
       await __tick(5);
-      emit("conversation", { sid: "sid-1", epoch: 9, at: 0, end: 1, lines: turnLine("t1", "hello") });
-      await __tick(5);
-      return { reads: Object.keys(__state.gets).filter(p => p.startsWith("/api/sessions")),
+      emit("ping", {});
+      return { subjects: Object.keys(stream().handlers),
+               reads: Object.keys(__state.gets).filter(p => p.startsWith("/api/sessions")),
                term: !!document.getElementById("termview"), live: squadStream.live() };
     """
     out = run_page(page, driver)
     assert out["reads"] == [], f"the phone page reads a session route: {out}"
+    assert "sessions" not in out["subjects"] and "conversation" not in out["subjects"], out
+    assert "board" in out["subjects"], out
     assert out["term"] is False, "the phone page still holds a chat thread"
     assert out["live"] is True
 

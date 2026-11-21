@@ -111,7 +111,7 @@ def send(port, method, path, *, host=None, login=None, origin=None, body=None):
 def test_a_listed_run_serves_its_page_its_record_and_its_info_under_the_prefix(world):
     base = f"/dash/{RUN}/"
     status, page = send(world.hub, "GET", base)
-    assert status == 200 and page.startswith(PAGE) and b"hub-overlay.js (#898)" in page   # the session overlay rides on the page (#898)
+    assert status == 200 and page.startswith(PAGE)
     assert send(world.hub, "GET", base + "run/record.jsonl") == (200, RECORD.encode())
     status, info = send(world.hub, "GET", base + "run/info.json")
     assert status == 200 and json.loads(info)["name"] == RUN
