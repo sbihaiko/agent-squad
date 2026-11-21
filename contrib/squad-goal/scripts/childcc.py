@@ -456,6 +456,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
             ok_push, why_push = salvage_push(wt, branch)
             if not ok_push:   # a failed push is no marker and no requeue: the next pass pushes again
                 print(f"CHILD NO-WAVE SALVAGE FAILED #{n} ({name} {child}): the push of {sha[:9]} to {branch} failed, tried on the next pass: {why_push}", flush=True); continue
+            (A / f"salvaged-{branch.replace('/', '_')}").write_text(sha + "\n")   # the provenance marker: branchland.sh gives a marked branch its rebase round (#2571)
             print(f"CHILD NO-WAVE SALVAGE #{n} ({name} {child}): pushed {sha[:9]} to {branch}", flush=True); mk.touch(); continue
         if card not in (*claimed_names().split("|"), "Todo", "Blocked"):   # backfill never moves a card past (or out of) its column; a card the backfill may move falls through to the entry, which moves it when there is no wave
             logged(f"backfill {name} {child}", f"CHILDCC SKIP #{n} ({name} {child}): its run ended and its card is past the backfill; no entry, no card move"); mk.touch(); continue

@@ -2655,6 +2655,8 @@ PY
     SALVAGE_WHY="its head carries no commit that is not on $base by patch"; echo "salvage: $SALVAGE_WHY" >&2; return 0;; esac
   br="fix/$n-salvage-$run"; err="$SG_STATE/salvage-$n.err"
   $G -C "$wt" push -q origin "HEAD:refs/heads/$br" >/dev/null 2>"$err" || { echo "salvage: the push of ${head:0:9} to $br failed: $(tail -1 "$err" 2>/dev/null)" >&2; return 0; }
+  # (#2571) The provenance marker names the pushed head: branchland.sh gives a rebase round to a marked branch, never to a name.
+  mkdir -p "$SG_STATE/auto" && printf '%s\n' "$head" > "$SG_STATE/auto/salvaged-$(printf '%s' "$br" | tr / _)"
   SALVAGE_BR=$br; printf '%s\n' "$br"
 }
 

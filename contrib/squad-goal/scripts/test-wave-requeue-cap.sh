@@ -244,6 +244,8 @@ printf '%s\n' '{"event": "spawn_accepted", "child": "c", "envelope": "route", "d
 out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2030 2030 2>&1)
 [ "$out" = "fix/2030-salvage-run2030" ] && ok "a capped child's head is pushed and its branch named (#2030)" || ko "salvage named '$out'"
 [ "$(/usr/bin/git -C "$o" rev-parse -q --verify refs/heads/fix/2030-salvage-run2030)" = "$h2030" ] && ok "the salvage branch stands on the child's head (#2030)" || ko "fix/2030-salvage-run2030 is not the child's head"
+# (#2571) the push marks its branch: the provenance marker names the pushed head, and the lander's rebase round follows it
+[ "$(cat "$T/st/auto/salvaged-fix_2030-salvage-run2030" 2>/dev/null)" = "$h2030" ] && ok "2571 the salvage push writes the provenance marker with its head" || ko "2571 no provenance marker: '$(ls "$T/st/auto")'"
 /usr/bin/git -C "$wt" -c user.name=t -c user.email=t@t commit -q --allow-empty --amend -m "Refs #2030 base"
 out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2031 2031 2>&1)
 [ -z "$out" ] && ok "a run that names no child of the issue salvages nothing (#2030)" || ko "a child of another issue: '$out'"
@@ -259,6 +261,7 @@ printf '%s\n' '{"event": "spawn_accepted", "child": "d", "definition": "GitHub i
 out=$(SG_STATE="$T/st" SG_BASE=dev SG_REPO=x/y bash "$T/s/wave.sh" salvage run2030 2032 2>&1)
 [ -z "$(/usr/bin/git -C "$o" rev-parse -q --verify refs/heads/fix/2032-salvage-run2030 2>/dev/null)" ] && ok "a head the base already holds by patch is pushed to no salvage branch (#2310)" || ko "a by-patch head was salvaged: '$out'"
 case "$out" in *"not on dev by patch"*) ok "the salvage names why it pushed no branch (#2310)";; *) ko "the salvage names no reason: '$out'";; esac
+[ ! -e "$T/st/auto/salvaged-fix_2032-salvage-run2030" ] && ok "2571 a salvage that pushes nothing writes no provenance marker" || ko "2571 a marker with no push"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail

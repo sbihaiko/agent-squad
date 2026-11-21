@@ -9,8 +9,9 @@ br=$1 iss=$2; key=$(printf '%s' "$br" | tr / _); f="$SG_STATE/review-$key.md"
 head -1 "$f" 2>/dev/null | grep -q CHANGES || exit 0
 # The kept marker names the ref the round rebases on (#1344): the branch name alone proves nothing, so a hand-made
 # fix/*-rebase-* branch takes the ordinary round.
-km="$SG_STATE/auto/kept-$key"
-if [ -s "$km" ]; then work="REBASE ROUND: the branch's commits were kept when they conflicted with the wave tip (#1344). Your worktree starts on the tip of $br; rebase the branch it has checked out on $(head -1 "$km"), resolve each conflict in the files the review names so the work is kept, and commit; push nothing and open no pull request: once the run ends, the loop publishes the run's head to $br under a lease on the tip it reviewed."
+# (#2571) A marker with `salvage <tip> <base>` lines asks the round of its last tip only: a later head gets the ordinary round.
+km="$SG_STATE/auto/kept-$key"; st=$(/usr/bin/grep '^salvage ' "$km" 2>/dev/null | tail -1 | awk '{print $2}')
+if [ -s "$km" ] && { [ -z "$st" ] || [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$st" ]; }; then work="REBASE ROUND: the branch's commits were kept when their rebase conflicted (#1344, #2571). Your worktree starts on the tip of $br; rebase the branch it has checked out on $(head -1 "$km"), resolve each conflict in the files the review names so the work is kept, and commit; push nothing and open no pull request: once the run ends, the loop publishes the run's head to $br under a lease on the tip it reviewed."
 else work="commit on top of the branch your worktree has checked out (that branch is the tip of $br), and create no branch of your own; push nothing and open no pull request: once the run ends, the loop pushes the run's head to $br (fast-forward only)."; fi
 echo "One child, a FIX RUN on the work branch $br for GitHub issue #$iss (repo $repo). In your worktree, $work Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
 # (#2350) The one base the round names: launch.py cuts the run worktree from this branch's tip, so the child commits on the
