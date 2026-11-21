@@ -19,7 +19,7 @@ header{display:flex;gap:10px;align-items:baseline;padding:2px 14px 2px;padding-t
 #pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
 #pswl a[aria-current=page]{color:var(--acc)}
 #pswl .repo,#pswl .psw-m{color:var(--mute);font-size:var(--fs-caption)}
-#pswl .psw-all{color:var(--ok)}
+#pswl .psw-all{color:var(--acc)}   /* a link to every project: the interaction color, never a healthy state (#2665) */
 #pswx{display:block;width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 header a{color:var(--acc);font-size:var(--fs-caption);white-space:nowrap}
 #to-desktop{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;color:var(--mute);font-size:var(--fs-caption)}
@@ -41,9 +41,12 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #loops-open b{font-size:var(--fs-body)}#loops-sub{color:var(--mute);font-size:var(--fs-caption)}
 .looprow{display:block;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
 .looprow b{display:block;font-weight:600}.looprow .mut{color:var(--mute);font-size:var(--fs-caption)}
-.looprow.on b{color:var(--ok)}.looprow.off b{color:var(--err)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
+/* The name reads in the text color at rest; a state tone marks what the project does, so Fault Red keeps one meaning: a fault (#2665). */
+.looprow.on b{color:var(--ok)}.looprow.off b{color:var(--fg)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
 #loops-msg:not(:empty){color:var(--err);font-size:var(--fs-caption)}
 #loops-msg:empty{display:none}   /* an empty message takes no height, so the strip is only as tall as its content (#2664) */
+/* The empty Loop-bugs layer reports no state, so its line reads in the muted color, not the error color (#2665). */
+#bugs-msg{color:var(--mute);font-size:var(--fs-caption)}
 #loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
@@ -678,7 +681,7 @@ const LAYER = {
   loops: { show() { $("loops").hidden = false; loopDraw(); }, hide() { $("loops").hidden = true; } },
   loop: { show(s) { loopSlug = (s && s.slug) || ""; $("looppage").hidden = false; drawLoop(); },
           hide() { $("looppage").hidden = true; $("loop-confirm").hidden = true; } },
-  bugs: { show() { $("loopbugs").hidden = false; }, hide() { $("loopbugs").hidden = true; } },
+  bugs: { show() { $("loopbugs").hidden = false; drawBugs(); }, hide() { $("loopbugs").hidden = true; } },
   profiler: { show() { $("profpage").hidden = false; markChart(); profPoll(); }, hide() { $("profpage").hidden = true; markChart(); } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
@@ -1227,6 +1230,7 @@ function loopDraw() {
     return li;
   }));
   if (loopSlug || topLayer() === "loop") drawLoop();
+  if (topLayer() === "bugs") drawBugs();   // the fact may answer after the layer opens, so the layer draws again
 }
 function drawLoop() {
   const p = loopHere(), name = p ? (p.slug || p.repo || "this project") : "this project";
@@ -1254,7 +1258,9 @@ function drawLoop() {
   $("loop-menu").hidden = true;
   $("loop-reason").textContent = v.state === "refused" ? v.sub : "";
 }
-function openBugs() {
+// The Loop-bugs layer draws itself: one row per open loop-bug, and the muted line when nothing is open, so every draw of
+// the layer keeps its message (SPEC 2660, #2665).
+function drawBugs() {
   const p = loopHere(), bugs = (p && p.bugs_open) || [];
   $("bugs-title").textContent = "Loop-bugs · " + ((p && (p.slug || p.repo)) || "this project");
   $("bugs-list").replaceChildren(...bugs.map(x => {
@@ -1263,9 +1269,9 @@ function openBugs() {
     b.textContent = "#" + x.n + " " + (x.t || "");
     li.append(b); return li;
   }));
-  $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug is read now: the refusal may have just cleared.";
-  openLayer("bugs");
+  $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug in this project.";
 }
+function openBugs() { openLayer("bugs"); }
 async function loopView(fresh) {
   if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
   try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); }
