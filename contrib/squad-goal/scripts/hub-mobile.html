@@ -246,6 +246,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #periods button[aria-pressed=true]{box-shadow:inset 0 -2px 0 var(--acc)}
 #cchart{width:100%;margin:8px 0}
 #cchart svg{width:100%;max-width:420px;height:auto;display:block;margin:0 auto}
+@media (orientation:landscape){#cchart svg{max-width:none}}   /* a phone turned on its side gives the Spend chart the whole width (#2504) */
 #cchart svg text{fill:var(--mute);font-size:var(--fs-caption)}
 /* The Spend tab stacks the desktop panel (#2503): the summary line, the token bars under their period toggle, then the
    month pie over its legend. Each legend row names its consumer, and the pie's centre stays whole inside the hole. */
