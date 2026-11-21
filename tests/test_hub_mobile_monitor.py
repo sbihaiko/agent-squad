@@ -240,3 +240,53 @@ def test_an_imported_pr_link_is_a_44px_target_on_the_phone(hub):
     tail = css[css.rindex("/* }INST-CSS */"):]
     assert re.search(r"#inst \.at a\{[^}]*min-height:44px", tail), "the phone override follows the shared card style"
     assert re.search(r"#inst \.at a\{[^}]*min-width:44px", tail)
+
+
+INST_OPEN = "/* INST-CSS{ */"
+INST_CLOSE = "/* }INST-CSS */"
+
+
+def _shared_css(page):
+    """The rules inside the instrument style block, cut from the page as the browser receives it."""
+    i = page.index(INST_OPEN) + len(INST_OPEN)
+    return page[i:page.index(INST_CLOSE, i)]
+
+
+def _panel_rules(css):
+    return re.findall(r"#inst #ispeed [^{}]+\{[^}]*\}", css)
+
+
+def test_the_phone_serves_the_throughput_panel_rules_in_the_shared_block(hub):
+    """The Throughput panel's rules sit in the instrument block both pages import (#2662). The phone served the markup
+    with no panel, no bar and no trend tone, because the rules stayed outside the block it imports."""
+    phone, desktop = _shared_css(hub.MOBILE_PAGE), _shared_css(hub.PAGE)
+    for rule in ("#inst #ispeed .spd{", "#inst #ispeed .spdh{", "#inst #ispeed .spdt.up{", "#inst #ispeed .spr{",
+                 "#inst #ispeed .spl{", "#inst #ispeed .spn{", "#inst #ispeed .spw{", "#inst #ispeed .spwt{",
+                 "#inst #ispeed .spage{"):
+        assert rule in phone, f"the phone serves no {rule} rule: the block draws bare"
+        assert rule in desktop, f"the desktop lost the {rule} rule in the move"
+    assert hub.MOBILE_PAGE.count("#inst #ispeed .spd{") == 1, "one copy of the rules, never a phone-only second"
+    assert hub.PAGE.count("#inst #ispeed .spd{") == 1
+
+
+def test_the_phone_keeps_each_throughput_number_out_of_its_label(hub):
+    """A phone row puts the label and the value in their own tracks, and the median and the maximum at the two ends of
+    their line, so a number never runs into the word beside it (#2662, criterion 3)."""
+    css = _shared_css(hub.MOBILE_PAGE)
+    spl = re.search(r"#inst #ispeed \.spl\{[^}]*\}", css).group(0)
+    assert "display:flex" in spl and "justify-content:space-between" in spl, "the median and the maximum ran together"
+    spw = re.search(r"#inst #ispeed \.spw\{[^}]*\}", css).group(0)
+    assert "grid-template-columns" in spw, "the row's number has no track of its own"
+    assert re.search(r"#inst #ispeed \.spwv\{[^}]*text-align:right", css), "the value does not align away from its label"
+    assert re.search(r"#inst #ispeed \.spwv\{[^}]*white-space:nowrap", css), "the value may wrap into its label"
+
+
+def test_every_throughput_panel_color_resolves_to_a_design_token(hub):
+    """The panel rules name no color of their own: each one resolves to a token of DESIGN.md (#2662, criterion 5)."""
+    rules = _panel_rules(_shared_css(hub.MOBILE_PAGE))
+    assert rules, "the shared block carries no Throughput rule"
+    for rule in rules:
+        assert not re.search(r"#[0-9a-fA-F]{3,8}\b", rule), rule
+        assert not re.search(r"\b(rgba?|hsla?|oklch)\(", rule), rule
+        for value in re.findall(r"(?<!-)\bcolor:([^;}]+)", rule):
+            assert value.strip().startswith("var(--"), rule
