@@ -511,6 +511,50 @@ def write_wall(tree, scratch):
             + ' (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/") (regex #"^/dev/std(out|err)$"))')
 
 
+def repro_env(scratch):
+    """The environment a repro runs in: the gate's own (#2647). The checkout's venv comes first on PATH, when
+    $SG_CHECKOUT holds one, and pytest carries -p no:deepeval, so a repro that names a test the gate passes runs it the
+    way the gate does instead of dying at the plugin's startup."""
+    env = dict(os.environ, TMPDIR=scratch)
+    venv = os.path.join(env.get("SG_CHECKOUT", ""), ".venv", "bin")
+    if env.get("SG_CHECKOUT") and os.path.isdir(venv):
+        env["PATH"] = venv + os.pathsep + env.get("PATH", "")
+    addopts = env.get("PYTEST_ADDOPTS", "")
+    if "no:deepeval" not in addopts:
+        env["PYTEST_ADDOPTS"] = (addopts + " -p no:deepeval").strip()
+    return env
+
+
+def demote_markdown(path):
+    """Move the Blocking findings of a markdown review to Debt (#2647, ADR-0172): a markdown answer names no repro, so
+    none of its findings is proven. Each moved bullet ends with the reason; the file is rewritten atomically. The
+    bullets go after the Debt header when there is one; with none, the Blocking header becomes the Debt header."""
+    lines = open(path, encoding="utf-8").read().replace("\r\n", "\n").split("\n")
+    heads = [(i, m.group(1).lower()) for i, l in enumerate(lines) if (m := SECTION.match(l.strip()))]
+    blk = next((i for i, n in heads if n == "blocking"), None)
+    if blk is None:
+        return 0
+    end = next((i for i, _ in heads if i > blk), len(lines))
+    body = []
+    for l in lines[blk + 1:end]:
+        if BULLET.match(l) and is_finding("Blocking", BULLET.match(l).group(1)):
+            l = l.rstrip() + " — no repro: markdown answer"
+        body.append(l)
+    while body and not body[-1].strip():
+        body.pop()
+    rest = lines[:blk] + lines[end:]
+    debt = next((i for i, l in enumerate(rest) if (m := SECTION.match(l.strip())) and m.group(1).lower() == "debt"), None)
+    if debt is None:
+        out = lines[:blk] + ["## Debt"] + body + lines[end:]
+    else:
+        out = rest[:debt + 1] + [l for l in body if l.strip()] + rest[debt + 1:]
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(out))
+    os.replace(tmp, path)
+    return sum(1 for l in body if l.endswith("no repro: markdown answer"))
+
+
 def run_repro(cmd, checkout, timeout=None):
     """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
     (its process group is killed with it), 127 when it could not start, REPRO_REFUSED when the sandbox could not apply
@@ -522,7 +566,7 @@ def run_repro(cmd, checkout, timeout=None):
     scratch = tempfile.mkdtemp(prefix="repro-1521-")
     try:
         profile = (os.environ.get("SQUAD_SIGNAL_PROFILE") or SIGNAL_PROFILE) + write_wall(checkout, scratch)
-        env = dict(os.environ, TMPDIR=scratch)
+        env = repro_env(scratch)
         exe = os.environ.get("SQUAD_REPRO_EXEC") or REPRO_EXEC
         # #1525: the repro's stderr is a file in the scratch dir, so the write wall allows it and sandbox-exec's refusal is readable.
         with open(os.path.join(scratch, "stderr"), "w+b") as err:
@@ -722,6 +766,8 @@ def main(argv=None):
                    " finding Blocking with a base note, or moves it to Debt when --repro-prev holds the same repro")
     p.add_argument("--repro-prev", nargs=2, metavar=("ANSWER", "SHA"),
                    help="with --repro-base, the previous round's JSON ANSWER and its head SHA (#2565)")
+    p.add_argument("--demote-markdown", metavar="FILE", help="move the Blocking findings of a markdown review to Debt,"
+                   " each with the reason 'no repro: markdown answer', in place (#2647, ADR-0172)")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
@@ -746,6 +792,11 @@ def main(argv=None):
         return 0
     if (a.repro_base and not a.repro) or (a.repro_prev and not a.repro_base):
         p.error("--repro-base needs --repro, and --repro-prev needs --repro-base")
+    if a.demote_markdown:
+        moved = demote_markdown(a.demote_markdown)
+        if moved:
+            print(f"revformat: {moved} Blocking finding(s) of a markdown answer move to Debt: no repro", file=sys.stderr)
+        return 0
     if a.repro:
         repro_check(*a.repro, base=a.repro_base, prev=a.repro_prev)
         return 0
