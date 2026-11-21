@@ -19,7 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 PROFILER_JS = SCRIPTS / "hub-profiler.js"
 EGO = shutil.which("ego-browser")
-PHONE_WIDTH = 390
+PHONE_WIDTH = 844   # the Loop chart draws in landscape, so the trip lays out at the phone's wide side (#2504)
+PHONE_HEIGHT = 390
 READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 
 ESC = 'const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", \'"\': "&quot;"})[c]);\n'
@@ -247,9 +248,11 @@ DRAW_TRIP = """
   profV = view;
   profDraw();
   const trip = document.getElementById("proftrip");
+  // The chart screen draws in landscape, so the trip here is the desktop chart's markup, sized to the page (#2504).
   return { vw: window.innerWidth, docW: document.documentElement.scrollWidth, trip: fit(trip),
-           lanes: [...trip.querySelectorAll("svg.ptlane")].map(fit),
-           labels: [...trip.querySelectorAll(".ptlab")].map(fit),
+           chart: fit(trip.querySelector("svg")),
+           titles: [...trip.querySelectorAll("svg text.ptn")].map(e => e.textContent.trim()),
+           segs: trip.querySelectorAll("rect.ptb-seg").length,
            cells: [...document.querySelectorAll("#proftt th, #proftt td")].map(fit),
            table: fit(document.getElementById("proftt")) };
 }
@@ -261,7 +264,7 @@ def _trip_frame(page_html, base):
     page.write_text(page_html)
     head = (f"const SPACE_NAME = {json.dumps(f'agent-squad phone trip {uuid.uuid4().hex}')};\n"
             f"const URL = {json.dumps(page.as_uri())};\n"
-            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = 844;\n"
+            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = {PHONE_HEIGHT};\n"
             f"const TRIP_VIEW = {json.dumps(PHONE_TRIP_VIEW)};\n"
             f"const DRAW_TRIP = {DRAW_TRIP};\n")
     run = subprocess.run([EGO, "nodejs"], input=head + TRIP_EGO, capture_output=True, text=True, timeout=180)
@@ -277,19 +280,17 @@ def _overlap(a, b):
 
 @pytest.mark.heavy
 @pytest.mark.skipif(EGO is None, reason="ego-browser is needed to lay out the phone page")
-def test_the_phone_trip_fits_390_px_with_no_overlap_and_no_overflow(hub, tmp_path):
+def test_the_phone_trip_fits_the_landscape_width_with_no_overlap_and_no_overflow(hub, tmp_path):
     seen = _trip_frame(hub.MOBILE_PAGE, tmp_path)
     assert seen["vw"] == PHONE_WIDTH, f"the phone page rendered at {seen['vw']} px, not {PHONE_WIDTH}"
     assert seen["docW"] <= PHONE_WIDTH + 0.5, f"the page scrolls sideways: {seen['docW']} px wide"
     assert seen["trip"]["right"] <= PHONE_WIDTH + 0.5, f"the trip runs past the screen: {seen['trip']}"
-    for i, lane in enumerate(seen["lanes"]):
-        assert lane["right"] <= PHONE_WIDTH + 0.5 and lane["w"] > 0, f"lane {i} leaves the screen or draws nothing: {lane}"
-    assert len(seen["labels"]) == 4, f"the trip drew {len(seen['labels'])} labels, not four"
-    for i, label in enumerate(seen["labels"]):
-        assert label["sw"] <= label["cw"] + 0.5, f"label {label['text']!r} overflows its box: {label}"
-        assert label["right"] <= PHONE_WIDTH + 0.5, f"label {label['text']!r} runs past the screen: {label}"
-        for other in seen["labels"][i + 1:]:
-            assert not _overlap(label, other), f"labels {label['text']!r} and {other['text']!r} overlap"
+    # The Loop chart is the desktop chart's markup, and it fills the landscape width (#2504).
+    assert seen["chart"]["w"] > 0 and seen["chart"]["right"] <= PHONE_WIDTH + 0.5, \
+        f"the chart leaves the screen or draws nothing: {seen['chart']}"
+    assert seen["chart"]["w"] >= seen["trip"]["w"] - 2, f"the chart does not fill the trip's width: {seen['chart']}"
+    assert seen["titles"] == ["Tokens", "Machine"], f"the desktop chart's two gutter titles: {seen['titles']}"
+    assert seen["segs"] == 4, f"the trip bar drew {seen['segs']} column segments, not four"
     assert seen["table"]["right"] <= PHONE_WIDTH + 0.5, f"the table runs past the screen: {seen['table']}"
     for cell in seen["cells"]:
         assert cell["sw"] <= cell["cw"] + 0.5, f"cell {cell['text']!r} overflows its column: {cell}"

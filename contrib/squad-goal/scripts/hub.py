@@ -38,7 +38,8 @@ BOARD_DOING_JSON = json.dumps(_columns_module.DOING)
 BOARD_REVIEW_JSON = json.dumps(_columns_module.REVIEWING)
 BOARD_CHART_ROLES = {**{f"var(--s{i})": f"--chart-series-{i}" for i in range(1, 9)}, "var(--wait)": "--chart-wait", "var(--acc)": "--chart-bar", "var(--ok)": "--chart-ok", "var(--warn)": "--chart-warn", "var(--err)": "--chart-err", "var(--none)": "--chart-none", "var(--run)": "--chart-run", "var(--drop)": "--chart-drop", "var(--mute)": "--chart-series-other"}
 COLUMN_COLORS = {c["name"]: f"var({BOARD_CHART_ROLES.get(c['color'], '--chart-series-fallback')})" for c in BOARD_COLUMNS}   # one fill per column (#1604)
-BOARD_COLORS_JSON = json.dumps({**COLUMN_COLORS, **{lane["name"]: f"var({BOARD_CHART_ROLES.get(lane['color'], '--chart-series-fallback')})" for lane in BOARD_LANES}}, separators=(",", ":"))
+BOARD_COLORS = {**COLUMN_COLORS, **{lane["name"]: f"var({BOARD_CHART_ROLES.get(lane['color'], '--chart-series-fallback')})" for lane in BOARD_LANES}}
+BOARD_COLORS_JSON = json.dumps(BOARD_COLORS, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in BOARD_COLUMNS], separators=(",", ":"))
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -6066,9 +6067,10 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
         def cut(arr): return [arr[days.index(d)] for d in window]
         def band(name):
             lower, held = cut(values(name, 0)), [points[d]["held"][name] for d in window]
-            return {"name": name, "lower": lower, "upper": cut(values(name, 1)),
+            return {"name": name, "color": BOARD_COLORS.get(name, "var(--chart-series-fallback)"),
+                    "lower": lower, "upper": cut(values(name, 1)),
                     "count": [extents[d][name][1] - extents[d][name][0] for d in window], "held": held,
-                    "held_upper": [lo + h for lo, h in zip(lower, held, strict=True)]}
+                    "held_upper": [lo + h for lo, h in zip(lower, held, strict=True)]}   # the role rides with the band, so the phone names no column (#2504)
         def read(d):
             """One day's reading, whole: the page prints it on that day's hover and indexes no series for it (#1149)."""
             return {"day": d, "counts": [{"name": n, "count": extents[d][n][1] - extents[d][n][0]} for n in FLOW_BANDS],
@@ -8516,7 +8518,7 @@ const caseRows=cs=>(cs||[]).map(c=>{const ag=Math.max(0,Math.round((Date.now()-D
 let FLOWK=null,FLOWD={};   // each chart's answer from its own route, by name: its numbers and the instant its data was read (#971)
 let flowW=800,flowH=340;const flowP=36,flowHMin=340,flowHMax=720;   // both follow the window: the width from the pane, the height from its height, between a floor and a ceiling (#889, #1144)
 const flowHeight=h=>{const v=(h*0.55)|0;return v<flowHMin?flowHMin:v>flowHMax?flowHMax:v};   // the plot height is layout, never a series (#1144)
-const ltPaneW=()=>{const e=ltEl("#flowb"),w=e&&e.clientWidth?e.clientWidth:0,v=w?w-20:0;return v<600?600:v>1600?1600:(v|0)};   // the pane's width now, less its padding and held between the two bounds (#2171)
+const ltPaneW=()=>{const e=ltEl("#flowb"),w=e&&e.clientWidth?e.clientWidth:0,v=w?w-20:0;return v<120?120:(v|0)};   // the pane's width now, less its padding: the chart fills whatever width the window gives it, with no fixed box (SPEC 2498, #2504; #2171)
 const ltWinH=()=>typeof window!=="undefined"&&Number(window.innerHeight)>0?Number(window.innerHeight):0;   // the window the page stands in, or zero when it states no height: a page with no height sizes no read (#2171)
 const ltEl=sel=>typeof document!=="undefined"&&document.querySelector?document.querySelector(sel):null;   // one element of the page, or none where no page stands (#2171)
 const ltBox=sel=>{const e=ltEl(sel);return e&&e.getBoundingClientRect?e.getBoundingClientRect():null};   // one element's laid-out box, or null before the page lays it out (#2171)
