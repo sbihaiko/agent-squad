@@ -147,8 +147,8 @@ def test_the_top_back_names_the_screen_below_it(hub):
 
 
 @pytest.mark.node_bound
-@pytest.mark.parametrize("back", ['$("sh-backtop").onclick();', '$("sh-backact").onclick();'])
-def test_both_backs_call_one_pop(hub, back):
+@pytest.mark.parametrize("back", ['$("sh-backtop").onclick();'])
+def test_the_one_back_calls_one_pop(hub, back):
     out = run_page(hub.MOBILE_PAGE, f"""
         {TAP}
         await loadBoard();
@@ -179,14 +179,14 @@ def test_the_browser_back_matches_the_two_backs(hub):
     assert out["hash"] == "#/work", "the browser's Back leaves the address on the root the card stood over"
 
 
-def test_the_first_button_of_an_action_row_is_a_back(hub):
+def test_no_action_row_holds_a_back(hub):
     page = hub.MOBILE_PAGE
-    # Every action row puts its Back where the thumb is (SPEC 1596, rule 2; #1605).
-    for row in ("sheet-actions", "psw-footer", "runview-actions", "lead-actions"):
-        m = re.search(rf'<div id="{row}">(.*?)</div>', page, re.S)
+    # Back lives once, at the top of the screen (SPEC 2498, #2502): no footer repeats it.
+    for row in ("sheet-actions", "psw-footer", "runview-actions", "loop-actions"):
+        m = re.search(rf'<div id=["\']?{row}\b[^>]*>(.*?)</div>', page, re.S)
         assert m, row
-        assert re.search(r'^\s*<button[^>]*(?:data-actback|data-back|id="runview-back")', m.group(1)), \
-            f"the first button of {row} is no Back: {m.group(1)[:80]}"
+        assert not re.search(r'data-actback|data-back|id="runview-back"|>Back<', m.group(1)), \
+            f"the action row {row} still holds a back: {m.group(1)[:120]}"
 
 
 @pytest.mark.node_bound

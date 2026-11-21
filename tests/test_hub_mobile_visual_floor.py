@@ -33,7 +33,7 @@ BOX = """
                       return { x: r.left, y: r.top, w: r.width, h: r.height, right: r.right, bottom: r.bottom }; };
 """
 
-# The run detail: its box, its named Back at the top left and its action row's Back at the thumb.
+# The run detail: its box, its one named Back at the top left and the action row at the thumb.
 DRAW_RUN = """
 () => {
   /*BOX*/
@@ -43,7 +43,9 @@ DRAW_RUN = """
   const topBack = document.querySelector('[data-topback="run"]');
   topBack.hidden = false;
   topBack.querySelector(".ico-lbl").textContent = "Runs";
-  return { box: box(run), top: box(topBack), back: box(document.getElementById("runview-back")) };
+  return { box: box(run), top: box(topBack), act: box(document.getElementById("runview-actions")),
+           backs: [...run.querySelectorAll("[data-topback]")].concat([...run.querySelectorAll("[data-actback]")])
+                    .filter(b => !b.hidden).length };
 }
 """.replace("/*BOX*/", BOX)
 
@@ -115,15 +117,15 @@ def test_the_run_detail_sits_inside_the_viewport_and_the_thumb_zone(phone):
     viewport = {"x": 0, "y": 0, "w": vw, "h": vh, "right": vw, "bottom": vh}
     run = seen["frames"]["run"]
 
-    # The run detail fills the phone, and its two Backs stand where the thumb reaches: the named one at the top left,
-    # the action row's at the bottom.
+    # The run detail fills the phone and shows one back control at its top left (SPEC 2498, #2502); the action row
+    # stands in the thumb zone and holds no back.
     _inside(run["box"], viewport, "the run detail")
+    assert run["backs"] == 1, f"the run detail shows {run['backs']} back controls, not one: {run}"
     _inside(run["top"], run["box"], "the run's top Back")
     assert run["top"]["bottom"] <= run["box"]["h"] * THUMB, f"the run's top Back left the top of the screen: {run['top']}"
     assert run["top"]["h"] >= TAP, f"the run's top Back is {run['top']['h']} px tall"
-    _inside(run["back"], run["box"], "the run's action-row Back")
-    assert run["back"]["y"] >= run["box"]["h"] * THUMB, f"the run's action-row Back sits above the thumb zone: {run['back']}"
-    assert run["back"]["h"] >= TAP, f"the run's action-row Back is {run['back']['h']} px tall"
+    _inside(run["act"], run["box"], "the run's action row")
+    assert run["act"]["y"] >= run["box"]["h"] * THUMB, f"the run's action row sits above the thumb zone: {run['act']}"
 
     # The captured frame was really rendered: the screenshot on disk carries bytes.
     assert run["shot"] > 1000, "the run frame rendered no screenshot"
