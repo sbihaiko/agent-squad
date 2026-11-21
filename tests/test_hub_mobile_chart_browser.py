@@ -15,6 +15,8 @@ import threading
 
 import pytest
 
+from tests.test_hub_mobile_profiler import PHONE_TRIP_VIEW  # the Loop chart's own payload, one shape for both screens
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py"
 
@@ -50,7 +52,6 @@ LEAD = {"t": 1, "plot_frame": {"width": 672, "height": 212},
                  "control": {k: LEAD_VIEW for k in ("12h", "1", "2", "3", "7", "14", "30", "all")},
                  "columns": ["Todo", "Closed"], "coverage": None}}
 BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None, "groups": []}
-from tests.test_hub_mobile_profiler import PHONE_TRIP_VIEW  # the Loop chart's own payload, one shape for both screens
 API = {
     "/api/board": BOARD, "/api/runs": [], "/api/ended": [], "/api/stats": {"buckets": [], "totals": {}, "models": []},
     "/api/chart/lead": LEAD, "/api/chart/cfd": CFD, "/api/profiler": PHONE_TRIP_VIEW, "/api/loop": {}, "/api/load": {}, "/api/live": {},
