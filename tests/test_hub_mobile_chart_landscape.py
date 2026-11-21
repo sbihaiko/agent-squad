@@ -19,6 +19,7 @@ SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 PAGE = SCRIPTS / "hub-mobile.html"
 HUB_PY = SCRIPTS / "hub.py"
 CHART_JS = SCRIPTS / "hub-mobile-chart.js"
+PROFILER_JS = SCRIPTS / "hub-profiler.js"
 NODE = shutil.which("node")
 
 # One cumulative-flow view in the shape `/api/chart/cfd` serves: three days, two bands, the hub's own stack.
@@ -37,6 +38,18 @@ CFD = {
     "last": {"day": "2026-11-20", "wip": 2, "throughput": 1},
 }
 COLORS = {"Todo": "var(--chart-series-2)", "Closed": "var(--chart-series-7)"}
+
+# One lead view in the shape `/api/chart/lead` serves: the frame, its ticks and three reference values.
+LEAD = {
+    "plot_frame": {"width": 672, "height": 212},
+    "ticks": [{"y": 0, "text": "1h"}, {"y": 1, "text": "4h"}],
+    "xticks": [{"x": 0, "text": "Nov 18"}, {"x": 1, "text": "Nov 20"}],
+    "dots": [], "clusters": [],
+    "average": {"y": 0.4, "text": "4h", "label": "Average"},
+    "median": {"y": 0.3, "text": "1h 36m", "label": "Median"},
+    "p85": {"y": 0.7, "text": "7h 21m", "label": "p85"},
+    "mark": {"outline": 1.5},
+}
 
 
 def run_js(expr):
@@ -80,11 +93,41 @@ def test_the_cumulative_flow_draws_at_the_measured_width_and_fills_the_viewport(
         assert f'fill="{paint}"' in svg, f"the band {name} lost the color the page gives it"
 
 
+def test_a_chart_measures_again_after_the_legend_takes_its_row():
+    """The legend takes its row from the plot's flex box: the draw measures again, else the drawing is letterboxed."""
+    html = page()
+    for fn in ("leadDraw", "cfdDraw"):
+        m = re.search(rf"function {fn}\(\) \{{(.*?)\n\}}", html, re.S)
+        assert m, f"the page has no {fn}"
+        body = m.group(1)
+        measures = [i for i in range(len(body)) if body.startswith("chartSized(plot)", i)]
+        assert len(measures) == 2, f"{fn} measures the plot {len(measures)} time(s), not once before and once after the legend"
+        paint_at = body.find("paint(box)")
+        assert measures[0] < paint_at, f"{fn} paints before it measures the plot"
+        assert paint_at < measures[1], f"{fn} measures the second time before it paints the legend"
+        assert "again.height !== box.height" in body, f"{fn} draws again even when the legend left the box unchanged"
+
+
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
 def test_the_cumulative_flow_legend_names_the_bands_the_payload_serves():
     legend = run_js(f"mcCfd({json.dumps(CFD)}, {{width: 844, height: 300}}, {json.dumps(COLORS)})")["legend"]
     for band in CFD["bands"]:
         assert band["name"] in legend, band["name"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_the_end_labels_turn_inward_so_the_box_cuts_no_date():
+    """The first date starts at the axis and the last ends there: a centred end label overflows the measured box."""
+    svg = run_js(f"mcCfd({json.dumps(CFD)}, {{width: 844, height: 300}})")["svg"]
+    assert re.search(r"text-anchor=start fill=[^>]*>2026-11-18</text>", svg), \
+        "the first day is centred on the axis, so the box cuts its left half"
+    assert re.search(r"text-anchor=end fill=[^>]*>2026-11-20</text>", svg), \
+        "the last day is centred on the axis, so the box cuts its right half"
+    lead = run_js(f"mltChart({json.dumps(LEAD)}, {{width: 820, height: 200}})")["svg"]
+    assert re.search(r'text-anchor=start fill="var\(--chart-axis\)">Nov 18</text>', lead), \
+        "the first lead date is centred on the axis, so the box cuts its left half"
+    assert re.search(r'text-anchor=end fill="var\(--chart-axis\)">Nov 20</text>', lead), \
+        "the last lead date is centred on the axis, so the box cuts its right half"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
@@ -96,11 +139,10 @@ def test_a_tap_names_the_day_and_its_counts():
     assert "WIP 2" in text and "throughput 1" in text, text
 
 
-@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
 def test_a_chart_drawn_in_portrait_keeps_the_hint_and_draws_no_plot():
-    """The rotate hint is the whole portrait screen: nothing is drawn there."""
-    script = CHART_JS.read_text()
-    assert "mcLandscape" not in script or "mcChartBox" in script
+    """The rotate hint is the whole portrait screen: the rule reads the measured orientation and the plot is hidden."""
+    assert "mcLandscape(window.innerWidth" in PROFILER_JS.read_text(), \
+        "the Loop chart never asks the measured orientation, so the narrow rule cannot switch its drawing"
     html = page()
     start = html.find("@media (orientation: portrait)")
     assert start != -1, "the page carries no portrait media query"
@@ -111,6 +153,16 @@ def test_a_chart_drawn_in_portrait_keeps_the_hint_and_draws_no_plot():
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_every_chart_screen_marks_the_page_as_it_enters_and_leaves():
+    """The chart mark follows the layer stack, and the Loop's loader marks it again when its first payload arrives."""
+    html = page()
+    for name in ("lead", "cfd", "profiler"):
+        entry = re.search(rf"\b{name}: \{{ show\(\)[^\n]*\n[^\n]*\}}", html)
+        assert entry, f"the {name} layer is not in the stack table"
+        assert entry.group(0).count("markChart()") == 2, f"the {name} screen marks neither its show nor its hide"
+    assert "markChart(false)" in PROFILER_JS.read_text(), "the Loop loader never marks the screen when its payload arrives"
+
+
 def test_a_chart_screen_carries_no_tab_bar():
     html = page()
     assert re.search(r"body\.chart nav\{display:none\}", html), "the tab bar still draws on a chart screen"
@@ -155,3 +207,50 @@ def test_the_lead_chart_draws_at_the_measured_width():
     start = script.index("const mltChart")
     body = script[start: script.index("\nconst ", start + 1)]   # the whole function, through its closing brace
     assert "mcChartBox" in body, "the lead chart still draws at the payload's fixed frame"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_a_reading_past_the_plot_clamps_to_its_edge():
+    """A log-scale tick or a reference line above 1 plots at the plot's top, never outside the viewBox."""
+    assert run_js("mltY(1.6, 260, 240)") == 20, "a reading above 1 leaves the plot"
+    assert run_js("mltY(-0.2, 260, 240)") == 260, "a reading below 0 leaves the plot"
+    high = {**LEAD, "average": {"y": 1.6, "text": "1 day", "label": "Average"}}
+    part = run_js(f"mltChart({json.dumps(high)}, {{width: 844, height: 300}})")["svg"]
+    ys = [float(v) for v in re.findall(r'(?<![A-Za-z-])y(?:1|2)?="?(-?\d+(?:\.\d+)?)', part)]
+    assert ys and min(ys) >= 0 and max(ys) <= 300, f"the chart draws outside its box: {min(ys)}..{max(ys)}"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_a_reference_value_stands_in_the_legend_alone():
+    """The legend is the one place for a reference value, so a chart screen never draws it twice."""
+    part = run_js(f"mltChart({json.dumps(LEAD)}, {{width: 844, height: 300}})")
+    assert "mltref" not in part["svg"], "the reference value is drawn in the plot and in the legend"
+    for key in ("average", "median", "p85"):
+        assert LEAD[key]["text"] in part["legend"], f"the legend lost {key}"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_the_two_paths_keep_one_margin_rule():
+    """A measured box fills its viewport; with no size the payload's frame keeps the old desktop geometry."""
+    box = run_js(f"mltChart({json.dumps(LEAD)}, {{width: 844, height: 300}})")["svg"]
+    assert 'viewBox="0 0 844 300"' in box, "the measured box is not the drawing's frame"
+    frame = run_js(f"mltChart({json.dumps(LEAD)})")["svg"]
+    assert 'viewBox="0 0 720 308"' in frame, f"the desktop geometry changed: {frame[:60]}"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_a_hidden_state_is_not_named_in_the_day_reading():
+    """A tap names the states the drawing keeps; WIP and throughput stay the hub's whole-board figures."""
+    text = run_js(f"mcCfdPin({json.dumps(CFD)}, 1, {json.dumps(['Closed'])})")
+    assert "Todo 1" in text, text
+    assert "Closed" not in text, f"a hidden state is still named: {text}"
+    assert "WIP 2 (whole board)" in text and "throughput 1 (whole board)" in text, text
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
+def test_a_band_takes_the_payloads_color_with_no_page_map():
+    """The phone names no board column: each band's paint is the role the hub sends, not the palette position."""
+    cfd = json.loads(json.dumps(CFD))
+    cfd["bands"][0]["color"] = "var(--chart-series-2)"   # the first band's palette role would be series-1
+    svg = run_js(f"mcCfd({json.dumps(cfd)}, {{width: 844, height: 300}}, null)")["svg"]
+    assert 'fill="var(--chart-series-2)"' in svg, "the band fell back to the palette role, not the payload's color"

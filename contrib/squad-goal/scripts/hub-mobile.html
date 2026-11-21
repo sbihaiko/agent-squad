@@ -290,11 +290,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .chart-screen .scr-head{flex:none}
 .chart-screen .chart-plot{flex:1;min-height:0;margin:2px 0}
 .chart-screen #ltlegend{flex:none;margin:0}
-.chart-screen #ltlegend .mltlg+.mltlg{display:none}   /* the reference values stand in the plot's gutter (#2504) */
 .chart-screen #ltpin,.chart-screen #cfdpin{flex:none}
 .chart-screen #ltbars,.chart-screen #ltzoom,.chart-screen #cfdctl{flex:none;margin:2px 0}
 .chart-screen #ltbars button,.chart-screen #ltzoom button{padding:2px 10px;font-size:var(--fs-caption)}   /* the phone's 44 px control floor holds (#2504) */
-body.chart #lead-actions,body.chart #cfd-actions,body.chart #prof-actions{display:none}   /* the head holds the one back control (#2504) */
 #cfdctl{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;color:var(--mute);font-size:var(--fs-caption)}
 #cfdctl select{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption)}   /* the phone's control floor (#2504) */
 #cfdctl summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
@@ -504,7 +502,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <b>Rotate to view</b><span>Cumulative Flow draws in landscape.</span>
 </div>
 </div>
-<div id="cfd-actions"><button data-actback type="button">Back</button></div>
 </article>
 <article id=loopbugs data-screen=bugs hidden>
 <div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loop</span></button><h2 id=bugs-title>Loop-bugs</h2></div>
@@ -719,17 +716,17 @@ const LAYER = {
     hide() { $("psheet").hidden = true; $("profile").setAttribute("aria-expanded", "false"); },
   },
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
-  lead: { show() { document.querySelector('[data-screen="lead"]').hidden = false; loadLead(); },
-          hide() { document.querySelector('[data-screen="lead"]').hidden = true; } },
-  cfd: { show() { document.querySelector('[data-screen="cfd"]').hidden = false; loadCfd(); },
-         hide() { document.querySelector('[data-screen="cfd"]').hidden = true; } },
+  lead: { show() { document.querySelector('[data-screen="lead"]').hidden = false; markChart(); loadLead(); },
+          hide() { document.querySelector('[data-screen="lead"]').hidden = true; markChart(); } },
+  cfd: { show() { document.querySelector('[data-screen="cfd"]').hidden = false; markChart(); loadCfd(); },
+         hide() { document.querySelector('[data-screen="cfd"]').hidden = true; markChart(); } },
   // The Loops list names every project and the change log across them; a row opens one project's loop; the loop page
   // writes to that one project (SPEC 1596, rule 8; #1599).
   loops: { show() { $("loops").hidden = false; loopDraw(); }, hide() { $("loops").hidden = true; } },
   loop: { show(s) { loopSlug = (s && s.slug) || ""; $("looppage").hidden = false; drawLoop(); },
           hide() { $("looppage").hidden = true; $("loop-confirm").hidden = true; } },
   bugs: { show() { $("loopbugs").hidden = false; }, hide() { $("loopbugs").hidden = true; } },
-  profiler: { show() { $("profpage").hidden = false; profPoll(); }, hide() { $("profpage").hidden = true; } },
+  profiler: { show() { $("profpage").hidden = false; markChart(); profPoll(); }, hide() { $("profpage").hidden = true; markChart(); } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
 // screen a nested one stands on. Every row above reads the route table, so a screen is named in one place.
@@ -2173,10 +2170,18 @@ const leadEl = () => document.querySelector('[data-screen="lead"]');
 const leadView = () => MLT.zc || (MLT.base ? MLT.base[MLT.tf] : null);
 function leadDraw() {
   const el = leadEl(), c = leadView(); if (!el || !c) return;
-  const plot = el.querySelector("#ltplot"), box = chartSized(plot);   // the chart screen measures its box on every draw
-  const part = box ? mltChart(c, box) : mltChart(c);
-  plot.innerHTML = part.svg;
-  el.querySelector("#ltlegend").innerHTML = part.legend;   // the legend and the reference values follow the plot, with no gutter
+  const plot = el.querySelector("#ltplot"), legend = el.querySelector("#ltlegend");   // the chart screen measures its box on every draw
+  const paint = box => {   // the legend and the reference values follow the plot, with no gutter
+    const part = box ? mltChart(c, box) : mltChart(c);
+    plot.innerHTML = part.svg;
+    if (legend) legend.innerHTML = part.legend;
+  };
+  const box = chartSized(plot);
+  paint(box);
+  // The legend takes its row from the plot's flex box, so the first measurement is the box before that row: draw once
+  // more at the box the chart now fills, or the drawing is letterboxed inside it (#2504).
+  const again = chartSized(plot);
+  if (again && (!box || again.width !== box.width || again.height !== box.height)) paint(again);
   for (const b of el.querySelectorAll("#ltbars [data-ltf]")) b.setAttribute("aria-pressed", String(b.dataset.ltf === MLT.tf));
 }
 function leadPin(k) {
@@ -2245,9 +2250,18 @@ function cfdStates() {
 function cfdDraw() {
   const el = cfdEl(), plot = el && el.querySelector("#cfdplot"), c = cfdCur();
   if (!c || !plot) return;
-  const part = mcCfd(c, chartSized(plot), MC_COLORS, cfdHidden());
-  plot.innerHTML = part.svg;
-  const legend = el.querySelector("#cfdlegend"); if (legend) legend.innerHTML = part.legend;
+  const legend = el.querySelector("#cfdlegend");
+  const paint = box => {
+    const part = mcCfd(c, box, MC_COLORS, cfdHidden());
+    plot.innerHTML = part.svg;
+    if (legend) legend.innerHTML = part.legend;
+  };
+  const box = chartSized(plot);
+  paint(box);
+  // The legend takes its row from the plot's flex box, so the first measurement is the box before that row: draw once
+  // more at the box the chart now fills, or the drawing is letterboxed inside it (#2504).
+  const again = chartSized(plot);
+  if (again && (!box || again.width !== box.width || again.height !== box.height)) paint(again);
 }
 async function loadCfd() {
   const el = cfdEl(); if (!el) return;
@@ -2270,23 +2284,26 @@ if (cfdPlot) cfdPlot.addEventListener("click", e => {
   const r = e.target && e.target.closest ? e.target.closest("rect[data-cfd-day]") : null, c = cfdCur();
   if (!r || !c) return;
   $("cfdpin").hidden = false;
-  $("cfdpintext").textContent = mcCfdPin(c, Number(r.dataset.cfdDay));
+  $("cfdpintext").textContent = mcCfdPin(c, Number(r.dataset.cfdDay), cfdHidden());
 });
 if ($("cfdpind")) $("cfdpind").onclick = () => { $("cfdpin").hidden = true; };
 // The screen on top of the stack decides whether the page is a chart screen, so the media query hides its body in
-// portrait and the tab bar never draws on it. A rotation measures the box again and redraws the chart it holds.
+// portrait and the tab bar never draws on it. Every chart screen marks itself as it enters and leaves the stack, and a
+// rotation measures the box again and redraws the chart it holds.
 const chartOnTop = () => CHART_SCREENS.has(topLayer() || "");
 function redrawChart() {
   if (!chartOnTop()) return;
   const top = topLayer();
   if (top === "lead") leadDraw();
   else if (top === "cfd") cfdDraw();
-  else if (top === "profiler" && typeof profV !== "undefined" && profV && typeof profDraw === "function") profDraw();
+  // The Loop chart's payload may not have arrived yet: the loader draws and marks it when it does, so a rotation before
+  // the first reply only marks the screen and never draws against a stale one (#2504).
+  else if (top === "profiler" && profV && typeof profDraw === "function") profDraw();
 }
-function markChart() {
+function markChart(draw) {
   const on = chartOnTop();
   document.body.classList.toggle("chart", on);
-  if (on) redrawChart();
+  if (on && draw !== false) redrawChart();   // the loader marks after its own draw, so it passes false (#2504)
 }
 addEventListener("resize", () => redrawChart());
 addEventListener("orientationchange", () => setTimeout(redrawChart, 60));

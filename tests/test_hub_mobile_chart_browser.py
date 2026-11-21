@@ -26,10 +26,10 @@ CFD = {
         "start": "2026-11-18", "zone": "UTC", "days": DAYS, "ymax": 4, "yticks": [0, 2, 4],
         "xticks": [{"i": 0, "day": DAYS[0]}, {"i": 1, "day": DAYS[1]}, {"i": 2, "day": DAYS[2]}],
         "bands": [
-            {"name": "Todo", "lower": [0, 0, 0], "upper": [2, 2, 1], "count": [2, 2, 1], "held": [0, 0, 0],
-             "held_upper": [0, 0, 0]},
-            {"name": "Closed", "lower": [0, 0, 1], "upper": [0, 1, 3], "count": [0, 1, 2], "held": [0, 0, 0],
-             "held_upper": [0, 0, 1]},
+            {"name": "Todo", "color": "var(--chart-series-2)", "lower": [0, 0, 0], "upper": [2, 2, 1], "count": [2, 2, 1],
+             "held": [0, 0, 0], "held_upper": [0, 0, 0]},
+            {"name": "Closed", "color": "var(--chart-series-7)", "lower": [0, 0, 1], "upper": [0, 1, 3], "count": [0, 1, 2],
+             "held": [0, 0, 0], "held_upper": [0, 0, 1]},
         ],
         "reads": [{"day": d, "counts": [{"name": "Todo", "count": 1}, {"name": "Closed", "count": 1}], "wip": 2,
                    "throughput": 1} for d in DAYS],
@@ -132,6 +132,17 @@ def test_a_chart_screen_draws_landscape_and_hints_in_portrait(page_html):
             assert page.is_hidden("#cfd-hint"), "the landscape chart still shows the rotate hint"
             assert page.is_hidden("nav"), "a chart screen carries a tab bar"
             wide = page.eval_on_selector("#cfdplot svg", "e => e.getBoundingClientRect().width")
+            fit = page.evaluate("""() => { const s = document.querySelector('#cfdplot svg'), r = s.getBoundingClientRect();
+                return { vb: s.getAttribute('viewBox'), w: Math.round(r.width), h: Math.round(r.height) }; }""")
+            assert fit["vb"] == f'0 0 {fit["w"]} {fit["h"]}', \
+                f"the drawing is letterboxed inside its box: viewBox {fit['vb']} in {fit['w']}x{fit['h']}"
+            # Each band's paint is the color the hub sends: Todo's role is series-2, where the palette's first is series-1.
+            bands = page.eval_on_selector_all(
+                "#cfdplot svg polygon",
+                "els => els.map(e => ({ name: e.querySelector('title')?.textContent, fill: e.getAttribute('fill') }))")
+            todo = [b for b in bands if b["name"] == "Todo"]
+            assert todo and todo[0]["fill"] == "var(--chart-series-2)", \
+                f"the band fell back to the palette position, not the payload's color: {bands}"
 
             # A tap on a day shows that day's value.
             page.click("#cfdplot rect[data-cfd-day='1']")
@@ -157,6 +168,10 @@ def test_a_chart_screen_draws_landscape_and_hints_in_portrait(page_html):
             page.wait_for_function("() => !!document.querySelector('#ltplot svg')")
             assert page.eval_on_selector("#ltplot svg", "e => e.getBoundingClientRect().width") > 800, \
                 "the lead chart does not fill the landscape width"
+            fit = page.evaluate("""() => { const s = document.querySelector('#ltplot svg'), r = s.getBoundingClientRect();
+                return { vb: s.getAttribute('viewBox'), w: Math.round(r.width), h: Math.round(r.height) }; }""")
+            assert fit["vb"] == f'0 0 {fit["w"]} {fit["h"]}', \
+                f"the drawing is letterboxed inside its box: viewBox {fit['vb']} in {fit['w']}x{fit['h']}"
             assert page.is_hidden("#lead-hint"), "the landscape lead chart still shows the rotate hint"
             assert page.is_hidden("nav"), "the lead chart screen carries a tab bar"
         finally:
@@ -175,11 +190,16 @@ def test_the_loop_chart_draws_the_desktop_chart_in_landscape(page_html):
         server, port = _serve(page_html)
         base = f"http://127.0.0.1:{port}/p/x/mobile"
         try:
-            page = browser.new_page(viewport={"width": 844, "height": 390}, device_scale_factor=3)
+            page = browser.new_page(viewport={"width": 390, "height": 844}, device_scale_factor=3)
             _boot(page, base, "#/now/profiler")
-            page.wait_for_function("() => !!document.querySelector('#proftrip svg text.ptn')")
+            # The cold load draws the rotate hint, not the phone's own lanes, before the payload arrives.
+            page.wait_for_function("() => document.body.classList.contains('chart')")
+            assert page.is_visible("#prof-hint"), "the portrait Loop screen shows no rotate hint"
+            assert page.is_hidden("nav"), "a chart screen carries a tab bar"
 
-            # The Loop chart is the desktop chart's markup, sized to the landscape width (#2498, #2504).
+            # The rotation redraws the desktop chart's markup at the landscape width, with the payload that arrived.
+            page.set_viewport_size({"width": 844, "height": 390})
+            page.wait_for_function("() => !!document.querySelector('#proftrip svg text.ptn')")
             assert page.eval_on_selector("#proftrip svg", "e => e.getBoundingClientRect().width") > 800, \
                 "the Loop chart does not fill the landscape width"
             titles = page.eval_on_selector_all("#proftrip svg text.ptn", "els => els.map(e => e.textContent)")

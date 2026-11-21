@@ -352,7 +352,7 @@ let profV=null,profErr="",profPhone=false;const profOpen=new Set();   // profPho
 function profDraw(){if(!profV)return;const b=document.getElementById("profb"),a=document.activeElement,row=a&&b.contains(a)?a.closest("tr[data-p]"):null,sw=!!a&&a.hasAttribute&&a.hasAttribute("data-prof");
  b.innerHTML=profHtml(profV,profOpen,profPhone)+(profErr?`<p class=lerr role=alert>${esc(profErr)}</p>`:"");
  const t=sw?b.querySelector("[data-prof]"):row?([...b.querySelectorAll("tr[data-p]")].find(r=>r.dataset.p===row.dataset.p)||b).querySelector("button"):null;if(t)t.focus()}   // a redraw replaces the rows: the focus returns to the control that held it
-async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw()}catch(e){}}
+async function profPoll(){try{profV=await (await fetch("/api/profiler?w="+profWin)).json();profDraw();if(typeof markChart==="function")markChart(false)}catch(e){}}   // the phone marks the chart screen when its first payload arrives, so a rotation before it never leaves a stale screen (#2504)
 async function profPost(on,client){profErr="";try{const r=await fetch("/api/profiler",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on,client})}),d=await r.json();if(!r.ok)profErr=d.reason||d.err||"refused"}catch(e){profErr="the hub did not answer"}
  await profPoll()}
 function profMount(client){profPhone=client==="phone";document.getElementById("profb").addEventListener("click",e=>{const s=e.target.closest("button[data-prof]");if(s){if(!s.disabled&&profV)profPost(!profV.on,client);return}
