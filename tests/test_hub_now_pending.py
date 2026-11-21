@@ -198,7 +198,7 @@ CHANNEL = {"id": "C0EXAMPLE1", "name": "proj-x"}
 def test_the_slack_link_is_the_channel_archive_on_the_connection_domain(hub, monkeypatch):
     fake = connection(monkeypatch, hub, AUTH, channel=CHANNEL)
     link = hub[0].slack_link(refresh=True)
-    assert link["state"] == "ok"
+    assert link["state"] == "ok" and link["ok"] is True
     assert link["url"] == "https://example-ws.slack.com/archives/C0EXAMPLE1"
     assert link["channel"] == "#proj-x"
     assert link["text"] == "Answer in Slack"
@@ -278,9 +278,10 @@ def test_the_slack_link_route_serves_an_unavailable_state_with_no_address(served
 
 PENDING_ROW = {"id": "run-old", "label": "implement #2500", "chip": "needs a decision", "issue": 2500,
                "url": "https://github.com/x/y/issues/2500", "spend": 6.22, "age": 1320}
-SLACK_OK = {"state": "ok", "url": "https://example-ws.slack.com/archives/C0EXAMPLE1", "channel": "#proj-x",
+SLACK_OK = {"state": "ok", "ok": True, "url": "https://example-ws.slack.com/archives/C0EXAMPLE1", "channel": "#proj-x",
             "text": "Answer in Slack"}
-SLACK_OFF = {"state": "unavailable", "url": None, "channel": None, "text": "Slack link unavailable: no connection."}
+SLACK_OFF = {"state": "unavailable", "ok": False, "url": None, "channel": None,
+             "text": "Slack link unavailable: no connection."}
 
 
 def boot(hub, routes):
@@ -313,11 +314,20 @@ def test_an_unavailable_slack_link_draws_no_anchor(hub):
 
 
 def test_an_unavailable_state_with_a_stale_address_draws_no_anchor(hub):
-    """The state decides the anchor, never the address alone: a stale address under the unavailable state is no link."""
-    stale = {**SLACK_OK, "state": "unavailable"}
+    """The hub's `ok` fact decides the anchor, never the address alone: a stale address under a false answer is no link."""
+    stale = {**SLACK_OK, "state": "unavailable", "ok": False}
     out = boot(hub[0], {"/api/pending": [{"body": "[]"}],
                         "/api/slack-link": [{"body": json.dumps(stale)}]})
     assert out["slack"] is None, "the unavailable state draws no anchor however its address reads"
+
+
+def test_an_answer_with_no_ok_fact_draws_no_anchor(hub):
+    """An answer from a build that sent a bare address is not a link the page may trust."""
+    bare = {"state": "ok", "url": "https://example-ws.slack.com/archives/C0EXAMPLE1", "channel": "#proj-x",
+            "text": "Answer in Slack"}
+    out = boot(hub[0], {"/api/pending": [{"body": "[]"}],
+                        "/api/slack-link": [{"body": json.dumps(bare)}]})
+    assert out["slack"] is None
 
 
 def test_a_row_with_no_http_address_stays_plain_text(hub):

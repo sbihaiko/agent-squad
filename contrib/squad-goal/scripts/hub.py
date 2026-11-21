@@ -2058,10 +2058,10 @@ def slack_link(now=None, refresh=False, profile=None, repo=None):
         ch = None
         if domain is not None: ch, why = slack_channel(repo, profile)
         if domain is not None and ch is not None:
-            answer = {"state": "ok", "url": f"https://{domain}.slack.com/archives/{ch['id']}",
+            answer = {"state": "ok", "ok": True, "url": f"https://{domain}.slack.com/archives/{ch['id']}",
                       "channel": "#" + str(ch.get("name") or ch["id"]), "text": "Answer in Slack"}
         else:
-            answer = {"state": "unavailable", "url": None, "channel": None,
+            answer = {"state": "unavailable", "ok": False, "url": None, "channel": None,
                       "text": "Slack link unavailable: " + str(why) + "."}
         _SLACK_LINK[key] = {"at": now, "answer": answer}
         return answer

@@ -1115,9 +1115,11 @@ function needRow(r) {
   return li;
 }
 function drawSlack(s) {
-  const box = $("needs-slack"), href = s && s.state === "ok" ? safeUrl(s.url) : null;
+  // The hub answers `ok` with the address for a link the owner may open, and `ok` false with no address otherwise; the
+  // page draws that fact. A stale address under a false answer still draws no anchor.
+  const box = $("needs-slack"), href = s && s.ok ? safeUrl(s.url) : null;
   box.replaceChildren();
-  if (href) {   // the ok state and an absolute address decide the anchor, never a stale address under another state
+  if (href) {
     const a = document.createElement("a"), b = document.createElement("b"), name = document.createElement("span"),
           arrow = document.createElement("span");
     a.className = "needs-slack"; a.href = href;
