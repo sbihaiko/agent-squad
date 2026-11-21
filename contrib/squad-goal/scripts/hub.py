@@ -3821,15 +3821,38 @@ def issue_url(n, repo=None):
     """The plain issue address on github.com, the form iOS opens in the GitHub app: no query string."""
     return f"https://github.com/{repo or REPO}/issues/{int(n)}"
 
+_ISSUE_STATE_KEPT = {}   # (repo, n) -> (monotonic at, the issue's state or None): the pending read's own closed-state memory (#2661)
+
+def issue_state(n, repo=None):
+    """The issue's own state from one GitHub REST read: `closed`, `open`, or None when the read did not answer. The answer
+    is kept for one pending poll window, so the served answer reads each issue at most once per window (#2661)."""
+    repo = repo or REPO
+    key = (repo.lower(), int(n)); now = time.monotonic()
+    hit = _ISSUE_STATE_KEPT.get(key)
+    if hit is not None and now - hit[0] < PENDING_POLL_SECS: return hit[1]
+    try:
+        r = ghread.read(f"repos/{repo}/issues/{int(n)}",
+                        lambda route: ghread.gh_transport(route, timeout=REST_TIMEOUT))
+        state = str((r.answer or {}).get("state") or "").lower() if r.is_answer and isinstance(r.answer, dict) else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        state = None
+    state = state if state in ("open", "closed") else None
+    _ISSUE_STATE_KEPT[key] = (now, state)
+    return state
+
 def settled_on_board(r):
     """True when the board settles the run's decision: its work landed (handled) or every issue it names is closed
     (verified by hand, evidence on the issue). The pending read asks this itself, so a row leaves Needs you even when
-    the run row's own summary cannot see the board."""
+    the run row's own summary cannot see the board. The board cache holds only the items the REST items route returns, so
+    an issue it does not hold is read from GitHub, once per poll window (#2661)."""
     landed = {p["n"] for p in board_cache.get("landed") or [] if p.get("m")}
     if r.get("fix") in landed: return True
     issues = {int(n) for n in r.get("issues") or []}
     if not issues: return False
-    closed = {i["n"] for i in board_cache.get("items") or [] if i.get("s") == "closed"}
+    items = {i["n"]: i for i in board_cache.get("items") or [] if isinstance(i.get("n"), int)}
+    closed = {n for n, i in items.items() if i.get("s") == "closed"}
+    for n in sorted(issues - set(items)):             # off the cache (another project, or a missed item): ask GitHub
+        if issue_state(n) == "closed": closed.add(n)
     return issues <= closed or bool(issues & landed)
 
 def pending_decisions():
