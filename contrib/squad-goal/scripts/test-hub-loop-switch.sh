@@ -152,9 +152,10 @@ def gone(pid):
         except OSError: return True
         time.sleep(0.1)
     return False
-# The page's run readers share one process table for 2.5 s (RUN_TABLE_SECS): prime that window before the run is born, so the
-# cached read never names it. The kill must read the table fresh, or the run survives a stop-now that claims to end it.
-hub.run_table()
+# The page's run readers share one process table for 2.5 s (RUN_TABLE_SECS). Prime that window at a far-future instant before
+# the run is born, so the cached read never names it however long the birth takes: the kill must read the table fresh, or the
+# run survives a stop-now that claims to end it. The stop-now kill is the check below, never the cache window itself.
+hub.run_table(now=time.time() + 3600)
 kid = STATE / "kid.pid"
 run_pid = detached(f"import subprocess,time;c=subprocess.Popen(['sleep','300']);open({str(kid)!r},'w').write(str(c.pid));time.sleep(300)", "squad", "start")   # argv as a run has it: squad start
 gate_pid = detached("import time;time.sleep(300)")
@@ -167,7 +168,6 @@ orphan = STATE.parent / "runs" / "r2"; orphan.mkdir(parents=True, exist_ok=True)
 (STATE / "active-runs.txt").write_text(f"{live_run}\n{orphan}\n")
 (STATE / "locks" / "gate" / "pid").write_text(f"{gate_pid}\n")
 reset()
-check("the page's run table does not name a run born inside its window", run_pid not in hub.run_table(), run_pid)
 code, got = hub.loop_switch(LOOP["loopback"], {"action": "stop-now", "confirm": True}, origin_ok=True)
 check("stop-now kills a detached run, its child and the held gate", gone(run_pid) and gone(kid_pid) and gone(gate_pid), (run_pid, kid_pid, gate_pid))
 a = audit()[-1] if audit() else {}
