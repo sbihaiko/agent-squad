@@ -219,17 +219,19 @@ class _File:
         return self.data
 
 
-def _patch_proc(monkeypatch, files, now):
+def _patch_proc(monkeypatch, files, now, uptime):
+    """A /proc read at one mocked instant: the files are fixed, and both boot reads answer that instant."""
     monkeypatch.setattr(procs, "open", lambda path, *a, **k: _File(files[path]), raising=False)
     monkeypatch.setattr(procs.time, "time", lambda: now)
+    _patch_boot_clock(monkeypatch, now, uptime)
 
 
 def _patch_boot_clock(monkeypatch, now, uptime):
-    """The boot clock `_linux_boot_time` reads: the wall clock and the boot clock answer one instant here. macOS names no
-    CLOCK_BOOTTIME, so the fake supplies its own id and answers it itself."""
+    """The boot clock `_linux_boot_time` reads: the wall clock answers `now` and the boot clock the uptime at that instant,
+    so the two answer one boot time. macOS names no CLOCK_BOOTTIME, so the fake supplies its own id and answers it."""
     realtime = time.CLOCK_REALTIME
     monkeypatch.setattr(procs.time, "CLOCK_BOOTTIME", 7, raising=False)
-    monkeypatch.setattr(procs.time, "clock_gettime", lambda clock_id: now if clock_id == realtime else now - uptime)
+    monkeypatch.setattr(procs.time, "clock_gettime", lambda clock_id: now if clock_id == realtime else uptime)
 
 
 def _sessions_module():
@@ -259,7 +261,7 @@ def test_2596_the_fractional_boot_read_moves_a_start_one_second_ahead(monkeypatc
         "/proc/4242/stat": f"4242 (sleep) {' '.join(fields)}\n",
         "/proc/4242/cmdline": b"sleep\x0030\x00",
     }
-    _patch_proc(monkeypatch, files, now)
+    _patch_proc(monkeypatch, files, now, uptime)
     p = procs._linux_proc(4242, procs._linux_boot_time())
     assert p is not None
     whole_second_start = int(boot) + starttime // hz   # the second the record's whole-second read names
@@ -297,7 +299,7 @@ def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatc
         "/proc/4242/cmdline": b"sleep\x0030\x00",
     }
 
-    _patch_proc(monkeypatch, files, now)
+    _patch_proc(monkeypatch, files, now, uptime)
     p = procs._linux_proc(4242, procs._linux_boot_time())
     assert p is not None
     age = now - p.start
