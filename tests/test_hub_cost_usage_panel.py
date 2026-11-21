@@ -516,3 +516,72 @@ def test_the_chart_draws_from_the_stats_read_alone():
     assert "/api/speed" not in body, "the chart never waits on a second route"
     assert 'console.warn("stats panel:",e)' in body
     assert "$(\"#chart\").innerHTML=bars(" in body
+
+
+def test_the_largest_slice_and_other_take_distinct_fills():
+    """#2503: a model's colour never lands on the fold's own role, so the largest slice and "other" never read as one."""
+    out = _run_js("""
+const models=[
+  {model:'b',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'c',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'d',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'e',month_tokens:1000,in:1,out:0,cache:0,spend:1,calls:1},
+];
+const html=pie(models);
+const out={fills:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"[^>]*fill="([^"]+)"/g)].map(m=>[m[1],m[2]])};
+""")
+    fills = out["fills"]
+    assert [f[0] for f in fills] == ["b", "c", "d", "other"], fills
+    assert fills[0][1] != fills[-1][1], f"the largest slice and other share {fills[0][1]}"
+    assert fills[-1][1] == "var(--chart-series-other)", fills
+
+
+def test_two_slices_never_share_a_fill():
+    """#2503: two models whose names hash to the same series take different roles, so a legend never shows one colour
+    twice. The desktop visual review found DeepSeek and Claude Opus on one green."""
+    out = _run_js("""
+const models=[
+  {model:'DeepSeek V4.1 Flash',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'Claude Haiku 5.5',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'Claude Opus 5.5',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  {model:'other-model',month_tokens:1000,in:1,out:0,cache:0,spend:1,calls:1},
+];
+const html=pie(models);
+const out={fills:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"[^>]*fill="([^"]+)"/g)].map(m=>[m[1],m[2]])};
+""")
+    fills = [f[1] for f in out["fills"]]
+    assert len(fills) == 4, out
+    assert len(set(fills)) == len(fills), f"two slices share a fill: {out['fills']}"
+
+
+def test_a_folded_tail_never_exhausts_the_palette_under_the_drawn_slices():
+    """#2503: the drawn slices take their roles first. A ten-model pie whose nine-name tail took all eight roles under
+    the top three put DeepSeek and Claude Opus on one green in the desktop render."""
+    out = _run_js("""
+const models=[
+  {model:'DeepSeek V4.1 Flash',month_tokens:9000,in:1,out:0,cache:0,spend:9,calls:1},
+  {model:'Claude Haiku 5.5',month_tokens:5000,in:1,out:0,cache:0,spend:5,calls:1},
+  {model:'Claude Opus 5.5',month_tokens:3000,in:1,out:0,cache:0,spend:3,calls:1},
+  ...Array.from({length:7},(_,i)=>({model:'tail-'+i,month_tokens:100,in:1,out:0,cache:0,spend:1,calls:1})),
+];
+const html=pie(models);
+const out={fills:[...html.matchAll(/<(?:path|circle)[^>]*data-k="([^"]+)"[^>]*fill="([^"]+)"/g)].map(m=>[m[1],m[2]])};
+""")
+    fills = [f[1] for f in out["fills"]]
+    assert [f[0] for f in out["fills"]] == ["DeepSeek V4.1 Flash", "Claude Haiku 5.5", "Claude Opus 5.5", "other"], out
+    assert len(set(fills)) == len(fills), f"two drawn slices share a fill: {out['fills']}"
+
+
+def test_the_centre_caption_stands_clear_of_the_ring():
+    """#2503: the caption sits inside a hole painted behind it, and the hole is wide enough for the whole line, so no
+    character vanishes where the line meets a slice. Mute text over a light fill was the defect the mockup showed."""
+    out = _run_js("const out={html:pie([{model:'m',month_tokens:1234567,in:1,out:0,cache:0,spend:1234.5,calls:1}])};")
+    html = out["html"]
+    m = re.search(r'<circle cx=(\d+) cy=(\d+) r=(\d+) fill="var\(--chart-bg\)"', html)
+    assert m, html
+    c, hole = int(m.group(1)), int(m.group(3))
+    assert hole >= 45, f"the caption is wider than the hole it sits on, and the hole is {hole} units"
+    cap = re.search(r'<text x=\d+ y=(\d+)[^>]*fill="(var\(--[\w-]+\))"[^>]*>tokens · month</text>', html)
+    assert cap, html
+    assert int(cap.group(1)) == c + 12, f"the caption sits at {cap.group(1)}, not under the total"
+    assert cap.group(2) == "var(--fg)", f"the caption is drawn in {cap.group(2)}, so a slice hides part of it"

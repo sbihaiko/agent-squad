@@ -1968,6 +1968,104 @@ def slack_set(body):
         if err: return {"err": err}
     return {"diff": diff, "state": slack_view(path)}
 
+# --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
+# alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
+# own map, which it filled when it joined the channel once. So the hub calls `auth.test` only: it lists no channel,
+# joins none and writes nothing. A profile may answer from its own connection and channel: a profile-qualified Keychain
+# entry and a profile-qualified channel entry win over the shared ones, and the kept answer is keyed by profile, so a
+# profile switch never serves another project's link. A missing connection, channel or domain answers the unavailable
+# state, which the page draws with no anchor.
+SLACK_TOKEN_SERVICE = "agent-squad-voice-slack-bot-token"   # contrib/voice/keychain.py BOT_TOKEN: the shared workspace connection
+SLACK_WORKSPACE = re.compile(r"^https://([A-Za-z0-9][\w.-]*?[A-Za-z0-9])\.slack\.com/?$")
+SLACK_LINK_SECS = 300.0
+KEYCHAIN = sys.platform == "darwin"   # the one reader is the macOS Keychain: another host has no connection to read
+_SLACK_LINK = {}   # (profile, repository) -> {"at", "answer"}: one window per profile, never one window for the machine
+_SLACK_LINK_LOCK = threading.Lock()
+
+def profile_of():
+    """The profile a request-time read answers for: the name this hub was loaded under, else the environment's.
+
+    hubmux restores the shell's SG_PROFILE after the import, so the pinned name wins whenever the hub was loaded with one
+    (#1073). A hub loaded with no profile still follows the environment, which is how a hand-run read names its profile."""
+    return PROFILE_NAME or os.environ.get("SG_PROFILE", "")
+
+def voice_state_dir():
+    """The always-on daemon's state directory: VOICE_STATE when the caller exports it, else its default."""
+    return pathlib.Path(os.environ.get("VOICE_STATE") or (pathlib.Path.home() / ".local" / "state" / "agent-squad" / "voiced"))
+
+def slack_token(profile=None):
+    """The workspace bot token, read from the macOS Keychain. A profile's own entry wins over the shared voice entry, so
+    two profiles may answer from two workspaces. The value never leaves this reader to a print or a log."""
+    p = profile_of() if profile is None else profile
+    services = [f"{SLACK_TOKEN_SERVICE}:{p}", SLACK_TOKEN_SERVICE] if p else [SLACK_TOKEN_SERVICE]
+    for service in services:
+        try:
+            r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                               capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode == 0 and r.stdout.strip(): return r.stdout.strip()
+    return None
+
+def slack_api(token, method):
+    """One Slack read. The hub calls `auth.test` alone: it lists no channel, joins none and writes nothing."""
+    req = urllib.request.Request("https://slack.com/api/" + method, headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode() or "{}")
+
+def slack_workspace(profile=None):
+    """(domain, error): the workspace domain from the Slack connection, never a constant in this repository."""
+    if not KEYCHAIN: return None, "no keychain on this host"
+    token = slack_token(profile)
+    if not token: return None, "no connection"
+    try: d = slack_api(token, "auth.test")
+    except Exception: return None, "the connection did not answer"
+    if not isinstance(d, dict) or not d.get("ok"): return None, "the connection refused"
+    m = SLACK_WORKSPACE.match(str(d.get("url") or ""))
+    if not m: return None, "no workspace domain"
+    return m.group(1), None
+
+def slack_channel(repo=None, profile=None):
+    """(channel, error): the project's channel from the daemon's map, a read that never joins a channel.
+
+    The daemon keys the map by repository. A profile-qualified entry (`<profile>:<repo>`) wins when the map holds one, so
+    two profiles that name one repository still resolve their own channel."""
+    repo = repo or REPO
+    profile = profile_of() if profile is None else profile
+    try: d = json.loads((voice_state_dir() / "channels.json").read_text())
+    except (OSError, ValueError): return None, "no channel for " + str(repo)
+    ch = None
+    if isinstance(d, dict):
+        if profile: ch = d.get(f"{profile}:{repo}")
+        ch = ch or d.get(repo)
+    if not isinstance(ch, dict) or not ch.get("id"): return None, "no channel for " + str(repo)
+    return ch, None
+
+def slack_link(now=None, refresh=False, profile=None, repo=None):
+    """The project channel's archive address on the workspace domain: {"state", "url", "channel", "text"}.
+
+    The answer is cached for a window per (profile, repository); `refresh` resolves again. A missing connection, channel
+    or domain answers the unavailable state with no address, and the page then draws no anchor (SPEC 2498, #2500)."""
+    profile = profile_of() if profile is None else profile
+    repo = repo or REPO
+    key = (profile, repo)
+    now = time.monotonic() if now is None else now
+    with _SLACK_LINK_LOCK:
+        kept = _SLACK_LINK.get(key) or {}
+        at = kept.get("at")
+        if not refresh and at is not None and now - at < SLACK_LINK_SECS: return kept["answer"]
+        domain, why = slack_workspace(profile)
+        ch = None
+        if domain is not None: ch, why = slack_channel(repo, profile)
+        if domain is not None and ch is not None:
+            answer = {"state": "ok", "ok": True, "url": f"https://{domain}.slack.com/archives/{ch['id']}",
+                      "channel": "#" + str(ch.get("name") or ch["id"]), "text": "Answer in Slack"}
+        else:
+            answer = {"state": "unavailable", "ok": False, "url": None, "channel": None,
+                      "text": "Slack link unavailable: " + str(why) + "."}
+        _SLACK_LINK[key] = {"at": now, "answer": answer}
+        return answer
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -3708,6 +3806,59 @@ def ended_folders():
 def ended_today():
     """The runs that ended on the machine's local day, latest end first, each with its end time."""
     return [row for _, row in ended_folders()]
+
+def issue_url(n, repo=None):
+    """The plain issue address on github.com, the form iOS opens in the GitHub app: no query string."""
+    return f"https://github.com/{repo or REPO}/issues/{int(n)}"
+
+def settled_on_board(r):
+    """True when the board settles the run's decision: its work landed (handled) or every issue it names is closed
+    (verified by hand, evidence on the issue). The pending read asks this itself, so a row leaves Needs you even when
+    the run row's own summary cannot see the board."""
+    landed = {p["n"] for p in board_cache.get("landed") or [] if p.get("m")}
+    if r.get("fix") in landed: return True
+    issues = {int(n) for n in r.get("issues") or []}
+    if not issues: return False
+    closed = {i["n"] for i in board_cache.get("items") or [] if i.get("s") == "closed"}
+    return issues <= closed or bool(issues & landed)
+
+def pending_decisions():
+    """Every run that ended needs-human and still waits for the owner, across every date, the latest end first (SPEC 2498).
+
+    The ended-runs read covers the local day only, so a decision the owner did not answer yesterday waits here today. The
+    record's final verdict is the last invocation's: a run resumed after its verdict has no verdict and is live again, and
+    one reclassified by a later verdict ended another way, so neither reaches this read. A run whose verdict was later
+    handled (its work landed) or verified (every issue was closed afterwards) is not pending. One run gives one row."""
+    now, out, seen = time.time(), [], set()
+    for d in sorted(project_dirs()):
+        for rd in sorted(d.glob("run-*")):
+            if rd.name in seen or not (rd / "record.jsonl").is_file(): continue
+            r = scan(rd / "record.jsonl")
+            if not r or r.get("verdict") != "needs-human": continue
+            row, _ = run_row(str(rd), "", [])
+            if row.get("state") != "needs-human": continue
+            if settled_on_board(r): continue
+            seen.add(rd.name)
+            n = next((int(x) for x in r.get("issues") or []), None)
+            ended = float(r.get("t1") or now)
+            out.append({"id": row["id"], "label": row.get("label") or row["id"], "chip": "needs a decision",
+                        "issue": n, "url": issue_url(n) if n is not None else None,
+                        "spend": row.get("spend") or 0, "age": max(0, int(now - ended)), "ended_at": ended})
+    return sorted(out, key=lambda x: -x["ended_at"])
+
+PENDING_POLL_SECS = 15.0   # seconds: every open page shares one walk of the run folders; a decision waits days, not seconds
+_PENDING_KEPT = {"at": None, "answer": None}
+_PENDING_LOCK = threading.Lock()
+
+def pending_served():
+    """The pending decisions, computed at most once per the page's poll window: any number of readers share one read."""
+    now = time.monotonic()
+    with _PENDING_LOCK:
+        at = _PENDING_KEPT["at"]
+        if at is not None and now - at < PENDING_POLL_SECS: return _PENDING_KEPT["answer"]
+        answer = pending_decisions()
+        _PENDING_KEPT.update(at=now, answer=answer)
+        return answer
 
 def open_ended(name, start=None):
     """The port of a dashboard server for a run that ended today, or for a registered run with no server of its own, or None:
@@ -8116,7 +8267,7 @@ if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($(
 setTheme(sTheme);
 if(!$("#mdl").open)mdlLoad();   // the models panel answers on boot while it is closed; an open panel already loaded (#1278)
 if(!$("#lim").open)limLoad();   // Spend & limits answers on boot too, so its chip and its Kanban sub-group never read a dash (#2432)
-const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
+const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)"],POCOL="var(--chart-series-other)",tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;   // "other" keeps its own role, out of the model palette, so the fold never wears a model's colour (#2503)
 const TOP=3;
 function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
@@ -8134,14 +8285,22 @@ function pie(ms){
  const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
  const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
- const col=k=>k==="other"?"var(--chart-series-other)":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
+ const GONE=new Set(),ROLE=new Map(),col=k=>{   // a model keeps its colour across renders, never takes the fold's role, and never shares a role with another slice (#2503)
+  if(k==="other")return POCOL;
+  if(!ROLE.has(k)){let i=[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length,n=0;
+   while(GONE.has(PCOL[i])&&n++<PCOL.length)i=(i+1)%PCOL.length;   // two names on one bucket take the next free role
+   GONE.add(PCOL[i]);ROLE.set(k,PCOL[i])}
+  return ROLE.get(k)};
  const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span><span class=sh>${Math.round(v/tot*100)}%</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ sl.forEach(x=>col(x.k));   // the drawn slices claim their roles before the fold does, so a full palette never makes two arcs one colour (#2503)
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
    :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
- let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="var(--chart-bg)" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="var(--chart-bg)"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--mute)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
+ let a0=-Math.PI/2;const R=70,C=80,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="var(--chart-bg)" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ // The hole carries the total and its caption (#2503): the hole is painted wide enough for the whole line, and the
+ // caption reads in full contrast, so no character vanishes where it meets a slice.
+ return `<div class=pie><svg viewBox="0 0 160 160" width=128 height=128>${arc}<circle cx=${C} cy=${C} r=48 fill="var(--chart-bg)"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
@@ -10299,6 +10458,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
+        elif self.path.startswith("/api/pending"): body, ct = json.dumps(pending_served()).encode(), "application/json"   # Now's decisions across every date (SPEC 2498, #2500)
+        elif self.path.startswith("/api/slack-link"): body, ct = json.dumps(slack_link()).encode(), "application/json"   # the project channel's address, resolved by reads alone (#2500)
         elif self.path.startswith("/api/live"): body, ct = json.dumps(live_served()).encode(), "application/json"   # one compute per poll window, whatever asks (#1933)
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats_served((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
