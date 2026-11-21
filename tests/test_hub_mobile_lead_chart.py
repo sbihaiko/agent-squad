@@ -141,7 +141,7 @@ def test_the_tick_thinning_keeps_a_label_only_fourteen_pixels_from_the_last_kept
     drawing positions, so a dense log scale never stacks two labels on top of each other."""
     kept = run_js("mltThin([0, 8, 20, 22, 40, 41])")
     assert kept == [0, 20, 40], kept
-    assert all(b - a >= 14 for a, b in zip(kept, kept[1:])), kept
+    assert all(b - a >= 14 for a, b in zip(kept, kept[1:], strict=False)), kept
     assert run_js("mltThin([0, 13.9, 27.9])") == [0, 27.9], "a gap under 14 px keeps its label"
 
 
@@ -152,7 +152,7 @@ def test_the_lead_axis_draws_no_two_tick_labels_closer_than_fourteen_pixels():
     svg = run_js(f"mltChart({json.dumps(dense)}, {{width: 844, height: 300}})")["svg"]
     ys = [float(v) for v in re.findall(r"<text x=38 y=\"?(-?[\d.]+)\"? text-anchor=end", svg)]
     assert 1 < len(ys) < len(dense["ticks"]), f"the dense axis kept {len(ys)} labels"
-    assert all(abs(b - a) >= 14 for a, b in zip(ys, ys[1:])), ys
+    assert all(abs(b - a) >= 14 for a, b in zip(ys, ys[1:], strict=False)), ys
 
 
 def test_the_legend_and_the_reference_values_sit_under_the_plot():
