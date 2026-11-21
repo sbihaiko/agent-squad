@@ -6394,7 +6394,7 @@ def board(moves=None):
         if why is not None and why[2] == board_cache.get("t"): row["prr"] = why[1]   # a refusal lasts until the board is read again
         if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
             row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
-            row["gchip"] = f"gate try {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255, #2501)
+            row["gchip"] = f"{_columns_module.TESTING} · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
         if int(i["n"]) in holds: row["hh"] = True   # a live hand hold: the page draws its own chip, never a filter (#2501)
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc

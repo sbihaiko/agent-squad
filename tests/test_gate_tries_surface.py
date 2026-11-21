@@ -62,7 +62,7 @@ def test_a_row_carries_its_gate_tries(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", _cache([_item(1255, 3), _item(1256, 0), _item(1257)]))
     data = hub.board()
     assert _row(data, 1255)["gt"] == 3
-    assert _row(data, 1255)["gchip"] == "gate try 3", "the chip text is a fact the row carries"
+    assert _row(data, 1255)["gchip"] == "Testing · 3", "the chip text is a fact the row carries"
     assert "gchip" not in _row(data, 1256), "a card with no attempt draws nothing, not an invented 0"
     assert "gt" not in _row(data, 1256), "a card with no attempt draws nothing, not an invented 0"
     assert "gt" not in _row(data, 1257), "a card the read carried no field for draws nothing"
@@ -144,7 +144,7 @@ def test_the_phone_card_shows_gating_and_its_count():
               "const specColor=()=>'#000';const mSlots=()=>({});const cardSpec=x=>x.sp?x.n:x.pa;const cardColor=()=>'#000';"
               "const issueURL=()=>'https://github.com/x/y/issues/1';" + fn.group(0) +
               "const txt=x=>x.textContent+x.children.map(txt).join('');"
-              "const a=cardLink({n:1255,t:'a card',l:[],gchip:'gate try 3'},0);"
+              "const a=cardLink({n:1255,t:'a card',l:[],gt:3,gchip:'Testing · 3'},0);"
               "const b=cardLink({n:1255,t:'a card',l:[]},1);"
               "console.log(JSON.stringify([txt(a),txt(b)]));")
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)

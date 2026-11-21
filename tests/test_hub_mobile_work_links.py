@@ -5,6 +5,7 @@ Every expected value below comes from the fixture board the hub serves, read whe
 under the stub DOM of `tests/hub_mobile_stub.py`, and each assertion reads an element, its href, its chips or its
 text. A link that leaves the page is a plain anchor, and a card carries only the chips the hub's row facts name.
 """
+import json
 import re
 
 import pytest
@@ -18,7 +19,7 @@ BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
              {"name": "Backlog", "n": 3, "items": [
                  {"n": SPEC, "t": "[SPEC 2498] Remove the hub chat", "l": ["spec"], "sp": True, "pm": True, "pmt": "Todo"},
                  {"n": 2491, "t": "The hub serves no session", "l": [], "pa": SPEC, "b": [2490],
-                  "ho": "run-1", "hs": "running", "hh": True, "gchip": "gate try 2"},
+                  "ho": "run-1", "hs": "running", "hh": True, "gt": 2, "gchip": "Testing · 2"},
                  {"n": 2492, "t": "The hub hosts no terminal", "l": [], "pa": SPEC}]},
              {"name": "Todo", "n": 0, "items": []},
              {"name": "Doing", "n": 0, "items": []}]}
@@ -124,6 +125,22 @@ def test_a_spec_group_header_promotes_and_names_its_pending_state(hub):  # noqa:
 
 
 @pytest.mark.node_bound
+def test_a_successful_promote_clears_its_pending_state(hub):  # noqa: F811
+    # The read after a successful write may still mark the spec promotable: the header then lets the owner ask again, and
+    # never stays disabled on a request that already answered.
+    out = run_page(hub.MOBILE_PAGE, """
+        show("work");
+        await __tick(0);
+        const head = () => document.querySelector('#cards .lane-h[data-lane="2489"]');
+        head().querySelector(".lane-promote").onclick();
+        await __tick(0);
+        const b = head().querySelector(".lane-promote");
+        return {text: b.textContent, disabled: b.disabled};
+    """, board=[BOARD], promote={"status": 200, "ct": "application/json", "body": "{}"})
+    assert out == {"text": "→ Todo", "disabled": False}, out
+
+
+@pytest.mark.node_bound
 def test_the_card_sheet_is_gone(hub):  # noqa: F811
     assert 'id="sheet"' not in hub.MOBILE_PAGE
     assert "sh-todo" not in hub.MOBILE_PAGE
@@ -137,25 +154,55 @@ def test_a_saved_card_address_opens_now(hub):  # noqa: F811
     assert out["hash"].startswith("#/now"), out
 
 
+LOOP_ANSWER = {"projects": [{"slug": "x", "repo": "sbihaiko/agent-squad", "state": "on",
+                             "bugs_open": [{"n": 2501, "t": "a bug"}], "bugs": 1}]}
+
+
 @pytest.mark.node_bound
 def test_every_link_that_leaves_the_page_is_a_plain_anchor(hub):  # noqa: F811
-    # The screens are booted and every element whose href leaves the origin is read: it must be an anchor with that href.
-    # A same-origin link under the profile prefix passes, as the rule allows.
+    # Every tab and every layer that builds an anchor is opened, and every element the owner can see whose href leaves the
+    # origin is read: it must be an anchor with that href and no query string. A same-origin link under the profile prefix
+    # passes, as the rule allows.
     out = run_page(hub.MOBILE_PAGE, """
-        const out = [];
-        const scan = () => { for (const tag of ["a", "area", "link", "form", "iframe", "img", "base"]) {
+        const out = [], seen = new Set();
+        const shown = e => { for (let p = e; p; p = p.parentElement) if (p.hidden) return false; return true; };
+        // Each element that can carry an address is read, and only where the owner can see it: a link that leaves the page
+        // must be an anchor.
+        const scan = where => { for (const tag of ["a", "area", "link", "form", "iframe", "img", "base"]) {
           for (const e of document.querySelectorAll(tag)) {
+            if (!shown(e)) continue;
             const href = e.href || e.getAttribute("href") || e.getAttribute("action") || e.getAttribute("src") || "";
-            if (/^https?:\\/\\//.test(href)) out.push({tag: e.tagName, href});
+            if (!/^https?:\\/\\//.test(href)) continue;
+            const k = where + "|" + e.tagName + "|" + href;
+            if (seen.has(k)) continue; seen.add(k);
+            out.push({where, tag: e.tagName, href});
           }
         } };
-        show("work"); await __tick(0); scan();
-        show("specs"); await __tick(0); scan();
+        show("now"); await __tick(0); scan("now");
+        show("work"); await __tick(0); scan("work");
+        show("specs"); await __tick(0); scan("specs");
+        show("runs"); await loadRuns(); scan("runs");
+        show("spend"); await __tick(20); scan("spend");
+        show("now"); await __tick(0);
+        openLayer("psheet"); await __tick(0); scan("psheet");
+        openLayer("lead"); await __tick(0); scan("lead");
+        openLayer("loops"); await __tick(0); scan("loops");
+        openLayer("loop", { slug: "x" }); await __tick(0); scan("loop");
+        openBugs(); await __tick(0); scan("bugs");
+        openLayer("profiler"); await __tick(0); scan("profiler");
         return out;
-    """, board=[BOARD])
+    """, board=[BOARD], routes={"/api/runs": [{"body": '{"runs": [], "groups": []}'}],
+                                 "/api/ended": [{"body": "[]"}],
+                                 "/api/loop": [{"body": json.dumps(LOOP_ANSWER)}],
+                                 "/api/leadtime": [{"body": "{}"}],
+                                 "/api/profiler": [{"body": "{}"}]})
     outside = [x for x in out if not x["href"].startswith("http://localhost") and not x["href"].startswith("http://127.0.0.1")]
     assert outside, out
     assert all(x["tag"] == "A" for x in outside), outside
+    # Each screen that draws an outside link was reached, so the scan is not vacuous on a screen it never opened: Work's
+    # cards and board link, Specs' spec row, and the loop-bugs list are read where the owner sees them.
+    assert {"work", "specs", "bugs"} <= {x["where"] for x in outside}, out
+    assert not any("?" in x["href"] for x in outside), outside   # a query string opens no app on iOS
     # A script redirect is no plain anchor: the page carries no call that leaves the origin on the owner's behalf.
     assert not re.search(r"location\\.href\\s*=", hub.MOBILE_PAGE), "a script redirect leaves the page"
     assert "window.open(" not in hub.MOBILE_PAGE, "a script redirect leaves the page"

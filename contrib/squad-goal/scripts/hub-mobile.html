@@ -1300,7 +1300,7 @@ function cardLink(x, i) {
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
   if (x.hh) id.append(chip("hold", "hand hold"));
-  if (x.gchip) id.append(chip("gate", x.gchip));
+  if (x.gt) id.append(chip("gate", "gate try " + x.gt));   // the phone labels the row's own fact; the wire keeps the Testing text (#2501)
   if (x.ho && x.hs === "running") id.append(chip("run", "live run"));
   if (x.b && x.b.length) id.append(chip("blocked", "blocked by " + x.b.map(n => "#" + n).join(", ")));
   const t = document.createElement("span"); t.textContent = x.t;
@@ -1369,7 +1369,7 @@ async function promoteSpec(spec) {
   promoReqs[spec.n] = { phase: "requested" };
   renderBoard();
   const out = await writePromote(spec.n);
-  if (out.kind === "ok") { await loadBoard(true); return; }   // the board's read drops the arrow, and the request with it
+  if (out.kind === "ok") { delete promoReqs[spec.n]; await loadBoard(true); return; }   // the write answered: no request still waits, even when the read still marks the spec promotable
   promoReqs[spec.n] = { phase: "refused", rule: out.kind === "refused" ? out.rule : "the request failed: " + (out.cause || "no answer") };
   renderBoard();
 }
