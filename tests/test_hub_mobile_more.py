@@ -1,7 +1,8 @@
-"""The mobile More tab: its read-only screens, each on its own, reading only the hub's existing GET routes (#832).
+"""The phone's read-only screens: the Spend tab's cost screen and Now's lead chart, each on its own, reading only the
+hub's existing GET routes (#832, SPEC 2498, #2499).
 
-The page is read from its files and composed the way the hub composes it. No server runs. The More tab is read-only: the
-page's one write is the owner's move on the Board tab (#829).
+The page is read from its files and composed the way the hub composes it. No server runs. The two screens are read-only:
+the page's one write is the owner's move on the Board tab (#829). The More tab left the page (#2499).
 """
 import pathlib
 import re
@@ -38,12 +39,15 @@ def open_tag(html, screen):
     return m.group(0)
 
 
-def test_more_tab_opens_its_screens_each_on_its_own():
+def test_each_read_only_screen_sits_in_its_own_tab():
+    """SPEC 2498 (#2499): the cost screen is the Spend tab's root, and the lead chart is a screen of Now."""
     html = page()
-    more = block(html, "section", "data-panel", "more")
-    for name in SCREEN_ROUTES:
-        assert f'data-more="{name}"' in more
-        assert "hidden" in open_tag(html, name)
+    spend = block(html, "section", "data-panel", "spend")
+    assert 'data-screen="cost"' in spend, "the Spend tab no longer draws the cost screen"
+    assert "hidden" not in open_tag(spend, "cost"), "the Spend tab's own screen opens hidden"
+    now = block(html, "section", "data-panel", "monitor")
+    assert 'data-screen="lead"' in now, "Now no longer holds the lead chart"
+    assert "hidden" in open_tag(now, "lead"), "the lead chart opens over Now instead of waiting for its screen"
 
 
 def test_each_screen_declares_its_existing_get_route():
@@ -77,11 +81,13 @@ def test_cost_chart_fits_the_screen():
     assert re.search(r"#cchart svg\{[^}]*width:100%", html)
 
 
-def test_more_tab_holds_no_form_no_post_and_no_write_control():
-    """The More tab is read-only: no form and no write of its own. The page's one write is the owner's move on the
+def test_the_read_only_screens_hold_no_form_no_post_and_no_write_control():
+    """The two screens are read-only: no form and no write of their own. The page's one write is the owner's move on the
     Board tab, whose body and route the board suite proves (#829)."""
-    more = block(page(), "section", "data-panel", "more").lower()
-    for tag in ("<form", "<input", "<select", "<textarea", 'type="submit"', "type=submit"):
-        assert tag not in more, tag
-    assert not re.search(r"\bpost\b", more)
-    assert "method" not in more and "fetch(" not in more
+    html = page()
+    for screen in ("cost", "lead"):
+        for tag in ("<form", "<input", "<select", "<textarea", 'type="submit"', "type=submit"):
+            assert tag not in block(html, "article", "data-screen", screen).lower(), (screen, tag)
+    spend = block(html, "section", "data-panel", "spend").lower()
+    assert not re.search(r"\bpost\b", spend)
+    assert "method" not in spend and "fetch(" not in spend

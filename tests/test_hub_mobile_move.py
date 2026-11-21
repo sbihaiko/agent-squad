@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -291,6 +292,14 @@ def run_page(page, driver, board=None, promote=None, routes=None, history_state=
     line = [row for row in p.stdout.splitlines() if row.startswith("__RESULT__")]
     assert line, p.stdout
     return json.loads(line[0][len("__RESULT__"):])
+
+
+def route_tabs(page):
+    """The tabs the page's own route table names, in table order, each as (tab, label). One reader for every test that
+    names the five tabs, so the list never drifts from the page it checks (SPEC 2498, #2499)."""
+    body = page[page.index("const ROUTE = {"):]
+    body = body[:body.index("\n};")]
+    return re.findall(r'^\s{2}(\w+):\s*\{\s*panel:\s*"\w+"\s*,\s*label:\s*"(\w+)"', body, re.M)
 
 
 def _module(name, path):

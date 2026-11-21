@@ -157,32 +157,23 @@ def test_back_from_a_card_sheet_restored_open_on_load_closes_it_before_navigatin
     assert out["after"] == {"hidden": True, "layers": [], "index": 0} and out["pending"] == 0, out
 
 
-MORE_TAP = 'const moreTap = d => document.querySelector(\'[data-panel="more"]\').onclick({ target: { closest: () => ({ dataset: d }) } });'
-
 LAYER_OPEN = {
-    "run": 'openRun("r1", "/run/r1", "Run one");',
-    "cost": 'moreTap({ more: "cost" });',
-    "lead": 'moreTap({ more: "lead" });',
+    "run": 'show("runs"); openRun("r1", "/run/r1", "Run one");',
+    "lead": 'show("now"); openLayer("lead");',
 }
 
 LAYER_BACK = {
     "run": '$("runview-back").onclick();',
-    "cost": 'moreTap({ back: "" });',
-    "lead": 'moreTap({ back: "" });',
+    "lead": '$("lead-backtop").onclick();',
 }
-
-# A screen opens inside the tab whose list it came from (SPEC 1596): the owner stands on that tab before the open.
-LAYER_TAB_OPEN = {"run": 'show("runs");', "cost": "", "lead": ""}
 
 LAYER_HIDDEN = {
     "run": '$("runview").hidden',
-    "cost": 'document.querySelector(\'[data-screen="cost"]\').hidden',
     "lead": 'document.querySelector(\'[data-screen="lead"]\').hidden',
 }
 
 RESTORE_STATE = {
     "run": {"tab": "runs", "layer": "run", "depth": 1, "id": "r1", "url": "/run/r1", "name": "Run one"},
-    "cost": {"tab": "now", "layer": "cost", "depth": 1},
     "lead": {"tab": "now", "layer": "lead", "depth": 1},
 }
 
@@ -191,9 +182,7 @@ RESTORE_STATE = {
 @pytest.mark.parametrize("layer", list(LAYER_OPEN))
 def test_each_layer_pushes_one_entry_on_open_and_pops_it_on_close(hub, layer):
     out = run_page(hub.MOBILE_PAGE, f"""
-        {MORE_TAP}
         await loadBoard();
-        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
         const opened = [history.index - base, layers.slice(), {LAYER_HIDDEN[layer]}];
@@ -208,9 +197,7 @@ def test_each_layer_pushes_one_entry_on_open_and_pops_it_on_close(hub, layer):
 @pytest.mark.parametrize("layer", list(LAYER_OPEN))
 def test_forward_reopens_the_layer_its_entry_names(hub, layer):
     out = run_page(hub.MOBILE_PAGE, f"""
-        {MORE_TAP}
         await loadBoard();
-        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
         {LAYER_BACK[layer]}
@@ -227,23 +214,18 @@ def test_forward_reopens_the_layer_its_entry_names(hub, layer):
 @pytest.mark.parametrize("layer", list(RESTORE_STATE))
 def test_a_reload_with_a_layer_open_restores_it_without_a_second_push(hub, layer):
     out = run_page(hub.MOBILE_PAGE, f"""
-        {MORE_TAP}
         await loadBoard();
         const restored = [history.index, history.entries.length, layers.slice(), {LAYER_HIDDEN[layer]}, history.state.layer, __pending()];
         {LAYER_BACK[layer]}
         __popAll();
         return {{ restored, after: [history.index, layers.slice(), {LAYER_HIDDEN[layer]}, history.state.layer || null] }};
     """, history_state=RESTORE_STATE[layer], history_below=True, board=[BOARD_ONE])
-    # Usage and lead time stand on More (SPEC 1596): the chain above them is restored with them, each on its own entry, so
-    # closing the top leaves both the screen under it and the entry that names it: the next Back is the browser's own.
-    nested = layer in ("cost", "lead")
-    assert out == {"restored": [2, 3, ["more", layer], False, layer, 0] if nested
-                             else [1, 2, [layer], False, layer, 0],
-                   "after": [1, ["more"], True, "more"] if nested
-                            else [0, [], True, None]}, out
+    # Every screen stands on its tab's root (SPEC 2498, #2499), so a reload reuses the entry it landed on: one screen, one
+    # entry, and the next Back is the browser's own.
+    assert out == {"restored": [1, 2, [layer], False, layer, 0], "after": [0, [], True, None]}, out
 
 
-OWNER_TAB = {"run": "runs", "cost": "now", "lead": "now"}
+OWNER_TAB = {"run": "runs", "lead": "now"}
 
 
 @pytest.mark.node_bound
@@ -272,9 +254,7 @@ def test_a_tab_change_keeps_the_layer_and_its_entry(hub, layer):
     """A tab left keeps its screens (SPEC 1596, rule 2): the tab that owns the screen returns to it, and one pop closes it."""
     owner = OWNER_TAB[layer]
     out = run_page(hub.MOBILE_PAGE, f"""
-        {MORE_TAP}
         await loadBoard();
-        {LAYER_TAB_OPEN[layer]}
         const base = history.index;
         {LAYER_OPEN[layer]}
         show("specs");

@@ -156,7 +156,7 @@ def test_every_dismissal_control_sits_in_a_bottom_footer():
     assert re.search(r'<div id="sheet-actions">.*?id="sh-close"', html, re.S), "the sheet's close is not in its footer"
     assert re.search(r'<div id="psw-footer">.*?id="pswx"', html, re.S), "the project sheet's close is not in its footer"
     assert re.search(r'<div id="runview-actions">.*?id="runview-back"', html, re.S), "the run view's back is not in its footer"
-    assert re.search(r'<div id="cost-actions">.*?data-back', html, re.S), "the cost screen's back is not in its footer"
+    assert re.search(r'<div id="lead-actions">.*?data-actback', html, re.S), "the lead chart's back is not in its footer"
 
 
 def test_a_sheet_scrolls_its_content_and_keeps_its_footer_still():
@@ -164,14 +164,14 @@ def test_a_sheet_scrolls_its_content_and_keeps_its_footer_still():
         assert "display:flex" in _decls(selector) and "flex-direction:column" in _decls(selector), selector
     for selector in ("#sheet-content", "#psw-content"):
         assert "overflow:auto" in _decls(selector), f"{selector} is not the sheet's scroller"
-    for selector in ("#sheet-actions", "#psw-footer", "#runview-actions", "#cost-actions"):
+    for selector in (("#sheet-actions", "#psw-footer", "#runview-actions", "#lead-actions")):
         assert "flex:none" in _decls(selector), f"{selector} scrolls away with the content"
 
 
 # --- the fixed edges ----------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("selector", ["header", "#sheet", "#psheet", "nav", "#undo", "#runview-head",
-                                      "#runview-actions", "#cost-actions"])
+                                      "#runview-actions", "#lead-actions"])
 def test_a_fixed_edge_clears_the_notch_and_the_home_indicator(selector):
     decls = _decls(selector)
     assert "env(safe-area-inset-top)" in decls or "env(safe-area-inset-bottom)" in decls, selector

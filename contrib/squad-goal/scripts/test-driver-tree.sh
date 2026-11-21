@@ -38,8 +38,18 @@ trap_kills_tree() {
   python3 - "$1" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
+def code(s):   # the line up to its comment: a `#` opens one at a word start, and none inside quotes (#2623)
+    out, q, prev = [], None, " "
+    for ch in s:
+        if q: q = None if ch == q else q
+        elif ch in "\"'": q = ch
+        elif ch == "#" and prev.isspace(): return "".join(out)
+        prev = ch
+        out.append(ch)
+    return "".join(out)
 fn, cur = {}, None   # a function's body runs from its `name() {` to the closing `}` at column 0, or to its one-line end
 for line in src.splitlines():
+    line = code(line)
     if cur is None:
         m = re.match(r"^([A-Za-z_]\w*)\(\)\s*\{", line)
         if m:
