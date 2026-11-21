@@ -127,20 +127,17 @@ def test_the_terminal_modules_leave_the_package():
 STALE = ("squad.supervisor", "squad/supervisor.py", "squad import supervisor", "SQUAD_SUPERVISOR_")
 
 
-def test_the_retirement_leaves_no_name_of_the_removed_supervisor():
-    """A file that still names the removed supervisor module or its environment variables tells a reader the terminal
-    lives. The retirement leaves no such name outside this guard."""
+def test_no_executable_code_names_the_removed_supervisor():
+    """Executable code that names the removed module or its variables tells a reader the terminal lives. The walk reads
+    `squad/` and `contrib/`, so a document may name the retirement without turning this guard red."""
     hits = []
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file() or path == pathlib.Path(__file__).resolve() or {".git", "__pycache__", ".scratch"} & set(path.parts):
-            continue
-        try:
-            text = path.read_text(errors="replace")
-        except OSError:
-            continue
-        for number, line in enumerate(text.splitlines(), 1):
-            if any(token in line for token in STALE):
-                hits.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+    for base in (ROOT / "squad", ROOT / "contrib"):
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.suffix not in (".py", ".sh") or "__pycache__" in path.parts:
+                continue
+            for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                if any(token in line for token in STALE):
+                    hits.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     assert hits == [], hits
 
 
@@ -214,6 +211,16 @@ def test_the_env_load_ignores_the_three_retired_terminal_keys(tmp_path):
     assert ps.env_tailnet(tmp_path) == {"host": "box.tail1.ts.net", "allow": ["me@example.com"]}
     data, _ = ps.load(tmp_path)
     assert data["tailnet"] == {"host": "box.tail1.ts.net", "allow": ["me@example.com"]}
+
+
+def test_the_env_load_ignores_the_retired_supervisor_keys(tmp_path):
+    """A `.env` line for the removed supervisor changes no tailnet key, so no setting reaches a start."""
+    from squad import project_settings as ps
+    (tmp_path / ".env").write_text(
+        "SQUAD_TAILNET_HOST=box.tail1.ts.net\n"
+        "SQUAD_SUPERVISOR_DIR=/tmp/sup\n"
+        "SQUAD_SUPERVISOR_CMD=python3 -m squad.supervisor\n")
+    assert ps.env_tailnet(tmp_path) == {"host": "box.tail1.ts.net"}
 
 
 def test_the_shipped_defaults_name_no_terminal_grant():

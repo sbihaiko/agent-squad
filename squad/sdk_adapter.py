@@ -506,7 +506,8 @@ HOSTED_TOOLS = ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "Bash"]
 
 def host():
     """A hosted session: each stdin line is a prompt run through this adapter's options, or a `!` shell command run in the
-    working directory. The caller writes the lines and reads what this prints.
+    working directory. `python -m squad.sdk_adapter host` runs it; that process writes the lines and reads what this
+    prints, where the retired terminal supervisor used to drive it.
 
     One event loop serves every prompt of the process (#1320). A loop per prompt let an SDK child outlive the loop that
     watched it: the child watcher is process-wide, so a child of one prompt was still being waited on when that loop
