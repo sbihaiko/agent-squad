@@ -19,7 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 PROFILER_JS = SCRIPTS / "hub-profiler.js"
 EGO = shutil.which("ego-browser")
-PHONE_WIDTH = 390
+PHONE_WIDTH = 844   # the Loop chart draws in landscape, so the trip lays out at the phone's wide side (#2504)
+PHONE_HEIGHT = 390
 READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 
 ESC = 'const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", \'"\': "&quot;"})[c]);\n'
@@ -261,7 +262,7 @@ def _trip_frame(page_html, base):
     page.write_text(page_html)
     head = (f"const SPACE_NAME = {json.dumps(f'agent-squad phone trip {uuid.uuid4().hex}')};\n"
             f"const URL = {json.dumps(page.as_uri())};\n"
-            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = 844;\n"
+            f"const WIDTH = {PHONE_WIDTH}; const HEIGHT = {PHONE_HEIGHT};\n"
             f"const TRIP_VIEW = {json.dumps(PHONE_TRIP_VIEW)};\n"
             f"const DRAW_TRIP = {DRAW_TRIP};\n")
     run = subprocess.run([EGO, "nodejs"], input=head + TRIP_EGO, capture_output=True, text=True, timeout=180)
@@ -277,7 +278,7 @@ def _overlap(a, b):
 
 @pytest.mark.heavy
 @pytest.mark.skipif(EGO is None, reason="ego-browser is needed to lay out the phone page")
-def test_the_phone_trip_fits_390_px_with_no_overlap_and_no_overflow(hub, tmp_path):
+def test_the_phone_trip_fits_the_landscape_width_with_no_overlap_and_no_overflow(hub, tmp_path):
     seen = _trip_frame(hub.MOBILE_PAGE, tmp_path)
     assert seen["vw"] == PHONE_WIDTH, f"the phone page rendered at {seen['vw']} px, not {PHONE_WIDTH}"
     assert seen["docW"] <= PHONE_WIDTH + 0.5, f"the page scrolls sideways: {seen['docW']} px wide"
