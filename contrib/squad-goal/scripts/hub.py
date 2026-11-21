@@ -6318,6 +6318,17 @@ def flight_draw(i):
     return {"st": PROMOTE_TO, "fz": _columns_module.view_column(PROMOTE_TO, closed, i.get("l"), i.get("cr"))[1], "state": "pending",
             "recorded": PROMOTE_TO, "entry": None}
 
+def live_hand_holds(state=None, now=None):
+    """The issue numbers a live hand hold holds, read once per board serve (#2533, #2501). The phone's `hand hold` chip is
+    this fact, so the page reads it off the board row it already has, never a second route."""
+    base = pathlib.Path(state) if state else STATE
+    closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
+    try:
+        return {h["issue"] for h in hand_holds(base, closed=closed, now=now) if h["live"]}
+    except Exception as e:
+        log_once(f"hub: the hand holds are unknown: {type(e).__name__}: {' '.join(str(e).split())}")
+        return set()
+
 def spec_plan_parents(items):
     """The spec numbers whose batch plan holds a ticket: an open sub-issue the board cache holds that is no spec and no held
     ticket (#1128). The board draws its start control from this cache fact, so a render never reads the sub-issues."""
@@ -6338,6 +6349,7 @@ def board(moves=None):
     flying, refused = flight_snapshot()   # the writes in flight draw in Todo, pending; a refusal names its reason on its card (#1300)
     flying = set(flying)
     taken = taken_map()   # the takeovers a card wears, read once per serve beside the holders it names
+    holds = live_hand_holds()   # the issues a live hand hold names, read once per serve (#2501)
     for i in board_cache["items"]:
         seen.add(int(i["n"]))
         d = flight_draw(i) if i["n"] in flying else drawn_column(i, moves, window)   # the one overlay rule the promote route asks too (#829)
@@ -6383,6 +6395,7 @@ def board(moves=None):
         if isinstance(i.get("gt"), (int, float)) and i["gt"] > 0:
             row["gt"] = int(i["gt"])   # the card's Gate Tries, off the field the read carried (#1255)
             row["gchip"] = f"{_columns_module.TESTING} · {int(i['gt'])}"   # the chip text is a fact the row carries: no renderer names the column (#1255)
+        if int(i["n"]) in holds: row["hh"] = True   # a live hand hold: the page draws its own chip, never a filter (#2501)
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
         ho, hs = holder_fact(i)                  # the run that holds the card, read from the seam (#241); `hs` says whether its process lives (#1661)
@@ -9907,10 +9920,6 @@ GESTURE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-gesture.js")
 # The phone's lead-time drawing (#1333): the desktop payload's numbers, laid out for the phone. Rules stay out of the
 # view (ADR-0137): the module computes no number the hub serves.
 CHART_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-chart.js").read_text()
-MOVE_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-move.js").read_text()
-# The card detail's one primary and its six states, the next step, the latest update and the related rows (SPEC 1596,
-# #1598): a pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
-CARD_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-card.js").read_text()
 # The loop rules of the phone page (SPEC 1596, rule 8; #1599): the aggregate, one row per project and the one primary of a
 # loop page. A pure rule module, so the view binds and delegates and holds no rule of its own (ADR-0137).
 LOOP_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-loop.js").read_text()
@@ -9925,6 +9934,9 @@ SPECS_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-specs.js").rea
 # Truthful filters, the counted remainder and Search on the phone (SPEC 1596, rules 4, 5 and 6; #1600): the remainder line
 # and the title/number/label match. A pure rule module, so the view binds and delegates and holds no rule of its own.
 SEARCH_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-search.js").read_text()
+# The repository and its board on GitHub (SPEC 2498, #2501): a card, a spec row and the board link are plain anchors to
+# these addresses, and the page names no repository of its own.
+HUB_BOARD_URL = f"https://github.com/users/{OWNER}/projects/{PROJECT_NO}"
 # The card rules of the desktop board (#917): spec color, one block of board-lanes.js, so the mobile page holds no
 # rule of its own and never the board's column names (ADR-0137).
 CARD_RULES_JS = re.search(r"// <card-rules>.*?// </card-rules>", (pathlib.Path(__file__).resolve().parent / "board-lanes.js").read_text(), re.S).group(0)
@@ -9938,7 +9950,7 @@ INST_JS = "\n".join([re.search(r"^const LOAD_ERR=.*$", PAGE, re.M).group(0),
                      re.search(r"^// INST\{.*?^// \}INST$", PAGE, re.M | re.S).group(0)]).replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__REPO__", REPO)
 
 BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, run-sheet.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
-MOBILE_PAGE = ((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*MOVE*/", MOVE_JS).replace("/*CARD_DETAIL*/", CARD_JS).replace("/*LINK*/", LINK_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace("/*BOARD_FILTER*/", BOARD_FILTER_JS).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
+MOBILE_PAGE = ((pathlib.Path(__file__).resolve().parent / "hub-mobile.html").read_text().replace("<!--INST_CARD-->", INST_CARD).replace("/*INST_CSS*/", INST_CSS).replace("/*INST_JS*/", INST_JS).replace("/*SWITCHER_JS*/", SWITCHER_JS).replace("/*GESTURE*/", GESTURE_JS).replace("/*CHART*/", CHART_JS).replace("/*LINK*/", LINK_JS).replace("/*RUN*/", RUN_JS).replace("/*USAGE*/", USAGE_JS).replace("/*SPECS*/", SPECS_JS).replace("/*SEARCH*/", SEARCH_JS).replace('/*HUB_REPO*/"owner/repo"', json.dumps(REPO)).replace('/*HUB_BOARD_URL*/"https://github.com"', json.dumps(HUB_BOARD_URL)).replace("/*WEB_TOKENS*/", WEB_TOKENS).replace("/*CARD_RULES*/", CARD_RULES_JS).replace("/*LOOP_RULES*/", LOOP_JS).replace("/*PROFILER_JS*/", PROFILER_JS).replace("/*PROFILER_CSS*/", PROFILER_CSS).replace("/*RUN_STATE_BASE_CSS*/", RUN_STATE_BASE_CSS).replace("/*RUN_STATE_CSS*/", "".join(run_state_css(r) for r in RUN_STATES))).replace("__BUILD__", str(BOOT))
 MOBILE_SHELL = ["/mobile/", "/mobile/manifest.webmanifest", "/mobile/icon.svg"]
 SW_JS = (pathlib.Path(__file__).resolve().parent / "hub-mobile-sw.js").read_text().replace("/*SHELL*/[]", json.dumps(MOBILE_SHELL))
 MANIFEST_JSON = json.dumps({"id": "/mobile/", "name": f"Squad hub {REPO}", "short_name": "Hub", "start_url": "/mobile/", "scope": "/mobile/", "display": "standalone", "background_color": BG_COLOR, "theme_color": BG_COLOR, "icons": [{"src": "/mobile/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}).encode()

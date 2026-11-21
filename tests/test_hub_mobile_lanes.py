@@ -65,7 +65,7 @@ TODO_CARDS = [BOARD[1]["items"][i] for i in range(4)]
 def test_a_column_groups_its_cards_by_spec_in_spec_number_order():
     out = lanes(TODO_CARDS)
     assert [ln["id"] for ln in out["lanes"]] == ["10", "20", "none"]
-    assert [c["n"] for c in out["lanes"][0]["cards"]] == [10, 11]
+    assert [c["n"] for c in out["lanes"][0]["cards"]] == [11]   # the spec's own card heads the lane and is not drawn
 
 
 @pytest.mark.node_bound
@@ -77,10 +77,11 @@ def test_the_no_spec_lane_comes_last_with_its_cards_and_its_title():
 
 
 @pytest.mark.node_bound
-def test_a_spec_card_heads_its_lane_and_stays_a_card_first():
+def test_a_spec_card_heads_its_lane_and_is_never_drawn():
     lane = lanes(TODO_CARDS)["lanes"][0]
     assert lane["title"] == "SPEC 10"
-    assert lane["cards"][0]["n"] == 10 and lane["cards"][0]["sp"] is True
+    assert lane["head"]["n"] == 10 and lane["head"]["sp"] is True
+    assert all(c["n"] != 10 for c in lane["cards"]), "the spec card is drawn as a card"
 
 
 @pytest.mark.node_bound
@@ -106,7 +107,7 @@ def test_a_wave_label_never_makes_a_lane():
     out = lanes(WAVE_CARDS, groups=WAVE_BOARD)
     titles = [ln["title"] for ln in out["lanes"]]
     assert titles == ["SPEC 40", "SPEC 50", "No spec"]
-    assert [c["n"] for c in out["lanes"][0]["cards"]] == [40, 41, 42]
+    assert [c["n"] for c in out["lanes"][0]["cards"]] == [41, 42]
     assert [c["n"] for c in out["lanes"][1]["cards"]] == [43]
     assert [ln["sid"] for ln in out["lanes"]] == ["SPEC 40", "SPEC 50", "No spec"]
 
@@ -133,7 +134,7 @@ def test_the_progress_counts_the_spec_children_on_the_whole_board_not_the_column
 def test_a_spec_card_with_no_child_in_the_column_still_draws_its_lane():
     cards = [BOARD[1]["items"][0]]
     out = lanes(cards)
-    assert [ln["id"] for ln in out["lanes"]] == ["10"] and out["flat"][0]["n"] == 10
+    assert [ln["id"] for ln in out["lanes"]] == ["10"] and out["lanes"][0]["head"]["n"] == 10 and out["flat"] == []
 
 
 @pytest.mark.node_bound
@@ -159,12 +160,6 @@ def test_an_open_ticket_of_a_closed_spec_lands_in_no_spec():
 
 
 @pytest.mark.node_bound
-def test_a_closed_column_names_the_count_the_answer_carries():
-    out = run_js(GESTURE_JS.read_text(), "carouselColumns([{name: 'Closed', end: true, n: 5, items: []}], [0], true)")
-    assert out["closed"] == [{"name": "Closed", "count": 5}]
-
-
-@pytest.mark.node_bound
 def test_a_saved_collapse_wins_over_the_default_and_the_flat_list_follows_it():
     out = lanes(TODO_CARDS, lc={"10": True, "none": False})
     by_id = {ln["id"]: ln for ln in out["lanes"]}
@@ -175,7 +170,7 @@ def test_a_saved_collapse_wins_over_the_default_and_the_flat_list_follows_it():
 @pytest.mark.node_bound
 def test_the_flat_list_is_the_cards_of_the_open_lanes_in_lane_order():
     out = lanes(TODO_CARDS)
-    assert [c["n"] for c in out["flat"]] == [10, 11, 14, 13]
+    assert [c["n"] for c in out["flat"]] == [11, 14, 13]
 
 
 def test_the_mobile_header_names_the_spec_in_its_colour():

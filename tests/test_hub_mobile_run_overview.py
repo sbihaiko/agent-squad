@@ -1,7 +1,7 @@
 """The phone's run screen is an overview of the hub's run row (SPEC 1115, #1458): the issues, the age, the spend and the state
 the row carries, a pause or resume only while the run is live, the verdict of an ended run, and the desktop dashboard one tap
 away. The rules are `hub-mobile-run.js`, run under node alone; the screen is booted over the stub DOM of
-`tests/test_hub_mobile_move.py`, and every fact it shows is read back as the owner sees it.
+`tests/hub_mobile_stub.py`, and every fact it shows is read back as the owner sees it.
 """
 import json
 import pathlib
@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from tests.test_hub_mobile_move import _module, run_js, run_page
+from tests.hub_mobile_stub import _module, run_js, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"

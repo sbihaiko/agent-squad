@@ -959,7 +959,7 @@ def test_a_successful_start_repaints_the_board_and_states_the_count(hub):
 
 
 def test_the_phone_page_gains_no_start_control():
-    for name in ("hub-mobile.html", "hub-mobile-move.js", "hub-mobile-run.js", "hub-mobile-gesture.js"):
+    for name in ("hub-mobile.html", "hub-mobile-run.js", "hub-mobile-gesture.js"):
         text = (ROOT / "contrib/squad-goal/scripts" / name).read_text()
         assert "Start this spec" not in text and "spb" not in text and "{spec:" not in text, name
 

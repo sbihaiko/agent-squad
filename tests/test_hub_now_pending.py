@@ -18,7 +18,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from tests.test_hub_mobile_move import run_page
+from tests.hub_mobile_stub import run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"

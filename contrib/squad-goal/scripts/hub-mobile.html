@@ -129,104 +129,58 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #col-title{flex:1;text-align:center;min-height:44px;display:flex;flex-direction:column;justify-content:center}
 #col-name{font-size:var(--fs-heading);font-weight:600}
 #col-count{color:var(--mute);font-size:var(--fs-caption);font-variant-numeric:tabular-nums}
-#empty-cols{color:var(--mute);font-size:var(--fs-caption);margin:0 0 8px}
-#dots{display:flex;justify-content:center;gap:6px;margin:8px 0 12px}
-#dots i{width:7px;height:7px;border-radius:var(--radius-full);background:var(--line)}
-#dots i.on{background:var(--fg)}
-#bfilter{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap}
-#bfilter button,#bfilter summary,#hide-empty,#lf summary{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 10px;font-size:var(--fs-body)}
-#lf{position:relative}
-#lfl{position:absolute;z-index:5;top:44px;left:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px;display:grid;gap:4px;min-width:200px;max-height:60vh;overflow:auto}
-#lfl label{font-size:var(--fs-body);display:flex;align-items:center;gap:6px;min-height:44px}
+/* The column names of Work (SPEC 2498, #2501): one pill per column, the active one ringed, so the owner switches the
+   column with one tap and every column is drawn, an empty one included. */
+#col-tabs{display:flex;gap:4px;overflow-x:auto;margin:8px 0 10px;scrollbar-width:none}
+#col-tabs button{flex:0 0 auto;min-height:44px;padding:0 10px;background:transparent;color:var(--mute);border:1px solid transparent;border-radius:var(--radius-full);font-size:var(--fs-caption)}
+#col-tabs button[aria-pressed=true]{color:var(--fg);border-color:var(--fg)}
 #cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:var(--card-gap-y)}
-.card{display:block;width:100%;text-align:left;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);padding:var(--card-gap-y-phone) var(--card-gap-x-phone);font:var(--fs-body) system-ui,sans-serif;min-height:44px}
-.card .cid{display:block;color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-bottom:2px}.shb{font-family:var(--font-mono)}
-.card .lchip{margin-left:6px}
-.card .lchip[data-k=spec]{color:var(--lc,var(--mute));border-color:var(--lc,var(--line))}   /* the spec in its color (#917) */
+/* A card is a plain anchor to its issue on GitHub (SPEC 2498, #2501): no sheet and no script redirect. */
+.card{display:block;width:100%;text-align:left;text-decoration:none;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-top:3px solid var(--lc,var(--mute));border-radius:var(--radius-lg);padding:var(--card-gap-y-phone) var(--card-gap-x-phone);font:var(--fs-body) system-ui,sans-serif;min-height:44px}
+.card:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.card.focus{border-color:var(--acc)}
+.card .cid{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--mute);font:var(--fs-caption) var(--font-mono);margin-bottom:4px}
+.card .lchip{display:inline-flex;align-items:center;min-height:var(--chip-h);padding:0 8px;border:1px solid currentColor;border-radius:var(--radius-full);font:var(--fs-caption) system-ui,sans-serif}
+.card .lchip[data-k=hold]{color:var(--warn)}
+.card .lchip[data-k=gate]{color:var(--acc)}
+.card .lchip[data-k=run]{color:var(--ok)}
+.card .lchip[data-k=blocked]{color:var(--err)}
 .empty{color:var(--mute);text-align:center;padding:24px 0}
 .lane-h{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;color:var(--mute);font-size:var(--fs-body);cursor:pointer;border-bottom:1px solid var(--line)}
 .lane-h .tw{width:14px;color:var(--mute)}
 .lane-h .lid{color:var(--lc,var(--mute));font-size:var(--fs-caption)}
 .lane-h .ltt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
-.lane-h .pc{color:var(--mute);font-size:var(--fs-caption)}
-/* The ticket sheet takes about 60% of the screen (#919), so the card it names stays visible above it. */
-#sheet{position:fixed;left:0;right:0;bottom:0;height:60vh;max-height:60vh;height:60dvh;max-height:60dvh;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:contain;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(56px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:20;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
-/* The sheet's content scrolls; its close and its move stay at the bottom edge of the sheet, above the tab bar and in
-   the thumb zone (#1142). The 56 px bottom padding clears the tab bar the sheet sits behind. */
-#sheet-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;touch-action:pan-y}
-#sheet-actions{flex:none;display:flex;align-items:center;gap:8px;margin-top:8px}
-#sheet-actions button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#sheet[hidden]{display:none;translate:0 100%;pointer-events:none;transition:translate var(--motion-duration-exit) var(--motion-exit-easing),display 0s allow-discrete}
-.grab{display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:0 auto}
-.grab::before{content:"";width:40px;height:4px;border-radius:var(--radius-sm);background:var(--line)}
-#sh-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
-#sh-head button,#sh-next{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#sh-pos{color:var(--mute);font-size:var(--fs-caption)}
-#sh-link{color:var(--acc);font-size:var(--fs-body);min-height:44px;display:inline-flex;align-items:center}
-#sh-nav{display:flex;gap:6px;align-items:center;min-height:44px;margin:6px 0}
-#sh-nav button{min-height:44px;min-width:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
-#sh-nav button:disabled{opacity:.35}
-#sh-set{display:flex;gap:6px;overflow:auto;flex:1}
-#sh-set button{min-height:44px;min-width:44px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);font-family:var(--font-mono)}
-#sh-set button.on{border-color:var(--acc);color:var(--acc)}
-#sh-title{font-size:var(--fs-body);margin:6px 0}
-#sh-chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
-#sh-chips .chip,.card .lchip{display:inline-flex;align-items:center;min-height:var(--chip-h);padding:0 8px;border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-caption);color:var(--mute)}
-#sh-chips .chip.spec{border-color:var(--acc);color:var(--acc)}
-#sh-meta{margin:4px 0 10px}
-#sh-meta .mrow{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);font-size:var(--fs-caption)}
-#sh-meta b{flex:0 0 84px;min-width:84px;color:var(--mute);font-weight:600}
-#sh-meta .shb{display:inline-flex;align-items:center;min-height:44px;padding:0 10px;color:var(--acc);text-decoration:none;border:1px solid var(--line);border-radius:var(--radius-md)}
-#sh-body{color:var(--fg);font-size:var(--fs-body);margin:10px 0;overflow-wrap:anywhere}
-#sh-body h1,#sh-body h2,#sh-body h3,#sh-body h4,#sh-body h5,#sh-body h6{font-size:var(--fs-body)}
-#sh-body img{max-width:100%}
-#sh-body pre{overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}
-#sh-body code{background:var(--bg);border-radius:var(--radius-sm);padding:0 4px}
-#sh-body pre code{padding:0}
-#sh-body a{color:var(--acc)}
-#sh-body table,#sh-body tbody{display:block}#sh-body tr{display:block;padding:6px 0;border-bottom:1px solid var(--line)}#sh-body td,#sh-body th{display:block;padding:2px 0}
-#sh-body blockquote{margin:8px 0;padding-left:10px;border-left:3px solid var(--line);color:var(--mute)}
-#sh-body input[type=checkbox]{transform:scale(1.1);transform-origin:left center;vertical-align:-3px;margin:0 6px 0 0;accent-color:var(--ok);pointer-events:none}
-#sh-last{margin:10px 0}
-#sh-last h3{font-size:var(--fs-body);margin:12px 0 4px;padding-top:8px;border-top:1px solid var(--line)}
-#sh-last .mut{color:var(--mute);font-size:var(--fs-caption);margin:0 0 6px}
-#sh-todo{flex:1;width:100%;min-height:44px;margin:0;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
-#sh-todo[hidden]{display:none}
-/* The one primary of the card detail (SPEC 1596, rule 7): each of the six states reads as itself, and a state that waits
-   on the board is disabled, so a second send is never offered. */
-#sh-todo .sub{display:block;font-size:var(--fs-caption);opacity:.85;white-space:normal}
-#sh-todo.requested,#sh-todo.unknown{color:var(--mute)}
-#sh-todo.confirmed{color:var(--ok);border-color:var(--ok)}
-#sh-todo.failed{color:var(--err);border-color:var(--err)}
-#sh-todo.refused{color:var(--warn);border-color:var(--warn)}
-#sh-todo:disabled{opacity:.85;cursor:default}
-#sh-menu{position:absolute;right:14px;bottom:calc(56px + 8px);display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
-#sh-menu[hidden]{display:none}
-#sh-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#sh-next,#sh-update,#sh-related{margin:10px 0}
-#sh-next h3,#sh-update h3,#sh-related h3{font-size:var(--fs-body);margin:0 0 4px}
-#sh-related .rel{display:flex;align-items:center;justify-content:space-between;min-height:44px;border-bottom:1px solid var(--line)}
-#sh-related .rel[role=button]{cursor:pointer}
+.lane-h .pc{color:var(--mute);font-size:var(--fs-caption);margin-left:auto}
+/* The one move on Work: the spec's group header starts the spec and its tickets (ADR-0142, SPEC 2498 #2501). */
+.lane-promote{min-height:44px;padding:0 10px;background:transparent;color:var(--ok);border:1px solid var(--ok);border-radius:var(--radius-md);font-size:var(--fs-body)}
+.lane-promote:disabled{opacity:.7}
+.lane-reason{color:var(--warn);font-size:var(--fs-caption);padding:0 4px 6px}
+/* The board lives on GitHub: the full board is one tap away (SPEC 2498, #2501). */
+.boardlink{display:flex;align-items:center;gap:12px;padding:12px;margin:12px 0 0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);color:var(--fg);text-decoration:none;min-height:44px}
+.boardlink b{display:block;color:var(--acc);font-weight:600}
+.boardlink .sub{flex:1;color:var(--mute);font-size:var(--fs-caption)}
+.boardlink svg{width:16px;height:16px;flex:none}
 /* The tab bar is on every screen, a detail included: it paints over every sheet and every full-screen screen, and each
    screen's bottom row keeps a 56 px clearance for it (#1597). */
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);z-index:40}
 nav[hidden]{display:none}
 nav button{flex:1;min-height:56px;white-space:nowrap;background:none;border:0;color:var(--mute);font:var(--fs-caption) system-ui;padding:6px 0}
 nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc)}
-/* One control row on every root (SPEC 1596, rule 4): the segmented filter and the scope pill, above the tab bar. */
+/* One control row on a root that offers a filter (SPEC 1596, rule 4). Work and Specs offer none (SPEC 2498, #2501): the
+   row hides on a root with no segment, and the project name in the header owns the project switch. */
 #control-row{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--panel);border-top:1px solid var(--line);z-index:39}
 #control-row[hidden]{display:none}
 #cr-seg{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
 #cr-seg button{min-height:44px;flex:none;background:var(--bg);color:var(--mute);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #cr-seg button[aria-pressed=true]{color:var(--fg);border-color:var(--acc)}
-#cr-scope{flex:none;max-width:52%;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-caption);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Search (#1600): the field takes the control row's slot, above the keyboard and the tab bar, and Back clears it. */
 #searchbar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));display:flex;gap:8px;padding:6px 14px;background:var(--panel);border-top:1px solid var(--line);z-index:39}
 #searchbar[hidden]{display:none}
 #searchbar input{flex:1;min-width:0;min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-field)}
 #search-back,#specs-search{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#bhead #work-search{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
-#cards[hidden],#dots[hidden],#work-results[hidden]{display:none}
+#bhead #work-search{display:grid;place-items:center;min-width:44px;min-height:44px;padding:0;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-full)}
+#bhead #work-search svg{width:18px;height:18px}
+#cards[hidden],#work-results[hidden]{display:none}
 #now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
 #now-head h2,#more-head h2,#specs-head h2{margin:0}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
@@ -329,7 +283,8 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
 #specs-list{display:grid;gap:10px}
-#specs-list .row{padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg)}
+#specs-list .row{position:relative;padding:12px 34px 12px 12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);color:var(--fg);text-decoration:none}
+#specs-list .row .ex{position:absolute;top:12px;right:12px;color:var(--mute);font-size:var(--fs-body)}
 #specs-list .row b{font-size:var(--fs-heading);line-height:1.35;font-weight:600;display:block}
 #specs-list .row .mut{line-height:1.5}
 .specbar{display:block;width:100%;height:8px;border-radius:var(--radius-full);background:var(--line);margin:10px 0 8px}
@@ -382,7 +337,7 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 /* Motion in the language of the desktop lane fade (owner, 2026-11-01): what comes in eases out, what goes eases in, and
    nothing waits on it. A sheet slides up from the bottom edge and back down. A card the last render did not draw fades in;
    a lane that shuts folds its cards away; reduced motion turns all of it off. */
-@starting-style{#sheet:not([hidden]),#psheet:not([hidden]){translate:0 100%}}
+@starting-style{#psheet:not([hidden]){translate:0 100%}}
 .card.cin{animation:cin var(--motion-duration-enter) var(--motion-entry-easing)}
 @keyframes cin{from{opacity:0;translate:0 6px}}
 .lout{display:grid;grid-template-rows:0fr;opacity:0;margin-top:-8px;pointer-events:none;animation:lout var(--motion-duration-exit) var(--motion-exit-easing)}
@@ -527,23 +482,15 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button id="col-prev" aria-label="Previous column"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg></button>
 <div id="col-title"><span id="col-name"></span><span id="col-count"></span></div>
 <button id="col-next" aria-label="Next column"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4"/></svg></button>
-<button id="work-search" type="button" aria-label="Search cards by title, number or label">Search</button>
+<button id="work-search" type="button" aria-label="Search cards by title, number or label"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg></button>
 </div>
-<div id="dots"></div>
-<div id="bfilter">
-<button id="bsp" type="button">Specs: all</button>
-<details id="lf"><summary>labels</summary><div id="lfl"></div></details>
-<button id="lmode" type="button">by group</button>
-<button id="hide-empty" type="button">Empty columns: hidden</button>
-</div>
-<p id="empty-cols" hidden></p>
+<div id="col-tabs" role="group" aria-label="Columns"></div>
 <div id="cards" data-role="gap"></div>
-<!-- The Work search results replace the columns (SPEC 1596, rule 5; #1600); the counted remainder names what the filter hid. -->
+<!-- The Work search results replace the columns (SPEC 1596, rule 5; #1600). -->
 <div id="work-results" class="runlist" hidden></div>
-<p id="work-rest" class="mut" role="status" hidden></p>
-<div id="undo" role="status" hidden><span id="undo-text"></span><button id="undo-btn" type="button" hidden>Undo</button></div>
 <p id="bread"></p>
 <p id="bmsg"></p>
+<a id="boardlink" class="boardlink" target="_blank" rel="noopener"><span><b>Squad Board on GitHub</b><span class="sub">move, edit and close cards there</span></span><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M3 9l6-6M4 3h5v5"/></svg></a>
 </section>
 <section data-panel="runs" hidden>
 <h2>Runs</h2>
@@ -584,21 +531,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="specs-list" class="runlist"></div>
 </section>
 </main>
-<div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
-<div id="sheet-content"><div class="grab"></div>
-<div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Work</span></button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
-<div id="sh-nav"><button id="sh-prev" type="button" aria-label="Previous card"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg></button><span id="sh-set"></span><button id="sh-next" type="button" aria-label="Next card"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4"/></svg></button></div>
-<h2 id="sh-title"></h2>
-<div id="sh-chips"></div>
-<div id="sh-meta"></div>
-<div id="sh-next"><h3>Next step</h3><p id="sh-next-text"></p></div>
-<div id="sh-update"><h3>Latest update</h3><p id="sh-update-text"></p></div>
-<div id="sh-related"><h3>Related</h3><div id="sh-related-list"></div></div>
-<div id="sh-body"></div>
-<div id="sh-last"></div></div>
-<div id="sheet-actions"><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
-<div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
-</div>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
@@ -611,7 +543,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <input id="search-input" type="search" autocomplete="off" aria-label="Search by title, number or label">
 </div>
 <!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
-<div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div><button id="cr-scope" type="button">All projects</button></div>
+<div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div></div>
 <!-- The tab bar of SPEC 1596 (#1597): five tabs, drawn on every screen, a detail included, and over every sheet. -->
 <nav>
 <button data-tab="now">Now</button>
@@ -628,17 +560,17 @@ const squadStream = window.squadStream || { on() {}, watch() {}, unwatch() {}, l
 /*CHART*/
 // The board's own chart colours: the hub inlines one map, so a band's paint is the column's color role, never a copy here.
 const MC_COLORS = null;   // the payload's bands carry the board's own color roles (#2504)
-/*MOVE*/
-/*CARD_DETAIL*/
 /*LINK*/
 /*RUN*/
 /*USAGE*/
 /*SPECS*/
 /*SEARCH*/
-/*BOARD_FILTER*/
 /*CARD_RULES*/
 /*LOOP_RULES*/
 const $ = id => document.getElementById(id);
+// The repository and the board this hub serves (SPEC 2498, #2501): a card and a spec row are plain anchors to their
+// issue under this repository, and the board link opens the project on GitHub. The hub fills both.
+const HUB_REPO = /*HUB_REPO*/"owner/repo";
 // One icon builder (SPEC 1596, #1605): an icon the script draws is the inline SVG the markup carries, so the one .ico
 // rule gives it its stroke and its weight. A glyph is never an icon.
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -651,6 +583,7 @@ function icon(d) {
 }
 const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
+$("boardlink").href = /*HUB_BOARD_URL*/"https://github.com";
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
 
 // Settings left the phone (SPEC 2498, #2499): a saved Settings address opens Now, and the owner changes settings on the
@@ -673,7 +606,6 @@ const ROUTE = {
   spend: { panel: "spend", label: "Spend", alias: [] },
   // A layer row: the address segment, the tab it stands on (null is the tab under it), its title, and its parent layer.
   layers: {
-    sheet: { seg: s => "card=" + s.n, tab: "work", title: "Card", parent: null },
     psheet: { seg: () => "profile", tab: null, title: "Projects", parent: null },
     run: { seg: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
            tab: "runs", title: "Run", parent: null },
@@ -687,11 +619,12 @@ const ROUTE = {
   // The segment head a layer answers to, for the layers whose address is one plain word.
   plain: { profile: "psheet", lead: "lead", cfd: "cfd", loops: "loops", bugs: "bugs", profiler: "profiler" },
   // The saved address of a screen this page dropped (SPEC 2498): the segment opens the named screen and the entry is
-  // replaced, so Back never lands on it again.
+  // replaced, so Back never lands on it again. A card address opens Now: the card sheet left the page (#2501).
   legacy: [
     [/^(usage|tokens)$/, { tab: "spend" }],
     [/^(more|settings)$/, { tab: "now" }],
     [/^session=/, { tab: "now" }],
+    [/^card=/, { tab: "now" }],
   ],
 };
 const TABS = Object.keys(ROUTE).filter(k => !["layers", "plain", "legacy"].includes(k) && ROUTE[k].panel);
@@ -703,15 +636,6 @@ const tabKey = n => TAB_LABEL[n] ? n : (TAB_ALIAS[n] || "now");
 // A tab stored by an older build keeps its meaning: the tab that draws it now opens.
 const tabOf = s => tabKey(s === "status" ? "now" : s);
 const LAYER = {
-  sheet: {
-    show(s) {
-      if (Number.isInteger(s.n) && !view.sheet) openCard(s.n);
-      else $("sheet").hidden = tabActive !== "work";   // the card is drawn: a return to Work shows it again
-    },
-    // A tab left keeps its screens, hidden: the card's own state waits for the return, so no read closes it.
-    pause() { $("sheet").hidden = true; },
-    hide() { view = { ...view, sheet: false }; offBoard = null; issueKey = ""; linkSheet = null; $("sheet").hidden = true; $("sh-set").innerHTML = ""; $("sh-pos").textContent = ""; },
-  },
   psheet: {
     show() { $("psheet").hidden = false; $("profile").setAttribute("aria-expanded", "true"); },
     hide() { $("psheet").hidden = true; $("profile").setAttribute("aria-expanded", "false"); },
@@ -739,7 +663,7 @@ const tabStacks = Object.fromEntries(TABS.map(t => [t, []]));
 const layerState = Object.fromEntries(TABS.map(t => [t, {}]));
 let tabActive = "now";
 let layers = tabStacks[tabActive];
-let layerBacks = 0, pendingSheet = null;
+let layerBacks = 0;
 const topLayer = () => layers[layers.length - 1];
 const fieldsOf = s => { const { tab, layer, depth, ...data } = s; return data; };
 // The screen under the top of the stack names the Back: "Work" on a card, "Now" on the lead chart over it. The arrow is the
@@ -784,11 +708,6 @@ function routeFromHash(hash) {
   const tab = tabKey(m[1]), seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {}, replace: false };
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
   if (!seg) return out;
-  // A card's saved address stays bound to the Work tab's sheet screen: the sheet is drawn, so a reload restores it (#2499).
-  if (head.startsWith("card=")) {
-    const n = Number(decodeURIComponent(head.slice(5)));
-    return { tab: ROUTE.layers.sheet.tab, layer: "sheet", data: Number.isInteger(n) ? { n } : {}, replace: false };
-  }
   for (const [test, target] of ROUTE.legacy) if (test.test(head)) return { ...target, layer: null, data: {}, replace: true };
   if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
@@ -797,20 +716,17 @@ function routeFromHash(hash) {
 }
 // One control row on every root (SPEC 1596, rule 4): the active tab's segmented filter, whose last option says what it
 // includes, and the scope pill, which reads "All projects" or the one project the page serves. A detail hides the row.
-// The segmented filter of each root, whose last option says what it includes (rule 4). A root with one view offers one
-// option, so no button presents a filter the page cannot apply (rule 6).
+// The segmented filter of each root that offers one, whose last option says what it includes (rule 4). Work and Specs
+// offer none (SPEC 2498, #2501): Work shows the columns and the search alone, and Specs shows its rows alone.
 const ROOT_FILTERS = {
-  work: ["Live", "Any card"],
-  specs: ["Any spec"],
   runs: ["Live", "Ended", "Any run"],
 };
-// Each root's own predicate per segment, over the facts the hub serves: a card with a live run, a live or an ended run.
-// The last segment keeps every row.
+// Each root's own predicate per segment, over the facts the hub serves: a live or an ended run. The last segment keeps
+// every row.
 const ROOT_KEEP = {
-  work: [x => !!x.ho, () => true],
   runs: [r => !!r.live, r => !r.live, () => true],   // Live is the hub's live-process fact, never a derived "running"
 };
-const rootFilter = { work: 1, specs: 0, runs: 2 };
+const rootFilter = { runs: 2 };
 const rootKeep = (tab, x) => { const f = ROOT_KEEP[tab]; const keep = f && f[rootFilter[tab]]; return keep ? keep(x) : true; };
 // The last option of every filter names what it includes and hides no row, so only an earlier option draws the remainder
 // line, and the line always names the option the owner pressed (rule 4; #1600).
@@ -823,16 +739,17 @@ const filterRest = (tab, total, shown) => {
 // control row reads its open flag on every paint.
 const searchState = { open: false, tab: "", query: "" };
 // A segment change repaints the root it filters, never another one (rule 6).
-const repaintRoot = tab => { if (tab === "work") refresh(); else if (tab === "runs") drawRuns(); };
-const scopeName = () => { const me = location.pathname.split("/")[1]; return me && me !== "mobile" ? me : "All projects"; };
+const repaintRoot = tab => { if (tab === "runs") drawRuns(); };
 function paintControlRow() {
   const row = $("control-row");
   if (!row) return;
-  row.hidden = layers.length > 0 || searchState.open;   // a detail draws its action row instead; Search takes the slot
+  // A root with no filter draws no row (SPEC 2498, #2501): Work and Specs show the board and the specs alone.
+  const opts = ROOT_FILTERS[tabActive] || [];
+  row.hidden = layers.length > 0 || searchState.open || !opts.length;
   const seg = $("cr-seg");
   if (seg.dataset.tab !== tabActive) {
     seg.dataset.tab = tabActive;
-    seg.replaceChildren(...(ROOT_FILTERS[tabActive] || []).map((text, i) => {
+    seg.replaceChildren(...opts.map((text, i) => {
       const b = document.createElement("button");
       b.type = "button"; b.textContent = text;
       b.onclick = () => { rootFilter[tabActive] = i; paintControlRow(); repaintRoot(tabActive); };
@@ -842,22 +759,22 @@ function paintControlRow() {
   [...seg.children].forEach((b, i) => {
     if (i === rootFilter[tabActive]) b.setAttribute("aria-pressed", "true"); else b.removeAttribute("aria-pressed");
   });
-  $("cr-scope").textContent = scopeName();
 }
-$("cr-scope").onclick = () => openLayer("psheet");
 const searchOn = () => searchState.open && (searchState.tab === "work" || searchState.tab === "specs");
 // A search stays inside the scope the owner sees: the cards the Work segment keeps, shaped for the rule module.
 const workSearchPool = () => ((board && board.groups) || []).flatMap(g => (g.items || [])
-  .filter(x => rootKeep("work", x)).map(x => ({ ...x, title: x.t, labels: x.l || [] })));
+  .map(x => ({ ...x, title: x.t, labels: x.l || [] })));
+// A search result is the card's own plain anchor to its issue (SPEC 2498, #2501): no found row leads to a sheet.
 function searchResultEl(x) {
-  const b = document.createElement("button");
-  b.type = "button"; b.className = "runrow"; b.dataset.n = String(x.n);
+  const a = document.createElement("a");
+  a.className = "runrow"; a.dataset.n = String(x.n);
+  a.href = issueURL(x); a.target = "_blank"; a.rel = "noopener";
   const t = document.createElement("b");
   t.textContent = "#" + x.n + " " + (x.t || "");
-  b.append(t);
-  if (x.l && x.l.length) { const s = document.createElement("div"); s.className = "mut"; s.textContent = x.l.join(" · "); b.append(s); }
-  b.onclick = () => { const n = x.n; clearSearch(); openCard(n); };
-  return b;
+  a.append(t);
+  if (x.l && x.l.length) { const s = document.createElement("div"); s.className = "mut"; s.textContent = x.l.join(" · "); a.append(s); }
+  a.onclick = () => clearSearch();
+  return a;
 }
 // The results replace the columns while the query names a row (rule 5); an empty field leaves the board where it was. The
 // remainder line describes the list the search replaced, so it steps aside while the query stands.
@@ -866,8 +783,6 @@ function paintWorkSearch(q) {
   $("work-results").replaceChildren(...rows.map(searchResultEl));
   $("work-results").hidden = !q;
   $("cards").hidden = !!q;
-  $("dots").hidden = !!q;
-  $("work-rest").hidden = !!q || !$("work-rest").textContent;
 }
 function paintSearch() {
   const on = searchOn();
@@ -889,7 +804,7 @@ function clearSearch() {
   $("searchbar").hidden = true;
   $("search-input").value = "";
   $("work-results").replaceChildren(); $("work-results").hidden = true;
-  $("cards").hidden = false; $("dots").hidden = false;
+  $("cards").hidden = false;
   paintControlRow();
   if (tab === "specs") { if (!board) loadBoard(); drawSpecs(); } else if (tab === "work") renderBoard();
 }
@@ -986,9 +901,7 @@ function closeLayer(name) {
 function popScreen() {
   if (searchOn()) { clearSearch(); return; }
   const top = topLayer();
-  if (!top) return;
-  if (top === "sheet") step({ act: "close" });
-  else closeLayer(top);
+  if (top) closeLayer(top);
 }
 // Back, Forward and a reload all land here: the tab and the screens become the ones the entry names.
 addEventListener("popstate", () => {
@@ -1026,7 +939,6 @@ function show(name) {
   tabNow = TAB_PANEL[tab];
   localStorage.setItem("squad-mobile-tab", tab);
   paintPanel();
-  if (tabNow !== "board") cancelMove("tab");   // the Undo is on the Work tab: no move runs on unseen (#1007)
   if (tabNow === "board") loadBoard();
   if (tabNow === "runs") loadRuns();
   if (tabNow === "monitor") { status(); loadNeeds(); loopView(); loadPoll(); }
@@ -1067,7 +979,7 @@ const SERVED_BUILD = __BUILD__;
 let writesOpen = 0, buildStale = false, reloading = false;
 const writing = p => { writesOpen++; return p.finally(() => { writesOpen--; }); };
 function reloadHeld() {
-  return writesOpen > 0 || !!(pending && pending.live);
+  return writesOpen > 0 || !!(promoReqs && Object.keys(promoReqs).length);
 }
 async function checkVersion() {
   let v;
@@ -1318,10 +1230,9 @@ function openBugs() {
   const p = loopHere(), bugs = (p && p.bugs_open) || [];
   $("bugs-title").textContent = "Loop-bugs · " + ((p && (p.slug || p.repo)) || "this project");
   $("bugs-list").replaceChildren(...bugs.map(x => {
-    const li = document.createElement("li"), b = document.createElement("button");
-    b.type = "button"; b.className = "looprow";
+    const li = document.createElement("li"), b = document.createElement("a");
+    b.className = "looprow"; b.href = issueURL(x); b.target = "_blank"; b.rel = "noopener";
     b.textContent = "#" + x.n + " " + (x.t || "");
-    b.onclick = () => openLayer("sheet", { n: x.n });
     li.append(b); return li;
   }));
   $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug is read now: the refusal may have just cleared.";
@@ -1358,19 +1269,15 @@ $("loop-confirm-no").onclick = () => { $("loop-confirm").hidden = true; };
 loopView();
 every("monitor", loopView, 5000);
 
-let board = null, shown = [], issueKey = "", touch = null, seenCards = null, freshNow = new Set(), offBoard = null, issueD = null;   // offBoard: a card the board does not hold, a closed one, read by its issue alone (#972)
+let board = null, shown = [], seenCards = null, freshNow = new Set();   // shown: the cards the drawn column shows, in order
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-const reasons = {};   // issue number -> {why, col}: a refusal the card reads on every render, until its card moves again
-// issue number -> this page's own move request: `{phase, at, cause, rule}`. It is what tells a requested, confirmed,
-// failed, unknown or refused primary apart from the row's own pending (`pd`) and refusal (`mr`) facts (SPEC 1596, #1598).
-const moveReqs = {};
-const rowColumn = n => { for (const g of (board && board.groups) || []) if (g.items.some(i => i.n === n)) return g.name; return ""; };
-const rowOf = n => ((board && board.groups) || []).flatMap(g => g.items).find(i => i.n === n);
-// Whether the board still names the move this page already took. A confirmed primary stays disabled on it until the row
-// drops the card's move or names another one (rule 7), so the same move is never sent twice.
-const offersSameMove = n => { const row = rowOf(n), r = moveReqs[n]; return !!(row && row.pm && r && row.pmt === r.to); };
-let view = { col: 0, cols: 0, card: 0, cards: 0, sheet: false };
+// The page's one move (SPEC 2498, #2501): a spec's group header starts the spec and its open tickets in one write
+// (ADR-0142). `promoReqs[spec]` is the page's own request record, keyed by spec number: a request that waits, or a refusal
+// with the route's own reason. A request in flight never sends twice.
+const promoReqs = {};
+const issueURL = x => "https://github.com/" + (x.r || HUB_REPO) + "/issues/" + x.n;
+let view = { col: 0, cols: 0 };
 let bo = JSON.parse(localStorage.getItem("squad-mobile-board") || "{}");
 const saveB = () => localStorage.setItem("squad-mobile-board", JSON.stringify(bo));
 const rolesOf = el => { const out = []; for (let e = el; e; e = e.parentElement) if (e.dataset && e.dataset.role) out.push(e.dataset.role); return out; };
@@ -1381,52 +1288,31 @@ const mSlots = () => {
   if (slotsOf !== board || !slots) { slotsOf = board; slots = specSlots(((board && board.groups) || []).flatMap(g => g.items.map(cardSpec)).filter(n => n != null)); }
   return slots;
 };
-const columnCards = g => g.items.filter(x => labelOk(bo.labels || [], bo.lmode, x) && spOk(x) && rootKeep("work", x));
-function cardButton(x, i) {
-  // The card's age at one short rung (#1444): minutes under an hour, hours under a day, days
-  // after it, so the chip is one token the eye reads at phone width.
-  const shortAge = o => { const m = Math.max(0, Math.floor((Date.now() - Date.parse(o)) / 60000)); return m < 60 ? m + "m" : m < 1440 ? Math.floor(m / 60) + "h" : Math.floor(m / 1440) + "d"; };
-  const b = document.createElement("button");
-  b.className = "card"; b.dataset.role = "card"; b.dataset.i = i; b.dataset.n = x.n; b.dataset.hr = x.hr || "";
+// Work shows every card its column holds (SPEC 2498, #2501): the spec, label, grouping, empty-column and live/any
+// filters left the page, so a column is drawn whole.
+const columnCards = g => g.items;
+// A card is a plain anchor to its issue on GitHub (SPEC 2498, #2501): no sheet, no query string, and only the chips the
+// hub's row facts name: live run, hand hold, gate try and blocked by.
+function cardLink(x, i) {
+  const a = document.createElement("a");
+  a.className = "card"; a.dataset.role = "card"; a.dataset.i = String(i); a.dataset.n = String(x.n);
+  a.href = issueURL(x); a.target = "_blank"; a.rel = "noopener";
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
-  // The card wears its spec's color and its spec as a text chip (#917); the rules are the desktop board's (board-lanes.js).
-  b.setAttribute("style", "--lc:" + cardColor(mSlots(), x));
   const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
-  if (x.pa != null && !x.sp) id.append(chip("spec", x.pa));
-  // The card's Gate Tries (issue 1255): the count the gate-attempt journal projects rides the row as its chip
-  // text, a fact the row carries, so this page names no column of its own.
-  if (x.gchip) id.append(chip("gate", x.gchip));
-  // The card's PR/CI chip reads the same row fields the desktop card reads (#1444): the badge
-  // (`pb`) and the CI rollup, where a state the row does not carry reads "unknown", never
-  // "passing". An issue's PRs ride its `prf`, each with the CI state the row carries for it, the
-  // same fields the ticket sheet reads; a row that holds no PR says so. No field is invented here
-  // and no phone-only rule is named.
-  const prs = x.kind === "pr" ? [{ n: x.n, ci: x.rollup }] : (x.prf || []);
-  id.append(chip("pr", prs.length ? (x.pb ? x.pb + " " : "") + prs.map(p => "#" + p.n + " · CI " + (p.ci == null ? "unknown" : p.ci)).join(" ") : "no PR"));
-  if (x.b && x.b.length) id.append(chip("blocked", "blocked"));
-  if (x.ho) id.append(chip("run", "running"));
-  if (x.o) id.append(chip("age", shortAge(x.o)));
+  if (x.hh) id.append(chip("hold", "hand hold"));
+  if (x.gt) id.append(chip("gate", "gate try " + x.gt));   // the phone labels the row's own fact; the wire keeps the column's own text (#2501)
+  if (x.ho && x.hs === "running") id.append(chip("run", "live run"));
+  if (x.b && x.b.length) id.append(chip("blocked", "blocked by " + x.b.map(n => "#" + n).join(", ")));
   const t = document.createElement("span"); t.textContent = x.t;
-  b.append(id, t);
-  // The reason the hub refused this card's move is page state the card reads, so every render after the refusal draws it
-  // again (#829): a span put on the card once is dropped by the next read of the board.
-  const why = reasons[x.n];
-  if (why) { const r = document.createElement("span"); r.className = "creason"; r.textContent = why.why; b.append(r); }
-  // The writer's refusal of a move comes on the row (`x.mr`) and the move in flight is marked pending (`x.pd`), so a reload draws
-  // both (#1300): the page never waits for the writer, and the card shows where GitHub holds it.
-  else if (x.mr) { const r = document.createElement("span"); r.className = "creason"; r.textContent = x.mr; b.append(r); }
-  if (x.pd) { const p = document.createElement("span"); p.className = "cpend"; p.textContent = "pending"; b.append(p); }
-  // A card the hub marks promotable is the only one that drags, and it names the column the move goes to (`x.pmt`) so
-  // this page holds no column list of its own (#829). The hint is drawn only while the card is dragged.
-  if (x.pm) {
-    b.dataset.pm = "1"; b.dataset.pmt = x.pmt || "";
-    const mv = document.createElement("span"); mv.className = "cmv";
-    b.append(mv);
-  }
-  return b;
+  a.append(id, t);
+  a.setAttribute("style", "--lc:" + cardColor(mSlots(), x));
+  return a;
 }
 // The swimlanes of one column (#893): the page reads the lanes the gesture module's rule makes, with the saved collapse.
-const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {}, sum: board && board.sum });
+// Spec grouping is the only grouping on Work (SPEC 2498, #2501).
+const specCardOf = n => ((board && board.groups) || []).flatMap(g => g.items).find(x => x.sp && x.n === n);
+const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {}, sum: board && board.sum,
+  titleOf: n => { const x = specCardOf(n); return x ? stripSpec(x.t) : ""; } });
 function laneHeader(l) {
   const h = document.createElement("div");
   h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
@@ -1434,57 +1320,105 @@ function laneHeader(l) {
   if (l.num != null) h.setAttribute("style", "--lc:" + specColor(mSlots(), l.num));   // the lane header takes its spec color (#917)
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
   const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
-  const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
-  h.append(tw, id, pc);
+  const ttl = document.createElement("span"); ttl.className = "ltt"; ttl.textContent = l.name;
+  const pc = document.createElement("span"); pc.className = "pc";
+  pc.textContent = l.num == null ? (l.cards.length ? String(l.cards.length) : "") : (l.total ? l.closed + "/" + l.total : "");
+  h.append(tw, id, ttl, pc);
+  // The one move sits on a spec's group header (ADR-0142, SPEC 2498 #2501): the spec card the hub marks promotable carries
+  // the column the move goes to (`pmt`), so the page names no column of its own.
+  const spec = l.head && l.head.pm && l.head.pmt ? l.head : null;   // the row names its destination: the page names no column (#2501)
+  if (spec) h.append(promoButton(spec));
+  // A refused request names the route's reason under the header until the owner asks again.
+  const r = l.num != null ? promoReqs[l.num] : null;
+  if (r && r.phase === "refused" && r.rule) { const why = document.createElement("span"); why.className = "lane-reason"; why.textContent = r.rule; h.append(why); }
   return h;
+}
+function promoButton(spec) {
+  const r = promoReqs[spec.n] || {};
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "lane-promote";
+  b.textContent = r.phase === "requested" ? "pending" : "→ " + spec.pmt;
+  b.disabled = r.phase === "requested";
+  b.onclick = () => promoteSpec(spec);
+  return b;
+}
+// The one write of the page (SPEC 2498, #2501): the existing `/api/promote` route, answered as the state the header reads:
+// `ok`, `refused` (a rule forbids it, the reason comes from the hub), `failed` (an answer the page cannot read) or `unknown`
+// (no answer at all). The page adds no write route of its own.
+async function writePromote(n) {
+  let r;
+  try { r = await writing(fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: n }) })); }
+  catch (e) { return { kind: "unknown" }; }
+  let d = {};
+  try {
+    // A refusal the hub answers as plain text (the seam's own 403) carries the reason in its body: it is never read as a
+    // failed request.
+    if (((r.headers.get("Content-Type") || "").indexOf("json")) < 0) {
+      const text = (await r.text()).trim();
+      if (!r.ok) return { kind: "refused", rule: text || "the hub answered " + r.status };
+      return { kind: "ok" };
+    } else d = await r.json();
+  } catch (e) { return { kind: "failed", cause: "the hub answered " + r.status + " with a body this page cannot read" }; }
+  if (d.err) return { kind: "refused", rule: d.err };
+  if (!r.ok) return { kind: "failed", cause: "the hub answered " + r.status };
+  return { kind: "ok" };
+}
+async function promoteSpec(spec) {
+  const r = promoReqs[spec.n];
+  if (r && r.phase === "requested") return;   // a request in flight sends once, and the header says it waits
+  promoReqs[spec.n] = { phase: "requested" };
+  renderBoard();
+  const out = await writePromote(spec.n);
+  if (out.kind === "ok") { delete promoReqs[spec.n]; await loadBoard(true); return; }   // the write answered: no request still waits, even when the read still marks the spec promotable
+  promoReqs[spec.n] = { phase: "refused", rule: out.kind === "refused" ? out.rule : "the request failed: " + (out.cause || "no answer") };
+  renderBoard();
 }
 let cardNodes = new Map();   // card key -> {sig, el}: the nodes the last render drew
 function renderBoard() {
   const groups = board && board.groups ? board.groups : [];
-  // With the filter on (the default), a column with no visible card is left out and named in one list (#877).
-  const { shown: cols, hidden, closed } = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false);
-  $("hide-empty").textContent = bo.hideEmpty !== false ? "Empty columns: hidden" : "Empty columns: shown";
-  // The segment hides a card the filter cannot keep: one quiet line counts the remainder (#1600). An open search
-  // replaces the list, so the line waits until the search clears.
-  const allCards = groups.reduce((m, g) => m + (g.items || []).length, 0);
-  const keptCards = groups.reduce((m, g) => m + (g.items || []).filter(x => rootKeep("work", x)).length, 0);
-  const restText = searchOn() && searchState.query.trim() ? "" : filterRest("work", allCards, keptCards);
-  $("work-rest").textContent = restText; $("work-rest").hidden = !restText;
-  const notes = [];
-  if (hidden.length) notes.push("Empty: " + hidden.map(h => h.name + " " + h.count).join(" · "));
-  if (closed.length) notes.push(closed.map(c => c.name + " " + c.count).join(" · "));
-  $("empty-cols").hidden = !notes.length;
-  $("empty-cols").textContent = notes.join(" · ");
+  // Every column is drawn, an empty one included: the empty-column filter left the page (SPEC 2498, #2501).
+  const cols = groups.filter(g => !g.end);
   view.cols = cols.length;
   view.col = Math.min(view.col, Math.max(0, cols.length - 1));
   const g = cols[view.col];
   const model = g ? laneModelOf(g) : { lanes: [], flat: [] };
   shown = model.flat;
-  view.cards = shown.length;
-  view.card = Math.min(view.card, Math.max(0, shown.length - 1));
-  const visible = g ? columnCards(g).length : 0;
+  const specs = model.lanes.filter(l => l.num != null).length;
+  const cards = model.lanes.reduce((n, l) => n + l.cards.length, 0);   // the spec's own card heads its lane and is not counted
   $("col-name").textContent = g ? g.name : "";
-  $("col-count").textContent = g ? (visible === g.items.length ? String(g.n) : visible + " of " + g.n) : "";
+  $("col-count").textContent = g ? (cards === 1 ? "1 card" : cards + " cards") + (specs ? " · " + specs + (specs === 1 ? " spec" : " specs") : "") : "";
   $("col-prev").disabled = view.col <= 0;
   $("col-next").disabled = view.col >= cols.length - 1;
-  $("dots").replaceChildren(...cols.map((c, i) => { const d = document.createElement("i"); if (i === view.col) d.className = "on"; return d; }));
+  // The row of column names switches the column with one tap (SPEC 2498, #2501).
+  const tabs = $("col-tabs");
+  if (tabs.dataset.k !== cols.map(c => c.name).join("\n")) {
+    tabs.dataset.k = cols.map(c => c.name).join("\n");
+    tabs.replaceChildren(...cols.map((c, i) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = c.name;
+      b.onclick = () => { view.col = i; renderBoard(); };
+      return b;
+    }));
+  }
+  [...tabs.children].forEach((b, i) => {
+    if (i === view.col) b.setAttribute("aria-pressed", "true"); else b.removeAttribute("aria-pressed");
+  });
   const empty = document.createElement("p");
   empty.className = "empty";
-  empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length, filtered: (bo.labels || []).length > 0 || specMode() !== 0 });
-  // Each lane heads its cards; a collapsed lane shows its header only. The card index counts the cards the column draws.
-  // Only a card new to the board on this board read fades in (loadBoard names it), so a column switch, a filter change
-  // and the poll never play the fade again.
+  empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length });
+  // Each lane heads its cards; a collapsed lane shows its header only. Only a card new to the board on this board read
+  // fades in (loadBoard names it), so a column switch and the poll never play the fade again.
   const fresh = freshNow, next = new Map();
   const nodes = [];
   let i = 0;
   for (const l of model.lanes) {
     nodes.push(laneHeader(l));
     if (!l.collapsed) for (const x of l.cards) {
-      // A card whose data, place, reason and color did not change keeps its node (#1004); only a changed card is rebuilt.
+      // A card whose data, place and color did not change keeps its node (#1004); only a changed card is rebuilt.
       const k = cardKey(x), isNew = fresh.has(k);
-      const sig = JSON.stringify([x, i, reasons[x.n] || null, cardColor(mSlots(), x), isNew]);
+      const sig = JSON.stringify([x, i, cardColor(mSlots(), x), isNew]);
       const old = cardNodes.get(k);
-      const b = old && old.sig === sig && !isNew ? old.el : cardButton(x, i);
+      const b = old && old.sig === sig && !isNew ? old.el : cardLink(x, i);
       i++;
       if (isNew) b.classList.add("cin");
       nodes.push(b);
@@ -1493,227 +1427,52 @@ function renderBoard() {
   }
   cardNodes = next;
   $("cards").replaceChildren(...(nodes.length ? nodes : [empty]));
+  // A spec's request stands only while its card is still the hub's promotable one: the read that drops the arrow drops the
+  // request with it, so a moved spec never shows a second pending.
+  for (const n of Object.keys(promoReqs))
+    if (!groups.some(g => g.items.some(x => x.n === +n && x.pm))) delete promoReqs[n];
 }
-// The sheet draws the card data the board read already holds (#919): the row carries the blockers, the cards it blocks,
-// the run that holds it and the pull request that closes it, so the view holds no rule of its own (ADR-0137).
+const esc = s => escHTML(s);
 const escHTML = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const esc = escHTML;const chipOf = (n, r) => `<a class="shb" data-n="${escHTML(n)}" data-r="${escHTML(r || "")}" title="open #${escHTML(n)} in this sheet">#${escHTML(n)}</a>`;
-const rowHTML = (label, html) => '<div class="mrow"><b>' + label + '</b><span>' + html + "</span></div>";
-const ROWS = ["Column", "Labels", "Blocked by", "Blocks", "Runs", "PR · CI", "Opened"];
-function sheetChips(x) {
-  return x.sp ? '<span class="chip spec">SPEC</span>' : "";
-}
-function sheetMeta(x, d) {
-  const prs = (x.prf || []).map(p => `<a class="shb" target="_blank" rel="noopener" href="https://github.com/${escHTML(p.r || x.r || "")}/pull/${escHTML(p.n)}">#${escHTML(p.n)}${p.ci ? " · CI " + escHTML(p.ci) : ""}</a>`);
-  const opened = d ? (d.by ? "by " + escHTML(d.by) : "unknown") + (d.created ? " on " + escHTML(String(d.created).slice(0, 10)) : "") : "…";
-  const v = {
-    "Column": escHTML(rowColumn(x.n) || ""),
-    "Labels": escHTML((x.l || []).join(" · ") || "none"),
-    "Blocked by": (x.b || []).map(n => chipOf(n, x.r)).join(" ") || "none",
-    "Blocks": (x.bl || []).map(n => chipOf(n, x.r)).join(" ") || "none",
-    "Runs": x.hr ? `<span class="shb">${escHTML(x.hr)}</span>` : "none",
-    "PR · CI": prs.join(" ") || "none",
-    "Opened": opened,
-  };
-  return ROWS.map(l => rowHTML(l, v[l])).join("");
-}
-// The card body of rule 7 (SPEC 1596): the next step, the latest update, the related objects, and Description and
-// Activity as two rows that open on their own. Every string comes from a fact the row or the issue read carries.
-function paintCardBody(x, d) {
-  $("sh-next-text").textContent = nextStepOf(x, rowColumn(x.n));
-  $("sh-update-text").textContent = d ? latestUpdateOf(d) : "Loading the latest update.";
-  $("sh-related-list").replaceChildren(...relatedOf(x, d || {}).map(r => {
-    const row = document.createElement("div");
-    row.className = "rel"; row.dataset.kind = r.kind;
-    if (r.kind === "description") row.id = "sh-desc-row";
-    if (r.kind === "activity") row.id = "sh-act-row";
-    if (r.kind === "description" || r.kind === "activity") row.setAttribute("role", "button");
-    const t = document.createElement("span"); t.textContent = r.text;
-    const ch = icon("M4 2l4 4-4 4"); ch.classList.add("chev");
-    row.append(t, ch);
-    return row;
-  }));
-}
-// Description and Activity are two rows of the Related list: a tap opens one without the other (rule 7, user story 25).
-$("sh-related-list").onclick = e => {
-  const row = e.target.closest && e.target.closest(".rel");
-  if (!row) return;
-  const box = row.dataset.kind === "description" ? $("sh-body") : row.dataset.kind === "activity" ? $("sh-last") : null;
-  if (box) box.hidden = !box.hidden;
-};
-function setLink(url) {
-  const ok = /^https:\/\/github\.com\//.test(url || "");
-  $("sh-link").hidden = !ok;
-  $("sh-link").href = ok ? url : "#";
-}
-// The card the sheet names now (#1459): an issue read that answers for any other card is dropped, so two card links in a
-// row leave the second card's issue on the sheet, whatever order the reads land in.
-function sheetKey() {
-  const x = view.sheet ? (offBoard || shown[view.card]) : null;
-  return x ? (x.r || "") + "#" + x.n : "";
-}
-async function loadIssue(x, key) {
-  try {
-    const d = await call("/api/issue?n=" + x.n + (x.r ? "&r=" + encodeURIComponent(x.r) : ""));
-    if (key !== sheetKey()) return;
-    issueD = d.err ? null : d;
-    if (d.err) { $("sh-meta").innerHTML = sheetMeta(x, null); $("sh-body").textContent = d.err; paintCardBody(x, null); return; }
-    setLink(d.url);
-    $("sh-title").textContent = "#" + d.n + " " + d.title;
-    $("sh-chips").innerHTML = sheetChips(x);
-    $("sh-meta").innerHTML = sheetMeta(x, d);
-    // GitHub's rendered body, passed through the hub's allow-list (#919): no frame, no script, checkboxes and code keep
-    // their look. A failed rendered read leaves the plain body the same read carried.
-    if (d.html) $("sh-body").innerHTML = d.html; else $("sh-body").textContent = d.body || "No description.";
-    $("sh-last").innerHTML = d.last
-      ? `<h3>Last comment</h3><p class="mut">${escHTML(d.last.by || "")} · ${escHTML(String(d.last.at || "").slice(0, 16).replace("T", " "))}</p>${d.last.html}`
-      : "";
-    paintCardBody(x, d);
-  } catch (e) { if (key === sheetKey()) { $("sh-body").textContent = e.message; paintCardBody(x, null); } }
-}
-// A card of the selection is scrolled above the sheet (#919): the sheet covers 60% of the screen, so the card it names
-// stays in sight above it.
-function scrollCardIntoView(x) {
-  const el = $("cards").querySelector('[data-role="card"][data-n="' + x.n + '"]');
-  if (el) el.scrollIntoView({ block: "start" });
-}
-function openCard(n) {
-  linkSheet = null;   // every open but a card link's own clears the card a hash opened
-  if (tabActive !== "work") show("work");   // the card belongs to Work: opening one shows Work, whoever asked
-  // A blocker link opens that ticket in the same sheet (#919), never a new tab: the card is found in its own column, and
-  // the board is drawn there before the sheet reads it.
-  // A card in a collapsed lane opens its lane first: the sheet never names a card the column does not draw (#893).
-  const groups = (board && board.groups) || [];
-  const drawn = carouselColumns(groups, groups.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;   // the index the carousel knows
-  for (const g of groups) {
-    const lane = laneModelOf(g).lanes.find(l => l.cards.some(r => r.n === n));
-    if (!lane) continue;
-    if (lane.collapsed) { bo.mlc = { ...(bo.mlc || {}), [lane.id]: false }; saveB(); }
-    const ci = drawn.findIndex(c => c.name === g.name);
-    const idx = laneModelOf(g).flat.findIndex(r => r.n === n);
-    if (ci >= 0 && idx >= 0) { offBoard = null; view = { ...view, col: ci, card: idx, sheet: true }; renderBoard(); renderSheet(); return; }
-  }
-  offBoard = { n, t: "", l: [], r: "" };
-  view = { ...view, sheet: true };
-  renderSheet();
-}
-function renderSheet() {
-  const x = offBoard || shown[view.card];
-  const open = view.sheet && !!x;
-  if (!open) { closeLayer("sheet"); return; }
-  openLayer("sheet", { n: x.n });
-  $("sheet").hidden = tabActive !== "work";   // the card belongs to Work: a read that answers on another tab never covers it
-  const key = (x.r || "") + "#" + x.n;
-  // The selection is the cards this column shows (#919), narrowed to the opened card's run when it holds one (#997): the
-  // position, the previous and next buttons and the number chips all read it, and a closed sheet clears the read key, so
-  // opening it again reads the issue again.
-  const set = offBoard ? [] : sheetCards(shown, x), at = set.indexOf(x);
-  $("sh-pos").textContent = offBoard ? "" : (at + 1) + " of " + set.length;
-  $("sh-prev").disabled = offBoard || at <= 0;
-  $("sh-next").disabled = offBoard || at >= set.length - 1;
-  $("sh-set").innerHTML = set.map((c, k) => {
-    const i = shown.indexOf(c);
-    return `<button type="button" data-i="${i}" class="${i === view.card ? "on" : ""}" title="card ${k + 1} of ${set.length}">#${escHTML(c.n)}</button>`;
-  }).join("");
-  // The action row's one primary reads the state the card rules name from the row's move facts and this page's request
-  // record (SPEC 1596, rule 7). The button's column comes from the row (`x.pmt`), never from a column this page names.
-  $("sh-todo").hidden = !x.pm && !moveReqs[x.n] && !x.mr;
-  paintActionRow(x);
-  // Board-derived metadata is redrawn on every pass, with the issue detail the last read gave (#1005).
-  if (key === issueKey) {
-    $("sh-chips").innerHTML = sheetChips(x); $("sh-meta").innerHTML = sheetMeta(x, issueD);
-    $("sh-next-text").textContent = nextStepOf(x, rowColumn(x.n));   // the row's own facts, redrawn on every pass
-    return;
-  }
-  issueKey = key; issueD = null;
-  $("sheet-content").scrollTop = 0;
-  $("sh-title").textContent = "#" + x.n + " " + x.t;
-  $("sh-chips").innerHTML = sheetChips(x);
-  $("sh-meta").innerHTML = sheetMeta(x, null);
-  $("sh-body").textContent = "Loading the issue.";
-  $("sh-last").innerHTML = "";
-  paintCardBody(x, null);
-  setLink(x.r ? "https://github.com/" + x.r + "/issues/" + x.n : "");
-  scrollCardIntoView(x);
-  loadIssue(x, key);
-}
-// The phone's card link (#1459): `#issue=N` names one card, and the rule module (hub-mobile-link.js) names what the board
-// does with it. The handler asks the rule for the result and says it on the board's own line, then opens the card, so a
-// folded lane opens and a card the board does not draw is read in the same sheet. A link that arrives before the first
-// board read waits for it, so it never lands on a blank board.
-// What the last card link opened, so a hash that stops naming it closes that sheet, and no card of the same number in
-// another repository is closed in its place: the sheet card's own key, or LINK_OFF for a sheet that reads the issue
-// alone. That sheet's key changes as the page redraws it, so the link keeps the fact that it opened an off-board sheet,
-// never the key the sheet happens to show.
-const LINK_OFF = "off";
-let linkWanted = null, linkSheet = null;
-// The facts come from the page's own reads: the label filter, the spec mode and a column the carousel leaves out each
-// drop a card, and a lane holds it or a defect dropped it. `dropped` names which read hid the card, so the line says the
-// neutral fact and no caller names the owner's filter for another read's doing.
-const linkFacts = n => {
-  const g = ((board && board.groups) || []).find(g => g.items.some(x => x.n === n));
-  if (!g) return { onBoard: false, shown: false, placed: false, collapsed: false, dropped: "" };
-  const x = g.items.find(c => c.n === n);
-  const dropped = !labelOk(bo.labels || [], bo.lmode, x) ? "labels" : !spOk(x) ? "spec" : g.end ? "column" : "";
-  const lane = dropped ? null : laneModelOf(g).lanes.find(l => l.cards.some(c => c.n === n));
-  return { onBoard: true, shown: !dropped, placed: !!lane, collapsed: !!(lane && lane.collapsed), dropped };
-};
-function linkTake() {
-  if (linkWanted === null || !board) return;
-  const n = linkWanted; linkWanted = null;
-  $("bmsg").textContent = linkResult(n, linkFacts(n)).say;
-  openCard(n);
-  const x = shown[view.card];
-  linkSheet = !offBoard && x && x.n === n ? cardKey(x) : LINK_OFF;   // the card the link named, never another one
-}
-// A hash that stops naming a card undoes what the last card link did: the sheet it opened closes and its line clears, so a
-// tab or an anchor the owner asked for is never hidden behind a stale card.
-function linkDrop() {
-  $("bmsg").textContent = "";
-  if (linkSheet === null) return;
-  const was = linkSheet; linkSheet = null;
-  const mine = was === LINK_OFF ? !!offBoard : view.sheet && sheetKey() === was;
-  if (mine) { view = { ...view, sheet: false }; renderSheet(); }
+// A saved `#issue=N` address opens Work at the card (SPEC 2498): the column that holds it opens, a folded lane opens, and
+// the card takes the page's focus mark. A card the board does not hold says so on the board's own line.
+let linkWanted = null;
+function focusCard(n) {
+  const cols = ((board && board.groups) || []).filter(g => !g.end);
+  const col = cols.findIndex(g => g.items.some(x => x.n === n));
+  if (col < 0) { $("bmsg").textContent = "#" + n + " is not on the board: its issue is read on GitHub."; return; }
+  const lane = laneModelOf(cols[col]).lanes.find(l => l.cards.some(x => x.n === n));
+  if (lane && lane.collapsed) { bo.mlc = { ...(bo.mlc || {}), [lane.id]: false }; saveB(); }
+  view.col = col; renderBoard();
+  const el = $("cards").querySelector('[data-role="card"][data-n="' + n + '"]');
+  if (el) { el.classList.add("focus"); if (el.scrollIntoView) el.scrollIntoView({ block: "center" }); }
 }
 function linkOpen() {
   const n = linkHash(location.hash);
-  if (n === null) { linkDrop(); return; }
-  linkWanted = n;
-  if (tabNow !== "board") show("board");   // a card link opens the board, where the card is (as the desktop does, #1274)
-  if (board) linkTake();   // a board already read opens the card now; a board still being read waits for applyBoard
+  if (n === null) return;
+  if (tabActive !== "work") show("work");
+  if (board) focusCard(n); else linkWanted = n;   // a board still being read opens the card when it answers
 }
 addEventListener("hashchange", linkOpen);
-function renderFilters() {
-  const m = specMode(), sel = bo.labels || [];
-  $("bsp").textContent = "Specs: " + SP[m][0];
-  $("lmode").textContent = bo.lmode === "all" ? "all" : "by group";
-  const LB = [...new Set([...((board && board.labels) || []), ...sel])].sort();
-  const lfl = $("lfl");
-  if (lfl.dataset.k !== LB.join("\n")) {
-    lfl.dataset.k = LB.join("\n");
-    lfl.replaceChildren(...LB.map(l => {
-      const lab = document.createElement("label"), c = document.createElement("input");
-      c.type = "checkbox"; c.value = l;
-      lab.append(c, document.createTextNode(" " + l));
-      return lab;
-    }));
-  }
-  lfl.querySelectorAll("input").forEach(c => c.checked = sel.includes(c.value));
-  $("lf").querySelector("summary").textContent = sel.length ? sel.join(", ") : "labels";
-}
-const refresh = () => { renderBoard(); renderSheet(); renderFilters(); drawSpecs(); };
+// The page paints the two lists it draws from the board, and nothing else (SPEC 2498, #2501): the filter row left the page.
+const refresh = () => { renderBoard(); drawSpecs(); };
 // Specs (#1604): each open spec with its tickets by column, from the board this page reads. hub-mobile-specs.js shapes it.
 function drawSpecs() {
   const all = specProgress(board);
-  // Search matches a spec's title, number or label and its results replace the list (rule 5; #1600).
+  // Search matches a spec's title, number or label and its results replace the list (SPEC 2498, #2501).
   const q = searchState.open && searchState.tab === "specs" ? searchState.query.trim() : "";
   const rows = q ? searchRows(all, q) : all;
   $("specs-state").textContent = !board ? "The board is loading." : rows.length ? "" : q ? "No spec matches." : "No open spec.";
   $("specs-list").replaceChildren(...rows.map(specRowEl));
 }
+// A spec row is a plain anchor to its issue on GitHub (SPEC 2498, #2501): the one tap leaves the hub, and the row carries
+// the progress the hub's summary holds.
 function specRowEl(s) {
-  const row = document.createElement("div");
+  const row = document.createElement("a");
   row.className = "row";
+  row.href = "https://github.com/" + (s.repo || HUB_REPO) + "/issues/" + s.n;
+  row.target = "_blank"; row.rel = "noopener";
+  row.dataset.n = String(s.n);
   const head = document.createElement("b");
   head.textContent = (s.repo ? s.repo + " · " : "") + "SPEC " + s.n + " " + s.title;
   const bar = document.createElementNS(NS_SVG, "svg"), at = { x: 0 };
@@ -1734,10 +1493,10 @@ function specRowEl(s) {
   count.textContent = s.count;
   legend.className = "mut";
   legend.textContent = s.legend;
-  row.append(head, bar, count, legend);
+  const ex = document.createElement("span"); ex.className = "ex"; ex.textContent = "↗"; ex.setAttribute("aria-hidden", "true");
+  row.append(head, bar, count, legend, ex);
   return row;
 }
-const step = g => { offBoard = null; view = sheetStep(view, shown, g); refresh(); };
 // The Specs tab draws from the board (SPEC 1596, rule 5): a board that answers after the tab opened repaints it, and the
 // tab asks for the board on its own the first time it opens (#1604).
 const specsPanel = () => document.querySelector('[data-panel="specs"]');
@@ -1757,206 +1516,36 @@ setInterval(() => {
 function applyBoard(b) {
   if (!b.groups) throw new Error(b.error || "The board is not ready.");
   boardRead = Date.now(); boardStale = !!b.err;
-  // The open sheet keeps its issue and column by identity, never by index (#1005).
-  const open = view.sheet && !offBoard && shown[view.card];
-  const id = open ? { name: (carouselColumns(((board && board.groups) || []), ((board && board.groups) || []).map(g => columnCards(g).length), bo.hideEmpty !== false).shown[view.col] || {}).name, key: cardKey(open) } : null;
   board = b;
-  // A lost reply the read now answers as moved resolves itself: the row no longer offers the move, so the unknown state
-  // ends without a second send (SPEC 1596, rule 7).
-  for (const n of Object.keys(moveReqs)) {
-    const row = b.groups.flatMap(g => g.items).find(i => i.n === +n);
-    if (moveReqs[n].phase === "unknown" && row && !row.pm) delete moveReqs[n];
-  }
-  if (id) {
-    const gs = b.groups, sh = carouselColumns(gs, gs.map(g => columnCards(g).length), bo.hideEmpty !== false).shown;
-    view = anchorView(view, sh.map(g => ({ name: g.name, flat: laneModelOf(g).flat })), id);
-  }
   // The seen set holds every card key a board read gave in this page session, so only a card new to the board fades.
   const keys = b.groups.flatMap(g => g.items.map(cardKey));
   freshNow = new Set(freshCards(seenCards, keys));
   seenCards = new Set([...(seenCards || []), ...keys]);
-  // A refusal stays on its card while the card keeps the column it was refused in; a read the move reached clears it.
-  for (const n of Object.keys(reasons)) if (rowColumn(+n) !== reasons[n].col) delete reasons[n];
   $("bmsg").textContent = "";
   refresh();
-  if (pendingSheet !== null) { const n = pendingSheet; pendingSheet = null; openCard(n); }
-  linkTake();   // a card link that waited for this read opens now (#1459)
+  // A card link that waited for the board opens now (#1459): the address may already name Work's root by then.
+  if (linkWanted !== null) { const n = linkWanted; linkWanted = null; focusCard(n); }
+  else linkOpen();
   freshNow = new Set();
 }
 squadStream.on("board", b => { try { applyBoard(b); } catch (e) { $("bmsg").textContent = e.message; } });
 every("board", () => { if (!squadStream.live()) loadBoard(); }, 10000);
 
-$("bsp").onclick = () => { bo.specs = (specMode() + 1) % 3; saveB(); refresh(); };
-$("hide-empty").onclick = () => { bo.hideEmpty = bo.hideEmpty === false; saveB(); refresh(); };
-$("lmode").onclick = () => { bo.lmode = bo.lmode === "all" ? "any" : "all"; saveB(); refresh(); };
-$("lfl").onchange = e => {
-  const h = new Set(bo.labels || []);
-  if (e.target.checked) h.add(e.target.value); else h.delete(e.target.value);
-  bo.labels = [...h]; saveB(); refresh();
-};
-$("col-prev").onclick = () => step({ act: "column", step: -1 });
-$("col-next").onclick = () => step({ act: "column", step: 1 });
-$("sh-next").onclick = () => step({ act: "card", step: 1 });
-$("sh-prev").onclick = () => step({ act: "card", step: -1 });
-$("sh-close").onclick = () => step({ act: "close" });
-$("sh-set").onclick = e => {
-  const b = e.target.closest("button[data-i]");
-  if (b) { offBoard = null; view = { ...view, card: +b.dataset.i, sheet: true }; renderSheet(); }
-};
-// A blocker or the pull request that closes the card opens the ticket in the same sheet (#919); "Open on GitHub" is the
-// only link that leaves the hub.
-$("sh-meta").onclick = e => {
-  const a = e.target.closest("a.shb[data-n]");
-  if (a) { e.preventDefault(); openCard(+a.dataset.n); }
-};
-// The one primary of the action row sends the card's own move, the one write the page already makes (#829). It is drawn
-// only for a card the hub marks promotable, and a requested, confirmed, unknown or refused move never sends a second
-// time (SPEC 1596, rule 7); only a failed move retries on one tap.
-$("sh-todo").onclick = () => {
-  const x = offBoard ? null : shown[view.card];
-  if (!x || !x.pm) return;
-  const phase = moveReqs[x.n] && moveReqs[x.n].phase;
-  if (phase === "failed") { sendMove(x.n, x.pmt); return; }   // a failed write retries on one tap
-  if (phase) return;                                          // requested, confirmed, unknown or refused never sends again
-  stageMove(x, null);   // the Undo window holds the write; only writePending sends it, and only it calls sendMove
-};
-// The ••• menu holds what the action row leaves out (rule 7): the close stays available when the primary owns the row.
-$("sh-dots").onclick = () => { $("sh-menu").hidden = !$("sh-menu").hidden; };
-$("sh-menu").onclick = e => {
-  const b = e.target.closest("[data-menu]");
-  if (!b) return;
-  $("sh-menu").hidden = true;
-  if (b.dataset.menu === "close") step({ act: "close" });
-  else if ($("sh-link").href) $("sh-link").click();
-};
-// The secondary is Close, unless a rule refused the move: then the rule is what the secondary offers, and a tap names it.
-$("sh-close").onclick = () => {
-  const x = offBoard ? null : shown[view.card];
-  const r = x && moveReqs[x.n];
-  if (r && r.phase === "refused") { $("bmsg").textContent = r.rule || "a rule forbids this move"; $("sheet-content").scrollTop = 0; return; }
-  step({ act: "close" });
-};
+$("col-prev").onclick = () => { view.col = Math.max(0, view.col - 1); renderBoard(); };
+$("col-next").onclick = () => { view.col = Math.min(view.cols - 1, view.col + 1); renderBoard(); };
 addEventListener("keydown", e => {
   if (e.key === "Escape") { popScreen(); return; }
-  if (!view.sheet) return;
-  if (e.key === "ArrowLeft" || e.key === "k") step({ act: "card", step: -1 });
-  else if (e.key === "ArrowRight" || e.key === "j") step({ act: "card", step: 1 });
+  if (tabActive !== "work" || layers.length) return;
+  if (e.key === "ArrowLeft" || e.key === "k") { view.col = Math.max(0, view.col - 1); renderBoard(); }
+  else if (e.key === "ArrowRight" || e.key === "j") { view.col = Math.min(view.cols - 1, view.col + 1); renderBoard(); }
 });
-// The owner's move from the phone (#829): a drag right past the threshold stages a move to the column the row names
-// (`x.pmt`); the Undo delays the write, and the app going hidden or the profile changing cancels it, so a move the owner
-// walked away from is never written later. The card never leaves its column here: only the hub's read moves it
-// (ADR-0143), and nothing on this page moves a card back or past the column the row names.
-let pending = null, pendingTimer = 0, deadTimer = 0, suppressClick = false;
-const undoText = t => { $("undo-text").textContent = t; $("undo").hidden = !t; };
-function stageMove(x, el) {
-  // A second move staged over a live one cancels it, and the Undo line names it: the owner never believes the first card
-  // is still moving (#829). The card's own last refusal is answered by this new move.
-  const prior = pending && pending.live ? pending.n : 0;
-  if (prior) cancelMove("superseded");
-  delete reasons[x.n];
-  clearTimeout(pendingTimer); clearTimeout(deadTimer);
-  pending = moveStage(x.n, x.pmt, Date.now());
-  if (el) { el.classList.remove("armed"); el.style.transform = ""; }
-  undoText((prior ? "#" + prior + ": move cancelled · " : "") + "#" + x.n + " moves to " + x.pmt + " in a few seconds");
-  $("undo-btn").hidden = false;
-  pendingTimer = setTimeout(writePending, UNDO_MS);
-  refresh();
-}
-function cancelMove(why) {
-  if (!pending || !pending.live) return;
-  pending = moveAct(pending, why, Date.now());
-  clearTimeout(pendingTimer); pendingTimer = 0;
-  $("undo-btn").hidden = true;
-  undoText("#" + pending.n + ": move cancelled");
-  clearTimeout(deadTimer);
-  deadTimer = setTimeout(() => { if (!pending || !pending.live) undoText(""); }, 2500);
-}
-async function writePending() {
-  const p = moveAct(pending, "write", Date.now());
-  if (!p || p.why !== "written") return;
-  pending = null; undoText(""); $("undo-btn").hidden = true;
-  await sendMove(p.n, p.to);
-}
-// The one write of a move (#829, #1598), answered as the state the primary reads: `ok`, `refused` (a rule forbids it, the
-// reason comes from the hub), `failed` (an answer the page cannot read) or `unknown` (no answer at all). The request is
-// the existing `/api/promote` route; this page adds no write route of its own.
-async function writePromote(n) {
-  let r;
-  try { r = await writing(fetch("/api/promote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue: n }) })); }
-  catch (e) { return { kind: "unknown" }; }   // a failed request is the only "did not answer"
-  let d = {};
-  try {
-    // A refusal the hub answers as plain text (the seam's own 403) carries the reason in its body: it is never read as a
-    // failed request (#829).
-    if (((r.headers.get("Content-Type") || "").indexOf("json")) < 0) {
-      const text = (await r.text()).trim();
-      if (!r.ok) return { kind: "refused", rule: text || "the hub answered " + r.status };
-      return { kind: "ok" };
-    } else d = await r.json();
-  } catch (e) { return { kind: "failed", cause: "the hub answered " + r.status + " with a body this page cannot read" }; }
-  if (d.err) return { kind: "refused", rule: d.err };
-  if (!r.ok) return { kind: "failed", cause: "the hub answered " + r.status };
-  return { kind: "ok" };
-}
-// One move request, one state: a request that waits, a confirmed move that stands two seconds, a failure that retries, an
-// unknown that keeps polling and never re-sends, and a refusal whose rule the secondary offers (SPEC 1596, rule 7).
-async function sendMove(n, to) {
-  moveReqs[n] = { phase: "requested", at: Date.now(), to: to || "" };
-  if (view.sheet) renderSheet();
-  const out = await writePromote(n);
-  if (out.kind === "ok") {
-    moveReqs[n] = { phase: "confirmed", at: Date.now(), to: to || "" };
-    setTimeout(() => {
-      if (!moveReqs[n] || moveReqs[n].phase !== "confirmed") return;
-      // Two seconds of "Moved to", then the next action. The record stays until the board drops the move or names
-      // another one, so the primary never invites a second send of the move it just took (rule 7).
-      if (!offersSameMove(n)) delete moveReqs[n];
-      if (view.sheet) renderSheet();
-    }, 2000);
-  } else if (out.kind === "unknown") {
-    moveReqs[n] = { phase: "unknown", at: Date.now() };
-  } else if (out.kind === "refused") {
-    moveReqs[n] = { phase: "refused", rule: out.rule };
-    showCardReason(n, out.rule);
-  } else {
-    moveReqs[n] = { phase: "failed", cause: out.cause };
-    showCardReason(n, out.cause);
-  }
-  if (view.sheet) renderSheet();
-  loadBoard(true);
-}
-// The one primary renders the state the rule module names from the row's move facts and the page's request record. The
-// view binds the state to the element and delegates the decision to `primaryView` (ADR-0137).
-function paintActionRow(x) {
-  // The move facts, the loop-switch fact the status poll already holds, and this page's own request record (rule 7).
-  const v = primaryView({ to: x.pmt || "", pending: !!x.pd, refused: x.mr || "", loop: loopFact, request: moveReqs[x.n] }, Date.now());
-  const btn = $("sh-todo");
-  btn.hidden = !!v.hidden;
-  btn.disabled = !!v.disabled;
-  btn.className = v.state;
-  $("sh-todo-label").textContent = v.label;
-  $("sh-todo-sub").textContent = v.sub || "";
-  $("sh-todo-sub").hidden = !v.sub;
-  // The secondary is Close, but a refused move offers its rule there instead (rule 7).
-  $("sh-close").textContent = v.secondary ? v.secondary : "Close";
-}
-function showCardReason(n, why) {
-  // The refusal is page state keyed by issue number, and the card draws it on every render (#829): the read that follows
-  // the write rebuilds every card, and the 10 s poll rebuilds them again, so a span put on the card once is lost.
-  reasons[n] = { why: why, col: rowColumn(n) };
-  if (rowColumn(n)) refresh();
-  else $("bmsg").textContent = why;   // no card on screen with these filters: the line names the card and the reason
-}
-$("undo-btn").onclick = () => cancelMove("undo");
-addEventListener("visibilitychange", () => { if (document.hidden) cancelMove("hidden"); });
-addEventListener("pagehide", () => { cancelMove("hidden"); endGesture(); });
 // A tap on a lane header opens or shuts that spec's lane on every column, and the choice is kept on the device (#893).
-// A lane that shuts folds its cards away (owner, 2026-11-01): the board is drawn at once, and the old cards, with no role
-// and no number, fold under the header and are removed, so nothing waits on the motion.
+// A lane that shuts folds its cards away (owner, 2026-11-01): the board is drawn at once, and the old cards fold under the
+// header and are removed, so nothing waits on the motion. A tap on the header's own promote button is the button's.
 const laneTap = h => {
   const leaving = h.dataset.coll !== "1" && motionOk() ? laneCards(h) : [];
   bo.mlc = { ...(bo.mlc || {}), [h.dataset.lane]: h.dataset.coll !== "1" };
-  saveB(); refresh();
+  saveB(); renderBoard();
   if (leaving.length) laneOut(h.dataset.lane, leaving);
 };
 const laneCards = h => {
@@ -1976,70 +1565,14 @@ function laneOut(id, cards) {
   setTimeout(drop, 400);
 }
 $("cards").onclick = e => {
+  if (e.target.closest("button")) return;   // the header's promote button is the button's own tap
   const h = e.target.closest(".lane-h");
-  const b = e.target.closest(".card");
-  if (suppressClick) { suppressClick = false; return; }
-  if (h) { laneTap(h); return; }
-  if (b) { view = afterOpen(view, +b.dataset.i); refresh(); }
+  if (h) laneTap(h);
 };
 $("cards").onkeydown = e => {
   const h = e.target.closest && e.target.closest(".lane-h");
   if (h && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); laneTap(h); }
 };
-const moveHint = el => {
-  const h = el.querySelector(".cmv");
-  if (!h) return;
-  h.textContent = el.classList.contains("armed") ? "release to move to " + el.dataset.pmt : "drag right, then release past the line, to move to " + el.dataset.pmt;
-};
-// A nested scroller or a control inside the sheet owns its own swipe (#1007): the issue strip, a wide code block, a link.
-const NESTED_TAGS = ["PRE", "TABLE", "BUTTON", "A", "INPUT", "TEXTAREA", "SELECT", "SUMMARY"];
-const nestedIn = (el, stop) => {
-  for (let e = el; e && e !== stop; e = e.parentElement) {
-    if (NESTED_TAGS.includes(e.tagName) || e.id === "sh-set") return true;
-  }
-  return false;
-};
-// The one cleanup of a gesture (#1007): its end, touchcancel and pagehide put the dragged card back and unarm it.
-function endGesture() {
-  const t = touch;
-  touch = null;
-  if (t && t.card) { t.card.style.transform = ""; t.card.classList.remove("armed"); moveHint(t.card); }
-  return t;
-}
-document.addEventListener("touchstart", e => {
-  const owner = gestureOwner(rolesOf(e.target));
-  if (owner === "none") { touch = null; return; }
-  const p = e.touches[0], card = e.target.closest ? e.target.closest(".card") : null;
-  const thumb = inThumbZone(p.clientY, window.innerHeight);   // the one write starts where the thumb is (#1142)
-  const handle = !!(e.target.closest && e.target.closest(".grab"));   // the grab handle closes the sheet and never stages a move (#1454)
-  touch = { owner, x: p.clientX, y: p.clientY, thumb, handle, atTop: $("sheet-content").scrollTop === 0, nested: owner === "sheet" && nestedIn(e.target, $("sheet")),
-            card: card && card.closest("#cards") ? card : null, pm: !!(!handle && thumb && card && card.dataset.pm === "1" && card.closest("#cards")) };
-  suppressClick = false;
-}, { passive: true });
-document.addEventListener("touchmove", e => {
-  if (!touch || !touch.pm || !touch.card) return;
-  const p = e.touches[0], dx = p.clientX - touch.x, dy = p.clientY - touch.y;
-  if (Math.abs(dy) > Math.abs(dx)) return;
-  touch.card.style.transform = "translateX(" + Math.max(0, Math.min(120, dx)) + "px)";
-  touch.card.classList.toggle("armed", moveArmed(dx));
-  moveHint(touch.card);
-}, { passive: true });
-document.addEventListener("touchend", e => {
-  if (!touch) return;
-  const p = e.changedTouches[0], t = endGesture(), dx = p.clientX - t.x, dy = p.clientY - t.y;
-  const g = gestureAct({ owner: t.owner, dx, dy, atTop: t.atTop, nested: t.nested, handle: t.handle, promotable: t.pm });
-  const mv = moveDrag({ promotable: t.pm, dx, dy });
-  suppressClick = !!t.card && (!!g || !!mv);
-  if (g) { step(g); return; }
-  // The released card is resolved by its number against the board as it now stands: a 10 s read can reorder the column
-  // during the drag, and the index taken at touchstart would then name another card (#829).
-  const n = t.card ? String(t.card.dataset.n) : "";
-  const x = mv && t.card ? shown.find(r => String(r.n) === n) : null;
-  const el = t.card ? $("cards").querySelector('[data-role="card"][data-n="' + n + '"]') || t.card : null;
-  if (x && x.pm) stageMove(x, el);
-  else if (el) { el.classList.remove("armed"); moveHint(el); }
-}, { passive: true });
-document.addEventListener("touchcancel", endGesture, { passive: true });
 
 let period = "day", moreSeq = 0;   // `moreSeq` numbers every cost and lead read: an answer older than the last one never draws
 const CH_W = 420, CH_H = 120;   // the wide box keeps the scale labels at the caption's own size on a phone (#2503)
@@ -2370,7 +1903,7 @@ async function loadLead() {
   const btn = $("profile");
   btn.onclick = () => openLayer("psheet");
   $("pswx").onclick = () => closeLayer("psheet");
-  $("pswl").onclick = e => { if (e.target.closest("a")) { cancelMove("profile"); closeLayer("psheet"); } };
+  $("pswl").onclick = e => { if (e.target.closest("a")) closeLayer("psheet"); };
   switcherPoll(d => {
     switcherPaint($("pswl"), d, me, "/mobile");
     const cur = d.repos.find(r => r.slug === me);
@@ -2555,14 +2088,7 @@ if (!history.state || (!history.state.layer && !TAB_LABEL[history.state.tab]))
 const restored = was.layer && LAYER[was.layer] ? { layer: was.layer, data: fieldsOf(was), direct: false }
   : route && route.layer ? { layer: route.layer, data: route.data, direct: true } : null;
 if (restored) {
-  if (restored.layer === "sheet") {
-    if (Number.isInteger(restored.data.n)) {
-      // A saved card address has no entry under it: its own entry marks itself, so its Back opens Work (#2499).
-      if (restored.direct) history.replaceState({ tab: "work", layer: "sheet", depth: 1, n: restored.data.n, direct: true },
-                                                "", routeHash({ tab: "work", layer: "sheet", n: restored.data.n }));
-      pendingSheet = restored.data.n;
-    }
-  } else {
+  if (LAYER[restored.layer]) {
     const chain = [...screenChain(restored.layer), restored.layer];
     for (const [i, name] of chain.entries())
       openLayer(name, i === chain.length - 1 ? restored.data : {}, i === 0 ? (restored.direct ? "direct" : true) : "push");

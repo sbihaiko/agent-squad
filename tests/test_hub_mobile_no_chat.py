@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is the page fixture)
+from tests.hub_mobile_stub import hub, run_page  # noqa: F401  (hub is the page fixture)
 
 RUN = "run-20261120-100000-abcd"
 SID = "11111111-2222-3333-4444-555555555555"

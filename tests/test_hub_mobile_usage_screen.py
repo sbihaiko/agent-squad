@@ -12,8 +12,8 @@ import re
 
 import pytest
 
-import tests.test_hub_mobile_move as move
-from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is a fixture)
+import tests.hub_mobile_stub as move
+from tests.hub_mobile_stub import hub  # noqa: F401  (hub is a fixture)
 
 BUCKETS = [
     {"t": "2026-11-08 09:00", "spend": 1.0, "tokens": 1000000, "runs": 1, "median_dur": None},

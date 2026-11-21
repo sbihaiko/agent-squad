@@ -3,7 +3,7 @@ that opens the run's dashboard — over a body that names the run's state, its a
 
 The run's session actions left the page with the chat (#2490), so the page reads no record, no card and no conversation,
 and its primary opens the dashboard the run still has. The rules are `hub-mobile-run.js`, run under node alone with no
-DOM; the page is booted over the stub DOM of `tests/test_hub_mobile_move.py`, and every fact is read back as the owner
+DOM; the page is booted over the stub DOM of `tests/hub_mobile_stub.py`, and every fact is read back as the owner
 sees it.
 """
 import json
@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from tests.test_hub_mobile_move import _module, run_js, run_page
+from tests.hub_mobile_stub import _module, run_js, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
