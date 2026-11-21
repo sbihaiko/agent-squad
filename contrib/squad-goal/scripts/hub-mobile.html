@@ -262,6 +262,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .chart-hint b{color:var(--fg);font-size:var(--fs-heading)}
 .chart-screen #lead-content,.chart-screen #cfd-content,.chart-screen #prof-content{display:flex;flex-direction:column;overflow:hidden;padding-top:calc(8px + env(safe-area-inset-top))}
 .chart-screen #prof-content{overflow-x:hidden;overflow-y:auto}   /* the loop's panels are dense: they scroll, never clip (#2504) */
+/* A chart screen draws no tab bar, so the profiler's body keeps no inset for one; the trip scrolls whole, never clipped (#2670). */
+.chart-screen #prof-content{padding-bottom:env(safe-area-inset-bottom)}
+.chart-screen #prof-content .chart-body{overflow:visible}
 .chart-screen .scr-head{flex:none}
 .chart-screen .chart-plot{flex:1;min-height:0;margin:2px 0}
 .chart-screen #ltlegend{flex:none;margin:0}
