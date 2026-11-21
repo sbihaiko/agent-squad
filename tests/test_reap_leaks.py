@@ -64,9 +64,32 @@ def test_a_process_with_a_living_parent_is_kept(tmp_path):
     assert reap_leaks.leaks(tmp_path, 0.0, [(4242, 900, 1, leftover), (900, 1, 99, "systemd --user")]) == [4242]
 
 
+def test_a_session_a_test_started_ends_nothing(tmp_path):
+    """#2680: a pytest session a test started ends nothing. Its reap sees the detached live check the outer session still
+    owns as a leftover, because a nohup child's parent is 1, and it ends it; that killed a live check eight-tenths of a
+    second after another worker's case started it. The outer session's own end still ends its leftover."""
+    since = time.time()
+    pid = _orphan(tmp_path / "tree", tmp_path)   # a real detached `serial.sh live-check` of this tree
+    try:
+        rows = reap_leaks._table() + [
+            (424242, 424241, 1, "python3 -m pytest -q -o addopts= tests/test_git_env_scrub.py"),   # the nested session
+            (424241, 424240, 3, "bash -e /home/runner/work/_temp/step.sh"),                          # the test that started it
+            (424240, 1, 30, "python3 -m pytest -n auto --rootdir . tests/"),                         # the outer controller
+        ]
+        assert reap_leaks.session_reap(tmp_path / "tree", since, rows=rows, pid=424242) == [], \
+            "a session a test started ended the live check of the outer session"
+        assert _alive(pid), "the live check the outer session still owns was ended"
+        assert reap_leaks.session_reap(tmp_path / "tree", since, rows=rows, pid=999999) == [pid], \
+            "the outer session's own end does not end its leftover"
+        assert _gone(pid), "the leftover outlived the outer session's reap"
+    finally:
+        if _alive(pid):
+            os.kill(pid, 15)
+
+
 def test_the_session_reaps_when_it_ends():
     conftest = (Path(__file__).parent / "conftest.py").read_text()
-    assert "def pytest_sessionfinish" in conftest and "reap_leaks.reap(" in conftest, \
+    assert "def pytest_sessionfinish" in conftest and "reap_leaks.session_reap(" in conftest, \
         "the session calls the reap when it ends"
 
 
