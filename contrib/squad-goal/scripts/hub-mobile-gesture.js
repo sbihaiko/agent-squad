@@ -1,12 +1,13 @@
 // Board rules of the mobile page. Pure: no DOM and no network. The hub inlines this text into hub-mobile.html.
-// The swimlanes of one column (#893): its cards grouped by spec, each lane headed by its number and progress (SPEC 2498,
-// #2501: spec grouping is the one grouping Work draws). A lane holds its spec's cards, the spec's own card first. Progress
-// counts the spec's children on the whole board, never the column alone. "No spec" is the last lane.
+// The swimlanes of one column (#893): its cards grouped by spec, each lane headed by its number, title and progress
+// (SPEC 2498, #2501: spec grouping is the one grouping Work draws). A lane heads itself with its spec's card, which it
+// never draws: the header carries the spec's name and the move. Progress counts the spec's children on the whole board,
+// never the column alone. "No spec" is the last lane.
 // A `wave:NN` label never makes a lane (SPEC 1965, #1988).
 // `lc` holds the saved collapse by lane id; a lane whose spec is done starts collapsed. `flat` is the cards the column
 // draws, in order, with the collapsed lanes left out.
 const cmpNum = (a, b) => a == null ? (b == null ? 0 : 1) : b == null ? -1 : a - b;
-const columnLanes = ({ groups, cards, lc, sum }) => {
+const columnLanes = ({ groups, cards, lc, sum, titleOf }) => {
   const ends = new Set((groups || []).filter(g => g.end).map(g => g.name));
   const specs = (sum && sum.specs) || [];
   const gone = new Set(specs.filter(s => ends.has(s.st)).map(s => s.n));   // a closed spec keeps no lane (#972)
@@ -21,16 +22,17 @@ const columnLanes = ({ groups, cards, lc, sum }) => {
   cards.forEach(x => {
     if (!x.sp) return;   // a spec card heads its spec's lane in this column
     const lane = ensure(x.n);
-    lane.cards.unshift(x);
+    lane.head = x;   // the spec card heads the lane and is not drawn (#2501, the mockup of #2498)
     lane.headed = true;
   });
   const lanes = [...by.values()].map(l => {
-    const s = l.headed ? specSum.get(l.spec) : null;   // progress is the summary's: a closed ticket is served by no row (#972)
+    const s = l.spec == null ? null : specSum.get(l.spec);   // progress is the summary's, wherever the spec's card sits (#972)
     const t = s ? s.total : 0, d = s ? s.closed : 0;
-    const isDone = t > 0 && d === t && !l.cards.some(x => !x.sp);
+    const isDone = t > 0 && d === t;
     const collapsed = Object.prototype.hasOwnProperty.call(lc || {}, l.id) ? !!lc[l.id] : isDone;
     const sid = l.spec == null ? "No spec" : "SPEC " + l.spec;
-    return { id: l.id, num: l.spec, sid, title: sid, total: t, closed: d, collapsed, cards: l.cards };
+    const name = l.spec != null && titleOf ? String(titleOf(l.spec) || "") : "";   // the spec's title, stripped by the caller
+    return { id: l.id, num: l.spec, sid, title: sid, name, total: t, closed: d, collapsed, cards: l.cards, head: l.head || null };
   }).sort((a, b) => cmpNum(a.num, b.num));
   const flat = lanes.flatMap(l => l.collapsed ? [] : l.cards);
   return { lanes, flat };
