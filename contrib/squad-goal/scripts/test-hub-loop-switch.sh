@@ -152,6 +152,10 @@ def gone(pid):
         except OSError: return True
         time.sleep(0.1)
     return False
+# The page's run readers share one process table for 2.5 s (RUN_TABLE_SECS). Prime that window at a far-future instant before
+# the run is born, so the cached read never names it however long the birth takes: the kill must read the table fresh, or the
+# run survives a stop-now that claims to end it. The stop-now kill is the check below, never the cache window itself.
+hub.run_table(now=time.time() + 3600)
 kid = STATE / "kid.pid"
 run_pid = detached(f"import subprocess,time;c=subprocess.Popen(['sleep','300']);open({str(kid)!r},'w').write(str(c.pid));time.sleep(300)", "squad", "start")   # argv as a run has it: squad start
 gate_pid = detached("import time;time.sleep(300)")
