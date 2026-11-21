@@ -10,6 +10,7 @@ the screens show and what the page sends, never a substring of its source.
 """
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -243,6 +244,31 @@ def test_the_loop_rules_are_inlined_and_the_page_names_no_all_loops_switch(hub):
     assert LOOP_JS.read_text() in hub.MOBILE_PAGE
     assert "/*LOOP_RULES*/" not in hub.MOBILE_PAGE
     assert "data-loop-all" not in hub.MOBILE_PAGE
+
+
+def _rule(page, selector):
+    """Every declaration block of the served page whose selector list names `selector`, in source order, joined."""
+    css = re.sub(r"/\*.*?\*/", "", "".join(re.findall(r"<style[^>]*>(.*?)</style>", page, re.S)), flags=re.S)
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        if selector in [s.strip() for s in m.group(1).split(",")]:
+            out.append(m.group(2))
+    return ";".join(out)
+
+
+def _value(rule, prop):
+    """The last value a declaration list gives `prop`: a later block wins, as it does in the page."""
+    seen = [d.split(":", 1)[1].strip() for d in rule.split(";") if d.split(":", 1)[0].strip() == prop]
+    return seen[-1] if seen else None
+
+
+def test_the_summary_button_centers_its_items_in_its_44_px_box(hub):
+    """#2677: a baseline alignment parks the summary at the top of the 44 px button, and the strip carries an empty band
+    under it. The items center on the cross axis, and the 44 px touch target stays."""
+    rule = _rule(hub.MOBILE_PAGE, "#loops-open")
+    assert _value(rule, "align-items") == "center", f"the summary button does not center its items: {rule!r}"
+    m = re.match(r"(\d+)px$", _value(rule, "min-height") or "")
+    assert m and int(m.group(1)) >= 44, f"the summary button lost its 44 px touch target: {rule!r}"
 
 
 # --- the fact the pages draw comes from the hub's real profile discovery, never a hand-built stub ---
