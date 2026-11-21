@@ -46,6 +46,8 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 /* The empty Loop-bugs layer reports no state, so its line reads in the muted color, not the error color (#2665). */
 #bugs-msg{color:var(--mute);font-size:var(--fs-caption)}
 #loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+/* The tab bar paints over every layer, so a layer that scrolls under it ends above it, and no line hides behind the bar in landscape (#2665). */
+#loops-content,#bugs-content{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
 #loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
