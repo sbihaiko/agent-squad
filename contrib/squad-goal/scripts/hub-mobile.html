@@ -191,6 +191,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 /* The Today control looks like a control (SPEC 2660, #2664): the panel surface, the system radius, a thumb target and a
    trailing chevron. It stays the same button with the same action: the day's Spend detail. */
 #now-today{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:0 12px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif;text-align:left}
+#now-today[hidden]{display:none}   /* the author display:flex otherwise outranks the UA [hidden] rule (#2664) */
 #now-today svg{color:var(--mute)}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 /* One icon (SPEC 1596, #1605): every icon is an inline SVG, and this rule is the one stroke width they all draw at. */

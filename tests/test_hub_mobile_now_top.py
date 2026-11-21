@@ -61,6 +61,22 @@ def test_the_today_control_shows_the_day_and_keeps_its_chevron(hub):  # noqa: F8
 
 
 @pytest.mark.node_bound
+def test_a_failed_day_read_leaves_the_today_control_hidden(hub):  # noqa: F811
+    out = run_page(hub.MOBILE_PAGE, """
+      await loadNowToday();
+      return { hidden: $("now-today").hidden };
+    """, routes={"/api/stats": [{"body": "{}", "status": 500}]})
+    assert out["hidden"] is True, "a failed day read paints the Today control"
+    hidden = _decls(hub.MOBILE_PAGE, "#now-today[hidden]")
+    assert "display:none" in hidden, f"the hidden attribute cannot outrank display:flex: {hidden}"
+
+
+def test_the_today_control_starts_hidden(hub):  # noqa: F811
+    btn = re.search(r'<button id="now-today"[^>]*>', hub.MOBILE_PAGE).group(0)
+    assert re.search(r"\bhidden\b", btn), "the Today control paints before its day read returns"
+
+
+@pytest.mark.node_bound
 def test_the_today_control_opens_the_day_detail(hub):  # noqa: F811
     out = run_page(hub.MOBILE_PAGE, """
       await loadNowToday();
