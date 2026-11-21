@@ -9,10 +9,23 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
-NODE_BOUND = ROOT / "tests" / "test_hub_mobile_board.py"
 INSTALL = ROOT / "docs" / "install.md"
 MESENAI_NAMES = ("MESENAI_REPO", "MESENAI_ROOT")
 HOST_BOUND = re.compile(r"@pytest\.mark\.host_bound(?:\([^\n]*\))?\s*\ndef (\w+)\(")
+NODE_BOUND = re.compile(r"^@pytest\.mark\.node_bound", re.MULTILINE)
+TEST_DEF = re.compile(r"^def test_", re.MULTILINE)
+
+
+def _node_bound_file() -> Path | None:
+    """The first test file that mixes node-bound tests with tests that need no node, read from the tree. Never a name: a
+    rewrite moved the node-bound tests out of the file this guard named, and the guard went red on a tree with no
+    defect (#2646). A file whose every test is node-bound also hides them, but then the switch collects nothing and the
+    run cannot show that the file's other tests still collect."""
+    for path in sorted((ROOT / "tests").glob("test_*.py")):
+        text = path.read_text()
+        if NODE_BOUND.search(text) and len(NODE_BOUND.findall(text)) < len(TEST_DEF.findall(text)):
+            return path
+    return None
 
 
 def _host_bound_names(path: Path) -> set[str]:
@@ -44,10 +57,12 @@ def test_the_ci_runner_switch_deselects_each_fixture_bound_test_by_id_and_never_
 @pytest.mark.heavy
 def test_the_ci_runner_switch_hides_the_node_binary_and_deselects_the_node_bound_tests():
     """Guard for #1323: the switch hides the node binary too, so a node-bound test is deselected and printed by id."""
-    r = _collect(NODE_BOUND, {"SQUAD_CI_RUNNER": "1"})
+    node_file = _node_bound_file()
+    assert node_file is not None, "no test file marks a node-bound test, so the switch has nothing to hide"
+    r = _collect(node_file, {"SQUAD_CI_RUNNER": "1"})
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
-    assert "deselected: tests/test_hub_mobile_board.py::" in out, out
+    assert f"deselected: tests/{node_file.name}::" in out, out
     assert "runs the page's JavaScript under node" in out, out
 
 
@@ -95,9 +110,11 @@ def test_the_local_half_switch_keeps_only_what_a_linux_runner_deselects():
     """Guard for the nightly's local half (#1975, ADR-0153, ADR-0139): `SQUAD_NIGHTLY_LOCAL_HALF=1` keeps only the tests
     that a Linux runner deselects by marker, read from the conftest's one deselection rule, never from a second list.
 
-    The node-bound gesture and board tests stay where node runs, and the unmarked tests of this file are left to the GitHub half.
+    The node-bound page tests stay where node runs, and the unmarked tests of this file are left to the GitHub half.
     """
-    paths = (NODE_BOUND, Path(__file__))
+    node_file = _node_bound_file()
+    assert node_file is not None, "no test file marks a node-bound test, so the case proves nothing"
+    paths = (node_file, Path(__file__))
     every, _ = _ids(paths, {})
     linux_runs, _ = _ids(paths, {"SQUAD_CI_RUNNER": "1"})
     local, out = _ids(paths, {"SQUAD_NIGHTLY_LOCAL_HALF": "1"})
