@@ -138,13 +138,28 @@ def test_a_detail_hides_the_control_row(hub):
 # --- the action row (rule 7) ---------------------------------------------------------------------------------------
 
 @pytest.mark.node_bound
-def test_the_action_row_is_back_dots_one_secondary_and_one_primary(hub):
+def test_the_action_row_holds_the_actions_alone(hub):
+    """Back lives at the top of the screen, so the card's action row carries its actions alone (SPEC 2498, #2502)."""
     out = run_page(hub.MOBILE_PAGE, OPEN + """
-        return [...$("sheet-actions").children].map(c => ({ id: c.id, tag: c.tagName, back: "actback" in c.dataset }));
+        return { row: [...$("sheet-actions").children].map(c => ({ id: c.id, tag: c.tagName })),
+                 backs: $("sheet-actions").querySelectorAll("[data-actback]").length,
+                 bar: $("sheet-actions").hidden };
     """, board=[board(CARD)])
-    assert out[0] == {"id": "sh-backact", "tag": "BUTTON", "back": True}, f"the first button is no Back: {out}"
-    assert out[1]["id"] == "sh-dots" and out[1]["tag"] == "BUTTON", out
-    assert [c["id"] for c in out[2:]] == ["sh-close", "sh-todo"], f"the row is not one secondary then one primary: {out}"
+    assert [c["id"] for c in out["row"]] == ["sh-dots", "sh-close", "sh-todo"], out
+    assert out["backs"] == 0, f"the card's action row still holds a back control: {out}"
+    assert out["bar"] is False, f"the row holds an action and is not drawn: {out}"
+
+
+def test_a_screen_with_no_action_draws_no_action_row(hub):
+    """An action bar stays only where it holds an action (SPEC 2498, #2502): a screen whose only control was Back
+    carries its one back at the top and no footer."""
+    page = hub.MOBILE_PAGE
+    for gone in ("loops-actions", "prof-actions", "lead-actions", "bugs-actions"):
+        assert not re.search(rf'id="{gone}"|id={gone}\b', page), f"the page still draws the empty action row {gone}"
+    for kept in ("sheet-actions", "psw-footer", "runview-actions", "loop-actions"):
+        assert re.search(rf'id="{kept}"|id={kept}\b', page), f"the action row {kept} left a screen that holds an action"
+    assert "[data-actback]" not in page and "data-actback" not in page, \
+        "a control still marks itself as a footer Back; every detail carries one back at the top"
 
 
 # --- the six primary states (rule 7) -------------------------------------------------------------------------------

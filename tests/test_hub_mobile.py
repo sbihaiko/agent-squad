@@ -57,7 +57,8 @@ def hub(monkeypatch, tmp_path):
     mod.board_cache = {"t": 1, "items": [dict(BUG), dict(FEATURE)], "prs": [], "err": None, "lc": {}, "errs": [], "cases": []}
     mod.LOOP_STAMP = tmp_path / "loop-stamp.json"
     monkeypatch.setattr(mod, "_loop_on", lambda pid_file=None: True)
-    monkeypatch.setattr(mod, "run_list", lambda: [{"id": "r1", "live": True}, {"id": "r2", "live": False}])
+    monkeypatch.setattr(mod, "run_list", lambda: [{"id": "r1", "live": True, "state": "running", "kind": "code"},
+                                                  {"id": "r2", "live": False, "state": "completed", "kind": "code"}])
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield mod, srv.server_port

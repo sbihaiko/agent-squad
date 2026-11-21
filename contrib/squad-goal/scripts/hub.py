@@ -839,11 +839,17 @@ def group_header(kind, rows, caps):
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 
+def live_run_rows(rows):
+    """The live runs the Runs heading and the Now tile both count (SPEC 2498, #2502): a run with a live process. The
+    childcc pass is a worker and a hand hold is work the operator does, so neither is a live run, and one count serves
+    both readers."""
+    return [r for r in rows if r.get("kind") not in ("childcc", "hold") and group_of(r) == "running"]
+
 def run_groups(rows, caps=None):
     """The Live group's header: its key, label, the text and title group_header builds, and `empty` (#1778). The page draws
     what it is given, so the occupancy's wording lives here alone (#1277). The rows are run_list's, each carrying `state`,
     `live`, `rank` and `age`. The childcc pass is a worker, never a run: group_header never counts it."""
-    held = [r for r in rows if r.get("kind") == "childcc" or group_of(r) == "running"]
+    held = [r for r in rows if r.get("kind") == "childcc"] + live_run_rows(rows)
     h = group_header("running", held, caps)
     return [{"key": "running", "label": "WORKERS", "text": h["text"], "title": h["title"], "empty": not held}]
 def run_rank(st, live=True):
@@ -3580,7 +3586,7 @@ def status_payload():
     """What the mobile Monitor tab reads below its card: the facts the hub computes, never a figure the page works out."""
     items = board_cache.get("items") or []
     return {"loop": loop_status(),
-            "live": sum(1 for r in run_list() if r.get("live")),
+            "live": len(live_run_rows(run_list())),   # one count for the Now tile and the Runs heading (#2502)
             "spend_today": spend_today(),
             "open_bugs": sum(1 for i in items if str(i.get("s")).upper() == "OPEN" and "bug" in (i.get("l") or [])),
             "warnings": [{"text": f["text"], "tip": f.get("tip")} for f in (LOAD_STATE.get("facts") or []) if f.get("bad")],

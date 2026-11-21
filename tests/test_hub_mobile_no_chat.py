@@ -94,12 +94,10 @@ def test_the_phone_page_loads_no_script_from_an_address(hub):  # noqa: F811
 def test_a_run_shows_its_dashboard_and_its_pause_control(hub):  # noqa: F811
     out = run_page(hub.MOBILE_PAGE, OPEN_LIVE + """
         return { primary: $("run-primary-label").textContent, primaryHidden: $("run-primary").hidden,
-                 secondary: $("runctl-btn").textContent, secondaryHidden: $("runctl-btn").hidden,
-                 desk: $("rundesk-btn").textContent };
+                 secondary: $("runctl-btn").textContent, secondaryHidden: $("runctl-btn").hidden };
     """, routes=routes())
     assert out["primaryHidden"] is False and out["primary"] == "Desktop dashboard", out
     assert out["secondaryHidden"] is False and out["secondary"] == "Pause the run", out
-    assert out["desk"] == "Desktop dashboard", out
 
 
 @pytest.mark.node_bound
