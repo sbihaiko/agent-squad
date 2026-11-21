@@ -226,11 +226,26 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #more-menu{display:grid;gap:8px}
 #more-menu a{display:flex;align-items:center;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-body);padding:0 12px;text-decoration:none}
 #more-menu button,[data-screen] button{min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);font-size:var(--fs-body);padding:0 12px;text-align:left}
-#periods{display:flex;gap:8px;margin:10px 0 12px}
+#periods{display:flex;gap:8px;margin:4px 0 12px}
 #periods button{flex:1;text-align:center}
 #periods button[aria-pressed=true]{box-shadow:inset 0 -2px 0 var(--acc)}
 #cchart{width:100%;margin:8px 0}
-#cchart svg{width:100%;height:auto;display:block}
+#cchart svg{width:100%;max-width:420px;height:auto;display:block;margin:0 auto}
+#cchart svg text{fill:var(--mute);font-size:var(--fs-caption)}
+/* The Spend tab stacks the desktop panel (#2503): the summary line, the token bars under their period toggle, then the
+   month pie over its legend. Each legend row names its consumer, and the pie's centre stays whole inside the hole. */
+#cost-sum{color:var(--mute);font-size:var(--fs-caption);margin:0 0 10px}
+#cost-sub{color:var(--mute);font-size:var(--fs-caption);margin:-2px 0 8px}
+#cost-chlg{display:flex;gap:16px;color:var(--mute);font-size:var(--fs-caption);margin:2px 0 6px}
+#cost-pie{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+#cost-pie svg.pie{width:170px;height:170px;margin:0 auto;display:block}
+#cost-pie svg.pie text{fill:var(--fg);font-size:var(--fs-caption)}
+#cost-pie svg.pie text.tot{font-weight:600}
+#cost-pie .lg{display:flex;flex-direction:column;gap:2px}
+#cost-pie .pie-row{display:flex;align-items:center;gap:8px;min-height:32px;font-size:var(--fs-caption)}
+#cost-pie .pie-row i{width:10px;height:10px;border-radius:var(--radius-full);flex:none}
+#cost-pie .pie-row .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#cost-pie .pie-row .usd,#cost-pie .pie-row .sh{color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;min-width:3ch}
 /* The phone's lead-time chart (#1333): the plot, then the legend and the reference values under it, with no gutter. */
 #ltplot{width:100%;margin:8px 0}
 #ltplot svg{width:100%;height:auto;display:block;touch-action:pan-y}
@@ -257,6 +272,7 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 [data-screen][hidden]{display:none}
 [data-screen].root{position:static;z-index:auto;overflow:visible;background:transparent}
 #cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-content{padding-bottom:72px}   /* the floating project pill covers the bottom 57 px, so the last cost row scrolls clear of it (#2503) */
 #lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
@@ -450,19 +466,25 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="runs-state" class="msg" role="status">The runs are loading.</p>
 <p id="runs-msg" class="msg" role="status"></p>
 </section>
-<!-- Spend (SPEC 2498, #2499): the fifth tab draws the cost screen, which the old More menu held. #2503 stacks the
-     desktop panel here. -->
+<!-- Spend (SPEC 2498, #2499, #2503): the fifth tab draws the desktop Spend panel stacked. The summary line, Tokens over
+     time with its hour, day and month toggle, and the model pie with its per-model legend. The pie covers this month, so
+     the toggle changes the bars alone. The phone cost list is gone. -->
 <section data-panel="spend" hidden>
 <div id="spend-head" data-role="header"><h2>Spend</h2></div>
 <article data-screen="cost" class="root" data-src="/api/stats">
 <div id="cost-content">
-<div id="periods">
+<p id="cost-sum" class="m"></p>
+<h3 class="sub">Tokens over time</h3>
+<div id="periods" role="group" aria-label="Period">
 <button data-period="hour" type="button">Per hour</button>
 <button data-period="day" type="button">Per day</button>
 <button data-period="month" type="button">Per month</button>
 </div>
 <div id="cchart"></div>
-<div class="list"></div>
+<p id="cost-chlg" class="chlg" hidden>loop · operator</p>
+<h3 class="sub">Model tokens · this month</h3>
+<p class="m" id="cost-sub">in + out</p>
+<div id="cost-pie"></div>
 <p id="cost-state" class="msg" role="status">Cost and usage are loading.</p>
 <p id="cost-msg" class="msg" role="status"></p></div>
 </article>
@@ -1870,48 +1892,117 @@ document.addEventListener("touchend", e => {
 document.addEventListener("touchcancel", endGesture, { passive: true });
 
 let period = "day", moreSeq = 0;   // `moreSeq` numbers every cost and lead read: an answer older than the last one never draws
-const CH_W = 280, CH_H = 90;
+const CH_W = 420, CH_H = 120;   // the wide box keeps the scale labels at the caption's own size on a phone (#2503)
 const NS_SVG = "http://www.w3.org/2000/svg";
-function rowEl(title, lines) {
-  const row = document.createElement("div");
-  row.className = "row";
-  const t = document.createElement("b");
-  t.textContent = title;
-  const kids = (lines.length ? lines : ["none"]).map(text => {
-    const s = document.createElement("div");
-    s.className = "mut";
-    s.textContent = text;
-    return s;
-  });
-  row.append(t, ...kids);
-  return row;
-}
-function chartEl(buckets) {
-  const NS = "http://www.w3.org/2000/svg";
-  const max = Math.max(0.01, ...buckets.map(b => b.spend)), bw = CH_W / buckets.length;
-  const svg = document.createElementNS(NS, "svg");
+function chartEl(buckets, per) {
+  // Tokens over time, the desktop panel's bars: the loop's segment first, the operator's stacked above it (#1756, #2503).
+  const svg = document.createElementNS(NS_SVG, "svg"), rows = usageBars(buckets, per), bw = CH_W / Math.max(rows.length, 1);
   svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
-  buckets.forEach((b, i) => {
-    const h = b.spend / max * (CH_H - 4), r = document.createElementNS(NS, "rect"), t = document.createElementNS(NS, "title");
-    r.setAttribute("x", i * bw + 1);
-    r.setAttribute("y", CH_H - h);
-    r.setAttribute("width", Math.max(1, bw - 2));
-    r.setAttribute("height", h);
-    r.setAttribute("fill", "var(--acc)");
-    t.textContent = `${b.t}: ${money(b.spend)} · ${b.runs} runs`;
-    r.append(t);
-    svg.append(r);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "tokens per interval");
+  rows.forEach((b, i) => {
+    const h = b.h / 100 * (CH_H - 4), hl = b.hLoop / 100 * (CH_H - 4), x = i * bw + 1, w = Math.max(1, bw - 2);
+    const loop = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
+    loop.setAttribute("x", x);
+    loop.setAttribute("y", CH_H - hl);
+    loop.setAttribute("width", w);
+    loop.setAttribute("height", hl);
+    loop.setAttribute("fill", "var(--chart-bar)");
+    t.textContent = `${b.label}: ${usageTokens(b.tokens)} loop tokens` + (b.op ? ` · ${usageTokens(b.op)} operator` : "");
+    loop.append(t);
+    svg.append(loop);
+    if (!b.op) return;
+    const op = document.createElementNS(NS_SVG, "rect");   // the operator's segment sits over the loop's
+    op.setAttribute("x", x);
+    op.setAttribute("y", CH_H - h);
+    op.setAttribute("width", w);
+    op.setAttribute("height", h - hl);
+    op.setAttribute("fill", "var(--chart-series-2)");
+    svg.append(op);
   });
+  const mx = document.createElementNS(NS_SVG, "text"), now = document.createElementNS(NS_SVG, "text");   // the scale and the live end, as the desktop chart names them (#2503)
+  mx.textContent = "max " + usageMillions(Math.max(...buckets.map(b => (b.tokens || 0) + (b.op || 0))));
+  mx.setAttribute("x", CH_W - 2);
+  mx.setAttribute("y", 12);
+  mx.setAttribute("text-anchor", "end");
+  now.textContent = "now";
+  now.setAttribute("x", CH_W - 2);
+  now.setAttribute("y", CH_H - 2);
+  now.setAttribute("text-anchor", "end");
+  svg.append(mx, now);
   return svg;
+}
+function pieEl(slices, colors) {
+  // The desktop model pie for the phone (#2503): one ring slice per model, the month total and its caption in the hole.
+  const C = 85, OUT = 74, TH = 24, MID = OUT - TH / 2, CIRC = 2 * Math.PI * MID;   // the hole (r 50) holds the caption whole at its own size
+  const svg = document.createElementNS(NS_SVG, "svg"), ring = usageRing(slices, MID);
+  svg.setAttribute("viewBox", "0 0 170 170");
+  svg.setAttribute("class", "pie");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "model tokens this month");
+  ring.forEach((r, i) => {
+    const c = document.createElementNS(NS_SVG, "circle"), t = document.createElementNS(NS_SVG, "title");
+    c.setAttribute("cx", C);
+    c.setAttribute("cy", C);
+    c.setAttribute("r", MID);
+    c.setAttribute("fill", "none");
+    c.setAttribute("stroke", colors[i]);
+    c.setAttribute("stroke-width", TH);
+    c.setAttribute("stroke-dasharray", `${r.len} ${CIRC - r.len}`);
+    c.setAttribute("stroke-dashoffset", r.off);
+    c.setAttribute("transform", `rotate(-90 ${C} ${C})`);
+    c.setAttribute("data-slice", slices[i].model);
+    c.setAttribute("data-other", String(!!slices[i].other));
+    t.textContent = slices[i].legend;
+    c.append(t);
+    svg.append(c);
+  });
+  const tot = document.createElementNS(NS_SVG, "text");   // the month total, in the desktop pie's own scale
+  tot.textContent = usageTokens(slices.reduce((s, x) => s + x.tokens, 0));
+  tot.setAttribute("x", C);
+  tot.setAttribute("y", C - 6);
+  tot.setAttribute("text-anchor", "middle");
+  tot.setAttribute("class", "tot");
+  const cap = document.createElementNS(NS_SVG, "text");   // the caption stays whole inside the hole (AC 3)
+  cap.textContent = "tokens · month";
+  cap.setAttribute("x", C);
+  cap.setAttribute("y", C + 8);
+  cap.setAttribute("text-anchor", "middle");
+  cap.setAttribute("class", "cap");
+  svg.append(tot, cap);
+  return svg;
+}
+function legendEl(slices, colors) {
+  // The rows the desktop pie folds under "other" are drawn at once here: one row per slice, each naming its consumer.
+  const box = document.createElement("div");
+  box.className = "lg";
+  slices.forEach((s, i) => {
+    const row = document.createElement("div"), dot = document.createElement("i");
+    row.className = "pie-row" + (s.other ? " other" : "");
+    dot.setAttribute("style", "background:" + colors[i]);
+    const ln = document.createElement("span"), tok = document.createElement("span"), sh = document.createElement("span");
+    ln.className = "ln";
+    ln.textContent = s.model;
+    tok.className = "usd";
+    tok.textContent = usageTokens(s.tokens);
+    sh.className = "sh";
+    sh.textContent = Math.round(s.pct) + "%";
+    row.append(dot, ln, tok, sh);
+    box.append(row);
+  });
+  return box;
 }
 const MORE = {
   cost(el, d) {
-    const buckets = d.buckets || [], t = d.totals || {};
-    el.querySelector("#cchart").replaceChildren(...(buckets.length ? [chartEl(buckets)] : []));
-    const rows = [rowEl("Today", [money(t.today)]), rowEl("This month", [money(t.month)]), rowEl("All time", [money(t.all)])];
-    if (t.unpriced || t.uncounted) rows.push(rowEl("Note", [`${t.unpriced} review calls unpriced, ${t.uncounted} with no usage count: the total is a floor.`]));
-    rows.push(...(d.models || []).map(m => rowEl(m.model, [`${money(m.spend)} · ${m.calls} calls`])));
-    el.querySelector(".list").replaceChildren(...rows);
+    // The Spend tab is the desktop panel stacked (#2503): the summary line, the token bars and the month pie.
+    const buckets = d.buckets || [];
+    el.querySelector("#cost-sum").textContent = usageSummary(d);
+    el.querySelector("#cchart").replaceChildren(...(buckets.length ? [chartEl(buckets, period)] : []));
+    const chlg = el.querySelector("#cost-chlg"), anyOp = buckets.some(b => (b.op || 0) > 0);
+    chlg.hidden = !anyOp;
+    if (anyOp) chlg.textContent = "● loop   ● operator";
+    const slices = usageSlices(d.models || []), colors = usageSliceColors(slices);
+    el.querySelector("#cost-pie").replaceChildren(...(slices.length ? [pieEl(slices, colors), legendEl(slices, colors)] : []));
   },
   lead(el, d) {
     const L = d && d.lead;
@@ -1992,7 +2083,10 @@ function drawCost(el) {
 async function loadCost() {
   const el = costEl(), seq = ++moreSeq;
   if (!el) return;
-  for (const b of el.querySelectorAll("[data-period]")) b.setAttribute("aria-pressed", String(b.dataset.period === period));
+  for (const b of el.querySelectorAll("[data-period]")) {   // one handler per button: a tap needs no bubbling, and the answer never races a delegated one
+    b.setAttribute("aria-pressed", String(b.dataset.period === period));
+    b.onclick = () => { if (period === b.dataset.period) return; period = b.dataset.period; loadCost(); };
+  }
   try {
     const d = await call(el.dataset.src + "?period=" + period);
     if (seq !== moreSeq) return;
@@ -2003,11 +2097,6 @@ async function loadCost() {
   }
   drawCost(el);
 }
-const costScreen = costEl();
-if (costScreen) costScreen.addEventListener("click", e => {
-  const b = e.target ? e.target.closest("[data-period]") : null;
-  if (b) { period = b.dataset.period; loadCost(); }
-});
 every("spend", loadCost, 10000);
 setInterval(() => { const el = document.querySelector('[data-screen="lead"]'); if (el && !el.hidden && !document.hidden) loadLead(); }, 10000);
 // The lead-time chart stands on Now (SPEC 2498, #2499): it reads its own payload while its screen shows.

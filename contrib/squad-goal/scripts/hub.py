@@ -8116,7 +8116,7 @@ if(RO){const ro=$("#ro");if(ro){ro.hidden=false;ro.textContent=RO_WHY}roWatch($(
 setTheme(sTheme);
 if(!$("#mdl").open)mdlLoad();   // the models panel answers on boot while it is closed; an open panel already loaded (#1278)
 if(!$("#lim").open)limLoad();   // Spend & limits answers on boot too, so its chip and its Kanban sub-group never read a dash (#2432)
-const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)","var(--chart-series-other)"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
+const PCOL=["var(--chart-series-1)","var(--chart-series-2)","var(--chart-series-3)","var(--chart-series-4)","var(--chart-series-5)","var(--chart-series-6)","var(--chart-series-7)","var(--chart-series-8)"],POCOL="var(--chart-series-other)",tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;   // "other" keeps its own role, out of the model palette, so the fold never wears a model's colour (#2503)
 const TOP=3;
 function pie(ms){
  // One slice per model NAME, never per spelling: one model answers under several (deepseek-flash, deepseek-flash[1m],
@@ -8134,14 +8134,22 @@ function pie(ms){
  const tot=rows.reduce((a,m)=>a+m.v,0),keep=rows.slice(0,TOP),fold=rows.slice(TOP);
  const sl=keep.map(m=>({k:m.n,n:m.n,v:m.v,t:`${m.n} (${m.ids.join(", ")})${m.routes.length?" via "+m.routes.join(", "):""}: ${tk(m.v)} tokens`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0);sl.push({k:"other",n:`other · ${fold.length} models`,v,t:fold.map(m=>`${m.n}: ${tk(m.v)} tokens`).join("\n")})}
- const col=k=>k==="other"?"var(--chart-series-other)":PCOL[[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length];   // a model keeps its colour across renders: the colour follows its name, not its place in the list
+ const GONE=new Set(),ROLE=new Map(),col=k=>{   // a model keeps its colour across renders, never takes the fold's role, and never shares a role with another slice (#2503)
+  if(k==="other")return POCOL;
+  if(!ROLE.has(k)){let i=[...String(k)].reduce((h,c)=>(h*31+c.charCodeAt(0))>>>0,0)%PCOL.length,n=0;
+   while(GONE.has(PCOL[i])&&n++<PCOL.length)i=(i+1)%PCOL.length;   // two names on one bucket take the next free role
+   GONE.add(PCOL[i]);ROLE.set(k,PCOL[i])}
+  return ROLE.get(k)};
  const dot=(k,n,v)=>`<i style="background:${col(k)}"></i><span class=ln>${esc(n)}</span><span class=usd>${tk(v)}</span><span class=sh>${Math.round(v/tot*100)}%</span>`;   // the rows are built outside the page template: a nested backtick there breaks the pie matcher in tests
+ sl.forEach(x=>col(x.k));   // the drawn slices claim their roles before the fold does, so a full palette never makes two arcs one colour (#2503)
  const subRows=fold.map(m=>`<div>${dot(m.n,m.n,m.v)}</div>`).join("");   // built outside the legend template: a nested backtick there breaks the pie matcher in tests
  const legendRows=sl.map(x=>x.k==="other"
    ?`<details class=lgo data-k="other"><summary tabindex=0 title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</summary><div class=lgx>${subRows}</div></details>`
    :`<div tabindex=0 data-k="${esc(x.k)}" title="${esc(x.t)}">${dot(x.k,x.n,x.v)}</div>`).join("");
- let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="var(--chart-bg)" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="var(--chart-bg)"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--mute)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
+ let a0=-Math.PI/2;const R=70,C=80,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} data-k="${esc(x.k)}" fill="${col(x.k)}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" data-k="${esc(x.k)}" fill="${col(x.k)}" stroke="var(--chart-bg)" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ // The hole carries the total and its caption (#2503): the hole is painted wide enough for the whole line, and the
+ // caption reads in full contrast, so no character vanishes where it meets a slice.
+ return `<div class=pie><svg viewBox="0 0 160 160" width=128 height=128>${arc}<circle cx=${C} cy=${C} r=48 fill="var(--chart-bg)"/><text x=${C} y=${C-1} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)" font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="var(--fg)" style="font-size:var(--fs-caption)">tokens · month</text></svg><div class=lg>${legendRows}</div></div>`}
 function hlPie(k){document.querySelectorAll("#pie [data-k]").forEach(el=>el.classList.toggle("hl",!!k&&el.dataset.k===k));document.querySelector("#pie .pie")?.classList.toggle("dim",!!k)}
 $("#pie").addEventListener("mouseover",e=>{const el=e.target.closest("[data-k]");hlPie(el?el.dataset.k:"")});
 $("#pie").addEventListener("mouseout",e=>{if(!$("#pie").contains(e.relatedTarget))hlPie("")});
