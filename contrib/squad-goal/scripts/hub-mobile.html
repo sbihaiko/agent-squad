@@ -131,8 +131,8 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #col-count{color:var(--mute);font-size:var(--fs-caption);font-variant-numeric:tabular-nums}
 /* The column names of Work (SPEC 2498, #2501): one pill per column, the active one ringed, so the owner switches the
    column with one tap and every column is drawn, an empty one included. */
-#col-tabs{display:flex;gap:6px;overflow-x:auto;margin:10px 0 12px;scrollbar-width:none}
-#col-tabs button{flex:0 0 auto;min-height:44px;padding:0 12px;background:transparent;color:var(--mute);border:1px solid transparent;border-radius:var(--radius-full);font-size:var(--fs-body)}
+#col-tabs{display:flex;gap:4px;overflow-x:auto;margin:8px 0 10px;scrollbar-width:none}
+#col-tabs button{flex:0 0 auto;min-height:44px;padding:0 10px;background:transparent;color:var(--mute);border:1px solid transparent;border-radius:var(--radius-full);font-size:var(--fs-caption)}
 #col-tabs button[aria-pressed=true]{color:var(--fg);border-color:var(--fg)}
 #cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:var(--card-gap-y)}
 /* A card is a plain anchor to its issue on GitHub (SPEC 2498, #2501): no sheet and no script redirect. */
@@ -246,7 +246,8 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
 #specs-list{display:grid;gap:10px}
-#specs-list .row{padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg)}
+#specs-list .row{position:relative;padding:12px 34px 12px 12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg)}
+#specs-list .row .ex{position:absolute;top:12px;right:12px;color:var(--mute);font-size:var(--fs-body)}
 #specs-list .row b{font-size:var(--fs-heading);line-height:1.35;font-weight:600;display:block}
 #specs-list .row .mut{line-height:1.5}
 .specbar{display:block;width:100%;height:8px;border-radius:var(--radius-full);background:var(--line);margin:10px 0 8px}
@@ -1226,7 +1227,9 @@ function cardLink(x, i) {
 }
 // The swimlanes of one column (#893): the page reads the lanes the gesture module's rule makes, with the saved collapse.
 // Spec grouping is the only grouping on Work (SPEC 2498, #2501).
-const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {}, sum: board && board.sum });
+const specCardOf = n => ((board && board.groups) || []).flatMap(g => g.items).find(x => x.sp && x.n === n);
+const laneModelOf = g => columnLanes({ groups: (board && board.groups) || [], cards: columnCards(g), lc: bo.mlc || {}, sum: board && board.sum,
+  titleOf: n => { const x = specCardOf(n); return x ? stripSpec(x.t) : ""; } });
 function laneHeader(l) {
   const h = document.createElement("div");
   h.className = "lane-h"; h.dataset.lane = l.id; h.dataset.coll = l.collapsed ? "1" : "0";
@@ -1234,11 +1237,13 @@ function laneHeader(l) {
   if (l.num != null) h.setAttribute("style", "--lc:" + specColor(mSlots(), l.num));   // the lane header takes its spec color (#917)
   const tw = document.createElement("span"); tw.className = "tw"; tw.textContent = l.collapsed ? "▸" : "▾";
   const id = document.createElement("span"); id.className = "lid"; id.textContent = l.sid;
-  const pc = document.createElement("span"); pc.className = "pc"; pc.textContent = l.total ? l.closed + "/" + l.total : "";
-  h.append(tw, id, pc);
+  const ttl = document.createElement("span"); ttl.className = "ltt"; ttl.textContent = l.name;
+  const pc = document.createElement("span"); pc.className = "pc";
+  pc.textContent = l.num == null ? (l.cards.length ? String(l.cards.length) : "") : (l.total ? l.closed + "/" + l.total : "");
+  h.append(tw, id, ttl, pc);
   // The one move sits on a spec's group header (ADR-0142, SPEC 2498 #2501): the spec card the hub marks promotable carries
   // the column the move goes to (`pmt`), so the page names no column of its own.
-  const spec = l.cards.find(c => c.sp && c.pm);
+  const spec = l.head && l.head.pm ? l.head : null;
   if (spec) h.append(promoButton(spec));
   // A refused request names the route's reason under the header until the owner asks again.
   const r = l.num != null ? promoReqs[l.num] : null;
@@ -1296,8 +1301,9 @@ function renderBoard() {
   const model = g ? laneModelOf(g) : { lanes: [], flat: [] };
   shown = model.flat;
   const specs = model.lanes.filter(l => l.num != null).length;
+  const cards = model.lanes.reduce((n, l) => n + l.cards.length, 0);   // the spec's own card heads its lane and is not counted
   $("col-name").textContent = g ? g.name : "";
-  $("col-count").textContent = g ? (g.n === 1 ? "1 card" : g.n + " cards") + (specs ? " · " + specs + (specs === 1 ? " spec" : " specs") : "") : "";
+  $("col-count").textContent = g ? (cards === 1 ? "1 card" : cards + " cards") + (specs ? " · " + specs + (specs === 1 ? " spec" : " specs") : "") : "";
   $("col-prev").disabled = view.col <= 0;
   $("col-next").disabled = view.col >= cols.length - 1;
   // The row of column names switches the column with one tap (SPEC 2498, #2501).
@@ -1404,7 +1410,8 @@ function specRowEl(s) {
   count.textContent = s.count;
   legend.className = "mut";
   legend.textContent = s.legend;
-  row.append(head, bar, count, legend);
+  const ex = document.createElement("span"); ex.className = "ex"; ex.textContent = "↗"; ex.setAttribute("aria-hidden", "true");
+  row.append(head, bar, count, legend, ex);
   return row;
 }
 // The Specs tab draws from the board (SPEC 1596, rule 5): a board that answers after the tab opened repaints it, and the

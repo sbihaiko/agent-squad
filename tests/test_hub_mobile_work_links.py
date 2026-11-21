@@ -16,10 +16,11 @@ SPEC = 2489
 BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None, "done": "Done",
          "sum": {"specs": [{"n": SPEC, "st": "Backlog", "closed": 0, "total": 4}], "waves": []},
          "groups": [
-             {"name": "Backlog", "n": 2, "items": [
+             {"name": "Backlog", "n": 3, "items": [
                  {"n": SPEC, "t": "[SPEC 2498] Remove the hub chat", "l": ["spec"], "sp": True, "pm": True, "pmt": "Todo"},
                  {"n": 2491, "t": "The hub serves no session", "l": [], "pa": SPEC, "b": [2490],
-                  "ho": "run-1", "hs": "running", "hh": True, "gchip": "gate try 2"}]},
+                  "ho": "run-1", "hs": "running", "hh": True, "gchip": "gate try 2"},
+                 {"n": 2492, "t": "The hub hosts no terminal", "l": [], "pa": SPEC}]},
              {"name": "Todo", "n": 0, "items": []},
              {"name": "Doing", "n": 0, "items": []}]}
 
@@ -63,10 +64,23 @@ def test_a_card_is_a_plain_anchor_to_its_issue(hub):  # noqa: F811
         return [...document.querySelectorAll("#cards .card")].map(a => ({tag: a.tagName, href: a.href, role: a.getAttribute("role")}));
     """, board=[BOARD])
     assert [c["tag"] for c in out] == ["A", "A"], out
-    assert "https://github.com/" + hub.REPO + "/issues/2491" in [c["href"] for c in out], out
+    assert [c["href"] for c in out] == ["https://github.com/" + hub.REPO + "/issues/2491",
+                                       "https://github.com/" + hub.REPO + "/issues/2492"], out
     for c in out:
         assert "?" not in c["href"], c            # no query string: iOS opens the app on a tap
         assert c["role"] is None, c
+
+
+@pytest.mark.node_bound
+def test_a_spec_lane_names_the_spec_by_its_title_and_hides_its_card(hub):  # noqa: F811
+    out = run_page(hub.MOBILE_PAGE, """
+        show("work");
+        await __tick(0);
+        return { sid: document.querySelector("#cards .lane-h .lid").textContent,
+                 title: document.querySelector("#cards .lane-h .ltt").textContent,
+                 spec: [...document.querySelectorAll("#cards .card")].some(a => a.dataset.n === "2489") };
+    """, board=[BOARD])
+    assert out == {"sid": "SPEC 2489", "title": "Remove the hub chat", "spec": False}, out
 
 
 @pytest.mark.node_bound
