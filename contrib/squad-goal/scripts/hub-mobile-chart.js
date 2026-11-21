@@ -17,10 +17,16 @@ const mltVal = v => v && v.text ? v.text : "?";
 const mltLine = (v, col, dash, w, h) => v && v.y != null
   ? `<line x1=${MLT_P} x2=${MLT_P + w} y1=${mltY(v.y, h)} y2=${mltY(v.y, h)} stroke="${col}" stroke-width=1${dash ? ` stroke-dasharray="${dash}"` : ""}></line>`
   : "";   // one 1px reference line, patterned so it reads in grayscale (#1332)
-const mltLegend = c => `<p class=mltlg><span><i class=mlthollow></i>Card</span><span><i class=mltfilled></i>Cluster</span><span><i class=mltroll></i>Rolling mean</span></p>`   // the series legend names every mark the plot draws (#1332)
+const mltLegend = (c, band) => `<p class=mltlg><span><i class=mlthollow></i>Card</span><span><i class=mltfilled></i>Cluster</span><span><i class=mltroll></i>Rolling mean</span>` +
+  (band ? `<span><i class=mltband></i>Rolling spread ±1 SD</span>` : "") + `</p>`   // the series legend names every mark the plot draws (#1332, #2504)
   + `<p class=mltlg>${MLT_REF.map(([key, , , cls]) => `<span><i class=${cls}></i>${mltEsc((c[key] && c[key].label) || key)} <b>${mltEsc(mltVal(c[key]))}</b></span>`).join("")}</p>`;   // the reference values with their swatches sit under the plot, where the phone has no gutter (#1333)
-const mltChart = c => {
-  const f = mltFrame(c), w = f.width, h = f.height, base = MLT_P + h, ink = "var(--chart-axis)";
+const mltChart = (c, size) => {
+  // A chart screen hands the box it measured, and the drawing fills it (SPEC 2498, #2504): the viewBox is that box, so a
+  // rotation that measures again draws at the new width. With no size the payload's frame sizes the chart, as before.
+  const f = mltFrame(c), box = size ? mcChartBox(size) : null;
+  const gut = box ? 74 : 0;   // the reference values sit in the right gutter of a chart screen, as on the desktop (#1332)
+  const W = box ? box.width : MLT_P + f.width + 4, H = box ? box.height : f.height + 2 * MLT_P + 8;
+  const w = Math.max(40, W - MLT_P - 4 - gut), h = Math.max(30, H - 2 * MLT_P), base = MLT_P + h, ink = "var(--chart-axis)";
   const grid = (c.ticks || []).map(t => `<line x1=${MLT_P} y1=${mltY(t.y, h)} x2=${MLT_P + w} y2=${mltY(t.y, h)} stroke="var(--chart-grid)" stroke-dasharray="3 2"></line>` +
     `<text x=${MLT_P - 6} y=${mltY(t.y, h) + 4} text-anchor=end fill="${ink}">${mltEsc(t.text)}</text>`).join("");
   const xs = (c.xticks || []).map(t => `<text x=${mltX(t.x, w)} y=${base + 18} text-anchor=middle fill="${ink}">${mltEsc(t.text)}</text>`).join("");
@@ -29,12 +35,30 @@ const mltChart = c => {
     `<text x=${MLT_P} y=${MLT_P - 24} text-anchor=start fill="${ink}">Lead time (log)</text>` +
     `<text x=${MLT_P} y=${base + 36} text-anchor=start fill="${ink}">Date closed</text>`;   // the phone names no board column: the hub's column names stay out of its page (ADR-0137)
   const refs = MLT_REF.map(([key, col, dash]) => mltLine(c[key], col, dash, w, h)).join("");
+  // The reference values stand in the right gutter, each joined to its own line by a swatch, as the desktop draws them (#2504).
+  const tags = box ? (() => {
+    const rows = MLT_REF.map(([key, col, dash]) => {
+      const v = c[key]; if (!v || v.y == null) return null;
+      return { name: v.label || key, text: mltVal(v), col, dash, y: mltY(v.y, h) };
+    }).filter(Boolean).sort((a, b) => a.y - b.y);
+    let at = MLT_P;
+    for (const t of rows) { t.ty = Math.max(t.y, at); at = t.ty + 14; }
+    const over = rows.length ? rows[rows.length - 1].ty - base : 0;
+    if (over > 0) for (const t of rows) t.ty -= over;
+    return rows.map(t => `<line x1=${MLT_P + w} x2=${MLT_P + w + 6} y1=${t.y} y2=${t.ty} stroke="${t.col}" stroke-width=1></line>` +
+      `<line x1=${MLT_P + w + 8} x2=${MLT_P + w + 16} y1=${t.ty} y2=${t.ty} stroke="${t.col}" stroke-width=1${t.dash ? ` stroke-dasharray="${t.dash}"` : ""}></line>` +
+      `<text class=mltref x=${MLT_P + w + 20} y=${t.ty + 3} text-anchor=start fill="${ink}">${mltEsc(t.name)} ${mltEsc(t.text)}</text>`).join("");
+  })() : "";
   const dots = c.dots || [];
+  // The rolling spread is the payload's own per-dot high and low readings, drawn as the desktop draws it (#2504, #1334).
+  const bp = box && dots.length && dots.every(d => d.rolling && d.rolling.y_high != null && d.rolling.y_low != null)
+    ? [...dots.map(d => ({ x: d.x, y: d.rolling.y_high })), ...dots.slice().reverse().map(d => ({ x: d.x, y: d.rolling.y_low }))] : null;
+  const band = bp ? `<polygon points="${bp.map(p => `${mltX(p.x, w)},${mltY(p.y, h)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Rolling spread ±1 SD</title></polygon>` : "";
   const roll = dots.length ? `<polyline fill=none stroke="var(--chart-bar)" stroke-width=3 points="${dots.map(d => `${mltX(d.x, w)},${mltY(d.rolling.y, h)}`).join(" ")}"></polyline>` : "";   // the trend is the strongest line (#1332)
   const outline = (c.mark && c.mark.outline) ?? 1.5;   // a payload from before `mark` keeps the 1.5 px ring (#1432)
   const marks = (c.clusters || []).map((k, i) => `<circle data-lt-k="${i}" cx=${mltX(k.x, w)} cy=${mltY(k.y, h)} r=${k.r} fill="${k.count > 1 ? "var(--chart-ink)" : "var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=${outline} style="cursor:pointer"></circle>`).join("");   // one hollow dot per card, one filled dot per cluster, at the payload's own sizes (#1331, #1432)
-  const svg = `<svg data-lt viewBox="0 0 ${MLT_P + w + 4} ${h + 2 * MLT_P + 8}" role="img" aria-label="Lead time">${grid}${xs}${axes}${refs}${roll}${marks}</svg>`;   // no right gutter: the values moved under the plot (#1333)
-  return { svg, legend: mltLegend(c) };
+  const svg = `<svg data-lt viewBox="0 0 ${W} ${H}" role="img" aria-label="Lead time">${grid}${xs}${axes}${band}${refs}${roll}${marks}${tags}</svg>`;   // a chart screen reserves the right gutter for the reference values (#2504)
+  return { svg, legend: mltLegend(c, !!bp) };
 };
 const mltStack = k => (k.dots || []).map(d => (d.stack || []).map(b => `${b.column} ${b.text}`).join(", ")).filter(Boolean).join(" · ");
 const mltPin = k => {
@@ -52,3 +76,73 @@ const mltZoom = (range, dir) => {
   const mid = (a + b) / 2, half = (b - a) / 2, f = dir === "out" ? 2 : 0.5;   // the buttons halve and double the window
   return { from: new Date(mid - half * f).toISOString(), to: new Date(mid + half * f).toISOString() };
 };
+
+// The chart screens in landscape (SPEC 2498, #2504). The same rules serve every chart: the frame is the box the page
+// measured at draw time, so a rotation measures again and redraws at the new width; portrait is the rotate hint alone.
+const MC_MIN_W = 120, MC_MIN_H = 80;
+const mcLandscape = (w, h) => Number(w) > Number(h);   // the phone's wider side is the landscape side
+const mcChartBox = size => {   // the drawing frame: the measured box, never a fixed one the layout has not met
+  const w = Math.round(Number(size && size.width) || 0), h = Math.round(Number(size && size.height) || 0);
+  return { width: w >= MC_MIN_W ? w : MC_MIN_W, height: h >= MC_MIN_H ? h : MC_MIN_H };
+};
+// The cumulative flow draws the payload /api/chart/cfd serves, at the measured box: the desktop's stack of bands, its
+// axis and its per-day reading, and no number this page derives (ADR-0137). A band's paint is the board's own color role.
+const MC_CFD_L = 44, MC_CFD_B = 34, MC_CFD_T = 14, MC_CFD_R = 10;
+const MC_SERIES = ["var(--chart-series-1)", "var(--chart-series-2)", "var(--chart-series-3)", "var(--chart-series-4)",
+  "var(--chart-series-5)", "var(--chart-series-6)", "var(--chart-series-7)", "var(--chart-series-8)"];
+// The band's paint: the role the payload carries, else the caller's map, else the series palette by position. The phone
+// page names no board column itself, so the hub sends the role with the band (#2504, ADR-0137).
+const mcCfdColor = (colors, name, i, band) => (band && band.color) || (colors && colors[name]) || MC_SERIES[i % MC_SERIES.length];
+const mcCfdStack = (c, hidden = []) => {   // the bands the payload stacks, minus the states the reader hid
+  const all = (c.bands || []).filter(b => b && Array.isArray(b.upper));
+  const keep = all.filter(b => !hidden.includes(b.name));
+  if (keep.length === all.length || !all.every(b => b.lower && b.upper)) return keep;
+  const base = {}; let at = null;   // the rest re-stack from their counts, with no gap where a hidden band stood (#1356)
+  for (let i = keep.length - 1; i >= 0; i--) {
+    const b = keep[i], zero = b.count.map(() => 0);
+    base[b.name] = at === null ? zero : at;
+    at = (at === null ? zero : at).map((v, k) => v + (b.count[k] || 0));
+  }
+  return keep.map(b => ({ ...b, lower: base[b.name], upper: base[b.name].map((v, k) => v + (b.count[k] || 0)),
+    held_upper: base[b.name].map((v, k) => v + (b.held[k] || 0)) }));
+};
+const mcCfdRead = (c, i) => (c.reads || [])[i] || null;
+const mcCfdText = r => {
+  if (!r) return "";
+  const counts = (r.counts || []).map(k => `${k.name} ${k.count == null ? "none" : k.count}`).join(", ");
+  const fig = v => (v == null ? "none" : v);
+  return `${r.day}: ${counts} · WIP ${fig(r.wip)} (whole board) · throughput ${fig(r.throughput)} (whole board)`;
+};
+const mcCfd = (c, size, colors, hidden) => {
+  const shown = mcCfdStack(c, hidden || []);
+  const box = mcChartBox(size), W = box.width, H = box.height;
+  const x0 = MC_CFD_L, x1 = Math.max(x0 + 20, W - MC_CFD_R), y0 = MC_CFD_T, y1 = Math.max(y0 + 20, H - MC_CFD_B);
+  const days = c.days || [], n = days.length, ymax = Number(c.ymax) || 0;
+  const X = i => (n < 2 ? x0 : x0 + i * (x1 - x0) / (n - 1));
+  const Y = v => (ymax ? y1 - v * (y1 - y0) / ymax : y1);
+  const axis = "var(--chart-axis)";
+  const grid = (c.yticks || []).map(v => `<line x1=${x0 - 4} y1=${Y(v)} x2=${x0} y2=${Y(v)} stroke=${axis}></line>` +
+    `<text x=${x0 - 7} y=${Y(v) + 4} text-anchor=end fill=${axis}>${v}</text>`).join("");
+  const xlab = (c.xticks || []).map(t => `<line x1=${X(t.i)} y1=${y1} x2=${X(t.i)} y2=${y1 + 4} stroke=${axis}></line>` +
+    `<text x=${X(t.i)} y=${y1 + 17} text-anchor=middle fill=${axis}>${mltEsc(t.day)}</text>`).join("");
+  const lines = `<line x1=${x0} y1=${y0} x2=${x0} y2=${y1} stroke="var(--chart-grid)"></line>` +
+    `<line x1=${x0} y1=${y1} x2=${x1} y2=${y1} stroke="var(--chart-grid)"></line>` +
+    `<text x=${x0 + 6} y=${y0 + 4} text-anchor=start fill=${axis}>cards</text>` +   // beside the top tick, never over it (#2504)
+    `<text x=${x1} y=${y1 + 31} text-anchor=end fill=${axis}>day (${mltEsc(c.zone || "")})</text>`;
+  const runs = b => { const out = []; let cur = null; days.forEach((_, i) => { if (b.upper[i] == null) { cur = null; return; } if (!cur) { cur = []; out.push(cur); } cur.push(i); }); return out; };
+  const poly = (b, run) => {
+    const one = run.length === 1, hwd = 3;
+    const up = run.flatMap(i => (one ? [[X(i) - hwd, b.upper[i]], [X(i) + hwd, b.upper[i]]] : [[X(i), b.upper[i]]]));
+    const low = [...run].reverse().flatMap(i => (one ? [[X(i) + hwd, b.lower[i]], [X(i) - hwd, b.lower[i]]] : [[X(i), b.lower[i]]]));
+    return [...up, ...low].map(([x, v]) => `${x.toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+  };
+  const bands = shown.map((b, i) => runs(b).map(run => `<polygon points="${poly(b, run)}" fill="${mcCfdColor(colors, b.name, i, b)}" fill-opacity=".85"><title>${mltEsc(b.name)}</title></polygon>`).join("")).join("");
+  const held = shown.map(b => (b.held && b.held.some(v => v > 0)
+    ? runs(b).map(run => `<polygon points="${poly({ upper: b.held_upper || b.upper, lower: b.lower }, run)}" fill="var(--chart-held)" fill-opacity=".45"><title>${mltEsc(b.name)} held</title></polygon>`).join("") : "")).join("");
+  const cw = (x1 - x0) / (n < 2 ? 1 : n);
+  const taps = (c.reads || []).map((r, i) => `<rect data-cfd-day="${i}" x=${(X(i) - cw / 2).toFixed(1)} y=${y0} width=${cw.toFixed(1)} height=${(y1 - y0).toFixed(1)} fill="transparent" style="cursor:pointer"><title>${mltEsc(mcCfdText(r))}</title></rect>`).join("");
+  const svg = `<svg data-cfd viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative Flow">${bands}${held}${lines}${grid}${xlab}${taps}</svg>`;
+  const legend = `<p class=mltlg>${shown.map((b, i) => `<span><i class=mltcdot style="background:${mcCfdColor(colors, b.name, i, b)}"></i>${mltEsc(b.name)}</span>`).join("")}</p>`;
+  return { svg, legend };
+};
+const mcCfdPin = (c, i) => mcCfdText(mcCfdRead(c, i));   // a tap on a point shows its value
