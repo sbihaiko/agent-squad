@@ -101,7 +101,7 @@ def test_the_running_pill_keeps_its_occupancy_and_its_tooltip(hub):
     """The header beside WORKERS still prints occupancy and still carries the spend as its tooltip (#1508)."""
     rows = [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
     h = hub.group_header("running", rows, {"runs": 10, "children": 20})
-    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
+    assert h["text"] == "Runs 3/10 · Agents 9/20"
     assert h["title"] == "$6.60"
 
 

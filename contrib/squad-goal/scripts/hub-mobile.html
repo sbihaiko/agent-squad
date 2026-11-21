@@ -207,6 +207,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cost-sum{color:var(--mute);font-size:var(--fs-caption);margin:0 0 10px}
 #cost-sub{color:var(--mute);font-size:var(--fs-caption);margin:-2px 0 8px}
 #cost-chlg{display:flex;gap:16px;color:var(--mute);font-size:var(--fs-caption);margin:2px 0 6px}
+/* The legend's dots wear the bars' own tokens (#2668): the bar token for loop, the second series token for operator. */
+#cost-chlg span{display:inline-flex;align-items:center;gap:6px}
+#cost-chlg span::before{content:"";width:10px;height:10px;border-radius:var(--radius-full);flex:none}
+#cost-chlg .k-loop::before{background:var(--chart-bar)}
+#cost-chlg .k-operator::before{background:var(--chart-series-2)}
 #cost-pie{display:flex;flex-direction:column;align-items:stretch;gap:8px}
 #cost-pie svg.pie{width:170px;height:170px;margin:0 auto;display:block}
 #cost-pie svg.pie text{fill:var(--fg);font-size:var(--fs-caption)}
@@ -291,6 +296,9 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 #specs-search{display:grid;place-items:center;width:44px;height:44px;padding:0;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-xl)}
 #specs-search svg{width:18px;height:18px}
 .runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px;font:var(--fs-body) system-ui,sans-serif}
+/* A run title on Runs is a name, not code: the row draws it in the body face at 600 (#2668). A run id keeps the
+   monospace face of `.runid`, wherever a detail view names it. */
+.runrow .runid{font-family:var(--font-ui)}
 .runrow .mut{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
 /* The run row draws the shared state chip: the served word in the state's tone, behind its shared mark (#1142). */
 .runrow .run-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
@@ -517,7 +525,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-period="month" type="button">Per month</button>
 </div>
 <div id="cchart"></div>
-<p id="cost-chlg" class="chlg" hidden>loop · operator</p>
+<p id="cost-chlg" class="chlg" hidden><span class="k-loop">loop</span><span class="k-operator">operator</span></p>
 <h3 class="sub">Model tokens · this month</h3>
 <p class="m" id="cost-sub">in + out</p>
 <div id="cost-pie"></div>
@@ -1687,8 +1695,7 @@ const MORE = {
     COST_LAST = [el, d];
     box.replaceChildren(...(buckets.length ? [chartEl(buckets, period, box.clientWidth)] : []));
     const chlg = el.querySelector("#cost-chlg"), anyOp = buckets.some(b => (b.op || 0) > 0);
-    chlg.hidden = !anyOp;
-    if (anyOp) chlg.textContent = "● loop   ● operator";
+    chlg.hidden = !anyOp;   // the dots and their tokens are the served markup's and CSS's, so a redraw keeps them (#2668)
     const slices = usageSlices(d.models || []), colors = usageSliceColors(slices);
     el.querySelector("#cost-pie").replaceChildren(...(slices.length ? [pieEl(slices, colors), legendEl(slices, colors)] : []));
   },

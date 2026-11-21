@@ -826,8 +826,9 @@ def usd_txt(v):
     return f"${v:.2f}"
 
 def group_header(kind, rows, caps):
-    """RUNNING shows occupancy against the machine-wide ceiling, runs then agents, and names what waits; other groups keep
-    count · cost. Spend is the tooltip. The childcc pass is a worker, never a run: it is drawn in its own row and never counted."""
+    """RUNNING shows occupancy against the machine-wide ceiling, runs then agents, in sentence case, and names what waits;
+    other groups keep count · cost. Spend is the tooltip. The childcc pass is a worker, never a run: it is drawn in its own
+    row and never counted."""
     n = len([r for r in rows if r.get("kind") != "childcc"])
     spend = sum((r.get("spend") or 0) for r in rows)
     agents = sum((r.get("agents") or 0) for r in rows)
@@ -836,7 +837,7 @@ def group_header(kind, rows, caps):
         per_run = ((caps or {}).get("per_run") or {}).get("label")
         if per_run: title += " · " + per_run
         if caps and isinstance(caps.get("runs"), int) and isinstance(caps.get("children"), int):
-            return {"text": f"RUNS {n}/{caps['runs']} · AGENTS {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
+            return {"text": f"Runs {n}/{caps['runs']} · Agents {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 
@@ -1235,7 +1236,7 @@ def load_tick(sample=None, now=None, load=None):
 #   base-test duration                           through `health`, and the three reserved here take the fourth accordion
 #                                                when they arrive: the numbering here and the page's `ACC` are one list
 # Two facts left the line by (b) and (c) together, and each is drawn one screen away (#1797, the owner's ruling 2026-10-16):
-# the runs and the agents the line counted are the WORKERS header's own reading (`RUNS n/10 · AGENTS n/20 · waiting: …`,
+# the runs and the agents the line counted are the WORKERS header's own reading (`Runs n/10 · Agents n/20 · waiting: …`,
 # `group_header`) and that header carries more than the footer did. The worktree count left the page with the fourth
 # accordion that drew it (the owner's ruling 2026-10-16): the count and its `clean now` press read poorly there, and the
 # pass that press asked for by hand runs on every third cycle by itself. No other reading used the count or the pass, so

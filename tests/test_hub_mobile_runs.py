@@ -151,7 +151,7 @@ def test_live_carries_the_occupancy_the_hub_built_beside_its_heading(hub):  # no
     groups = hub.run_groups([LIVE_ROW, CC_ROW], CAPS)
     running = next(g for g in groups if g["key"] == "running")
     out = draw(hub, [LIVE_ROW, CC_ROW])
-    assert out["occ"] == running["text"] == "RUNS 1/6 · AGENTS 2/20", "the occupancy counts the run, never the pass"
+    assert out["occ"] == running["text"] == "Runs 1/6 · Agents 2/20", "the occupancy counts the run, never the pass"
     assert out["occTitle"] == running["title"] == "$1.25"
 
 
@@ -167,7 +167,7 @@ def test_the_now_live_tile_and_the_runs_heading_count_one_source(hub, monkeypatc
     tile = hub.status_payload()["live"]
     heading = hub.run_groups(rows, CAPS)[0]["text"]
     assert tile == 1, f"the Now tile counts {tile} live runs, not the one live run: {rows}"
-    assert heading.startswith(f"RUNS {tile}/6"), f"the tile counts {tile} and the heading says {heading!r}"
+    assert heading.startswith(f"Runs {tile}/6"), f"the tile counts {tile} and the heading says {heading!r}"
 
 
 @pytest.mark.node_bound
@@ -207,6 +207,33 @@ def test_a_hub_that_rejects_the_groups_query_still_lists_the_runs(hub):  # noqa:
     assert "implement #7" in out["live"][0]["text"], "a hub that rejects the groups query still lists its runs, as main did"
     assert out["occ"] == "", "a rejected group read draws no occupancy"
     assert out["msg"] == "", "a rejected group read is not the runs list's error"
+
+
+@pytest.mark.node_bound
+def test_the_run_title_draws_in_the_body_face_and_the_occupancy_reads_in_sentence_case(hub):  # noqa: F811
+    """#2668: a run title on Runs is a name, not code: the row draws it in the body face at weight 600, while a run id
+    inside a detail view keeps the monospace face. The Live heading prints the occupancy the hub built, in sentence case."""
+    css = served_css(hub.MOBILE_PAGE)
+    title = rule(css, ".runrow .runid")
+    assert title.get("font-family") == "var(--font-ui)", f"the run title is not in the body face: {title}"
+    ident = rule(css, ".runid")
+    assert "var(--font-mono)" in ident.get("font", ""), "a run id in a detail view lost its monospace face"
+    assert ident.get("font", "").startswith("600 "), f"the run title lost its 600 weight: {ident}"
+    out = draw(hub, [LIVE_ROW, CC_ROW])
+    assert out["occ"] == "Runs 1/6 · Agents 2/20", out["occ"]
+
+
+def served_css(page):
+    return "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", page, flags=re.S))
+
+
+def rule(css, selector):
+    """The last declaration body the served stylesheet gives `selector`, as a dict of property to value."""
+    bodies = [dict(p.split(":", 1) for p in body.split(";") if ":" in p)
+              for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+              if selector in [s.strip() for s in sel.split(",")]]
+    assert bodies, f"the served page has no rule for {selector}"
+    return {k.strip(): v.strip() for k, v in bodies[-1].items()}
 
 
 @pytest.mark.node_bound
