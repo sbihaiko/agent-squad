@@ -50,9 +50,10 @@ LEAD = {"t": 1, "plot_frame": {"width": 672, "height": 212},
                  "control": {k: LEAD_VIEW for k in ("12h", "1", "2", "3", "7", "14", "30", "all")},
                  "columns": ["Todo", "Closed"], "coverage": None}}
 BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None, "groups": []}
+from tests.test_hub_mobile_profiler import PHONE_TRIP_VIEW  # the Loop chart's own payload, one shape for both screens
 API = {
     "/api/board": BOARD, "/api/runs": [], "/api/ended": [], "/api/stats": {"buckets": [], "totals": {}, "models": []},
-    "/api/chart/lead": LEAD, "/api/chart/cfd": CFD, "/api/profiler": {}, "/api/loop": {}, "/api/load": {}, "/api/live": {},
+    "/api/chart/lead": LEAD, "/api/chart/cfd": CFD, "/api/profiler": PHONE_TRIP_VIEW, "/api/loop": {}, "/api/load": {}, "/api/live": {},
     "/api/slots": {}, "/api/subs": {}, "/api/models": {}, "/api/columns": {}, "/api/limits": {}, "/api/delivery": {},
     "/api/issue": {}, "/api/status": {}, "/api/leadtime": LEAD_VIEW,
 }
@@ -157,6 +158,35 @@ def test_a_chart_screen_draws_landscape_and_hints_in_portrait(page_html):
                 "the lead chart does not fill the landscape width"
             assert page.is_hidden("#lead-hint"), "the landscape lead chart still shows the rotate hint"
             assert page.is_hidden("nav"), "the lead chart screen carries a tab bar"
+        finally:
+            browser.close()
+            server.shutdown()
+
+
+@pytest.mark.heavy
+def test_the_loop_chart_draws_the_desktop_chart_in_landscape(page_html):
+    sync = pytest.importorskip("playwright.sync_api")
+    with sync.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(channel="chrome")
+        except sync.Error as e:
+            pytest.skip(f"Chrome is not available: {' '.join(str(e).split())[:200]}")
+        server, port = _serve(page_html)
+        base = f"http://127.0.0.1:{port}/p/x/mobile"
+        try:
+            page = browser.new_page(viewport={"width": 844, "height": 390}, device_scale_factor=3)
+            _boot(page, base, "#/now/profiler")
+            page.wait_for_function("() => !!document.querySelector('#proftrip svg text.ptn')")
+
+            # The Loop chart is the desktop chart's markup, sized to the landscape width (#2498, #2504).
+            assert page.eval_on_selector("#proftrip svg", "e => e.getBoundingClientRect().width") > 800, \
+                "the Loop chart does not fill the landscape width"
+            titles = page.eval_on_selector_all("#proftrip svg text.ptn", "els => els.map(e => e.textContent)")
+            assert titles == ["Tokens", "Machine"], f"the desktop chart's two lane titles: {titles}"
+            assert not page.eval_on_selector_all("#proftrip .ptlane", "els => els.length"), \
+                "the phone drew its own stacked lanes, not the desktop chart"
+            assert page.is_hidden("#prof-hint"), "the landscape Loop chart still shows the rotate hint"
+            assert page.is_hidden("nav"), "a chart screen carries a tab bar"
         finally:
             browser.close()
             server.shutdown()
