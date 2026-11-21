@@ -141,34 +141,25 @@ async def test_a_record_with_the_old_raw_hash_is_compared_by_the_old_method(tmp_
         await resumed(tmp_path).resume(answer="pass")
 
 
-def test_terminals_send_takes_true_or_false_and_names_its_key_otherwise():
-    P.validate({"tailnet": {"terminals_send": True}})
-    P.validate({"tailnet": {"terminals_send": False}})
-    with pytest.raises(OptionError, match="tailnet.terminals_send"):
-        P.validate({"tailnet": {"terminals_send": "yes"}})
-
-
-def test_the_shipped_default_leaves_the_phone_send_off():
-    text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
-    assert "terminals_send: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
-
-
-@pytest.mark.parametrize("key,env", [
-    ("terminals_read", "SQUAD_TAILNET_TERMINALS_READ"),
-    ("terminals_attach", "SQUAD_TAILNET_TERMINALS_ATTACH"),
-])
-def test_terminal_grants_take_true_or_false_name_their_key_and_env_otherwise(key, env):
+@pytest.mark.parametrize("key", ["terminals_read", "terminals_attach", "terminals_send"])
+def test_the_three_retired_terminal_keys_validate_and_are_ignored(key):
+    """The hub hosts no terminal (#2492): a project file that still carries one is accepted, whatever its value."""
     P.validate({"tailnet": {key: True}})
-    P.validate({"tailnet": {key: False}})
-    with pytest.raises(OptionError, match=f"tailnet.{key}"):
-        P.validate({"tailnet": {key: "yes"}})
-    assert P.ENV_KEYS[f"tailnet.{key}"] == env
+    P.validate({"tailnet": {key: "left as it was"}})
+    assert f"tailnet.{key}" not in P.CATALOG
+    assert f"tailnet.{key}" not in P.ENV_KEYS
 
 
-@pytest.mark.parametrize("key", ["terminals_read", "terminals_attach"])
-def test_the_shipped_default_leaves_each_terminal_grant_off(key):
+def test_a_key_beside_the_retired_ones_is_still_refused():
+    with pytest.raises(OptionError, match="tailnet.terminals_other"):
+        P.validate({"tailnet": {"terminals_other": True}})
+
+
+def test_the_shipped_defaults_name_no_terminal_grant():
     text = (pathlib.Path(__file__).resolve().parent.parent / "config" / "agent-defaults.yaml").read_text()
-    assert f"{key}: false" in text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
+    block = text.split("tailnet:", 1)[1].split("\nwatch:", 1)[0]
+    for key in ("terminals_read", "terminals_attach", "terminals_send"):
+        assert key not in block
 
 
 def test_loop_write_takes_true_or_false_and_names_its_key_otherwise():

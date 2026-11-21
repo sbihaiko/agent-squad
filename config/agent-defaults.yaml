@@ -67,9 +67,6 @@ dashboard:                          # the run dashboard page; run_start records 
 tailnet:                            # the project file's tailnet block; its edits never refuse a resume (squad/project_settings.py)
   host: null                        # MagicDNS name of this machine; unset refuses every tailnet request
   allow: []                         # login names in email form; empty refuses every tailnet request
-  terminals_read: false             # the tailnet may read the scrollback of a hosted session, for every allowed login; off until the owner sets it true (SQUAD_TAILNET_TERMINALS_READ)
-  terminals_attach: false           # the tailnet may attach to and detach from a hosted session, for every allowed login; off until the owner sets it true (SQUAD_TAILNET_TERMINALS_ATTACH)
-  terminals_send: false             # the phone may send a message to a live session of this profile, for every allowed login; off until the owner sets it true
   loop_write: false                 # the tailnet may start and stop the loop from the hub; off, the switch is read-only from the tailnet (SQUAD_TAILNET_LOOP_WRITE)
   profiler_write: false             # the tailnet may turn the hub's CPU sampling on and off; off, that switch is read-only from the tailnet (SQUAD_TAILNET_PROFILER_WRITE)
   board_priority_write: false       # the tailnet may set a card's Priority from the hub; off, that write is refused from the tailnet (SQUAD_TAILNET_BOARD_PRIORITY_WRITE)

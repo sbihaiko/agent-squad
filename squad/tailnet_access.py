@@ -3,21 +3,19 @@
 Documented assumption, not yet confirmed by probe #713: a tailnet request has `Host` equal to `tailnet.host`, and its
 identity is the `Tailscale-User-Login` header. If the probe disagrees, only this module changes.
 Display headers (`Tailscale-User-Name`, the picture) never decide. The decision follows the action the request asks for,
-never its HTTP method. The caller keeps its own loopback Origin check for writes.
+never its HTTP method. The caller keeps its own loopback Origin check for writes, and a route's own grant. The hub hosts
+no terminal, so the seam grants no `terminals_*` permission.
 Standard library only: contrib/squad-goal/scripts/hub.py loads this file by path.
 """
 from typing import NamedTuple
 
 LOGIN_HEADER = "Tailscale-User-Login"
 
-VIEW = "view"        # a page or a status read that no terminal grant covers
-READ = "read"        # the scrollback of a hosted session
-ATTACH = "attach"    # attach, detach, start, stop and end of a hosted session
-SEND = "send"        # input to a running session
+VIEW = "view"        # a page or a status read
+SEND = "send"        # a message to a running session
 CONTROL = "control"  # any other write, such as the loop switch or a run's pause
-ACTIONS = frozenset({VIEW, READ, ATTACH, SEND, CONTROL})
-WRITES = frozenset({ATTACH, SEND, CONTROL})
-GRANT_OF = {READ: "terminals_read", ATTACH: "terminals_attach", SEND: "terminals_send"}
+ACTIONS = frozenset({VIEW, SEND, CONTROL})
+WRITES = frozenset({SEND, CONTROL})
 
 
 class Verdict(NamedTuple):
@@ -28,7 +26,7 @@ class Verdict(NamedTuple):
 ALLOW = Verdict(True, "")
 
 
-def decide(*, host, origin, action, login, port, tailnet_host, allowed_logins, grants=frozenset()) -> Verdict:
+def decide(*, host, origin, action, login, port, tailnet_host, allowed_logins) -> Verdict:
     if action not in ACTIONS:
         raise ValueError(f"unknown action {action!r}")
     if host in (f"127.0.0.1:{port}", f"localhost:{port}"):
@@ -45,7 +43,4 @@ def decide(*, host, origin, action, login, port, tailnet_host, allowed_logins, g
         return Verdict(False, "login not allowed")
     if action in WRITES and origin != f"https://{tailnet_host}":
         return Verdict(False, "origin not allowed")
-    grant = GRANT_OF.get(action)
-    if grant is not None and grant not in grants:
-        return Verdict(False, f"tailnet.{grant} is off")
     return ALLOW

@@ -67,7 +67,7 @@ SPEED = {"window": 10, "window_secs": 4 * 3600, "day": 10, "median": 9, "min": 4
          "specs": {"open": 3, "done": 5, "total": 9, "pct": 55, "frac": 5 / 9,
                    "value": "5 of 9 closed - 55%", "state": "info", "bar": True, "tip": ""}}
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "write": True, "reason": "", "tailnet": False,
-             "access": {"loop_write": False, "terminals_send": False},
+             "access": {"loop_write": False},
              "live": {"runs": ["/x/runs/run-20261102-1"], "gates": []}, "log": []}
 
 

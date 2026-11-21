@@ -1,7 +1,7 @@
 """The SuperGrok gauge refreshes itself: when the kept reading is stale or its period has ended, the quota probe starts
 the grok TUI briefly so the CLI writes a new credit line, at most once an hour and never while one already runs (#1530).
 
-The hub never opens a pseudo-terminal on its own path (test_supervisor forbids it): the TUI start lives in
+The hub hosts no terminal and opens no pseudo-terminal on its own path (#2492): the TUI start lives in
 `grokrefresh.sh`, which the hub runs as a child. The script is what these tests pin, with a stub `grok`.
 """
 import importlib.util
@@ -77,7 +77,7 @@ def test_a_running_refresh_is_never_started_twice(env):
 
 
 def test_the_hub_module_never_opens_a_pseudo_terminal_itself():
-    """The TUI start is a child script, never a pty on the hub's own path (test_supervisor's guard, kept here)."""
+    """The TUI start is a child script, never a pty on the hub's own path (the guard is kept here, #2492)."""
     source = HUB_PY.read_text()
     for token in ("openpty", "forkpty", "os.fork(", "pty.spawn"):
         assert token not in source, f"hub.py carries {token}: the TUI start belongs in grokrefresh.sh"

@@ -24,9 +24,18 @@ def test_set_writes_a_tailnet_key_to_the_env_file_and_never_the_tracked_file(rep
 
 
 def test_load_reads_the_tailnet_block_from_the_env_file(repo):
-    (repo / ".env").write_text("OTHER=1\nSQUAD_TAILNET_HOST=box.tail1.ts.net\nSQUAD_TAILNET_ALLOW=me@example.com\nSQUAD_TAILNET_TERMINALS_SEND=true\n")
+    (repo / ".env").write_text("OTHER=1\nSQUAD_TAILNET_HOST=box.tail1.ts.net\nSQUAD_TAILNET_ALLOW=me@example.com\nSQUAD_TAILNET_LOOP_WRITE=true\n")
     data, _ = ps.load(repo)
-    assert data["tailnet"] == {"host": "box.tail1.ts.net", "allow": ["me@example.com"], "terminals_send": True}
+    assert data["tailnet"] == {"host": "box.tail1.ts.net", "allow": ["me@example.com"], "loop_write": True}
+
+
+def test_load_ignores_a_retired_terminal_variable(repo):
+    """The hub hosts no terminal (#2492): `.env` names no terminal grant, and a stored line for one is ignored."""
+    (repo / ".env").write_text("SQUAD_TAILNET_HOST=box.tail1.ts.net\nSQUAD_TAILNET_TERMINALS_READ=true\n"
+                               "SQUAD_TAILNET_TERMINALS_ATTACH=true\nSQUAD_TAILNET_TERMINALS_SEND=true\n")
+    assert ps.env_tailnet(repo) == {"host": "box.tail1.ts.net"}
+    data, _ = ps.load(repo)
+    assert data["tailnet"] == {"host": "box.tail1.ts.net"}
 
 
 def test_the_env_file_wins_over_a_tailnet_block_left_in_the_tracked_file(repo):

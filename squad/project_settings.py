@@ -56,9 +56,6 @@ CATALOG = {
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
     "tailnet.host": ("str", None, None, "MagicDNS name", "name of this machine on the tailnet"),
     "tailnet.allow": ("emails", None, None, "login names", "logins a tailnet request may come from"),
-    "tailnet.terminals_read": ("bool", None, None, "true or false", "the tailnet may read the scrollback of a hosted session of this profile; the grant holds for every allowed login"),
-    "tailnet.terminals_attach": ("bool", None, None, "true or false", "the tailnet may attach to and detach from a hosted session of this profile; the grant holds for every allowed login"),
-    "tailnet.terminals_send": ("bool", None, None, "true or false", "the phone may send a message to a live session of this profile; the grant holds for every allowed login of the profile"),
     "tailnet.loop_write": ("bool", None, None, "true or false", "the tailnet may start and stop the loop from the hub; off, the switch is read-only from the tailnet"),
     "tailnet.profiler_write": ("bool", None, None, "true or false", "the tailnet may turn the hub's CPU sampling on and off; off, that switch is read-only from the tailnet"),
     "tailnet.board_priority_write": ("bool", None, None, "true or false", "the tailnet may set a card's Priority from the hub; off, that write is refused from the tailnet"),
@@ -84,10 +81,12 @@ CALL = ("limits.max_output_tokens", "limits.context_tokens", "limits.max_stalls"
 
 # The tailnet block is personal (a machine name, a login), so it lives in the project's gitignored `.env`, never in the tracked file.
 ENV = ".env"
-ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW", "tailnet.terminals_read": "SQUAD_TAILNET_TERMINALS_READ",
-            "tailnet.terminals_attach": "SQUAD_TAILNET_TERMINALS_ATTACH", "tailnet.terminals_send": "SQUAD_TAILNET_TERMINALS_SEND",
+ENV_KEYS = {"tailnet.host": "SQUAD_TAILNET_HOST", "tailnet.allow": "SQUAD_TAILNET_ALLOW",
             "tailnet.loop_write": "SQUAD_TAILNET_LOOP_WRITE", "tailnet.profiler_write": "SQUAD_TAILNET_PROFILER_WRITE",
             "tailnet.board_priority_write": "SQUAD_TAILNET_BOARD_PRIORITY_WRITE"}
+# The three terminal grants the hub no longer hosts (#2492). A project file that still carries one is accepted and the key
+# is ignored; `.env` no longer names its variable, so an `.env` line for it is ignored too.
+RETIRED = frozenset({"tailnet.terminals_read", "tailnet.terminals_attach", "tailnet.terminals_send"})
 
 
 def _env_lines(target):
@@ -104,7 +103,7 @@ def env_tailnet(target):
         name, sep, raw = line.partition("=")
         if sep and name.strip() in names:
             key, raw = names[name.strip()], raw.strip().strip('"\'')
-            out[key] = [x.strip() for x in raw.split(",") if x.strip()] if key == "allow" else yaml.safe_load(raw) if key in ("terminals_send", "loop_write", "profiler_write", "board_priority_write") else raw
+            out[key] = [x.strip() for x in raw.split(",") if x.strip()] if key == "allow" else yaml.safe_load(raw) if key in ("loop_write", "profiler_write", "board_priority_write") else raw
     return out
 
 
@@ -222,6 +221,8 @@ def defects(data):
                         bad.append((rk, _unknown(k) if CREDENTIAL.search(k) else f"not a role setting; allowed: {', '.join(sorted(ROLE_KEYS))}"))
                     elif (why := value_defect(CATALOG[f"options.{k}"], rv, rk)):
                         bad.append((rk, why))
+        elif key in RETIRED:
+            continue   # a retired terminal grant is ignored, never refused (#2492)
         elif key not in CATALOG:
             bad.append((key, _unknown(key)))
         elif (why := value_defect(CATALOG[key], v, key)):
