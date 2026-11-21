@@ -339,7 +339,7 @@ def test_identifiers_keep_mono_and_numeric_rows_keep_tabular_figures(surfaces):
     token_css = TOKENS_FILE.read_text()
     assert ".kr" in token_css and ".runrow" in token_css
     phone_css = _served_css(surfaces["hub-mobile"])
-    for selector in (".card .cid", ".runid", ".shb", "#sh-set button"):
+    for selector in (".card .cid", ".runid"):   # the sheet's identifiers left the page with the sheet (#2501)
         decls = _rule(phone_css, selector)
         font = " ".join(decls.get(key, "") for key in ("font", "font-family"))
         assert "var(--font-mono)" in font, f"phone identifier {selector} is not monospace"
@@ -726,7 +726,7 @@ def test_motion_entry_and_discrete_sheet_exit_use_their_own_timing(surfaces):
     assert "var(--motion-duration-short) var(--motion-entry-easing)" in item
 
     mobile = _strip_comments(_served_css(surfaces["hub-mobile"]))
-    hidden_sheet = next(body for selector, body in _blocks(mobile) if selector == "#sheet[hidden]")
+    hidden_sheet = next(body for selector, body in _blocks(mobile) if selector == "#psheet[hidden]")
     assert re.search(r"display\s+0s\s+allow-discrete", hidden_sheet)
 
 
