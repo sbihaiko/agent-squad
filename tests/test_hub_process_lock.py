@@ -2,8 +2,8 @@
 
 hubmux.py loads hub.py once per profile into one interpreter, so each profile's module carries its own `_SQUAD_LOCK`: the
 lock then serializes nothing across profiles while every instance purges and imports the same `sys.modules`. The live hub
-read that race as "the terminal supervisor is not running: No module named 'squad.supervisor'" at start, and as
-"the process reading failed" on the run list.
+read that race as a failed module resolution at start, which left its page shut, and as "the process reading failed" on
+the run list.
 """
 import importlib.util
 import os

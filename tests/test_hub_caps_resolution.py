@@ -131,8 +131,9 @@ def test_a_concurrent_import_never_breaks_the_resolution(hub):
     """The hub serves on threads, so `load_squad` purges and reads `sys.modules` while another thread imports.
 
     A `sys.modules` iterated while a key is added raises "dictionary changed size during iteration". The live hub read
-    that as "the terminal supervisor is not running: No module named 'squad.supervisor'", and the terminal stayed shut.
-    The resolution takes its snapshots and holds one lock, so a concurrent import never reaches it.
+    that as a failed module resolution while a profile loaded, so the page it served stayed shut (the retired terminal
+    supervisor's start was the profile load that tripped it). The resolution takes its snapshots and holds one lock, so a
+    concurrent import never reaches it.
     """
     import threading
 
