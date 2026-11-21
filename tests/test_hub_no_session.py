@@ -24,10 +24,15 @@ ANA = "ana@example.com"
 SLUG = "alpha"
 
 GET_PAIRS = ("/api/sessions", "/api/sessions/card?sid=s1&client_id=c1", "/api/sessions/conversation?sid=s1",
-             "/api/sessions/clip?sid=s1&k=t1", "/api/sessions/image?sid=s1&p=/tmp/co/images/a.png",
+             "/api/sessions/clip?sid=s1&k=t1", "/api/sessions/clip?refresh=1&sid=s1&k=t1",
+             "/api/sessions/image?sid=s1&p=/tmp/co/images/a.png",
              "/api/sessions/send?sid=s1&client_id=c1", "/api/sessions/project")
 POST_PAIRS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/attach", "/api/sessions/voice",
-              "/api/sessions/screenshot")
+              "/api/sessions/screenshot", "/api/sessions/attach?kind=screenshot&sid=s1&client_id=c1")
+
+# An unknown POST's answer: the shape a removed path must answer, since the hub no longer handles it. Measured against the
+# hub, not assumed: the generic write path answers 400 with one key, and nothing else (#2491).
+UNKNOWN_POST = (400, {"err": "forbidden"})
 
 
 class Trap:
@@ -139,13 +144,19 @@ def test_a_removed_get_serves_the_page_from_an_admitted_tailnet_identity(fleet, 
 
 @pytest.mark.parametrize("path", POST_PAIRS)
 def test_a_removed_post_answers_400_on_loopback(fleet, path):
+    """A removed POST answers exactly as a path the hub never heard of: 400, one key. The two answers are compared, so a
+    route still handled (with this body, or a 403 refusal) fails the case."""
     body = b'{"sid":"s1","text":"hi","client_id":"c1"}'
     trap = _trap()
     try:
         for port in (fleet["hub"], fleet["mux"]):
-            status, ct, raw = _request(port, "POST", path if port == fleet["hub"] else _prefix(port, path), body=body)
+            def call(p):
+                return _request(port, "POST", p if port == fleet["hub"] else _prefix(port, p), body=body)
+            status, ct, raw = call(path)
+            cstatus, cct, craw = call("/api/no-such-route")
             assert status == 400, (port, path, status)
-            assert json.loads(raw)["err"] == "forbidden", (port, path, raw[:200])
+            assert ct.startswith("application/json"), (port, path, ct)
+            assert (status, json.loads(raw)) == (cstatus, json.loads(craw)) == UNKNOWN_POST, (port, path, status, raw[:200])
     finally:
         _untrap(("sessions", "session_send", "session_card"))
     assert trap == [], f"a removed POST reached session code: {trap}"
@@ -157,33 +168,46 @@ def test_a_removed_post_answers_no_session_from_an_admitted_tailnet_identity(fle
     trap = _trap()
     try:
         for port in (fleet["hub"], fleet["mux"]):
-            status, _, raw = _request(port, "POST", path if port == fleet["hub"] else _prefix(port, path),
-                                      host=TAILNET, login=ANA, body=body)
-            assert status in (400, 403), (port, path, status)
-            assert b"status" not in raw or b"msg_id" not in raw, (port, path, raw[:200])
+            def call(p):
+                return _request(port, "POST", p if port == fleet["hub"] else _prefix(port, p),
+                                host=TAILNET, login=ANA, body=body)
+            status, _, raw = call(path)
+            cstatus, _, craw = call("/api/no-such-route")
+            assert (status, json.loads(raw)) == (cstatus, json.loads(craw)) == UNKNOWN_POST, (port, path, status, raw[:200])
     finally:
         _untrap(("sessions", "session_send", "session_card"))
     assert trap == [], f"a removed POST reached session code: {trap}"
 
 
-def test_the_hub_imports_no_session_module(tmp_path, monkeypatch):
-    """The hub starts with no session module: an import at load reaches the trap and the load fails."""
+def _load_hub(tmp_path, monkeypatch, name):
     for k, v in (("SG_REPO", "x/alpha"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "alpha"),
                  ("SG_CHECKOUT", str(tmp_path / "co")), ("SG_STATE", str(tmp_path / "state")),
                  ("SG_HUB_DIR", str(tmp_path / "hub")), ("HOME", str(tmp_path / "home"))):
         monkeypatch.setenv(k, v)
     (tmp_path / "home").mkdir(exist_ok=True)
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / "hub.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_hub_imports_no_session_module(tmp_path, monkeypatch):
+    """The hub starts with no session module: an import at load reaches the trap and the load fails."""
     trap = _trap()
     try:
-        spec = importlib.util.spec_from_file_location("hub_no_session_load_under_test", SCRIPTS / "hub.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        mod = _load_hub(tmp_path, monkeypatch, "hub_no_session_load_under_test")
     finally:
         _untrap(("sessions", "session_send", "session_card"))
     assert trap == [], f"the hub imported session code at load: {trap}"
     assert not hasattr(mod, "sessions_payload")
     assert not hasattr(mod, "conversation_payload")
     assert not hasattr(mod, "send_to_session")
+
+
+def test_the_hub_reports_no_session_build_fact(tmp_path, monkeypatch):
+    """HUB_BUILD names only what the hub loads now: the two removed facts cannot return unnoticed (#2491, AC 4)."""
+    mod = _load_hub(tmp_path, monkeypatch, "hub_build_under_test")
+    assert set(mod.HUB_BUILD) == {"hub", "started"}
 
 
 def test_the_session_modules_and_their_scripts_are_gone():
