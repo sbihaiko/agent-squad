@@ -1,0 +1,652 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-21T10:34:23+00:00",
+  "title": "Design System: agent-squad",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "Hangar Black",
+        "canonical": "#0f1115",
+        "tonalRamp": [
+          "#1c1e21",
+          "#32363e",
+          "#474e5c",
+          "#616d85",
+          "#848fa4",
+          "#a9afbc",
+          "#ccd0d6",
+          "#ecedef"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Console Slate",
+        "canonical": "#161a21",
+        "tonalRamp": [
+          "#1b1e22",
+          "#313640",
+          "#454e5e",
+          "#5d6d88",
+          "#818fa7",
+          "#a7afbe",
+          "#cbd0d7",
+          "#ebedef"
+        ]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Instrument Slate",
+        "canonical": "#1c212b",
+        "tonalRamp": [
+          "#1b1d22",
+          "#303540",
+          "#444d5f",
+          "#5c6b8a",
+          "#7f8da8",
+          "#a6aebf",
+          "#cbcfd7",
+          "#ebedef"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#2a303b",
+        "tonalRamp": [
+          "#1c1e21",
+          "#32363e",
+          "#474e5c",
+          "#616d85",
+          "#848fa4",
+          "#a9b0bc",
+          "#ccd0d6",
+          "#ecedef"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Strong Hairline",
+        "canonical": "#353d4b",
+        "tonalRamp": [
+          "#1c1e21",
+          "#32363f",
+          "#474f5d",
+          "#606e85",
+          "#838fa5",
+          "#a9b0bc",
+          "#ccd0d6",
+          "#ecedef"
+        ]
+      },
+      "edge": {
+        "role": "neutral",
+        "displayName": "Edge",
+        "canonical": "#667085",
+        "tonalRamp": [
+          "#1c1e21",
+          "#33363d",
+          "#494f5a",
+          "#656e81",
+          "#878fa1",
+          "#abb0ba",
+          "#cdd0d5",
+          "#ecedee"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Slate",
+        "canonical": "#2e3846",
+        "tonalRamp": [
+          "#1b1e22",
+          "#303740",
+          "#444f5f",
+          "#5c6f89",
+          "#8091a8",
+          "#a6b0bf",
+          "#cbd0d7",
+          "#ebedef"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Readout White",
+        "canonical": "#e6e8ee",
+        "tonalRamp": [
+          "#1b1d22",
+          "#31353f",
+          "#454c5e",
+          "#5e6887",
+          "#818ba6",
+          "#a7adbe",
+          "#ccced6",
+          "#ececef"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Dial Gray",
+        "canonical": "#8a93a3",
+        "tonalRamp": [
+          "#1d1e21",
+          "#34373d",
+          "#4a4f59",
+          "#666f80",
+          "#88919f",
+          "#acb1b9",
+          "#ced0d4",
+          "#ecedee"
+        ]
+      },
+      "signal-blue": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#5aa9ff",
+        "tonalRamp": [
+          "#0e1e2f",
+          "#13375d",
+          "#124f92",
+          "#076edf",
+          "#3390f5",
+          "#78b0ed",
+          "#b5d0ed",
+          "#e5edf6"
+        ]
+      },
+      "state-ok": {
+        "role": "state",
+        "displayName": "Go Green",
+        "canonical": "#3ecf8e",
+        "tonalRamp": [
+          "#152920",
+          "#224f3a",
+          "#2b7856",
+          "#32b479",
+          "#5ace9a",
+          "#90d5b6",
+          "#c0e2d3",
+          "#e8f2ee"
+        ]
+      },
+      "state-warn": {
+        "role": "state",
+        "displayName": "Caution Amber",
+        "canonical": "#f5b041",
+        "tonalRamp": [
+          "#2e2210",
+          "#5a4017",
+          "#8b5f18",
+          "#d48912",
+          "#eba83d",
+          "#e7bf7e",
+          "#ebd7b8",
+          "#f5efe5"
+        ]
+      },
+      "state-wait": {
+        "role": "state",
+        "displayName": "Hold Yellow",
+        "canonical": "#e8d44d",
+        "tonalRamp": [
+          "#2b2812",
+          "#554d1b",
+          "#837620",
+          "#c6b020",
+          "#dfcb49",
+          "#dfd486",
+          "#e7e1bb",
+          "#f4f2e6"
+        ]
+      },
+      "state-err": {
+        "role": "state",
+        "displayName": "Fault Red",
+        "canonical": "#ff6b6b",
+        "tonalRamp": [
+          "#2f0e0e",
+          "#5d1313",
+          "#921212",
+          "#df0707",
+          "#f53333",
+          "#ed7878",
+          "#edb5b5",
+          "#f6e5e5"
+        ]
+      },
+      "state-run": {
+        "role": "state",
+        "displayName": "Live Teal",
+        "canonical": "#2dd4bf",
+        "tonalRamp": [
+          "#142a27",
+          "#20514b",
+          "#277c71",
+          "#2cbaa8",
+          "#54d4c4",
+          "#8cd9cf",
+          "#bee4df",
+          "#e7f3f1"
+        ]
+      },
+      "state-none": {
+        "role": "state",
+        "displayName": "Idle Lilac",
+        "canonical": "#b79cf6",
+        "tonalRamp": [
+          "#19112c",
+          "#2c1957",
+          "#3c1c87",
+          "#4f19cd",
+          "#7443e5",
+          "#9f82e3",
+          "#c8bae9",
+          "#eae6f4"
+        ]
+      },
+      "state-drop": {
+        "role": "state",
+        "displayName": "Dropped Violet",
+        "canonical": "#c678dd",
+        "tonalRamp": [
+          "#241529",
+          "#44224e",
+          "#662b78",
+          "#9632b3",
+          "#b35ace",
+          "#c590d5",
+          "#dac0e2",
+          "#f0e8f2"
+        ]
+      },
+      "on-tone": {
+        "role": "neutral",
+        "displayName": "On Tone",
+        "canonical": "#0b1a12",
+        "tonalRamp": [
+          "#18251e",
+          "#294737",
+          "#386c50",
+          "#479e70",
+          "#6dbb91",
+          "#9bcab1",
+          "#c6ddd0",
+          "#eaf1ed"
+        ]
+      },
+      "tint-ok": {
+        "role": "state",
+        "displayName": "Tint Ok",
+        "canonical": "#12302a",
+        "tonalRamp": [
+          "#172623",
+          "#274942",
+          "#356f63",
+          "#42a490",
+          "#68c0ae",
+          "#98cdc2",
+          "#c4ded9",
+          "#e9f1f0"
+        ]
+      },
+      "tint-warn": {
+        "role": "state",
+        "displayName": "Tint Warn",
+        "canonical": "#261e0f",
+        "tonalRamp": [
+          "#262117",
+          "#483d28",
+          "#6d5a36",
+          "#a28144",
+          "#bea16a",
+          "#ccba99",
+          "#ddd5c5",
+          "#f1eee9"
+        ]
+      },
+      "tint-err": {
+        "role": "state",
+        "displayName": "Tint Err",
+        "canonical": "#2a1212",
+        "tonalRamp": [
+          "#251818",
+          "#472929",
+          "#6b3838",
+          "#9e4848",
+          "#bb6d6d",
+          "#ca9b9b",
+          "#dcc6c6",
+          "#f1eaea"
+        ]
+      },
+      "tint-acc": {
+        "role": "state",
+        "displayName": "Tint Acc",
+        "canonical": "#0f1d2c",
+        "tonalRamp": [
+          "#161e27",
+          "#26374a",
+          "#325171",
+          "#3e71a8",
+          "#6492c3",
+          "#96b2cf",
+          "#c3d1df",
+          "#e9edf1"
+        ]
+      },
+      "series-1": {
+        "role": "series",
+        "displayName": "Series 1",
+        "canonical": "#14b8c0",
+        "tonalRamp": [
+          "#112b2c",
+          "#1a5456",
+          "#1e8186",
+          "#1bc2ca",
+          "#45dbe2",
+          "#83dde2",
+          "#bae6e8",
+          "#e6f4f4"
+        ]
+      },
+      "series-2": {
+        "role": "series",
+        "displayName": "Series 2",
+        "canonical": "#d88cd0",
+        "tonalRamp": [
+          "#271625",
+          "#4a2647",
+          "#71326b",
+          "#a83e9d",
+          "#c464ba",
+          "#cf96c9",
+          "#dfc3dc",
+          "#f1e9f1"
+        ]
+      },
+      "series-3": {
+        "role": "series",
+        "displayName": "Series 3",
+        "canonical": "#2cbcd8",
+        "tonalRamp": [
+          "#13262a",
+          "#1e4952",
+          "#266f7e",
+          "#29a5bd",
+          "#51c1d7",
+          "#8acddb",
+          "#bedee5",
+          "#e7f1f3"
+        ]
+      },
+      "series-4": {
+        "role": "series",
+        "displayName": "Series 4",
+        "canonical": "#b99126",
+        "tonalRamp": [
+          "#2a2414",
+          "#514320",
+          "#7c6527",
+          "#ba932c",
+          "#d4b154",
+          "#d9c48c",
+          "#e4dabe",
+          "#f3f0e7"
+        ]
+      },
+      "series-5": {
+        "role": "series",
+        "displayName": "Series 5",
+        "canonical": "#ff8a5c",
+        "tonalRamp": [
+          "#2f170e",
+          "#5d2813",
+          "#923612",
+          "#df4407",
+          "#f56a33",
+          "#ed9978",
+          "#edc5b5",
+          "#f6e9e5"
+        ]
+      },
+      "series-6": {
+        "role": "series",
+        "displayName": "Series 6",
+        "canonical": "#9ccc65",
+        "tonalRamp": [
+          "#1f2716",
+          "#394b25",
+          "#547231",
+          "#76a93d",
+          "#97c563",
+          "#b4d095",
+          "#d2dfc3",
+          "#edf1e9"
+        ]
+      },
+      "series-7": {
+        "role": "series",
+        "displayName": "Series 7",
+        "canonical": "#f48fb1",
+        "tonalRamp": [
+          "#2c111a",
+          "#571a2e",
+          "#861d40",
+          "#cb1a56",
+          "#e3447a",
+          "#e283a3",
+          "#e8baca",
+          "#f4e6eb"
+        ]
+      },
+      "series-8": {
+        "role": "series",
+        "displayName": "Series 8",
+        "canonical": "#90a4ae",
+        "tonalRamp": [
+          "#1c1f21",
+          "#323a3e",
+          "#48555c",
+          "#627884",
+          "#8599a3",
+          "#a9b6bc",
+          "#cdd3d6",
+          "#eceeee"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The project name in the header."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Panel, sheet and dialog titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Rows, values, labels and prose."
+      },
+      "field": {
+        "displayName": "Field",
+        "purpose": "Text inside inputs and selects; 16 px stops the phone zoom."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase block headings; captions without the uppercase."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Code, paths and commands."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-soft",
+        "value": "0 4px 14px #0008",
+        "purpose": "A small floating layer such as a popover."
+      },
+      {
+        "name": "shadow-deep",
+        "value": "0 12px 40px #000c",
+        "purpose": "A modal dialog over the scrim."
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-short",
+        "value": "150ms",
+        "purpose": "Hover and switch transitions."
+      },
+      {
+        "name": "duration-enter",
+        "value": "200ms",
+        "purpose": "A layer that enters."
+      },
+      {
+        "name": "duration-exit",
+        "value": "150ms",
+        "purpose": "A layer that leaves."
+      },
+      {
+        "name": "duration-long",
+        "value": "400ms",
+        "purpose": "A sheet or a sidebar that slides."
+      },
+      {
+        "name": "entry-easing",
+        "value": "ease-out",
+        "purpose": "Entrances."
+      },
+      {
+        "name": "exit-easing",
+        "value": "ease-in",
+        "purpose": "Exits."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "A quiet outlined action on the fixed control row.",
+      "html": "<button class=\"ds-btn\">Discard changes</button>",
+      "css": ".ds-btn{background:var(--panel,#161a21);color:var(--fg,#e6e8ee);border:1px solid var(--line,#2a303b);border-radius:6px;height:32px;padding:0 12px;font:15px system-ui,-apple-system,'Segoe UI',sans-serif;cursor:pointer}.ds-btn:hover{background:var(--hover,#2e3846);border-color:var(--line-strong,#353d4b)}.ds-btn:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:2px}"
+    },
+    {
+      "name": "Commit Button",
+      "kind": "button",
+      "refersTo": "button-commit",
+      "description": "The Save button while a staged change waits.",
+      "html": "<button class=\"ds-btn-commit\">Save...</button>",
+      "css": ".ds-btn-commit{background:var(--warn,#f5b041);color:var(--on-tone,#0b1a12);border:1px solid var(--warn,#f5b041);border-radius:6px;height:32px;padding:0 12px;font:15px system-ui,-apple-system,'Segoe UI',sans-serif;cursor:pointer}.ds-btn-commit:hover{filter:brightness(1.08)}.ds-btn-commit:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:2px}"
+    },
+    {
+      "name": "Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "The header's tab row; the active tab turns Signal Blue.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab\">Kanban</button><button class=\"ds-tab\">Runs</button><button class=\"ds-tab ds-on\" aria-selected=\"true\">Settings</button></nav>",
+      "css": ".ds-tabs{display:flex;gap:6px}.ds-tab{background:var(--panel,#161a21);color:var(--fg,#e6e8ee);border:1px solid var(--line,#2a303b);border-radius:6px;padding:4px 12px;font:15px system-ui,-apple-system,'Segoe UI',sans-serif;cursor:pointer}.ds-tab:hover{border-color:var(--line-strong,#353d4b)}.ds-tab.ds-on{color:var(--acc,#5aa9ff);border-color:var(--acc,#5aa9ff)}.ds-tab:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:2px}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A field on the ground fill; a staged value turns amber.",
+      "html": "<input class=\"ds-input\" value=\"8\" aria-label=\"Doing card limit\"> <input class=\"ds-input ds-set\" value=\"low\" aria-label=\"effort\">",
+      "css": ".ds-input{background:var(--bg,#0f1115);color:var(--fg,#e6e8ee);border:1px solid var(--line,#2a303b);border-radius:4px;height:32px;padding:0 6px;font:16px system-ui,-apple-system,'Segoe UI',sans-serif;color-scheme:dark}.ds-input:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:2px}.ds-input.ds-set{color:var(--warn,#f5b041);border-color:var(--tint-warn-line,#6b5223)}"
+    },
+    {
+      "name": "State Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "A small outlined fact; a state chip takes its tone.",
+      "html": "<span class=\"ds-chip\">guard off</span> <span class=\"ds-chip ds-ok\">under its limit</span> <span class=\"ds-chip ds-err\">at limit</span>",
+      "css": ".ds-chip{display:inline-block;border:1px solid var(--line,#2a303b);border-radius:8px;padding:0 7px;font:600 13px system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--mute,#8a93a3);font-variant-numeric:tabular-nums}.ds-chip.ds-ok{color:var(--ok,#3ecf8e);border-color:var(--tint-ok-line,#2e6b4f)}.ds-chip.ds-err{color:var(--err,#ff6b6b);border-color:var(--err,#ff6b6b)}"
+    },
+    {
+      "name": "Tile",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A read-only fact in a Now block: a muted label over a readout.",
+      "html": "<div class=\"ds-tile\"><span class=\"ds-tl\">Last hour</span><b class=\"ds-tv\">4.3M tokens</b></div>",
+      "css": ".ds-tile{display:flex;flex-direction:column;gap:2px;background:var(--card,#1c212b);border:1px solid var(--line,#2a303b);border-radius:8px;padding:8px 10px;font:15px system-ui,-apple-system,'Segoe UI',sans-serif;max-width:220px}.ds-tile:hover{border-color:var(--edge,#667085)}.ds-tl{font-size:13px;color:var(--mute,#8a93a3)}.ds-tv{font-size:17px;font-weight:600;color:var(--fg,#e6e8ee);font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Settings Row",
+      "kind": "custom",
+      "refersTo": "input",
+      "description": "One editable setting: the label left, the control right, a hairline below.",
+      "html": "<div class=\"ds-row\"><span>Pause factor</span><input class=\"ds-rin\" value=\"3\" aria-label=\"Pause factor\"></div>",
+      "css": ".ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line,#2a303b);font:15px system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--fg,#e6e8ee);max-width:420px}.ds-rin{background:var(--bg,#0f1115);color:var(--fg,#e6e8ee);border:1px solid var(--line,#2a303b);border-radius:4px;height:32px;width:104px;padding:0 6px;text-align:right;font-size:16px}.ds-rin:focus-visible{outline:2px solid var(--acc,#5aa9ff);outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Flight Deck",
+    "overview": "The hub, its phone page and the run dashboard read like the instrument panel of an aircraft in cruise. The operator looks to confirm that nothing needs a hand, and a look must settle that in seconds. Each mark carries a reading: a gauge, a state color, a count, an age. Nothing on the page is decoration.\n\nThe panel is dark and flat. Depth comes from three tonal steps, ground, panel and card, and from thin rules between them. Color is rare at rest, so a color on the page is news: green is done or healthy, amber needs a look, red is a fault. The one blue is the signal of interaction: the active tab, a link, the focus ring.\n\nComponents are quiet and exact. A control is a thin outline on a dark surface, sized to a fixed row, with no shadow at rest. Density is high on the desktop and relaxes on the phone, where every control grows to a thumb target.",
+    "keyCharacteristics": [
+      "Dark, flat surfaces in three tonal steps; shadows only under a layer that floats.",
+      "Color reports state; it never decorates.",
+      "One system font for the interface and one monospace face for code, paths and data.",
+      "Fixed control rows: 32 px on the desktop, 44 px on the phone.",
+      "Tabular numerals in every table, tile and count.",
+      "Dark only: one dark theme on every surface, and no light variant."
+    ],
+    "rules": [
+      {
+        "name": "The Color Is News Rule",
+        "body": "A surface at rest is neutral. A color appears only when it reports a state, and a reader can name the state from the color alone.",
+        "section": "colors"
+      },
+      {
+        "name": "The Separate Hues Rule",
+        "body": "The state tones, the series and the accent are one set. No two share a CIELAB hue within 12 degrees at a comparable lightness, and the accent is never the first series.",
+        "section": "colors"
+      },
+      {
+        "name": "The Edge Contrast Rule",
+        "body": "A boundary that carries meaning uses `edge` at 3:1 or more. A decorative rule uses `rule` and may sit lower.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Numerals Rule",
+        "body": "Every table, tile, count and gauge readout uses tabular numerals, so a changing value never shifts its column.",
+        "section": "typography"
+      },
+      {
+        "name": "The Five Sizes Rule",
+        "body": "The scale has five sizes: 13, 15, 16, 17 and 21 px. A new element takes one of them.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat At Rest Rule",
+        "body": "A card, a row or a button at rest has no shadow. Depth only marks a layer that floats.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** take every color from `web-tokens.css` through its custom property. Hub, phone and dashboard share that one file.",
+      "**Do** keep body text at 4.5:1 or more, and every meaningful boundary at 3:1 or more.",
+      "**Do** size every control to the row: 32 px on the desktop and 44 px at 600 px and below.",
+      "**Do** use tabular numerals wherever a number can change.",
+      "**Do** let a narrow panel move a secondary cell to its own line instead of clipping a label, a value or a placeholder.",
+      "**Do** honor `prefers-reduced-motion`: a transition stops, and the state change stays."
+    ],
+    "donts": [
+      "**Don't** write a hex literal in a surface's CSS. A new value becomes a named token first.",
+      "**Don't** put a shadow under a card, a row or a button at rest.",
+      "**Don't** use a state tone for decoration or for emphasis that is not a state.",
+      "**Don't** add a light theme. The system is dark only (`color-scheme: dark`), on every surface.",
+      "**Don't** add a sixth type size or a second interface font."
+    ]
+  }
+}
