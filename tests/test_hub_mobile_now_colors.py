@@ -60,11 +60,14 @@ def _css(page):
 
 
 def _decls(css, selector):
-    """The declarations of the rule that names this selector, alone or in a group."""
+    """The declarations that paint this selector: every rule that names it, alone or in a group, in source order, so the
+    later one wins the way the cascade does at equal specificity."""
+    out = {}
     for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", re.sub(r"/\*[\s\S]*?\*/", "", css)):
         if selector in [s.strip() for s in sel.split(",")]:
-            return dict(re.findall(r"([\w-]+)\s*:\s*([^;}]+)", body))
-    raise AssertionError(f"the page serves no rule for {selector}")
+            out.update(dict(re.findall(r"([\w-]+)\s*:\s*([^;}]+)", body)))
+    assert out, f"the page serves no rule for {selector}"
+    return out
 
 
 def _tokens(css):
