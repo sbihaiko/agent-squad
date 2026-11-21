@@ -76,7 +76,7 @@ def test_an_empty_run_list_names_the_missing_data(hub):  # noqa: F811
 @pytest.mark.node_bound
 def test_an_empty_cost_list_names_the_missing_data(hub):  # noqa: F811
     stats = {"buckets": [], "totals": {"today": 0, "month": 0, "all": 0, "unpriced": 0, "uncounted": 0}, "models": []}
-    out = boot(hub, 'openLayer("cost"); await loadMore(); return { text: $("cost-state").textContent, '
+    out = boot(hub, 'show("spend"); await __tick(20); return { text: $("cost-state").textContent, '
                     'hidden: $("cost-state").hidden, msg: $("cost-msg").textContent };',
                {"/api/stats": [{"body": json.dumps(stats)}]})
     assert "No model spend" in out["text"] and not out["hidden"], out
@@ -94,7 +94,7 @@ def test_a_failed_first_run_list_read_draws_one_error_line(hub):  # noqa: F811
 
 @pytest.mark.node_bound
 def test_a_failed_first_cost_read_draws_one_error_line(hub):  # noqa: F811
-    out = boot(hub, 'openLayer("cost"); await loadMore(); return { state: $("cost-state").textContent, '
+    out = boot(hub, 'show("spend"); await __tick(20); return { state: $("cost-state").textContent, '
                     'stateHidden: $("cost-state").hidden, msg: $("cost-msg").textContent, '
                     'role: $("cost-msg").getAttribute("role") };',
                {"/api/stats": [BROKEN]})

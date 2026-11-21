@@ -16,8 +16,8 @@ from tests.test_hub_mobile_move import BOARD_ONE, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-TABS = ["now", "work", "specs", "runs"]
-TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "runs": "Runs"}
+TABS = ["now", "work", "specs", "runs", "spend"]
+TAB_NAME = {"now": "Now", "work": "Work", "specs": "Specs", "runs": "Runs", "spend": "Spend"}
 
 
 @pytest.fixture(scope="module")
@@ -76,13 +76,13 @@ def test_a_detail_keeps_the_bar_and_its_tab(hub):
         const cur = () => (document.querySelector("nav [aria-current=page]") || {{}}).dataset;
         tap("work"); openCard(7);
         const card = {{ nav: !document.querySelector("nav").hidden, tab: cur().tab, open: !$("sheet").hidden }};
-        tap("now"); $("now-more").onclick();
-        const more = {{ nav: !document.querySelector("nav").hidden, tab: cur().tab,
-                        open: !document.querySelector('[data-panel="more"]').hidden }};
-        return {{ card, more }};
+        tap("now"); openLayer("lead");
+        const lead = {{ nav: !document.querySelector("nav").hidden, tab: cur().tab,
+                        open: !document.querySelector('[data-screen="lead"]').hidden }};
+        return {{ card, lead }};
     """, board=[BOARD_ONE])
     assert out["card"] == {"nav": True, "tab": "work", "open": True}, out
-    assert out["more"] == {"nav": True, "tab": "now", "open": True}, out
+    assert out["lead"] == {"nav": True, "tab": "now", "open": True}, out
 
 
 @pytest.mark.node_bound
@@ -121,7 +121,7 @@ def test_the_address_mirrors_the_screen_and_a_reload_lands_on_it(hub):
     reloaded = run_page(hub.MOBILE_PAGE, """
         await __tick(20);
         return { tab: tabActive, open: !$("sheet").hidden, n: (shown[view.card] || {}).n, hash: location.hash };
-    """, board=[BOARD_ONE], hash="#/work/card=7")
+    """, board=[BOARD_ONE], hash="#/work/card=7", history_state={"tab": "work", "layer": "sheet", "depth": 1, "n": 7}, history_below=True)
     assert reloaded == {"tab": "work", "open": True, "n": 7, "hash": "#/work/card=7"}, reloaded
 
 
@@ -132,13 +132,13 @@ def test_the_top_back_names_the_screen_below_it(hub):
         await loadBoard();
         tap("work"); openCard(7);
         const card = {{ open: !$("sheet").hidden, said: document.querySelector('[data-topback="sheet"]').textContent }};
-        tap("now"); $("now-more").onclick(); openLayer("cost");
-        const usage = {{ open: !document.querySelector('[data-screen="cost"]').hidden,
-                        said: document.querySelector('[data-topback="cost"]').textContent }};
-        return {{ card, usage }};
+        tap("now"); openLayer("lead");
+        const lead = {{ open: !document.querySelector('[data-screen="lead"]').hidden,
+                        said: document.querySelector('[data-topback="lead"]').textContent }};
+        return {{ card, lead }};
     """, board=[BOARD_ONE])
     assert out["card"] == {"open": True, "said": "Work"}, out
-    assert out["usage"] == {"open": True, "said": "More"}, out
+    assert out["lead"] == {"open": True, "said": "Now"}, out
 
 
 @pytest.mark.node_bound
@@ -177,7 +177,7 @@ def test_the_browser_back_matches_the_two_backs(hub):
 def test_the_first_button_of_an_action_row_is_a_back(hub):
     page = hub.MOBILE_PAGE
     # Every action row puts its Back where the thumb is (SPEC 1596, rule 2; #1605).
-    for row in ("sheet-actions", "psw-footer", "runview-actions", "cost-actions", "lead-actions"):
+    for row in ("sheet-actions", "psw-footer", "runview-actions", "lead-actions"):
         m = re.search(rf'<div id="{row}">(.*?)</div>', page, re.S)
         assert m, row
         assert re.search(r'^\s*<button[^>]*(?:data-actback|data-back|id="runview-back")', m.group(1)), \

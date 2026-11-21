@@ -251,11 +251,13 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #ltpin p{margin:0 0 6px}
 .row{padding:10px 4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .row .mut{color:var(--mute);font-size:var(--fs-caption)}
-/* A More screen fills the screen, scrolls its content and keeps its Back at the bottom edge, in the thumb zone (#1142). */
+/* A detail screen fills the screen, scrolls its content and keeps its Back at the bottom edge, in the thumb zone (#1142).
+   A screen that is also a tab's root stays in the page flow: the tab draws it, so it covers no tab (#2499). */
 [data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 [data-screen][hidden]{display:none}
+[data-screen].root{position:static;z-index:auto;overflow:visible;background:transparent}
 #cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
-#cost-actions,#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
@@ -338,7 +340,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <main>
 <section data-panel="monitor">
 <button id="now-today" type="button" hidden></button>
-<div id="now-head" data-role="header"><h2>Now</h2><button id="now-more" type="button">More</button></div>
+<div id="now-head" data-role="header"><h2>Now</h2></div>
 <!--INST_CARD-->
 <!-- The loop strip (SPEC 1596, rule 8; #1599): one loop belongs to one project, so the strip aggregates every project
      the hub serves and a row opens that project's loop. It never shows one unnamed switch. -->
@@ -373,9 +375,28 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=loop-menu hidden><button id=loop-menu-stop type=button>Stop now</button></div>
 </article>
 <article id=profpage data-screen=profiler hidden>
-<div id=prof-content><div class=scr-head><button id=prof-backtop data-topback=profiler type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Loop</h2></div>
+<div id=prof-content><div class=scr-head><button id=prof-backtop data-topback=profiler type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Loop</h2></div>
 <div id=profb></div></div>
 <div id=prof-actions><button data-actback type=button>Back</button></div>
+</article>
+<article data-screen="lead" data-src="/api/chart/lead" hidden>
+<div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Lead time</h2></div>
+<div id="ltbars">
+<button data-ltf="2" type="button">48h</button>
+<button data-ltf="7" type="button">1 week</button>
+<button data-ltf="30" type="button">1 month</button>
+<button data-ltf="all" type="button">All time</button>
+</div>
+<div id="ltplot"></div>
+<div id="ltlegend"></div>
+<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
+<div id="ltzoom">
+<button data-ltzoom="in" type="button">Zoom in</button>
+<button data-ltzoom="out" type="button">Zoom out</button>
+<button data-ltzoom="reset" type="button">Reset</button>
+</div>
+<p class="msg" role="status"></p></div>
+<div id="lead-actions"><button data-actback type="button">Back</button></div>
 </article>
 <article id=loopbugs data-screen=bugs hidden>
 <div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loop</span></button><h2 id=bugs-title>Loop-bugs</h2></div>
@@ -421,7 +442,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 </section>
 <section data-panel="runs" hidden>
 <h2>Runs</h2>
-<button id="runs-usage" type="button">Usage</button>
 <h3 class="sub">Live<span id="runs-occ"></span></h3>
 <div id="runs-live" class="runlist"></div>
 <h3 class="sub">Ended today</h3>
@@ -430,17 +450,12 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <p id="runs-state" class="msg" role="status">The runs are loading.</p>
 <p id="runs-msg" class="msg" role="status"></p>
 </section>
-<section data-panel="more" hidden>
-<div id="more-head" data-role="header"><button id="more-backtop" data-topback="more" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>More</h2></div>
-<div id="more-menu">
-<button data-more="cost" type="button">Cost and usage</button>
-<button data-more="lead" type="button">Lead time</button>
-<button id="more-loop" data-more="profiler" type="button">Loop</button>
-<a class="more-link" id="more-settings" href="./#set">Settings</a>
-</div>
-<p class="msg" role="status">The Flow charts are desktop only: the Cumulative Flow Type and visible-state filters live on the desktop page.</p>
-<article data-screen="cost" data-src="/api/stats" hidden>
-<div id="cost-content"><div class="scr-head"><button id="cost-backtop" data-topback="cost" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Cost and usage</h2></div>
+<!-- Spend (SPEC 2498, #2499): the fifth tab draws the cost screen, which the old More menu held. #2503 stacks the
+     desktop panel here. -->
+<section data-panel="spend" hidden>
+<div id="spend-head" data-role="header"><h2>Spend</h2></div>
+<article data-screen="cost" class="root" data-src="/api/stats">
+<div id="cost-content">
 <div id="periods">
 <button data-period="hour" type="button">Per hour</button>
 <button data-period="day" type="button">Per day</button>
@@ -450,28 +465,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div class="list"></div>
 <p id="cost-state" class="msg" role="status">Cost and usage are loading.</p>
 <p id="cost-msg" class="msg" role="status"></p></div>
-<div id="cost-actions"><button data-back type="button">Back</button></div>
 </article>
-<article data-screen="lead" data-src="/api/chart/lead" hidden>
-<div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">More</span></button><h2>Lead time</h2></div>
-<div id="ltbars">
-<button data-ltf="2" type="button">48h</button>
-<button data-ltf="7" type="button">1 week</button>
-<button data-ltf="30" type="button">1 month</button>
-<button data-ltf="all" type="button">All time</button>
-</div>
-<div id="ltplot"></div>
-<div id="ltlegend"></div>
-<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
-<div id="ltzoom">
-<button data-ltzoom="in" type="button">Zoom in</button>
-<button data-ltzoom="out" type="button">Zoom out</button>
-<button data-ltzoom="reset" type="button">Reset</button>
-</div>
-<p class="msg" role="status"></p></div>
-<div id="lead-actions"><button data-back type="button">Back</button></div>
-</article>
-<div id="more-actions"><button id="more-backact" data-actback type="button">Back</button></div>
 </section>
 <section data-panel="specs" hidden>
 <div id="specs-head" data-role="header"><h2>Specs</h2><button id="specs-search" type="button" aria-label="Search specs by title, number or label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg></button></div>
@@ -479,17 +473,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="specs-list" class="runlist"></div>
 </section>
 </main>
-<section id="usage-screen" hidden>
-<div class="scr-head"><button id="usage-back" data-topback="usage" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><h2>Usage</h2></div>
-<div id="usage-periods" role="group" aria-label="Period"><button data-usage-period="hour" type="button" aria-pressed="false">Hour</button><button data-usage-period="day" type="button" aria-pressed="true">Day</button><button data-usage-period="month" type="button" aria-pressed="false">Month</button></div>
-<p id="usage-state" class="msg" role="status"></p>
-<h3 class="sub">Tokens</h3>
-<div id="usage-bars"></div>
-<p id="usage-peak" class="mut"></p>
-<h3 class="sub">Models · this month</h3>
-<div id="usage-pie"></div>
-<div id="usage-legend"></div>
-</section>
 <div id="sheet" data-role="sheet" role="dialog" aria-labelledby="sh-title" hidden>
 <div id="sheet-content"><div class="grab"></div>
 <div id="sh-head"><button id="sh-backtop" data-topback="sheet" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Work</span></button><span id="sh-pos"></span><a id="sh-link" target="_blank" rel="noopener">Open on GitHub</a></div>
@@ -525,6 +508,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-tab="work">Work</button>
 <button data-tab="specs">Specs</button>
 <button data-tab="runs">Runs</button>
+<button data-tab="spend">Spend</button>
 </nav>
 <!-- The page script stays the last one. -->
 <script>
@@ -557,27 +541,52 @@ const base = location.pathname.replace(/mobile\/?$/, "");
 $("to-desktop").href = base;
 $("to-desktop").onclick = () => localStorage.setItem("squad-view","desktop");
 
-// settings-handoff:begin
-// #1286: Settings opens the desktop tab on the theme last used there, kept under "hub"; the first theme left when none
-// was used, and a stored Loop theme, which left Settings (#2515), opens that same first theme
-const SET_THEMES = ["lim","sub","mdl","slk","acc"];
-const lastSetTheme = (() => { try { const t = JSON.parse(localStorage.getItem("hub") || "{}").sth; return SET_THEMES.includes(t) ? t : "lim"; } catch (e) { return "lim"; } })();
-$("more-settings").href = "./#set-" + lastSetTheme;
-// #1446: the entry names the desktop view, so the desktop page's narrow-screen redirect does not return the owner
-$("more-settings").onclick = () => localStorage.setItem("squad-view","desktop");
-// settings-handoff:end
+// Settings left the phone (SPEC 2498, #2499): a saved Settings address opens Now, and the owner changes settings on the
+// desktop page, which the header links to.
 /*PROFILER_JS*/
 profMount("phone");
 setInterval(() => { if (!$("profpage").hidden && !document.hidden && profV && profV.on) profPoll(); }, 2000);
 
-// The phone's navigation shell (SPEC 1596, #1597): four tabs, one stack of screens per tab, and one history entry per
-// screen that names its tab and the address the location mirrors. A screen opens inside the tab whose list it came from,
-// so leaving a tab on a detail and coming back shows the same detail. Back, the action row's Back, the open tab's tap and
-// the browser's Back all leave by one pop.
-const TAB_LABEL = { now: "Now", work: "Work", specs: "Specs", runs: "Runs" };
+// The phone's navigation shell (SPEC 2498, #2499): one route table, five tabs, and one stack of screens per tab. Every
+// address is `#/<tab>` for a root or `#/<tab>/<layer>` for a detail, and the table names each screen's tab, its title and
+// the screen its Back opens. A screen opens inside the tab whose list it came from, so leaving a tab on a detail and
+// coming back shows the same detail. Back, the action row's Back, the browser's Back and the open tab's tap all leave by
+// one pop.
+const ROUTE = {
+  // A tab row: the panel it draws, and the older name a stored tab still spells.
+  now: { panel: "monitor", label: "Now", alias: ["monitor", "status", "more"] },
+  work: { panel: "board", label: "Work", alias: ["board"] },
+  specs: { panel: "specs", label: "Specs", alias: [] },
+  runs: { panel: "runs", label: "Runs", alias: [] },
+  spend: { panel: "spend", label: "Spend", alias: [] },
+  // A layer row: the address segment, the tab it stands on (null is the tab under it), its title, and its parent layer.
+  layers: {
+    sheet: { seg: s => "card=" + s.n, tab: "work", title: "Card", parent: null },
+    psheet: { seg: () => "profile", tab: null, title: "Projects", parent: null },
+    run: { seg: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
+           tab: "runs", title: "Run", parent: null },
+    lead: { seg: () => "lead", tab: "now", title: "Lead time", parent: null },
+    loops: { seg: () => "loops", tab: "now", title: "Loops", parent: null },
+    loop: { seg: s => "loop=" + encodeURIComponent(s.slug || ""), tab: "now", title: "Loop", parent: "loops" },
+    bugs: { seg: () => "bugs", tab: "now", title: "Loop-bugs", parent: "loop" },
+    profiler: { seg: () => "profiler", tab: "now", title: "Loop", parent: null },
+  },
+  // The segment head a layer answers to, for the layers whose address is one plain word.
+  plain: { profile: "psheet", lead: "lead", loops: "loops", bugs: "bugs", profiler: "profiler" },
+  // The saved address of a screen this page dropped (SPEC 2498): the segment opens the named screen and the entry is
+  // replaced, so Back never lands on it again.
+  legacy: [
+    [/^(usage|tokens)$/, { tab: "spend" }],
+    [/^(more|settings)$/, { tab: "now" }],
+    [/^session=/, { tab: "now" }],
+    [/^card=/, { tab: "now" }],   // the card sheet's saved address (#2498): the sheet is a tap on Work, never a bookmark
+  ],
+};
+const TABS = Object.keys(ROUTE).filter(k => !["layers", "plain", "legacy"].includes(k) && ROUTE[k].panel);
+const TAB_LABEL = Object.fromEntries(TABS.map(t => [t, ROUTE[t].label]));
 // The panel each tab draws, and the older names a stored tab still spells.
-const TAB_PANEL = { now: "monitor", work: "board", specs: "specs", runs: "runs" };
-const TAB_ALIAS = { monitor: "now", board: "work", more: "now" };
+const TAB_PANEL = Object.fromEntries(TABS.map(t => [t, ROUTE[t].panel]));
+const TAB_ALIAS = Object.fromEntries(TABS.flatMap(t => ROUTE[t].alias.map(a => [a, t])));
 const tabKey = n => TAB_LABEL[n] ? n : (TAB_ALIAS[n] || "now");
 // A tab stored by an older build keeps its meaning: the tab that draws it now opens.
 const tabOf = s => tabKey(s === "status" ? "now" : s);
@@ -596,10 +605,8 @@ const LAYER = {
     hide() { $("psheet").hidden = true; $("profile").setAttribute("aria-expanded", "false"); },
   },
   run: { show(s) { showRun(s); }, hide() { hideRun(); } },
-  cost: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
-  usage: { show() { showUsage(); }, hide() { hideUsage(); } },
-  lead: { show(s) { moreScreen = s.layer; showMore(); }, hide() { moreScreen = null; showMore(); } },
-  more: { show() { moreScreen = null; paintPanel(); }, hide() { moreScreen = null; paintPanel(); } },
+  lead: { show() { document.querySelector('[data-screen="lead"]').hidden = false; loadLead(); },
+          hide() { document.querySelector('[data-screen="lead"]').hidden = true; } },
   // The Loops list names every project and the change log across them; a row opens one project's loop; the loop page
   // writes to that one project (SPEC 1596, rule 8; #1599).
   loops: { show() { $("loops").hidden = false; loopDraw(); }, hide() { $("loops").hidden = true; } },
@@ -609,20 +616,19 @@ const LAYER = {
   profiler: { show() { $("profpage").hidden = false; profPoll(); }, hide() { $("profpage").hidden = true; } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
-// screen a nested one stands on.
-const LAYER_TAB = { sheet: "work", run: "runs", usage: "runs", cost: "now", lead: "now", more: "now", loops: "now", loop: "now", bugs: "now", profiler: "now" };
-const LAYER_TITLE = { sheet: "Card", psheet: "Projects", run: "Run", usage: "Usage", cost: "Cost and usage", lead: "Lead time", more: "More",
-                      loops: "Loops", loop: "Loop", bugs: "Loop-bugs", profiler: "Loop" };
-const LAYER_PARENT = { cost: "more", lead: "more", loop: "loops", bugs: "loop", profiler: "more" };
+// screen a nested one stands on. Every row above reads the route table, so a screen is named in one place.
+const LAYER_TAB = Object.fromEntries(Object.entries(ROUTE.layers).filter(([, r]) => r.tab).map(([name, r]) => [name, r.tab]));
+const LAYER_TITLE = { ...Object.fromEntries(Object.entries(ROUTE.layers).map(([name, r]) => [name, r.title])) };
+const LAYER_PARENT = Object.fromEntries(Object.entries(ROUTE.layers).filter(([, r]) => r.parent).map(([name, r]) => [name, r.parent]));
 const screenChain = name => { const out = []; for (let p = LAYER_PARENT[name]; p; p = LAYER_PARENT[p]) out.unshift(p); return out; };
-const tabStacks = { now: [], work: [], specs: [], runs: [] };
-const layerState = { now: {}, work: {}, specs: {}, runs: {} };
+const tabStacks = Object.fromEntries(TABS.map(t => [t, []]));
+const layerState = Object.fromEntries(TABS.map(t => [t, {}]));
 let tabActive = "now";
 let layers = tabStacks[tabActive];
 let layerBacks = 0, pendingSheet = null;
 const topLayer = () => layers[layers.length - 1];
 const fieldsOf = s => { const { tab, layer, depth, ...data } = s; return data; };
-// The screen under the top of the stack names the Back: "Work" on a card, "More" on the usage above it. The arrow is the
+// The screen under the top of the stack names the Back: "Work" on a card, "Now" on the lead chart over it. The arrow is the
 // inline icon the markup draws, never a glyph inside the button's word (SPEC 1596, #1605).
 const titleOf = n => LAYER_TITLE[n] || TAB_LABEL[n] || "";
 const backLabel = () => layers.length > 1 ? titleOf(layers[layers.length - 2]) : TAB_LABEL[tabActive];
@@ -636,7 +642,7 @@ function paintBack() {
   }
   paintControlRow();
 }
-// The address mirrors the top of the stack, so a reload lands on the same screen: "#/work/card=7", "#/now/more".
+// The address mirrors the top of the stack, so a reload lands on the same screen: "#/work/card=7", "#/now/loops".
 // A screen that draws from its own fields carries them in the segment's query, so a cold load fills them like the open does.
 const queryString = pairs => pairs.filter(([, v]) => v).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
 const withQuery = (head, pairs) => { const q = queryString(pairs); return head + (q ? "?" + q : ""); };
@@ -648,36 +654,25 @@ const queryOf = s => {
   }
   return out;
 };
-const SEG = {
-  sheet: s => "card=" + s.n,
-  psheet: () => "profile",
-  run: s => withQuery("run=" + encodeURIComponent(s.id || s.url || ""), [["url", s.url], ["name", s.name]]),
-  cost: () => "usage",   // the address `/usage` has always named, so an old link opens the same screen
-  usage: () => "tokens",
-  lead: () => "lead",
-  more: () => "more",
-  loops: () => "loops",
-  loop: s => "loop=" + encodeURIComponent(s.slug || ""),
-  bugs: () => "bugs",
-  profiler: () => "profiler",
-};
+const SEG = Object.fromEntries(Object.entries(ROUTE.layers).map(([name, r]) => [name, r.seg]));
 const routeHash = s => "#/" + ((s && s.tab) || tabActive) + (s && s.layer && SEG[s.layer] ? "/" + SEG[s.layer](s) : "");
+// The address a screen's Back opens: its parent layer on the same tab, else the tab's root.
+const parentHash = (tab, layer) => {
+  const p = (ROUTE.layers[layer] || {}).parent;
+  return "#/" + tab + (p ? "/" + SEG[p]({}) : "");
+};
+// One reader for the whole table: a tab root, a layer, or a saved address of a screen the page dropped. A dropped address
+// answers a root, so the page replaces the entry with it.
 function routeFromHash(hash) {
-  const m = /^#\/(now|work|specs|runs)(?:\/([^/]+))?$/.exec(String(hash || ""));
+  const m = /^#\/(\w+)(?:\/([^/]+))?$/.exec(String(hash || ""));
   if (!m) return null;
-  const tab = m[1], seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {} };
+  const tab = tabKey(m[1]), seg = m[2] || "", at = seg.indexOf("?"), out = { tab, layer: null, data: {}, replace: false };
   const head = at < 0 ? seg : seg.slice(0, at), q = queryOf(at < 0 ? "" : seg.slice(at + 1));
-  if (head === "profile") out.layer = "psheet";
-  else if (head === "more") out.layer = "more";
-  else if (head === "usage") out.layer = "cost";   // `/usage` names the cost screen alone, whatever tab the address carries
-  else if (head === "tokens") out.layer = "usage";
-  else if (head === "lead") out.layer = "lead";
-  else if (head === "loops") out.layer = "loops";
-  else if (head === "bugs") out.layer = "bugs";
-  else if (head === "profiler") out.layer = "profiler";
-  else if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
-  else if (head.startsWith("card=")) { out.layer = "sheet"; out.data = { n: +head.slice(5) }; }
+  if (!seg) return out;
+  for (const [test, target] of ROUTE.legacy) if (test.test(head)) return { ...target, layer: null, data: {}, replace: true };
+  if (head.startsWith("loop=")) { out.layer = "loop"; out.data = { slug: decodeURIComponent(head.slice(5)) }; }
   else if (head.startsWith("run=")) { out.layer = "run"; out.data = { id: decodeURIComponent(head.slice(4)), url: q.url || "", name: q.name || "" }; }
+  else if (ROUTE.plain[head]) out.layer = ROUTE.plain[head];
   return out;
 }
 // One control row on every root (SPEC 1596, rule 4): the active tab's segmented filter, whose last option says what it
@@ -770,6 +765,7 @@ function openSearch(tab) {
 function clearSearch() {
   const tab = searchState.tab;
   searchState.open = false; searchState.tab = ""; searchState.query = "";
+  searchSaved[tab] = null;
   $("searchbar").hidden = true;
   $("search-input").value = "";
   $("work-results").replaceChildren(); $("work-results").hidden = true;
@@ -777,14 +773,32 @@ function clearSearch() {
   paintControlRow();
   if (tab === "specs") { if (!board) loadBoard(); drawSpecs(); } else if (tab === "work") renderBoard();
 }
+// A search stays with its screen (SPEC 2498, #2499): leaving the tab hides the field and keeps its text, and the return
+// opens it again on the same query, so the owner's place on the page survives a glance at another tab.
+const searchSaved = { work: null, specs: null };
+function parkSearch() {
+  if (!searchOn()) return;
+  searchSaved[searchState.tab] = { query: searchState.query };
+  searchState.open = false; searchState.tab = ""; searchState.query = "";
+  $("searchbar").hidden = true;
+  $("work-results").hidden = true;
+  paintControlRow();
+}
+function resumeSearch(tab) {
+  const saved = searchSaved[tab];
+  if (!saved) return;
+  searchState.open = true; searchState.tab = tab; searchState.query = saved.query;
+  $("search-input").value = saved.query;
+  paintSearch();
+}
 $("work-search").onclick = () => openSearch("work");
 $("specs-search").onclick = () => openSearch("specs");
 $("search-input").oninput = () => { searchState.query = $("search-input").value; paintSearch(); };
 $("search-input").onkeydown = e => { if (e && e.key === "Escape") clearSearch(); };
 $("search-back").onclick = clearSearch;
-// The panel in view: the tab's root, or the More screen where it stands over Now.
+// The panel in view: the tab's root.
 function paintPanel() {
-  const panel = layers.includes("more") ? "more" : TAB_PANEL[tabActive];
+  const panel = TAB_PANEL[tabActive];
   for (const p of document.querySelectorAll("[data-panel]")) p.hidden = p.dataset.panel !== panel;
   for (const b of document.querySelectorAll("nav [data-tab]")) {
     b.dataset.tab === tabActive ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
@@ -793,6 +807,7 @@ function paintPanel() {
   // A tab restored on its own opens with its own facts (SPEC 1596, rule 5): Specs reads the board, and asks for it when it
   // is the panel on show and the board has not answered yet (#1604).
   if (panel === "specs") { if (!board) loadBoard(); drawSpecs(); }
+  if (panel === "spend") loadCost();
 }
 function entryOf(tab) {
   const st = tabStacks[tab], top = st[st.length - 1];
@@ -813,9 +828,12 @@ function openLayer(name, data, restore) {
   if (tab !== tabActive) { paintPanel(); return; }   // a read that answered on another tab: its screen waits there
   const s = { tab, layer: name, depth: stack.length, ...data };
   // A reload reuses the entry it landed on for the bottom screen of the chain and pushes every screen above it, so the
-  // parent of the top keeps an entry of its own and a Back from the top lands on it ("push" forces that push).
+  // parent of the top keeps an entry of its own and a Back from the top lands on it ("push" forces that push). A direct
+  // entry has no entry under it, so its bottom marks itself (`direct`) and its Back replaces the address with the parent.
+  const was = history.state || {};
   if (restore === "push") history.pushState(s, "", routeHash(s));
-  else if (restore || (history.state && history.state.layer === name && !layerBacks)) history.replaceState(s, "", routeHash(s));
+  else if (restore === "direct") history.replaceState({ ...s, direct: true }, "", routeHash(s));
+  else if (restore || (was.layer === name && !layerBacks)) history.replaceState({ ...s, ...(was.direct ? { direct: true } : {}) }, "", routeHash(s));
   else history.pushState(s, "", routeHash(s));
   LAYER[name].show(s);
   paintBack();
@@ -835,11 +853,18 @@ function closeLayer(name) {
   const gone = layers.splice(at);
   for (const g of gone.reverse()) { LAYER[g].hide(); delete layerState[tabActive][g]; }
   paintPanel(); paintBack();
+  // A detail the owner entered straight from the address has no entry under it (SPEC 2498, #2499): its Back opens the
+  // parent in the route table by replacing the address, so a Back never leaves the page from an empty history.
+  if (at === 0 && history.state && history.state.direct) {
+    history.replaceState({ tab: tabActive }, "", parentHash(tabActive, name));
+    return;
+  }
   layerBacks += gone.length;
   for (let i = 0; i < gone.length; i++) history.back();
 }
-// One pop for the top Back, the action row's Back and the open tab's tap.
+// One pop for the top Back, the action row's Back and the open tab's tap. A search closes before its screen leaves.
 function popScreen() {
+  if (searchOn()) { clearSearch(); return; }
   const top = topLayer();
   if (!top) return;
   if (top === "sheet") step({ act: "close" });
@@ -875,13 +900,8 @@ function show(name) {
   if (tabNow) tabScroll[tabNow] = window.scrollY;
   if (tab !== tabActive) pauseStack(tabActive);
   tabActive = tab;
-  // Search belongs to Work and Specs: leaving them closes the field and puts the root's own list back (#1600).
-  if (searchState.open && searchState.tab !== tab) {
-    searchState.open = false; searchState.tab = ""; searchState.query = "";
-    $("searchbar").hidden = true; $("work-results").hidden = true;
-    $("cards").hidden = false; $("dots").hidden = false;
-    paintControlRow();   // the control row gives its slot back as soon as the search closes (#1600)
-  }
+  // Search belongs to Work and Specs: a tab left keeps its screen's search, and the return opens it again (SPEC 2498).
+  if (searchOn() && searchState.tab !== tab) parkSearch();
   layers = tabStacks[tab];
   tabNow = TAB_PANEL[tab];
   localStorage.setItem("squad-mobile-tab", tab);
@@ -891,10 +911,12 @@ function show(name) {
   if (tabNow === "runs") loadRuns();
   if (tabNow === "monitor") { status(); loopView(); loadPoll(); }
   showStack(tab);
+  resumeSearch(tab);
   paintBack();
   window.scrollTo(0, tabScroll[tabNow] || 0);
 }
-// A tap on the tab in view returns to its root and the next tap reaches the top; another tab opens where it was left.
+// A tap on the tab in view returns to its root and the next tap reaches the top; another tab opens where it was left, and
+// the tap replaces the entry (SPEC 2498, #2499), so Back never walks through a tab the owner already left.
 function tabTap(tab) {
   if (tab === tabActive) {
     if (layers.length) closeLayer(layers[0]);
@@ -902,7 +924,7 @@ function tabTap(tab) {
     return;
   }
   const entry = entryOf(tab);
-  history.pushState(entry, "", routeHash(entry));   // the entry names the screen the tab was left on
+  history.replaceState(entry, "", routeHash(entry));   // the entry names the screen the tab was left on
   show(tab);
 }
 tabs.forEach(b => b.onclick = () => tabTap(b.dataset.tab));
@@ -912,14 +934,9 @@ const typingField = el => !!el && (el.tagName === "TEXTAREA" || el.isContentEdit
   || (el.tagName === "INPUT" && !/^(button|checkbox|radio|submit|reset|file|color|range|image)$/.test((el.type || "text").toLowerCase())));
 document.addEventListener("focusin", e => { if (typingField(e.target)) tabBar.hidden = true; });
 document.addEventListener("focusout", e => { if (typingField(e.target)) tabBar.hidden = false; });
+// Every Back runs the one pop: the top Back of each detail screen and the action row's Back (SPEC 2498, #2499).
+for (const b of document.querySelectorAll("[data-topback]")) b.onclick = popScreen;
 for (const b of document.querySelectorAll("[data-actback]")) b.onclick = popScreen;
-$("more-backtop").onclick = popScreen;
-$("sh-backtop").onclick = popScreen;
-$("ps-backtop").onclick = popScreen;
-$("run-backtop").onclick = popScreen;
-$("cost-backtop").onclick = popScreen;
-$("lead-backtop").onclick = popScreen;
-$("now-more").onclick = () => openLayer("more");
 
 // The phone follows the hub's build as the desktop does (#1114). A new build reloads the page once, and the reload waits
 // while a write is in flight or a move is staged (#1455).
@@ -1844,8 +1861,9 @@ document.addEventListener("touchend", e => {
 }, { passive: true });
 document.addEventListener("touchcancel", endGesture, { passive: true });
 
-let moreScreen = null, period = "day", moreSeq = 0;
+let period = "day", moreSeq = 0;   // `moreSeq` numbers every cost and lead read: an answer older than the last one never draws
 const CH_W = 280, CH_H = 90;
+const NS_SVG = "http://www.w3.org/2000/svg";
 function rowEl(title, lines) {
   const row = document.createElement("div");
   row.className = "row";
@@ -1939,81 +1957,6 @@ document.querySelector('[data-screen="lead"] #ltplot').addEventListener("click",
 });
 // The cost list keeps what it last drew (#1445): the one helper draws the line, the error and then the held rows. The
 // lead-time screen keeps its single line, which this change leaves alone.
-// Runs › Usage (#1604): the desktop's /api/stats payload for the period the owner picks. hub-mobile-usage.js shapes it; the
-// screen fetches, draws and computes no number of its own (ADR-0137).
-const usageState = { period: "day", data: null, seq: 0 };
-const NS_SVG = "http://www.w3.org/2000/svg";
-function usageBarsEl(bars) {
-  const svg = document.createElementNS(NS_SVG, "svg"), bw = CH_W / bars.length;
-  svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
-  bars.forEach((b, i) => {
-    const r = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title"), h = b.h / 100 * (CH_H - 4), hl = b.hLoop / 100 * (CH_H - 4);
-    r.setAttribute("x", i * bw + 1);
-    r.setAttribute("y", CH_H - hl);
-    r.setAttribute("width", Math.max(1, bw - 2));
-    r.setAttribute("height", hl);
-    r.setAttribute("fill", "var(--acc)");
-    t.textContent = `${b.label}: ${usageCount(b.tokens)}` + (b.op ? ` loop · ${usageCount(b.op)} operator` : "");
-    r.append(t);
-    svg.append(r);
-    if (b.op) {   // the operator session's segment, stacked above the loop's (#1756)
-      const o = document.createElementNS(NS_SVG, "rect"), ot = document.createElementNS(NS_SVG, "title");
-      o.setAttribute("x", i * bw + 1);
-      o.setAttribute("y", CH_H - h);
-      o.setAttribute("width", Math.max(1, bw - 2));
-      o.setAttribute("height", h - hl);
-      o.setAttribute("fill", "var(--chart-series-2)");   // the desktop chart's operator series, so both renderers agree (#1756)
-      ot.textContent = `${b.label}: ${usageCount(b.op)} operator`;
-      o.append(ot);
-      svg.append(o);
-    }
-  });
-  return svg;
-}
-function usageRingEl(slices) {
-  const svg = document.createElementNS(NS_SVG, "svg");
-  svg.setAttribute("viewBox", "0 0 120 120");
-  usageRing(slices, 50).forEach((s, i) => {
-    const c = document.createElementNS(NS_SVG, "circle");
-    c.setAttribute("cx", 60);
-    c.setAttribute("cy", 60);
-    c.setAttribute("r", 50);
-    c.setAttribute("fill", "none");
-    c.setAttribute("stroke-width", 20);
-    c.setAttribute("stroke", `hsl(${i * 60} 60% 55%)`);
-    c.setAttribute("stroke-dasharray", `${s.len} ${2 * Math.PI * 50}`);
-    c.setAttribute("stroke-dashoffset", s.off);
-    c.setAttribute("transform", "rotate(-90 60 60)");
-    svg.append(c);
-  });
-  return svg;
-}
-function paintUsage() {
-  const d = usageState.data;
-  const bars = usageBars(d.buckets || [], usageState.period), slices = usageSlices(d.models || []);
-  $("usage-bars").replaceChildren(...(bars.length ? [usageBarsEl(bars)] : []));
-  $("usage-peak").textContent = bars.length ? "Peak " + usagePeak(d.buckets, usageState.period) : "";
-  $("usage-pie").replaceChildren(...(slices.length ? [usageRingEl(slices)] : []));
-  $("usage-legend").replaceChildren(...slices.map(s => { const p = document.createElement("p"); p.className = "mut"; p.textContent = s.legend; return p; }));
-}
-function drawUsagePeriod() {
-  for (const b of document.querySelectorAll("[data-usage-period]")) b.setAttribute("aria-pressed", String(b.dataset.usagePeriod === usageState.period));
-}
-async function loadUsage() {
-  const seq = ++usageState.seq, period = usageState.period;
-  try {
-    const d = await call("/api/stats?period=" + period);
-    if (seq !== usageState.seq) return;
-    usageState.data = d;
-    paintUsage();
-    $("usage-state").textContent = "";
-  } catch (e) {
-    if (seq === usageState.seq) $("usage-state").textContent = e.message;
-  }
-}
-function selectUsagePeriod(period) { usageState.period = period; drawUsagePeriod(); return loadUsage(); }
-function showUsage() { $("usage-screen").hidden = false; drawUsagePeriod(); loadUsage(); }
-function hideUsage() { $("usage-screen").hidden = true; }
 async function loadNowToday() {
   try {
     const d = await call("/api/stats?period=day");
@@ -2023,48 +1966,47 @@ async function loadNowToday() {
     $("now-today").hidden = true;
   }
 }
-$("runs-usage").onclick = () => openLayer("usage");
-$("now-today").onclick = () => { tabTap("runs"); openLayer("usage"); };
-for (const b of document.querySelectorAll("[data-usage-period]")) b.onclick = () => selectUsagePeriod(b.dataset.usagePeriod);
+// The old Usage address names Spend (SPEC 2498): both entry points open the Spend tab, which owns the cost screen.
+$("now-today").onclick = () => tabTap("spend");
 every("monitor", loadNowToday, 60000);
 const costState = { ever: false, n: 0, error: "", data: null,
   loading: "Cost and usage are loading.", empty: "No model spend is drawn for this period." };
+const costEl = () => document.querySelector('[data-screen="cost"]');
 function drawCost(el) {
   drawList(costState, $("cost-state"), $("cost-msg"), () => { if (costState.data) MORE.cost(el, costState.data); });
 }
-async function readMore(name, el, seq) {
+// Spend reads its own panel (SPEC 2498, #2499): the period buttons change the bars, and the read refreshes while the tab
+// shows. #2503 brings the desktop panel's markup to this screen.
+async function loadCost() {
+  const el = costEl(), seq = ++moreSeq;
+  if (!el) return;
+  for (const b of el.querySelectorAll("[data-period]")) b.setAttribute("aria-pressed", String(b.dataset.period === period));
   try {
-    const query = name === "cost" ? "?period=" + period : "";
-    const d = await call(el.dataset.src + query);
-    if (seq !== moreSeq) return "";
-    if (name === "cost") { costState.ever = true; costState.data = d; costState.n = (d.models || []).length; return ""; }
-    MORE[name](el, d);
-    return "";
-  } catch (e) { return seq === moreSeq ? e.message : ""; }
-}
-async function loadMore() {
-  if (!moreScreen) return;
-  const name = moreScreen, seq = ++moreSeq, el = document.querySelector(`[data-screen="${name}"]`);
-  const fail = await readMore(name, el, seq);
-  if (seq !== moreSeq) return;
-  if (name !== "cost") { el.querySelector(".msg").textContent = fail; return; }
-  costState.error = fail;
+    const d = await call(el.dataset.src + "?period=" + period);
+    if (seq !== moreSeq) return;
+    costState.ever = true; costState.data = d; costState.n = (d.models || []).length; costState.error = "";
+  } catch (e) {
+    if (seq !== moreSeq) return;
+    costState.error = e.message;
+  }
   drawCost(el);
 }
-function showMore() {
-  for (const a of document.querySelectorAll("[data-screen]")) a.hidden = a.dataset.screen !== moreScreen;
-  document.getElementById("more-menu").hidden = !!moreScreen;
-  for (const b of document.querySelectorAll("[data-period]")) b.setAttribute("aria-pressed", String(b.dataset.period === period));
-  loadMore();
+costEl().addEventListener("click", e => {
+  const b = e.target ? e.target.closest("[data-period]") : null;
+  if (b) { period = b.dataset.period; loadCost(); }
+});
+every("spend", loadCost, 10000);
+setInterval(() => { const el = document.querySelector('[data-screen="lead"]'); if (el && !el.hidden && !document.hidden) loadLead(); }, 10000);
+// The lead-time chart stands on Now (SPEC 2498, #2499): it reads its own payload while its screen shows.
+async function loadLead() {
+  const el = document.querySelector('[data-screen="lead"]'), seq = ++moreSeq;
+  try {
+    const d = await call(el.dataset.src);
+    if (seq !== moreSeq) return;
+    MORE.lead(el, d);
+    el.querySelector(".msg").textContent = "";
+  } catch (e) { if (seq === moreSeq) el.querySelector(".msg").textContent = e.message; }
 }
-document.querySelector('[data-panel="more"]').onclick = e => {
-  const b = e.target.closest("button");
-  if (!b) return;
-  if (b.dataset.more) openLayer(b.dataset.more);
-  else if ("back" in b.dataset) popScreen();
-  else if (b.dataset.period) { period = b.dataset.period; showMore(); }
-};
-every("more", loadMore, 10000);
 
 /*SWITCHER_JS*/
 (() => {
@@ -2242,20 +2184,29 @@ const route = routeFromHash(location.hash);
 const was = history.state || {};
 drawRuns();
 drawCost(document.querySelector('[data-screen="cost"]')); loadNowToday();
+// A saved address of a screen the page dropped opens the screen the route table names, and replaces the entry (SPEC 2498):
+// the old address is gone from the history, so Back never returns to it. An entry that names its own screen keeps it: the
+// state a reload carries is the truth, and a replace would erase the screen the owner stands on.
+const heldEntry = history.state || {};
+if (route && route.replace && route.layer === null && !(heldEntry.layer && LAYER[heldEntry.layer]))
+  history.replaceState({ tab: route.tab }, "", routeHash(route));
 // The address names the screen first, then the entry's own state, then the tab the owner left: a reload lands on it.
 show(TAB_LABEL[was.tab] ? was.tab : (route ? route.tab : tabOf(localStorage.getItem("squad-mobile-tab"))));
-// A card link in the address opens its card once the board's read answers (#1459).
-if (linkHash(location.hash) !== null) linkOpen();
+// A card link in the address opens its card once the board's read answers (#1459). The saved issue address names Work at
+// the card, so the entry becomes Work's root and the card's own entry lands over it (SPEC 2498, #2499).
+if (linkHash(location.hash) !== null) { linkOpen(); history.replaceState({ tab: "work" }, "", "#/work"); }
 // A reload restores the screens its entry names on that entry: the entry it landed on holds the bottom screen of the chain
 // and each screen above it gets an entry of its own, so Back still closes the top and lands on the screen under it (#1450).
-const restore = was.layer && LAYER[was.layer] ? { layer: was.layer, data: fieldsOf(was) }
-  : route && route.layer ? { layer: route.layer, data: route.data } : null;
-if (restore) {
-  if (restore.layer === "sheet") {
-    if (Number.isInteger(restore.data.n)) pendingSheet = restore.data.n;
+// An address typed straight in has no entry under it (`direct`), so its Back opens the parent in the table (#2499).
+const restored = was.layer && LAYER[was.layer] ? { layer: was.layer, data: fieldsOf(was), direct: false }
+  : route && route.layer ? { layer: route.layer, data: route.data, direct: true } : null;
+if (restored) {
+  if (restored.layer === "sheet") {
+    if (Number.isInteger(restored.data.n)) pendingSheet = restored.data.n;
   } else {
-    const chain = [...screenChain(restore.layer), restore.layer];
-    for (const [i, name] of chain.entries()) openLayer(name, i === chain.length - 1 ? restore.data : {}, i === 0 ? true : "push");
+    const chain = [...screenChain(restored.layer), restored.layer];
+    for (const [i, name] of chain.entries())
+      openLayer(name, i === chain.length - 1 ? restored.data : {}, i === 0 ? (restored.direct ? "direct" : true) : "push");
   }
 }
 // The installed app's theme colour is the page's own background role, never a copy of its value.

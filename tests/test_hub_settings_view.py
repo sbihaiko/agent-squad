@@ -107,16 +107,15 @@ def test_the_sidebar_carries_no_control_that_writes_a_chain_and_no_link_to_setti
     assert "data-t=set" not in side and "#set" not in side
 
 
-def test_the_mobile_menu_opens_settings(hub):
-    """Re-anchored (#1446): the entry is the link the handoff settles. It opens the saved Settings theme and names
-    the desktop view before it navigates, so the desktop page's narrow-screen redirect does not return the owner."""
+def test_the_mobile_page_carries_no_settings_entry(hub):
+    """Re-anchored (#2499, SPEC 2498): Settings change only on the desktop, so the phone page the hub serves carries no
+    More menu and no Settings link."""
     _, port = hub
     st, page = _get(port, "/mobile")
     assert st == 200
-    menu = _between(page, '<div id="more-menu">', "</div>")
-    assert re.search(r'<a[^>]*id="more-settings"[^>]*href="\./#set"[^>]*>Settings</a>', menu), menu
-    assert re.search(r'\$\("more-settings"\)\.onclick\s*=\s*\(\)\s*=>\s*localStorage\.setItem\("squad-view","desktop"\)',
-                     page), "the Settings entry does not name the desktop view before it navigates"
+    assert 'id="more-menu"' not in page, "the phone page still draws the More menu"
+    assert 'id="more-settings"' not in page, "the phone page still carries a Settings entry"
+    assert './#set' not in page, "the phone page still links a Settings theme address"
 
 
 # ---------------------------------------------------------------- the panel, run in node

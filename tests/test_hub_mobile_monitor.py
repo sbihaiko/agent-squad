@@ -16,7 +16,7 @@ from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0
 SHA = "0123456789abcdef0123456789abcdef01234567"
-TABS = ["now", "work", "specs", "runs"]
+TABS = ["now", "work", "specs", "runs", "spend"]
 
 
 @pytest.fixture(scope="module")

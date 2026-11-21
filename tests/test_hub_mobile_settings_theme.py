@@ -1,6 +1,6 @@
-"""The phone's Settings entry opens the desktop Settings tab on the theme last used there (SPEC 1117, #1286).
+"""The phone carries no Settings entry (SPEC 2498, #2499), and the desktop still opens its Settings tab on a theme.
 
-The phone's handoff block and the desktop's boot routing run under node over a stubbed DOM.
+The desktop's boot routing runs under node over a stubbed DOM.
 """
 import importlib.util
 import json
@@ -34,22 +34,13 @@ def hub():
     return mod
 
 
-def _handoff_block(page):
-    assert page.count("// settings-handoff:begin") == 1 and page.count("// settings-handoff:end") == 1, "the phone has no single handoff block"
-    return page[page.index("// settings-handoff:begin"):page.index("// settings-handoff:end")]
-
-
-def _phone_link_href(stored):
+def test_the_phone_carries_no_settings_entry(hub):
+    """SPEC 2498 (#2499), user story 39: Settings change only on the desktop, so the phone page holds neither a Settings
+    link nor a handoff that opens the desktop Settings tab."""
     page = MOBILE_HTML.read_text()
-    block = _handoff_block(page)
-    src = (
-        f"const STORED={json.dumps(stored)};"
-        "const localStorage={getItem:k=>k==='hub'?STORED:null};"
-        "const els={'more-settings':{href:'./#set'}};const $=id=>els[id];\n"
-        f"{block}\n"
-        "console.log(JSON.stringify(els['more-settings'].href));"
-    )
-    return _node(src)
+    assert "settings-handoff" not in page, "the phone still carries the Settings handoff"
+    assert not re.search(r'id=["\']more-settings["\']', page), "the phone still carries the Settings link"
+    assert "./#set" not in page, "the phone still links a Settings theme address"
 
 
 def _desktop_tab_and_theme(hub, hash_):
@@ -71,40 +62,6 @@ def _node(src):
     result = subprocess.run([NODE, "-e", src], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
-
-
-@needs_node
-@pytest.mark.parametrize(
-    "stored,href",
-    [
-        ('{"sth":"acc"}', "./#set-acc"),
-        ('{"sth":"sub","pins":[]}', "./#set-sub"),
-        ("{}", "./#set-lim"),
-        ('{"sth":"bogus"}', "./#set-lim"),
-        ('{"sth":"lop"}', "./#set-lim"),
-        ("not json", "./#set-lim"),
-    ],
-)
-def test_the_phone_settings_link_carries_the_last_theme_or_the_first_one(stored, href):
-    assert json.loads(_phone_link_href(stored)) == href
-
-
-def _desktop_themes_and_first(hub):
-    """The desktop's theme order and first theme, read from the running page, never a second literal kept in step."""
-    sth = re.search(r"^const STH=[^\n]*", hub.PAGE, re.M).group(0)
-    first = re.search(r"^const SET_FIRST=[^\n]*", hub.PAGE, re.M).group(0)
-    return json.loads(_node(f"{sth}\n{first}\nconsole.log(JSON.stringify([Object.keys(STH),SET_FIRST]));"))
-
-
-@needs_node
-def test_the_phone_theme_list_and_first_theme_match_the_desktop(hub):
-    """#2515: the phone handoff opens every theme the desktop knows, and a stored non-theme value (the removed Loop
-    theme) opens the desktop's runtime first theme, so the two defaults cannot drift apart."""
-    themes, first = _desktop_themes_and_first(hub)
-    for t in themes:
-        assert json.loads(_phone_link_href(json.dumps({"sth": t}))) == f"./#set-{t}", f"the phone drops {t}"
-    assert json.loads(_phone_link_href('{"sth":"lop"}')) == f"./#set-{first}", \
-        f"the phone's fallback does not match the desktop's runtime first theme {first!r}"
 
 
 @needs_node
@@ -132,27 +89,6 @@ STORE_STUB = (
     "removeItem:k=>{delete store[k]}};"
     "const matchMedia=q=>({matches:true});"
 )
-
-
-@needs_node
-def test_the_phone_settings_entry_names_the_desktop_view_before_it_navigates(hub):
-    """#1446: the Settings entry writes squad-view=desktop for the saved theme's anchor, so once it runs the desktop
-    page's narrow-screen redirect is false and the owner is not sent back to the phone."""
-    block = _handoff_block(MOBILE_HTML.read_text())
-    cond = _redirect_condition(hub)
-    src = (
-        STORE_STUB +
-        "store['hub']=JSON.stringify({sth:'acc'});"
-        "const els={'more-settings':{href:'./#set'}};const $=id=>els[id];\n"
-        f"{block}\n"
-        "els['more-settings'].onclick();\n"
-        "console.log(JSON.stringify({href:els['more-settings'].href,view:store['squad-view']??null,"
-        f"redirect:Boolean({cond})}}));"
-    )
-    got = json.loads(_node(src))
-    assert got["href"] == "./#set-acc", "the entry does not open the saved Settings theme"
-    assert got["view"] == "desktop", "the entry does not name the desktop view"
-    assert got["redirect"] is False, "the redirect sends the owner back to the phone"
 
 
 @needs_node

@@ -242,12 +242,12 @@ def test_a_tap_lists_every_card_in_the_served_cluster(hub):  # noqa: F811
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_a_tap_on_a_served_cluster_pins_its_text(hub):  # noqa: F811
-    """`loadMore` hands the screen the route's own answer; a tap on one of its clusters pins that cluster's text."""
+    """`loadLead` hands the screen the route's own answer; a tap on one of its clusters pins that cluster's text."""
     payload = served_lead(hub)
     index = next(i for i, k in enumerate(payload["lead"]["control"]["all"]["clusters"]) if k["count"] > 1)
     out = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)};" + f"""
       call = p => Promise.resolve(PAYLOAD);   // the screen's own fetch of /api/chart/lead
-      moreScreen = "lead"; await loadMore();
+      await loadLead();
       const el = document.querySelector('[data-screen="lead"]');
       const all = el.querySelector('#ltbars [data-ltf="all"]');
       el.listeners.click.forEach(fn => fn({{ target: all }}));   // the served 'all' view holds the seeded clusters
@@ -290,7 +290,7 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     out = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)};" + """
       const sent = [];
       call = (p, fresh) => { sent.push({ path: p, fresh: !!fresh }); return Promise.resolve(p.startsWith("/api/chart/lead") ? PAYLOAD : {}); };
-      moreScreen = "lead"; await loadMore();
+      await loadLead();
       const el = document.querySelector('[data-screen="lead"]');
       el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
       const start = MLT.start;
@@ -327,7 +327,7 @@ def test_the_zoom_url_the_page_builds_is_the_route_it_reads(hub):  # noqa: F811
     # Pass two: the page draws the route's own answer, not a stand-in of the test's own making.
     drawn = move.run_page(hub.MOBILE_PAGE, f"const PAYLOAD = {json.dumps(payload)}; const ANSWER = {json.dumps(answer)};" + """
       call = p => Promise.resolve(p.startsWith("/api/chart/lead") ? PAYLOAD : ANSWER);
-      moreScreen = "lead"; await loadMore();
+      await loadLead();
       const el = document.querySelector('[data-screen="lead"]');
       el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
       await leadZoom("out");
@@ -350,7 +350,7 @@ def test_a_stale_answer_never_draws_over_a_newer_view(hub):  # noqa: F811
       const held = [];
       let holding = false;
       call = p => holding ? new Promise(r => held.push(r)) : Promise.resolve(PAYLOAD);
-      moreScreen = "lead"; await loadMore();
+      await loadLead();
       const el = document.querySelector('[data-screen="lead"]');
       el.listeners.click.forEach(fn => fn({ target: el.querySelector('#ltbars [data-ltf="all"]') }));
       const click = sel => el.listeners.click.forEach(fn => fn({ target: el.querySelector(sel) }));

@@ -63,9 +63,21 @@ def routes(view=VIEW):
     return {"/api/profiler": [{"body": json.dumps(view), "status": 200}]}
 
 
-def test_the_more_entry_is_a_button_that_opens_a_layer_not_a_link(hub):
-    assert '<a class="more-link" id="more-loop"' not in hub.MOBILE_PAGE
-    assert 'data-more="profiler"' in hub.MOBILE_PAGE
+def test_the_loop_chart_opens_by_its_own_route(hub):
+    """SPEC 2498 (#2499): the Loop chart is a screen of Now at `#/now/profiler`, and the More menu that held its button
+    left the page."""
+    page = hub.MOBILE_PAGE
+    assert '<a class="more-link" id="more-loop"' not in page
+    assert 'data-more="profiler"' not in page, "the removed More menu still names the Loop chart"
+
+
+@pytest.mark.node_bound
+def test_a_direct_entry_on_the_loop_chart_route_opens_it(hub):
+    out = run_page(hub.MOBILE_PAGE, """
+      await __tick(10);
+      return { open: !$("profpage").hidden, tab: tabActive, back: document.querySelector('[data-topback="profiler"]').textContent };
+    """, hash="#/now/profiler", routes=routes())
+    assert out == {"open": True, "tab": "now", "back": "Now"}, out
 
 
 @pytest.mark.node_bound
