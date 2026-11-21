@@ -174,7 +174,7 @@ def test_a_run_with_no_known_row_opens_on_the_desktop_dashboard(hub):
 @pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
 def test_the_desktop_dashboard_is_one_tap_from_the_overview(hub):
     body = OPEN_LIVE_BODY + """
-  $("rundesk-btn").onclick({ target: $("rundesk-btn") });
+  $("run-primary").onclick();
   return { ...facts(), src: $("runframe").src };
 """
     out = open_run(hub, body, routes())

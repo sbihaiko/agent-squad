@@ -25,15 +25,17 @@ check("the strip is a button that opens the Loops list", 'openLayer("loops")' in
 check("a project row opens that project's loop", re.search(r'openLayer\("loop", \{ slug:', t) is not None)
 check("a row names its project, so no switch is unnamed", re.search(r'b\.setAttribute\("data-loop-project", p\.slug \|\| ""\)', t) is not None)
 # The Loops list: every project and the change log across them; no switch for all loops at once.
-loops = ("loops", "loops-list", "loops-log", "loops-backtop", "loops-backact", "loops-state")
+loops = ("loops", "loops-list", "loops-log", "loops-backtop", "loops-state")
 check("the Loops list has its projects, its change log and its Back", all(has(t, i) for i in loops))
+check("the Loops list keeps its one Back at the top and none in a footer", "data-topback=loops" in t and "loops-backact" not in t)
 check("the Loops list draws every project from the one fact", '$("loops-list").replaceChildren(...loopItems(ps))' in t)
 check("the change log spans projects and names each one", re.search(r'e\.project \|\| "this project"', t) is not None)
 # The loop page: one action row with one primary, Stop now under •••, the confirm that names what it kills.
 page = ("looppage", "loop-title", "loop-state", "loop-facts", "loop-primary", "loop-secondary", "loop-dots", "loop-menu",
         "loop-menu-stop", "loop-confirm", "loop-confirm-text", "loop-confirm-go", "loop-confirm-no", "loop-reason",
-        "loop-backtop", "loop-backact")
+        "loop-backtop")
 check("the loop page has its state, its facts, its action row, its menu and its confirm", all(has(t, i) for i in page))
+check("the loop page keeps its one Back at the top and none in its action row", "data-topback=loop" in t and "loop-backact" not in t)
 check("the loop page reads the hub's one loop route", re.search(r'call\("/api/loop"(, *fresh)?\)', t) is not None)
 check("a loop page writes to one project's own route", re.search(r'"http|"/api/loop" : "/" \+ loopSlug \+ "/api/loop"', t) is not None
       or '"/" + loopSlug + "/api/loop"' in t)

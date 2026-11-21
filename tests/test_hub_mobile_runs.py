@@ -155,6 +155,21 @@ def test_live_carries_the_occupancy_the_hub_built_beside_its_heading(hub):  # no
     assert out["occTitle"] == running["title"] == "$1.25"
 
 
+def test_the_now_live_tile_and_the_runs_heading_count_one_source(hub, monkeypatch):  # noqa: F811
+    """The Now tile and the Runs heading read one count (SPEC 2498, #2502): a live run is one with a live process, and
+    neither a hand hold nor the childcc pass is a run, so the two numbers never contradict."""
+    rows = [LIVE_ROW, HOLD_ROW, CC_ROW, ENDED_ROW]
+    monkeypatch.setattr(hub, "run_list", lambda: rows)
+    monkeypatch.setattr(hub, "board_cache", {"items": []})
+    monkeypatch.setattr(hub, "spend_today", lambda: 0.0)
+    monkeypatch.setattr(hub, "loop_status", lambda: {"on": True, "since": None})
+    monkeypatch.setattr(hub, "load_payload", lambda: {})
+    tile = hub.status_payload()["live"]
+    heading = hub.run_groups(rows, CAPS)[0]["text"]
+    assert tile == 1, f"the Now tile counts {tile} live runs, not the one live run: {rows}"
+    assert heading.startswith(f"RUNS {tile}/6"), f"the tile counts {tile} and the heading says {heading!r}"
+
+
 @pytest.mark.node_bound
 def test_ended_today_lists_the_ended_runs_and_never_the_live_ones(hub):  # noqa: F811
     out = draw(hub, [LIVE_ROW], ended=[ENDED_ROW, dict(LIVE_ROW, running=False)])

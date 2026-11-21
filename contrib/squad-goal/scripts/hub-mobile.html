@@ -45,8 +45,8 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
-#loops-actions,#loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
-#loop-actions button,#loops-actions button{min-height:44px}
+#loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#loop-actions button{min-height:44px}
 #loop-actions #loop-primary{flex:1;text-align:center}
 #loop-primary:disabled,#loop-secondary:disabled{opacity:.45}
 #loop-primary.requested{box-shadow:inset 0 -2px 0 var(--warn,var(--warn))}#loop-primary.refused{box-shadow:inset 0 -2px 0 var(--err)}
@@ -257,7 +257,6 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 [data-screen][hidden]{display:none}
 [data-screen].root{position:static;z-index:auto;overflow:visible;background:transparent}
 #cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
-#lead-actions{flex:none;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
 .runlist{display:grid;gap:8px}
@@ -302,9 +301,6 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 /* The run's one primary takes the row's free width; the secondary keeps its own size beside it (#1604). */
 #run-primary{flex:1 1 100%;min-height:44px;background:var(--acc);color:var(--bg);border:1px solid var(--acc);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 #run-primary[hidden]{display:none}
-#run-menu{position:absolute;right:14px;bottom:calc(62px + 8px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:4px;padding:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);z-index:25}
-#run-menu[hidden]{display:none}
-#run-menu button{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 .card.armed{border-color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
 .card .cmv{display:none;color:var(--ok);font-size:var(--fs-caption);margin-top:4px}
 .card.armed .cmv{display:block}
@@ -334,7 +330,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="psw-content"><div class="grab"></div>
 <button id="ps-backtop" data-topback="psheet" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button>
 <div id="pswl"></div></div>
-<div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button><button id="pswx" type="button">Close</button></div>
+<div id="psw-footer"><button id="pswx" type="button">Close</button></div>
 </div>
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
@@ -357,7 +353,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <h3 class=sub>Change log</h3>
 <ol id=loops-log></ol>
 <p id=loops-state class=msg role=status></p></div>
-<div id=loops-actions><button id=loops-backact data-actback type=button>Back</button></div>
 </article>
 <article id=looppage data-screen=loop hidden>
 <div id=loop-content><div class=scr-head><button id=loop-backtop data-topback=loop type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loops</span></button><h2 id=loop-title>Loop</h2></div>
@@ -367,7 +362,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id=loop-confirm hidden><p id=loop-confirm-text></p><button id=loop-confirm-go type=button>Stop now</button><button id=loop-confirm-no type=button>Cancel</button></div>
 </div>
 <div id=loop-actions>
-<button id=loop-backact data-actback type=button>Back</button>
 <button id=loop-dots type=button aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button>
 <button id=loop-secondary type=button hidden></button>
 <button id=loop-primary type=button></button>
@@ -377,7 +371,6 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <article id=profpage data-screen=profiler hidden>
 <div id=prof-content><div class=scr-head><button id=prof-backtop data-topback=profiler type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Loop</h2></div>
 <div id=profb></div></div>
-<div id=prof-actions><button data-actback type=button>Back</button></div>
 </article>
 <article data-screen="lead" data-src="/api/chart/lead" hidden>
 <div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Lead time</h2></div>
@@ -396,13 +389,11 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-ltzoom="reset" type="button">Reset</button>
 </div>
 <p class="msg" role="status"></p></div>
-<div id="lead-actions"><button data-actback type="button">Back</button></div>
 </article>
 <article id=loopbugs data-screen=bugs hidden>
 <div id=bugs-content><div class=scr-head><button id=bugs-backtop data-topback=bugs type=button><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Loop</span></button><h2 id=bugs-title>Loop-bugs</h2></div>
 <ul id=bugs-list></ul>
 <p id=bugs-msg class=msg role=status></p></div>
-<div id=bugs-actions><button id=bugs-backact data-actback type=button>Back</button></div>
 </article>
 <div class=tiles>
 <div class=tile><b id=t-live>-</b><span>live runs</span></div>
@@ -485,14 +476,13 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="sh-related"><h3>Related</h3><div id="sh-related-list"></div></div>
 <div id="sh-body"></div>
 <div id="sh-last"></div></div>
-<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
+<div id="sheet-actions"><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><button id="sh-close" type="button">Close</button><button id="sh-todo" type="button" hidden><span id="sh-todo-label"></span><span id="sh-todo-sub" class="sub" hidden></span></button></div>
 <div id="sh-menu" hidden><button type="button" data-menu="close">Close</button><button type="button" data-menu="github">Open on GitHub</button></div>
 </div>
 <section id="runview" hidden>
 <div id="runview-head"><button id="run-backtop" data-topback="run" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Runs</span></button><span id="runview-name"></span></div>
 <div id="runbody"><div id="runoverview"><p class="runov-row"><b>State</b> <span id="runov-state" class="run-state b"></span></p><p class="runov-row"><b>Age</b> <span id="runov-age"></span></p><p class="runov-row"><b>Spend</b> <span id="runov-spend"></span></p><p id="runov-verdict-row" class="runov-row" hidden><b>Verdict</b> <span id="runov-verdict"></span></p><p class="runov-row"><b>Issues</b> <span id="runov-issues"></span></p></div><iframe id="runframe" title="Run dashboard" hidden></iframe></div>
-<div id="runview-actions"><button id="runview-back" data-actback type="button">Back</button><button id="run-dots" type="button" aria-label="More actions" aria-haspopup="true"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6h.01M6 6h.01M10 6h.01"/></svg></button><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
-<div id="run-menu" hidden><button id="rundesk-btn" type="button">Desktop dashboard</button></div>
+<div id="runview-actions"><div id="runctl"><button id="runctl-btn" type="button" hidden></button><p id="runctl-limits"></p><p id="runctl-msg" class="msg" role="status"></p></div><button id="run-primary" type="button" hidden><span id="run-primary-label"></span></button></div>
 </section>
 <!-- Search on Work and Specs (SPEC 1596, rule 5; #1600): the field opens above the keyboard in the control row's slot,
      Enter-less matching runs on every keystroke, the results replace the root's list, and Esc or Back clears it. -->
@@ -942,9 +932,8 @@ const typingField = el => !!el && (el.tagName === "TEXTAREA" || el.isContentEdit
   || (el.tagName === "INPUT" && !/^(button|checkbox|radio|submit|reset|file|color|range|image)$/.test((el.type || "text").toLowerCase())));
 document.addEventListener("focusin", e => { if (typingField(e.target)) tabBar.hidden = true; });
 document.addEventListener("focusout", e => { if (typingField(e.target)) tabBar.hidden = false; });
-// Every Back runs the one pop: the top Back of each detail screen and the action row's Back (SPEC 2498, #2499).
+// Every Back runs the one pop: each detail screen carries one, at its top (SPEC 2498, #2502). No footer repeats it.
 for (const b of document.querySelectorAll("[data-topback]")) b.onclick = popScreen;
-for (const b of document.querySelectorAll("[data-actback]")) b.onclick = popScreen;
 
 // The phone follows the hub's build as the desktop does (#1114). A new build reloads the page once, and the reload waits
 // while a write is in flight or a move is staged (#1455).
@@ -2121,13 +2110,13 @@ async function loadRunControl() {
   if (id !== runId) return;
   const v = runControlView(info, state, runRows[id] ? runRows[id].running : undefined), b = $("runctl-btn"), msg = $("runctl-msg");
   b.dataset.act = v.act || ""; b.textContent = v.label; b.hidden = !v.act || runBusy;
-  $("runctl-limits").textContent = RUN_LIMITS;
+  $("runctl-limits").textContent = v.act ? RUN_LIMITS : "";   // the rule of a control the bar does not offer is not drawn (#2502)
   msg.textContent = runReply ? runReply.text : v.note;
   msg.className = "msg" + (runReply && !runReply.ok ? " err" : "");
   drawRunActions();
 }
 function drawRunActions() {
-  const v = runPrimary();
+  const v = runPrimary(runRows[runId], !!$("runoverview").hidden);
   $("run-primary-label").textContent = v.label;
   $("run-primary").dataset.act = v.act;
   $("run-primary").hidden = !v.act;
@@ -2149,7 +2138,7 @@ async function sendRunControl() {
 const runRows = {};
 function showDesk(on) {
   $("runoverview").hidden = on; $("runframe").hidden = !on;
-  $("rundesk-btn").textContent = on ? "Overview" : "Desktop dashboard";
+  drawRunActions();
 }
 function drawRunOverview(row) {
   if (!row) return;
@@ -2171,15 +2160,11 @@ function showRun(s) {
   const row = runRows[runId];
   showDesk(!row); drawRunOverview(row); drawRunActions();
   $("runctl-btn").hidden = true; $("runctl-msg").textContent = "";
-  $("run-menu").hidden = true;
   loadRunControl();
 }
-function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); $("run-menu").hidden = true; runId = null; }
-$("rundesk-btn").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
-$("run-dots").onclick = () => { $("run-menu").hidden = !$("run-menu").hidden; };
-$("run-primary").onclick = () => { $("run-menu").hidden = true; showDesk($("runoverview").hidden === false); };
+function hideRun() { $("runview").hidden = true; $("runframe").src = "about:blank"; showDesk(false); runId = null; }
+$("run-primary").onclick = () => showDesk(!$("runoverview").hidden);
 for (const id of ["runs-live", "runs-ended"]) $(id).onclick = e => { const b = e.target.closest(".runrow"); if (b && b.dataset.id) openRun(b.dataset.id, b.dataset.url, b.dataset.name); };
-$("runview-back").onclick = () => closeLayer("run");
 $("runctl-btn").onclick = sendRunControl;
 let rtouch = null;
 document.addEventListener("touchstart", e => { const p = e.touches[0]; rtouch = { x0: p.clientX, y0: p.clientY, atTop: window.scrollY === 0 }; }, { passive: true });
