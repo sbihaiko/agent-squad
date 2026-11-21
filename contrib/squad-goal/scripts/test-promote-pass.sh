@@ -156,8 +156,9 @@ rm -f "$SG_STATE/active-runs.txt"
 /usr/bin/grep -q 'sg_battery_workers' "$d/promote-pass.sh" && ok "the worker count comes from the one machine bound" || ko "promote-pass.sh carries its own worker count"
 
 # The dispatchers read the reserve (#739): a standing one holds them in one line, and a marker past the gate lock's own bound
-# is a proof that died and holds nothing.
-hold() { ( export SG_STATE="$SG_STATE"; . "$d/ghcall.sh"; gh_dispatch_hold ); }
+# is a proof that died and holds nothing. The nightly window wins over the reserve when it stands, so the two cases below
+# switch it off (#2632, #2397): the window reads the wall clock, and the suite otherwise fails in the nightly hour alone.
+hold() { ( export SG_STATE="$SG_STATE" SG_NIGHTLY_OFF=1; . "$d/ghcall.sh"; gh_dispatch_hold ); }
 rm -f "$SG_STATE/nightly-result" "$SG_STATE/promote-reserve"
 printf '%s 1\n' "$(date +%s)" > "$SG_STATE/promote-reserve"
 out=$(hold); rc=$?
