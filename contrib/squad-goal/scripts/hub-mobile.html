@@ -1272,7 +1272,7 @@ every("monitor", loopView, 5000);
 let board = null, shown = [], seenCards = null, freshNow = new Set();   // shown: the cards the drawn column shows, in order
 const cardKey = x => (x.r || "") + "#" + x.n;
 const motionOk = () => typeof matchMedia === "function" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-// The page's one move (SPEC 2498, #2501): a spec's group header starts the spec and its open Backlog tickets in one write
+// The page's one move (SPEC 2498, #2501): a spec's group header starts the spec and its open tickets in one write
 // (ADR-0142). `promoReqs[spec]` is the page's own request record, keyed by spec number: a request that waits, or a refusal
 // with the route's own reason. A request in flight never sends twice.
 const promoReqs = {};
@@ -1300,7 +1300,7 @@ function cardLink(x, i) {
   const id = document.createElement("span"); id.className = "cid"; id.textContent = "#" + x.n;
   const chip = (k, text) => { const c = document.createElement("span"); c.className = "lchip"; c.dataset.k = k; c.textContent = text; return c; };
   if (x.hh) id.append(chip("hold", "hand hold"));
-  if (x.gt) id.append(chip("gate", "gate try " + x.gt));   // the phone labels the row's own fact; the wire keeps the Testing text (#2501)
+  if (x.gt) id.append(chip("gate", "gate try " + x.gt));   // the phone labels the row's own fact; the wire keeps the column's own text (#2501)
   if (x.ho && x.hs === "running") id.append(chip("run", "live run"));
   if (x.b && x.b.length) id.append(chip("blocked", "blocked by " + x.b.map(n => "#" + n).join(", ")));
   const t = document.createElement("span"); t.textContent = x.t;
@@ -1326,7 +1326,7 @@ function laneHeader(l) {
   h.append(tw, id, ttl, pc);
   // The one move sits on a spec's group header (ADR-0142, SPEC 2498 #2501): the spec card the hub marks promotable carries
   // the column the move goes to (`pmt`), so the page names no column of its own.
-  const spec = l.head && l.head.pm ? l.head : null;
+  const spec = l.head && l.head.pm && l.head.pmt ? l.head : null;   // the row names its destination: the page names no column (#2501)
   if (spec) h.append(promoButton(spec));
   // A refused request names the route's reason under the header until the owner asks again.
   const r = l.num != null ? promoReqs[l.num] : null;
@@ -1337,7 +1337,7 @@ function promoButton(spec) {
   const r = promoReqs[spec.n] || {};
   const b = document.createElement("button");
   b.type = "button"; b.className = "lane-promote";
-  b.textContent = r.phase === "requested" ? "pending" : "→ " + (spec.pmt || "Todo");
+  b.textContent = r.phase === "requested" ? "pending" : "→ " + spec.pmt;
   b.disabled = r.phase === "requested";
   b.onclick = () => promoteSpec(spec);
   return b;

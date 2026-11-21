@@ -141,6 +141,21 @@ def test_a_successful_promote_clears_its_pending_state(hub):  # noqa: F811
 
 
 @pytest.mark.node_bound
+def test_a_spec_row_that_names_no_destination_draws_no_move(hub):  # noqa: F811
+    # The header takes its destination from the row's `pmt` and names no column of its own (#2501, ADR-0137): a row that
+    # carries no destination draws no move at all.
+    spec = {**GROUPS[0]["items"][0], "pmt": None}
+    board = {**BOARD, "groups": [{**GROUPS[0], "items": [spec]}]}
+    out = run_page(hub.MOBILE_PAGE, """
+        show("work");
+        await __tick(0);
+        return {lane: !!document.querySelector('#cards .lane-h[data-lane="2489"]'),
+                promote: !!document.querySelector("#cards .lane-promote")};
+    """, board=[board])
+    assert out == {"lane": True, "promote": False}, out
+
+
+@pytest.mark.node_bound
 def test_the_card_sheet_is_gone(hub):  # noqa: F811
     assert 'id="sheet"' not in hub.MOBILE_PAGE
     assert "sh-todo" not in hub.MOBILE_PAGE
