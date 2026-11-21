@@ -308,9 +308,12 @@ function profTrip(t,phone){
   +`<td>${c.column==="testing"&&c.slot_wait_s!=null?profTripNum(c.slot_wait_s):dash}</td><td>${c.column==="testing"&&c.gate_run_s!=null?profTripNum(c.gate_run_s):dash}</td></tr>`).join("")}</tbody></table>`;
  // The rework line (#2292): a stint that went back to work counts in no column; the rule layer words the line.
  const rw=t.rework&&t.rework.text?`<p class=tprw>${esc(t.rework.text)}</p>`:"";
- // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them.
+ // The phone draws the lanes in place of the bar, with the peak and the saturation sentence above them. A chart screen
+ // draws only with the phone in landscape, and there it is the desktop chart's markup, sized to the measured box
+ // (SPEC 2498, #2504): the lanes serve a narrow page, and a page without the chart rules keeps them.
  const noSlot=profNoSlotGates(t);
- if(phone)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.${noSlot}</p>`
+ const narrow=typeof mcLandscape!=="function"||!mcLandscape(window.innerWidth,window.innerHeight);
+ if(phone&&narrow)return `<section id=proftrip>${head}<p class=tpn>${n} deliveries in the last ${span}: the chart folds ${cols.length} columns, one per board column, in the order of the rows below. Each column's width is its time per issue divided by its parallelism, the mean number of issues standing in it at once.${noSlot}</p>`
   +profTripFacts(t)+profTripLanes(t)+table+rw+`</section>`;
  // A RAM field the record never carried is named, so a dash never reads as zero memory use (#2253).
  const ramReason=t.ram_minutes===0?"No RAM reading in this window: the load record has no memory field there.":"";

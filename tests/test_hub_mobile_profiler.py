@@ -248,9 +248,11 @@ DRAW_TRIP = """
   profV = view;
   profDraw();
   const trip = document.getElementById("proftrip");
+  // The chart screen draws in landscape, so the trip here is the desktop chart's markup, sized to the page (#2504).
   return { vw: window.innerWidth, docW: document.documentElement.scrollWidth, trip: fit(trip),
-           lanes: [...trip.querySelectorAll("svg.ptlane")].map(fit),
-           labels: [...trip.querySelectorAll(".ptlab")].map(fit),
+           chart: fit(trip.querySelector("svg")),
+           titles: [...trip.querySelectorAll("svg text.ptn")].map(e => e.textContent.trim()),
+           segs: trip.querySelectorAll("rect.ptb-seg").length,
            cells: [...document.querySelectorAll("#proftt th, #proftt td")].map(fit),
            table: fit(document.getElementById("proftt")) };
 }
@@ -283,14 +285,12 @@ def test_the_phone_trip_fits_the_landscape_width_with_no_overlap_and_no_overflow
     assert seen["vw"] == PHONE_WIDTH, f"the phone page rendered at {seen['vw']} px, not {PHONE_WIDTH}"
     assert seen["docW"] <= PHONE_WIDTH + 0.5, f"the page scrolls sideways: {seen['docW']} px wide"
     assert seen["trip"]["right"] <= PHONE_WIDTH + 0.5, f"the trip runs past the screen: {seen['trip']}"
-    for i, lane in enumerate(seen["lanes"]):
-        assert lane["right"] <= PHONE_WIDTH + 0.5 and lane["w"] > 0, f"lane {i} leaves the screen or draws nothing: {lane}"
-    assert len(seen["labels"]) == 4, f"the trip drew {len(seen['labels'])} labels, not four"
-    for i, label in enumerate(seen["labels"]):
-        assert label["sw"] <= label["cw"] + 0.5, f"label {label['text']!r} overflows its box: {label}"
-        assert label["right"] <= PHONE_WIDTH + 0.5, f"label {label['text']!r} runs past the screen: {label}"
-        for other in seen["labels"][i + 1:]:
-            assert not _overlap(label, other), f"labels {label['text']!r} and {other['text']!r} overlap"
+    # The Loop chart is the desktop chart's markup, and it fills the landscape width (#2504).
+    assert seen["chart"]["w"] > 0 and seen["chart"]["right"] <= PHONE_WIDTH + 0.5, \
+        f"the chart leaves the screen or draws nothing: {seen['chart']}"
+    assert seen["chart"]["w"] >= seen["trip"]["w"] - 2, f"the chart does not fill the trip's width: {seen['chart']}"
+    assert seen["titles"] == ["Tokens", "Machine"], f"the desktop chart's two gutter titles: {seen['titles']}"
+    assert seen["segs"] == 4, f"the trip bar drew {seen['segs']} column segments, not four"
     assert seen["table"]["right"] <= PHONE_WIDTH + 0.5, f"the table runs past the screen: {seen['table']}"
     for cell in seen["cells"]:
         assert cell["sw"] <= cell["cw"] + 0.5, f"cell {cell['text']!r} overflows its column: {cell}"
