@@ -166,7 +166,8 @@ class FakeSlack:
 
     def __call__(self, token, method):
         self.calls.append(method)
-        if method != "auth.test": return {"ok": False, "error": "unexpected"}
+        if method != "auth.test":
+            return {"ok": False, "error": "unexpected"}
         return self.auth(token) if callable(self.auth) else self.auth
 
 
