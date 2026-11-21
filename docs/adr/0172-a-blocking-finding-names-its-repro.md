@@ -24,7 +24,9 @@ check: a line that exits non-zero while the defect is present.
    tree. No such tree: no repro runs, and every finding stays Blocking. A repro that exits 0 moves the finding to Debt,
    marked with the head it passed at. A repro that cannot run (timeout, not executable, not found) also moves it to
    Debt, marked as not run. A repro whose sandbox cannot apply (a session already under a sandbox refuses a nested one)
-   proved nothing: the finding stays Blocking and the loop names the refusal. Any other non-zero status keeps the finding
+   proved nothing: the finding stays Blocking and the loop names the refusal. A sandbox executable that cannot start at
+   all (a host with no `sandbox-exec`, as a Linux runner) is the same case: the sandbox could not apply, so the finding
+   stays Blocking and the loop names the failure, never "not run". Any other non-zero status keeps the finding
    Blocking. A refused write is a failed command, so
    a repro that makes one and then exits non-zero stays Blocking; a repro that swallows the refusal and exits 0 still
    moves its finding to Debt.
@@ -67,7 +69,7 @@ check: a line that exits non-zero while the defect is present.
 field, a finding with no repro key is refused, `--repro` keeps a failing repro Blocking and moves a passing or unrunnable
 one to Debt with its head; a repro red at the head runs at the base only then, keeps its finding Blocking with a base
 note on its first round, moves it to Debt naming the base and both heads when the previous answer holds the same repro,
-keeps it Blocking when reworded, and keeps it Blocking with a named reason when the base run proves nothing; and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one. `test-revformat.sh` also proves a repro runs with the checkout's venv first and pytest under `-p no:deepeval`, and
+keeps it Blocking when reworded, and keeps it Blocking with a named reason when the base run proves nothing; and a repro cannot write outside its tree while it can write inside; a sandbox that cannot apply keeps the finding Blocking and names the refusal, inside a child sandbox and outside one; a sandbox executable that cannot start keeps the finding Blocking and names the failure, told apart from a repro whose own command is not found (127). `test-revformat.sh` also proves a repro runs with the checkout's venv first and pytest under `-p no:deepeval`, and
 that `--demote-markdown` moves a markdown answer's Blocking findings to Debt with the reason and keeps the shape.
 `contrib/squad-goal/scripts/test-review.sh`:
 a markdown CHANGES is saved with its Blocking finding in Debt and as an approval, the prompt states the repro's grep

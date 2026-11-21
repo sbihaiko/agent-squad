@@ -425,6 +425,10 @@ REPRO = "repro"
 REPRO_TIMEOUT = 60          # seconds a repro may run; a longer one did not run (#1521)
 # #1525: run_repro's status when sandbox-exec could not apply its profile (rc 71, "sandbox-exec: sandbox_apply:" on stderr): a session already under a sandbox (claude-sandboxed.sh) refuses a nested one. The repro never started, so the finding stays Blocking.
 REPRO_REFUSED = -71
+# #2658: the sandbox executable itself could not start (a host with no sandbox-exec, as the Linux CI runner). The sandbox
+# could not apply, so the repro proved nothing and the finding stays Blocking, as for REPRO_REFUSED. A 127 from the shell
+# means something else: the sandbox ran, and the repro's own command was not found.
+REPRO_NO_SANDBOX = -72
 # #1525: SQUAD_REPRO_EXEC names a test seam: a double that takes the same argv (`-p <profile> sh -c <cmd>`), set only by a suite that runs inside a child sandbox.
 REPRO_EXEC = "/usr/bin/sandbox-exec"
 REPRO_BASE_BUDGET = 120     # seconds all base runs of one answer may take (#2565); a run past it proves nothing
@@ -557,8 +561,9 @@ def demote_markdown(path):
 
 def run_repro(cmd, checkout, timeout=None):
     """The exit status of a repro command, run by sh under the signal wall in `checkout` (#1521): 124 when it timed out
-    (its process group is killed with it), 127 when it could not start, REPRO_REFUSED when the sandbox could not apply
-    (a nested sandbox, #1525). `timeout` caps the run below REPRO_TIMEOUT (a base run, #2565). The wall is the
+    (its process group is killed with it), 127 when the repro's command could not start, REPRO_REFUSED when the sandbox
+    could not apply (a nested sandbox, #1525), REPRO_NO_SANDBOX when the sandbox executable cannot start at all
+    (a host with no sandbox-exec, #2658). `timeout` caps the run below REPRO_TIMEOUT (a base run, #2565). The wall is the
     profile in SQUAD_SIGNAL_PROFILE,
     else SIGNAL_PROFILE: the one a child session runs under (claude-sandboxed.sh). A write wall (write_wall) refuses a
     write outside `checkout` and a scratch dir the repro's TMPDIR points at; the scratch dir is removed after the run.
@@ -574,8 +579,8 @@ def run_repro(cmd, checkout, timeout=None):
                 proc = subprocess.Popen([exe, "-p", profile, "sh", "-c", cmd],
                                         cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                         stderr=err, start_new_session=True)
-            except OSError:
-                return 127
+            except OSError:   # the sandbox executable itself is not on this host: nothing ran, so nothing is proven (#2658)
+                return REPRO_NO_SANDBOX
             try:
                 rc = proc.wait(timeout=REPRO_TIMEOUT if timeout is None else timeout)
             except subprocess.TimeoutExpired:
@@ -615,8 +620,8 @@ def repro_check(path, checkout, sha, base=None, prev=None):
     A repro that exits 0 shows the defect is not present, so the finding moves to Debt with "repro passed at <sha>". A
     repro that cannot run (124, 126, 127) moves it to Debt with "repro did not run at <sha>". Any other non-zero status
     is a reproduction, and the finding stays Blocking. The rewrite is atomic; a failed read or write leaves the answer
-    as it was, and the caller keeps its verdict. A repro whose sandbox cannot apply (REPRO_REFUSED) proved nothing: the
-    finding stays Blocking and the reason is printed.
+    as it was, and the caller keeps its verdict. A repro whose sandbox cannot apply (REPRO_REFUSED) or cannot start
+    (REPRO_NO_SANDBOX) proved nothing: the finding stays Blocking and the reason is printed.
 
     #2565: with `base` (TREE, SHA), a repro red at the head also runs at the base, in TREE, within REPRO_BASE_BUDGET for
     all base runs, each capped at the budget left. Green at the base: the finding stays Blocking. Red at the base: it stays Blocking with "repro also fails
@@ -633,6 +638,11 @@ def repro_check(path, checkout, sha, base=None, prev=None):
         defect = " ".join(item["defect"].split())
         if rc == REPRO_REFUSED:
             print(f"revformat: repro sandbox refused at {sha} (sandbox-exec exit 71, sandbox_apply: a nested sandbox): "
+                  f"{defect}; the finding stays Blocking", file=sys.stderr)
+            blocking.append(item)
+            continue
+        if rc == REPRO_NO_SANDBOX:
+            print(f"revformat: the repro sandbox cannot start at {sha} (the sandbox executable is not on this host): "
                   f"{defect}; the finding stays Blocking", file=sys.stderr)
             blocking.append(item)
             continue
@@ -657,6 +667,8 @@ def repro_check(path, checkout, sha, base=None, prev=None):
                     continue
                 if brc == REPRO_REFUSED:
                     why = "repro sandbox refused (sandbox-exec exit 71)"
+                elif brc == REPRO_NO_SANDBOX:
+                    why = "the repro sandbox cannot start"
                 elif brc in (124, 126, 127):
                     why = f"the repro did not run (exit {brc})"
                 elif brc < 0:

@@ -546,4 +546,14 @@ python3 "$src" --demote-markdown "$T/m44b.md" 2>/dev/null; rc=$?
 [ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/m44b.md")" = "blocking=0 debt=1" ] && python3 "$src" "$T/m44b.md" >/dev/null \
   && ok "44 a Blocking section with no Debt section becomes the Debt section" \
   || ko "44 no debt: rc=$rc $(cat "$T/m44b.md")"
+# 45) #2658: the sandbox executable itself cannot start (a host with no sandbox-exec, as the Linux CI runner). The sandbox
+# could not apply, so the repro proved nothing: its finding stays Blocking and stderr names the failure, as a refusal does.
+# A missing binary is never the repro's own "not found" (127): that one means the sandbox ran and the command did not.
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x","failure":"y","fix":"z","repro":"exit 1"}],"debt":[],"resolved":[]}' > "$T/r45.json"
+env SQUAD_REPRO_EXEC="$T/no-such-sandbox-exec-2658" python3 "$src" --repro "$T/r45.json" "$T/co" abc1234 2>"$T/r45.err"; rc=$?
+python3 "$src" --answer "$T/r45.json" > "$T/r45.md" 2>/dev/null
+[ $rc = 0 ] && [ "$(python3 "$src" --summary "$T/r45.md")" = "blocking=1 debt=0" ] \
+  && /usr/bin/grep -q 'the repro sandbox cannot start at abc1234' "$T/r45.err" \
+  && ok "45 a sandbox that cannot start proves nothing: the finding stays Blocking and the reason is named" \
+  || ko "45 no sandbox: rc=$rc summary='$(python3 "$src" --summary "$T/r45.md" 2>&1)' $(cat "$T/r45.err")"
 rm -rf "$T"; exit $fail
