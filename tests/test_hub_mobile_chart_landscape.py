@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
@@ -67,6 +68,75 @@ def chart_screen(name):
     m = re.search(rf'<article[^>]*data-screen="{name}"[^>]*>(.*?)</article>', page(), re.S)
     assert m, f"the phone has no {name} chart screen"
     return m.group(0)
+
+
+class _Parents(HTMLParser):
+    """Each id of the served markup and the id of its nearest named ancestor, read from the page's own elements."""
+
+    VOID = {"meta", "link", "br", "hr", "img", "input", "source", "area", "base", "col", "embed", "param", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.parent = {}
+
+    def handle_starttag(self, tag, attrs):
+        d = dict(attrs)
+        if d.get("id"):
+            self.parent[d["id"]] = next((i for _, i in reversed(self.stack) if i), None)
+        if tag not in self.VOID:
+            self.stack.append((tag, d.get("id")))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID:
+            self.stack.pop()
+
+    def handle_endtag(self, tag):
+        while self.stack:
+            if self.stack.pop()[0] == tag:
+                break
+
+
+def parents(markup):
+    parser = _Parents()
+    parser.feed(markup)
+    return parser.parent
+
+
+def media_block(html, query):
+    start = html.find(f"@media ({query}")
+    assert start != -1, f"the page carries no {query} media query"
+    end = html.find("@media", start + 1)
+    return re.sub(r"\s+", "", html[start: len(html) if end == -1 else end])
+
+
+def test_the_landscape_lead_shares_one_row_and_gives_the_plot_the_rest_of_the_height():
+    """#2663: in landscape the period buttons and the zoom control stand in one row over the plot, the plot takes the
+    remaining height of the chart area, and the portrait phone keeps the layout it has."""
+    html = page()
+    screen = chart_screen("lead")
+    where = parents(screen)
+    assert where.get("ltbars") == "ltrow" and where.get("ltzoom") == "ltrow", \
+        f"the period buttons and the zoom control share no row: {where.get('ltbars')}, {where.get('ltzoom')}"
+    assert where.get("ltrow") == "lead-content", "the control row does not sit in the lead screen's own body"
+    assert screen.index('id="ltrow"') < screen.index('id="ltplot"'), "the control row does not stand over the plot"
+
+    land = media_block(html, "orientation: landscape")
+    row = re.search(r"\.chart-screen#ltrow\{([^}]*)\}", land)
+    assert row, "the landscape phone has no rule for the control row"
+    assert "display:flex" in row.group(1), "the landscape control row is not a flex row"
+    assert "flex-direction:row" in row.group(1) and "flex-wrap:nowrap" in row.group(1), row.group(1)
+    assert "flex:none" in row.group(1), "the control row takes height from the plot"
+
+    plot = re.search(r"\.chart-screen\s+\.chart-plot\{([^}]*)\}", html)
+    assert plot and "flex:1" in plot.group(1) and "min-height:0" in plot.group(1), \
+        "the plot no longer takes the remaining height of the chart area"
+
+    port = media_block(html, "orientation: portrait")
+    assert ".chart-body{display:none}" in port and ".chart-hint{display:flex}" in port, \
+        "the portrait phone lost its rotate hint"
+    assert "ltrow" not in port, "the portrait phone picked up the landscape control row"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")

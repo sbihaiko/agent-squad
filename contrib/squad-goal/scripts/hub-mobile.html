@@ -269,7 +269,15 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 }
 @media (orientation: landscape){
   body.chart .chart-hint{display:none}
+  /* The phone in landscape gives the period buttons and the zoom control one row, so the plot takes the rest of the
+     height (#2663). The portrait phone never draws this body: it keeps its rotate hint. */
+  .chart-screen #ltrow{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:8px;flex:none;margin:2px 0}
+  .chart-screen #ltrow #ltbars,.chart-screen #ltrow #ltzoom{flex:none;margin:0}
+  .chart-screen #ltrow #ltbars{flex:1 1 auto}
+  .chart-screen #ltrow #ltzoom button{white-space:nowrap}   /* a zoom label stays on its one line (#2663) */
 }
+.chart-screen #ltsum{margin:2px 0}
+.chart-screen .chart-body .msg{margin:0}   /* the empty status line keeps no height from the plot (#2663) */
 body.chart header,body.chart #control-row,body.chart nav{display:none}   /* a chart screen has no tab bar */
 body.chart{height:100dvh;overflow:hidden}
 body.chart main{height:100dvh;display:flex;flex-direction:column;padding:0}
@@ -419,20 +427,22 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Lead Time</h2></div>
 <div class="chart-body">
 <p id="ltsum" class="lt-sum"></p>
+<div id="ltrow">
 <div id="ltbars">
 <button data-ltf="2" type="button">48h</button>
 <button data-ltf="7" type="button">1 week</button>
 <button data-ltf="30" type="button">1 month</button>
 <button data-ltf="all" type="button">All time</button>
 </div>
-<div id="ltplot" class="chart-plot"></div>
-<div id="ltlegend"></div>
-<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
 <div id="ltzoom">
 <button data-ltzoom="in" type="button">Zoom in</button>
 <button data-ltzoom="out" type="button">Zoom out</button>
 <button data-ltzoom="reset" type="button">Reset</button>
 </div>
+</div>
+<div id="ltplot" class="chart-plot"></div>
+<div id="ltlegend"></div>
+<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
 <p class="msg" role="status"></p></div>
 <div class="chart-hint" id="lead-hint" role="status">
 <svg class="chart-turn" viewBox="0 0 24 44" aria-hidden="true" focusable="false"><rect x="5" y="7" width="14" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 13a10 10 0 0 1 5-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2 13l4-1M2 13l1-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>

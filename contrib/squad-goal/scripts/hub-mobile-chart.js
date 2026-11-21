@@ -14,6 +14,12 @@ const mltFrame = c => c && c.plot_frame && c.plot_frame.width > 0 ? c.plot_frame
 const mltX = (x, w) => MLT_P + x * w;   // plot fraction to the drawing's x
 const mltY = (y, base, h) => Math.min(base, Math.max(base - h, base - y * h));   // plot fraction to the drawing's y, clamped to the frame so a log-scale tick past 1 stays visible (#2504)
 const mltVal = v => v && v.text ? v.text : "?";
+const MLT_TICK_GAP = 14;   // the y axis keeps a label only this far from the last kept one, so no two labels overlap (#2663)
+const mltThin = (ys, gap = MLT_TICK_GAP) => {   // the drawing positions a dense log scale stacks are thinned in order
+  const keep = [];
+  for (const y of ys) if (!keep.length || Math.abs(y - keep[keep.length - 1]) >= gap) keep.push(y);
+  return keep;
+};
 const mltLine = (v, col, dash, w, base, h) => v && v.y != null
   ? `<line x1=${MLT_P} x2=${MLT_P + w} y1=${mltY(v.y, base, h)} y2=${mltY(v.y, base, h)} stroke="${col}" stroke-width=1${dash ? ` stroke-dasharray="${dash}"` : ""}></line>`
   : "";   // one 1px reference line, patterned so it reads in grayscale (#1332)
@@ -30,8 +36,10 @@ const mltChart = (c, size) => {
   const pT = box ? 20 : MLT_P, pB = box ? 40 : MLT_P;   // the phone's short side gives the plot its room; the payload frame keeps its own margins (#2504)
   const w = Math.max(40, W - MLT_P - 4), h = Math.max(30, H - pT - pB), base = pT + h, ink = "var(--chart-axis)";
   const Y = v => mltY(v, base, h);   // one Y for both paths, clamped to the plot's own top and floor (#2504)
-  const grid = (c.ticks || []).map(t => `<line x1=${MLT_P} y1=${Y(t.y)} x2=${MLT_P + w} y2=${Y(t.y)} stroke="var(--chart-grid)" stroke-dasharray="3 2"></line>` +
-    `<text x=${MLT_P - 6} y=${Y(t.y) + 4} text-anchor=end fill="${ink}">${mltEsc(t.text)}</text>`).join("");
+  const ticks = c.ticks || [];
+  const keptLabels = new Set(mltThin(ticks.map(t => Y(t.y) + 4)));   // a dense log scale keeps only the labels 14 px apart (#2663)
+  const grid = ticks.map(t => `<line x1=${MLT_P} y1=${Y(t.y)} x2=${MLT_P + w} y2=${Y(t.y)} stroke="var(--chart-grid)" stroke-dasharray="3 2"></line>` +
+    (keptLabels.has(Y(t.y) + 4) ? `<text x=${MLT_P - 6} y=${Y(t.y) + 4} text-anchor=end fill="${ink}">${mltEsc(t.text)}</text>` : "")).join("");
   const xs = (c.xticks || []).map((t, i, a) => {   // the end labels turn inward, so the box never cuts a date (#2504)
     const anchor = a.length === 1 ? "middle" : i === 0 ? "start" : i === a.length - 1 ? "end" : "middle";
     return `<text x=${mltX(t.x, w)} y=${base + 18} text-anchor=${anchor} fill="${ink}">${mltEsc(t.text)}</text>`;

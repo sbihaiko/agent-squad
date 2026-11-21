@@ -135,6 +135,26 @@ def test_the_phone_reads_the_desktop_payload_with_no_second_route():
     assert "d.lead" in html, "the phone draws no answer from the served payload"
 
 
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_tick_thinning_keeps_a_label_only_fourteen_pixels_from_the_last_kept():
+    """#2663: the y axis keeps a label only when it sits at least 14 px from the last kept label. The thinning reads the
+    drawing positions, so a dense log scale never stacks two labels on top of each other."""
+    kept = run_js("mltThin([0, 8, 20, 22, 40, 41])")
+    assert kept == [0, 20, 40], kept
+    assert all(b - a >= 14 for a, b in zip(kept, kept[1:])), kept
+    assert run_js("mltThin([0, 13.9, 27.9])") == [0, 27.9], "a gap under 14 px keeps its label"
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_lead_axis_draws_no_two_tick_labels_closer_than_fourteen_pixels():
+    """#2663: a dense tick set draws fewer labels; every label the svg keeps stands 14 px or more from its neighbour."""
+    dense = {**CHART, "ticks": [{"y": i * 0.02, "text": f"t{i}"} for i in range(20)]}
+    svg = run_js(f"mltChart({json.dumps(dense)}, {{width: 844, height: 300}})")["svg"]
+    ys = [float(v) for v in re.findall(r"<text x=38 y=\"?(-?[\d.]+)\"? text-anchor=end", svg)]
+    assert 1 < len(ys) < len(dense["ticks"]), f"the dense axis kept {len(ys)} labels"
+    assert all(abs(b - a) >= 14 for a, b in zip(ys, ys[1:])), ys
+
+
 def test_the_legend_and_the_reference_values_sit_under_the_plot():
     """#1333: the plot comes first, the legend and the three reference values follow it, with no right gutter."""
     screen = lead_screen()
