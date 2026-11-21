@@ -220,7 +220,7 @@ def root_page(apps, title, note=None):
             f'{"repository" if len(repos) == 1 else "repositories"} · {nlive} live</span></header>'
             f'{"" if not title or title == "squad hub" else "<p class=where>" + html.escape(title) + "</p>"}{note or ""}'
             f'<ul id="repos">{rows}</ul></main>'
-            f'<script>{INDEX_JS}</script>{OVERLAY}').encode()
+            f'<script>{INDEX_JS}</script>').encode()
 
 
 # The index repaints its list from /api/hub every 10 s, so a profile added or gone and the live counts show with no reload
@@ -245,13 +245,6 @@ setInterval(poll,10000);
 """
 
 
-# The session overlay (#898) on the index: the one source hub.py serves on every profile page, here over every repository
-# the request may see. Each repository's sessions sit under its own path; with more than one session the owner picks.
-OVERLAY_SOURCES = ('async()=>{const r=await fetch("/api/hub",{cache:"no-store"});const h=await r.json();'
-                   'return h.repos.filter(x=>!x.err).map(x=>({label:x.slug,api:"/"+encodeURIComponent(x.slug)+"/api"+"/sessions"}));}')
-OVERLAY = f'<script>window.SQUAD_OV_SOURCES={OVERLAY_SOURCES};\n{(HERE / "vendor-html2canvas-1.4.1.min.js").read_text()}\n{(HERE / "hub-overlay.js").read_text()}</script>'
-
-
 def test_note(slug, apps):
     """What a path the hub does not own is told: a test log belongs to a repository, so name where it lives instead of
     leaving the operator at a list. `/test/<id>` read as a repository named `test` is the case that sent them here."""
@@ -263,7 +256,7 @@ def test_note(slug, apps):
 
 
 REWRITTEN = (b"text/html", b"application/json", b"application/manifest+json", b"text/javascript")
-VERBATIM = ("/api/sessions",)   # a transcript's text quotes paths: the routing rewrite never touches it
+VERBATIM = ()   # a route whose body the routing rewrite never touches
 
 
 def rewrite(body, slug):
@@ -307,13 +300,10 @@ def server(port, apps, on_new=None):
         def not_found(self): return self.profile.not_found(self)
         def dash(self, method, body=b""): return self.profile.dash(self, method, body)
         def stream(self, a): return self.profile.stream(self, a)
-        def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
-        def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
         def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
         def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
         def terminal_start(self, a): return self.profile.terminal_start(self, a)   # a session the supervisor starts (#1216)
         def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
-        def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
         def profiler_post(self, a): return self.profile.profiler_post(self, a)   # the Loop tab's switch write (#1743)

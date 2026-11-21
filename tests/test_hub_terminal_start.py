@@ -1,13 +1,9 @@
-"""Starting a hosted terminal from the panel (#1216): the hub's start route reaches the supervisor's `start` op, the project
-route names the sessions the supervisor hosts and the profile's job and checkout, and the page types into a hosted session
-and sends to the inbox otherwise. The supervisor is a fake here: what the test pins is the hub's call into it and the rules
-the page holds.
+"""Starting a hosted terminal from the panel (#1216): the hub's start route reaches the supervisor's `start` op. The
+supervisor is a fake here: what the test pins is the hub's call into it.
 """
 import importlib.util
 import json
 import pathlib
-import shutil
-import subprocess
 import sys
 import threading
 from http.client import HTTPConnection
@@ -20,14 +16,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 HUBMUX = (SCRIPTS / "hubmux.py").read_text()
-OVERLAY_JS = (SCRIPTS / "hub-overlay.js").read_text()
 sys.path.insert(0, str(SCRIPTS))
 
 CID = "client-0001-abcd"
 SID = "started-session-1"
 JOB = "p1"
-
-NODE = shutil.which("node")
 
 
 class FakeSupervisor:
@@ -62,7 +55,6 @@ def load_hub(monkeypatch, tmp_path, session_rows=(), refused=None):
     spec.loader.exec_module(mod)
     mod.run_list = lambda: []
     mod.loop_caps = lambda: None
-    monkeypatch.setattr(mod.sessions, "project_sessions", lambda profile, checkout, profiles_of=None: [])
     fake = FakeSupervisor(session_rows=session_rows, refused=refused)
     mod.terminal_supervisor = lambda: fake
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
@@ -150,63 +142,8 @@ def test_the_start_route_refuses_a_write_without_the_hubs_own_origin(hub):
     assert h.fake.calls == []
 
 
-def test_the_project_route_names_the_hosted_sessions_and_the_start_job(hub):
-    h = hub()
-    h.fake.session_rows = [{"sid": SID, "job": JOB, "cwd": str(h.checkout)}, {"sid": "elsewhere", "job": "p1", "cwd": str(ROOT)}]
-    h.mod.start_terminal_supervisor()
-    status, body = request(h.port, "GET", "/api/sessions/project")
-    assert status == 200
-    out = json.loads(body)
-    assert out["hosted"] == [SID]
-    assert out["start"] == {"job": JOB, "cwd": str(h.checkout)}
-    assert out["supervisor"] == {"state": "up", "why": ""}
-    assert h.fake.calls == [("list", {})]
-
-
-def test_a_supervisor_that_is_not_up_hosts_no_session(hub):
-    h = hub()
-    h.fake.session_rows = [{"sid": SID, "job": JOB, "cwd": str(h.checkout)}]
-    status, body = request(h.port, "GET", "/api/sessions/project")
-    assert status == 200
-    assert json.loads(body)["hosted"] == []
-    assert h.fake.calls == []
-
-
 def test_the_mux_delegates_the_start_route():
     assert "def terminal_start(self, a): return self.profile.terminal_start(self, a)" in HUBMUX
-
-
-def node_json(expr):
-    script = f"{OVERLAY_JS}\nconst SQ=module.exports;\nconsole.log(JSON.stringify({expr}));"
-    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    return json.loads(p.stdout)
-
-
-@pytest.mark.node_bound
-@pytest.mark.parametrize("info, hosted, sid, offered", [
-    ({"state": "up", "why": ""}, [], "claude-1", True),
-    ({"state": "up", "why": ""}, [SID], SID, False),
-    ({"state": "refused", "why": "no daemon"}, [], "claude-1", False),
-    ({"state": "starting", "why": ""}, [], "claude-1", False),
-])
-def test_the_panel_offers_start_only_for_an_up_supervisor_and_an_unhosted_session(info, hosted, sid, offered):
-    assert node_json(f"SQ.startOffered({json.dumps(info)}, {json.dumps(hosted)}, {json.dumps(sid)})") is offered
-
-
-@pytest.mark.node_bound
-def test_the_panel_types_into_a_hosted_terminal_and_sends_to_the_inbox_otherwise():
-    assert node_json('SQ.composerRoute(true)') == "write"
-    assert node_json('SQ.composerRoute(false)') == "send"
-    assert node_json('SQ.sentLine("write")') == "Sent to the terminal."
-    assert node_json('SQ.sentLine("send")') == "Sent: the session's inbox accepted the message."
-
-
-@pytest.mark.node_bound
-def test_the_panel_carries_the_start_button_and_the_terminal_writes():
-    assert 'id="sq-ov-start"' in OVERLAY_JS and "Start a session" in OVERLAY_JS
-    for name in ("start", "attach", "write", "read"):
-        assert f'"/terminals/{name}' in OVERLAY_JS, name
 
 
 def test_the_route_the_panel_posts_reaches_the_start(hub):

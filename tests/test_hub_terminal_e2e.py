@@ -22,7 +22,6 @@ from squad import supervisor as sv
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUBMUX = ROOT / "contrib/squad-goal/scripts/hubmux.py"
-OVERLAY = (ROOT / "contrib/squad-goal/scripts/hub-overlay.js").read_text()
 PREFIX = "/alpha"
 SID = "e2e-terminal-1"
 OTHER = "e2e-terminal-2"
@@ -153,28 +152,32 @@ def hub_up(tmp_path, monkeypatch):
     shutil.rmtree(sockets, ignore_errors=True)
 
 
-def wait_state(hub: SimpleNamespace, wanted: str) -> dict:
-    """The supervisor record the session route carries, once it reaches `wanted`; the start runs on a thread."""
+def wait_up(hub: SimpleNamespace) -> None:
+    """The supervisor is up once a read reaches it: an unstarted session is refused as unknown, never as an absent daemon."""
     deadline = time.monotonic() + START_DEADLINE
     while True:
         try:
-            status, body = request(hub.port, "GET", PREFIX + "/api/sessions/project")
-            if status == 200 and json.loads(body)["supervisor"]["state"] == wanted:
-                return json.loads(body)["supervisor"]
+            status, body = request(hub.port, "GET", read_path(SID))
+            if status == 403 and "not started by this daemon" in json.loads(body)["err"]:
+                return
         except OSError:
             pass
-        assert time.monotonic() < deadline, f"the supervisor never reached {wanted!r}: {hub.log.name}"
+        assert time.monotonic() < deadline, f"the supervisor never came up: {hub.log.name}"
         time.sleep(0.2)
 
 
-NODE = shutil.which("node")
-
-
-def supervisor_sentence(info: dict) -> str:
-    script = f"{OVERLAY}\nconst SQ=module.exports;\nconsole.log(JSON.stringify(SQ.supervisorLine({json.dumps(info)})));"
-    p = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
-    assert p.returncode == 0, p.stderr
-    return json.loads(p.stdout)
+def wait_refused(hub: SimpleNamespace) -> str:
+    """A read of an unstarted session answers the supervisor's own refusal while the daemon is down."""
+    deadline = time.monotonic() + START_DEADLINE
+    while True:
+        try:
+            status, body = request(hub.port, "GET", read_path(SID))
+            if status == 503:
+                return json.loads(body)["err"]
+        except OSError:
+            pass
+        assert time.monotonic() < deadline, f"the supervisor never refused: {hub.log.name}"
+        time.sleep(0.2)
 
 
 @pytest.mark.heavy
@@ -182,9 +185,7 @@ def supervisor_sentence(info: dict) -> str:
 @pytest.mark.slow(reason="starts hubmux, a real supervisor daemon and a hosted session")
 def test_a_hosted_session_echoes_a_line_sent_through_the_hub(hub_up):
     hub = hub_up()
-    assert wait_state(hub, "up") == {"state": "up", "why": ""}, "hubmux's start path did not start the terminal supervisor"
-    status, body = request(hub.port, "GET", PREFIX + "/api/sessions/project")
-    assert status == 200 and "sessions" in json.loads(body)
+    wait_up(hub)   # hubmux's start path brought the terminal supervisor up
 
     sv.call(hub.state, "start", job="e2e-terminal", cwd=str(hub.checkout), session=SID)
     status, _ = request(hub.port, "GET", read_path(SID))
@@ -218,24 +219,14 @@ def test_a_hosted_session_echoes_a_line_sent_through_the_hub(hub_up):
 
 @pytest.mark.heavy
 @pytest.mark.slow(reason="starts hubmux and a refused supervisor start")
-@pytest.mark.node_bound
-def test_with_the_supervisor_absent_the_panel_says_one_sentence_and_a_read_answers_one_refusal(hub_up):
+def test_with_the_supervisor_absent_a_read_answers_one_refusal(hub_up):
     hub = hub_up(absent=True)
-    record = wait_state(hub, "refused")
-    assert "No such file or directory" in record["why"]
+    refusal = wait_refused(hub)
+    assert refusal.startswith("the terminal supervisor is not running: ")
+    assert "No such file or directory" in refusal
+    assert "\n" not in refusal, "the refusal is one line"
 
-    sentence = supervisor_sentence(record)
-    assert sentence == f"The terminal supervisor is not running: {record['why'].rstrip('.')}."
-    assert "\n" not in sentence
-
-    status, body = request(hub.port, "GET", read_path(SID))
-    assert status == 503
-    refusal = json.loads(body)["err"]
-    assert refusal == f"the terminal supervisor is not running: {record['why']}"
     status, body = request(hub.port, "GET", read_path(SID))
     assert status == 503
     assert json.loads(body)["err"] == refusal, "a read answered a fresh refusal instead of the one reason"
 
-    status, body = request(hub.port, "GET", PREFIX + "/api/sessions/project")
-    assert status == 200
-    assert json.loads(body)["supervisor"] == record
