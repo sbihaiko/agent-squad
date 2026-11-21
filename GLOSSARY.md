@@ -313,7 +313,7 @@ The owner's own work on a card. It moves the card the way any other holder does,
 _Avoid_: hand fix, by hand, human
 
 **HAL9k**:
-The operator session's own work on a card — the agent the owner talks to, outside the loop. It claims and releases a card like any other holder and is never mistaken for a run.
+The operator session's own work on a card — the agent the owner talks to in Slack, outside the loop. It claims and releases a card like any other holder and is never mistaken for a run.
 _Avoid_: the agent, Claude, operator (as a holder)
 
 **Squad**:

@@ -22,7 +22,7 @@ held the option, and an option removed under a card loses the value that card ca
 1. **A gate is a column, not a badge over Batching.** The definition names Testing between Batching and
    Closed, with its own colour that no other status wears, the actor the gate, and the
    fact that a gate or proof waits for a slot or runs for the wave. Every surface takes the order from
-   the definition: the lane order, the legend, the phone's served board and the cumulative flow bands.
+   the definition: the lane order, the legend, the mobile page's board and the cumulative flow bands.
 2. **An attempt is a marker, not a move.** A red or unproven attempt keeps the card in Testing; the card
    leaves the column only forward, to Closed, and the definition's rules block says so. A fix round
    that starts new work moves the card backward only through the rules ADR-0143 already names.
@@ -53,8 +53,8 @@ held the option, and an option removed under a card loses the value that card ca
 ## Guard
 
 `tests/test_board_pin.py` holds the column's order, fact, actor and colour, the rules line, the number
-field, and the one-step pin. `tests/test_board_columns.py` holds the lane order, the legend, the phone
-board and the flow bands. `tests/test_board_define.py` and `contrib/squad-goal/scripts/test-board-define.sh`
+field, and the one-step pin. `tests/test_board_columns.py` holds the lane order, the legend, the mobile
+page's board and the flow bands. `tests/test_board_define.py` and `contrib/squad-goal/scripts/test-board-define.sh`
 hold the applier's number field. `tests/test_board_migrate.py` and
 `contrib/squad-goal/scripts/test-board-migrate.sh` hold a retired option's refusal. `tests/test_board_facts.py`
 holds a ticket in Testing as a ticket in flight, and the page's in-flight list as the facts' own list.
