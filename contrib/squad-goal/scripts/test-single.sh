@@ -57,4 +57,15 @@ bash "$d/single.sh" ownfail sh -c 'exit 7'; rc=$?
 kill "$lh" 2>/dev/null; wait "$lh" 2>/dev/null
 bash "$d/single.sh" live sh -c "echo after >> $T/log"; rc=$?
 [ "$rc" = 0 ] && /usr/bin/grep -qx after "$T/log" && ok "the dead holder is reaped and the call runs" || ko "the dead holder blocked the call: rc=$rc"
+
+# (#2607) A name takes SG_SINGLE_SLOTS slots: two landing passes run at once, and a third waits while both are held.
+( SG_SINGLE_SLOTS=2 bash "$d/single.sh" pair sh -c "echo p1 >> $T/p.log; sleep 5" & ); sleep 1
+( SG_SINGLE_SLOTS=2 bash "$d/single.sh" pair sh -c "echo p2 >> $T/p.log; sleep 5" & ); sleep 1
+[ -d "$SG_STATE/locks/single-pair" ] && [ -d "$SG_STATE/locks/single-pair-2" ] && ok "2607 the first slot keeps the name and the second carries its number" || ko "2607 slots: $(ls "$SG_STATE/locks" 2>/dev/null | tr '\n' ' ')"
+SG_SINGLE_SLOTS=2 bash "$d/single.sh" pair sh -c "echo p3 >> $T/p.log"; rc=$?
+[ "$rc" = 76 ] && ok "2607 a third call with both slots held answers the held code" || ko "2607 the third call answered $rc, not 76"
+sleep 6
+[ "$(tr '\n' ' ' < "$T/p.log")" = "p1 p2 " ] && ok "2607 both slots ran a call and the third ran nothing" || ko "2607 log: $(tr '\n' ' ' < "$T/p.log")"
+[ -d "$SG_STATE/locks/single-pair" ] && ko "2607 slot one left behind" || ok "2607 slot one is released"
+[ -d "$SG_STATE/locks/single-pair-2" ] && ko "2607 slot two left behind" || ok "2607 slot two is released"
 sleep 5; rm -rf "$T"; exit $fail

@@ -79,6 +79,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0173](0173-the-complete-tier-runs-on-the-promotion-request.md) | The complete tier runs on the promotion request: the fast tier runs on the dev-to-stg pull request and moves `stg`, the complete tier runs on the stg-to-main pull request on the `promote` label through a guard that starts it once per tip, and the loop moves `main` by a fast-forward to the sha whose complete tier is green; a red files one bug, an unproven tier is an alert |
 | [0174](0174-the-landings-gate-is-first-in-the-queue.md) | The landing's gate is first in the queue: a child's queued fast gate stands aside for it, a try-mode gate answers 73 at once, and a priority marker whose pid is gone or that is past `SERIAL_PRIORITY_MAX` names nobody |
 | [0175](0175-a-timeout-a-suite-explains-is-unproven.md) | A timeout that a suite of the same tree explains is unproven: the runner names its held gate slots so the suite takes none twice, the cap clock never stops, and a history row carries the tree sha |
+| [0176](0176-two-landings-run-at-once-and-git-arbitrates-the-push.md) | Two landings run at once and git arbitrates the push: `single.sh` takes one of `SG_SINGLE_SLOTS` slots, a landing passes two, and the refused push repeats from its fetch |
 
 ## Adding an ADR
 

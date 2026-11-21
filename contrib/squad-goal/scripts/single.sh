@@ -20,13 +20,24 @@ w=${SG_SINGLE_WAIT:-0}
 HELD=76   # the one "the lock is held" code (#1290): never a command's own exit
 # A zombie holder is dead: its parent has not reaped it, and kill -0 still answers (#1057).
 alive() { kill -0 "$1" 2>/dev/null && [ "$($SG_PS -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
-while [ "$w" -gt 0 ] && [ -d "$L" ] && h=$(cat "$L/pid" 2>/dev/null) && [ -n "$h" ] && alive "$h"; do sleep 1; w=$((w-1)); done
-if ! mkdir "$L" 2>/dev/null; then
-  h=$(cat "$L/pid" 2>/dev/null)
-  if [ -n "$h" ] && ! alive "$h"; then echo "single: reaping stale lock $n: holder pid $h is dead, lock age $(( $(date +%s) - $(mtime "$L/pid") ))s" >&2; rm -rf "$L"; mkdir "$L" 2>/dev/null || exit $HELD   # stale: take over
-  elif [ -z "$h" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ]; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit $HELD   # no pid after 10 s: owner died between mkdir and write
-  else exit $HELD; fi
-fi
+# (#2607) A name takes SG_SINGLE_SLOTS slots, one by default: slot one keeps the lock's own name and a later slot carries its
+# number. A landing passes two (SG_LAND_PARALLEL, wave.sh): two waves rebase, check and push at once, and git refuses the push
+# that is not a fast-forward, so the base's move is the race git settles.
+slots=${SG_SINGLE_SLOTS:-1}; case $slots in ''|*[!0-9]*|0) slots=1;; esac
+slotof() { SL="$st/locks/single-$n"; [ "$1" = 1 ] || SL="$SL-$1"; }
+freeslot() { local i; for ((i=1;i<=slots;i++)); do slotof "$i"; [ -d "$SL" ] || return 0; done; return 1; }
+while [ "$w" -gt 0 ] && ! freeslot; do sleep 1; w=$((w-1)); done
+taken=""
+for ((i=1;i<=slots;i++)); do
+  slotof "$i"
+  if mkdir "$SL" 2>/dev/null; then taken=$i; break; fi
+  h=$(cat "$SL/pid" 2>/dev/null)
+  if [ -n "$h" ] && ! alive "$h"; then echo "single: reaping stale lock $n: holder pid $h is dead, lock age $(( $(date +%s) - $(mtime "$SL/pid") ))s" >&2; rm -rf "$SL"; mkdir "$SL" 2>/dev/null && { taken=$i; break; }   # stale: take over
+  elif [ -z "$h" ] && [ $(( $(date +%s) - $(mtime "$SL") )) -gt 10 ]; then rm -rf "$SL"; mkdir "$SL" 2>/dev/null && { taken=$i; break; }   # no pid after 10 s: owner died between mkdir and write
+  fi
+done
+[ -n "$taken" ] || exit $HELD
+L=$SL
 # The release is the holder's only: a lock taken over meanwhile names another pid, and removing it would start a pass beside that holder (#531).
 echo $$ > "$L/pid"; trap '[ "$(cat "$L/pid" 2>/dev/null)" = "$$" ] && rm -rf "$L"' EXIT INT TERM
 "$@"
