@@ -1043,14 +1043,12 @@ def test_the_tab_is_named_loop_and_stands_between_flow_and_settings_on_the_deskt
     assert "Profiler" not in re.sub(r"//[^\n]*|/\*.*?\*/", "", mod.PAGE), "the page still shows the old name"
 
 
-def test_the_entry_stands_before_settings_on_the_mobile_page():
-    """The phone has no Flow tab: its More menu holds the Lead Time chart and the link to Settings, so the entry stands
-    between them. The entry opens the Loop layer on the phone (#1754); it is no link to the desktop view."""
+def test_the_more_menu_leaves_the_phone_page():
+    """The phone's More menu held the Loop chart and the link to Settings; both left the page (#2499). The Loop chart
+    opens at its own route, `#/now/profiler`, named by the page's route table."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
-    menu = html[html.index('<div id="more-menu">'):]
-    menu = menu[:menu.index("</div>")]
-    assert re.findall(r">([^<>\n]+)</(?:button|a)>", menu) == ["Cost and usage", "Lead time", "Loop", "Settings"]
-    assert re.search(r'<button id="more-loop" data-more="profiler" type="button">Loop</button>', menu), "the entry opens a layer, not a link"
+    assert 'id="more-menu"' not in html and "data-more" not in html, "the removed More menu still stands"
+    assert re.search(r'profiler: \{[^}]*tab: "now"', html), "the route table names the Loop chart under Now"
     assert 'more-loop").onclick' not in html, "the entry is no longer a link to the desktop view"
 
 
@@ -3094,10 +3092,11 @@ def test_the_page_names_no_gap_sentence_and_draws_no_failed_runs_table():
     assert "id=profstrip" not in out and "Loop state" not in out, "the loop state panel is gone"
 
 
-def test_the_phone_reaches_the_loop_tab():
-    """The phone's More menu opens the Loop view on the phone itself (#1754), drawn by the desktop's render function."""
+def test_the_phone_reaches_the_loop_chart_by_its_own_route():
+    """The phone opens the Loop chart on the phone itself (#1754) at `#/now/profiler` (#2499), drawn by the desktop's
+    render function."""
     html = (SCRIPTS / "hub-mobile.html").read_text()
-    assert re.search(r'id="more-loop" data-more="profiler"', html), "the phone opens its own Loop layer"
+    assert re.search(r'profiler: \{ seg: \(\) => "profiler", tab: "now"', html), "the phone's route table names the address"
     assert "/*PROFILER_JS*/" in html, "the layer inlines the shared render function"
 
 
