@@ -29,9 +29,8 @@ on:
 # the battery: the battery's `-m "not heavy"` leaves that file's `heavy` tests out. The complete tier's GUI e2e job carries
 # them alone. On each tier the host-bound tests are deselected by name (ADR-0139), and the complete tier also simulates a
 # runner (SQUAD_CI_RUNNER=1), so every deselected test prints its id and reason in the job log (#1323).
-# The full-suite shard jobs install `.[dev,sdk]`: the hosted terminal case starts a real hosted session, and the supervisor
-# refuses that start when its interpreter cannot import claude_agent_sdk. The runner can carry the sdk, so the case runs
-# there and is not deselected (#1538).
+# The full-suite shard jobs install `.[dev,sdk]`: a hosted session start refuses when its interpreter cannot import
+# claude_agent_sdk. The runner can carry the sdk, so the case runs there and is not deselected (#1538).
 # The heavy tests run inside the full-suite shard jobs. No job runs a Python x mode x shard matrix: a matrix over one job
 # split a commit into legs that waited behind each other for runners (#149), and a check no runner picks up answers
 # nothing. A complete-tier job that takes over fifteen minutes on a real run is split by test path into sibling jobs, each

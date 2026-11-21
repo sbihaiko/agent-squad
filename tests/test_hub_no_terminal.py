@@ -49,9 +49,7 @@ def load_hub(monkeypatch, tmp_path):
     (checkout / "docs" / "squad" / "defaults.yaml").write_text(
         f"tailnet:\n  host: {TAILNET}\n  allow: {json.dumps([ANA])}\n")
     for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "p1"),
-                 ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub")), ("SG_STATE", str(tmp_path / "state")),
-                 ("SQUAD_SUPERVISOR_DIR", str(tmp_path / "sup")),
-                 ("SQUAD_SUPERVISOR_CMD", f"{tmp_path}/no-supervisor {{state}}")):
+                 ("SG_CHECKOUT", str(checkout)), ("SG_HUB_DIR", str(tmp_path / "hub")), ("SG_STATE", str(tmp_path / "state"))):
         monkeypatch.setenv(k, v)
     spec = importlib.util.spec_from_file_location("hub_no_terminal_under_test", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
@@ -124,6 +122,26 @@ def test_the_terminal_modules_leave_the_package():
     be the editable install of another checkout, and that tree is not this one's to prove."""
     for name in ("supervisor.py", "terminal_audit.py"):
         assert not (ROOT / "squad" / name).exists(), name
+
+
+STALE = ("squad.supervisor", "squad/supervisor.py", "squad import supervisor", "SQUAD_SUPERVISOR_")
+
+
+def test_the_retirement_leaves_no_name_of_the_removed_supervisor():
+    """A file that still names the removed supervisor module or its environment variables tells a reader the terminal
+    lives. The retirement leaves no such name outside this guard."""
+    hits = []
+    for path in sorted(ROOT.rglob("*")):
+        if not path.is_file() or path == pathlib.Path(__file__).resolve() or {".git", "__pycache__", ".scratch"} & set(path.parts):
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if any(token in line for token in STALE):
+                hits.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+    assert hits == [], hits
 
 
 class _ProfileModule:
