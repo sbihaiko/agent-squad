@@ -8,15 +8,19 @@ writes. A missing connection, channel or domain draws an unavailable state with 
 The page is booted over a stub DOM, as the other phone suites do: the rules under test are the page's and the hub's, never
 a stub of them. The Slack API and the Keychain are seams here, so the suite makes no Slack call.
 """
+import http.client
 import importlib.util
 import json
+import pathlib
+import threading
 import time
+from http.server import ThreadingHTTPServer
 
 import pytest
 
 from tests.test_hub_mobile_move import run_page
 
-ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
 
@@ -33,6 +37,26 @@ def hub(monkeypatch, tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod, tmp_path
+
+
+@pytest.fixture
+def served(hub):
+    """The hub's own HTTP handler on a loopback port: the two reads are checked through the routes the page calls."""
+    mod, root = hub
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield mod, root, srv.server_port
+    srv.shutdown()
+    srv.server_close()
+
+
+def get(port, path):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    c.request("GET", path)
+    r = c.getresponse()
+    body = r.read()
+    c.close()
+    return r.status, json.loads(body or b"{}")
 
 
 def run_folder(root, name, events, request="#2500"):
@@ -109,6 +133,14 @@ def test_one_run_gives_one_row(hub):
     assert len(mod.pending_decisions()) == 1
 
 
+def test_the_pending_route_serves_the_decision_of_a_previous_day(served):
+    mod, root, port = served
+    run_folder(root, "run-old", [run_start(OLD), verdict(OLD + 60)])
+    status, body = get(port, "/api/pending")
+    assert status == 200
+    assert [r["id"] for r in body] == ["run-old"]
+
+
 # --- the Slack link
 
 class FakeSlack:
@@ -183,6 +215,14 @@ def test_the_link_is_resolved_once_per_window(hub, monkeypatch):
     first = hub[0].slack_link(refresh=True)
     second = hub[0].slack_link()
     assert first == second and fake.calls == ["auth.test"], "the address is cached, never resolved per request"
+
+
+def test_the_slack_link_route_serves_an_unavailable_state_with_no_address(served, monkeypatch):
+    mod, _, port = served
+    monkeypatch.setattr(mod, "slack_token", lambda: None)
+    status, body = get(port, "/api/slack-link")
+    assert status == 200
+    assert body["state"] == "unavailable" and body["url"] is None
 
 
 # --- the page

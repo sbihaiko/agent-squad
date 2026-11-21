@@ -107,6 +107,20 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #warnings{list-style:none;padding:0;margin:0}
 #warnings li{padding:12px 4px;border-bottom:1px solid var(--line);color:var(--warn);min-height:44px}
 #warn-detail{margin-top:10px;padding:12px;background:var(--panel);border-radius:var(--radius-lg);color:var(--mute);white-space:pre-wrap}
+/* Needs you (SPEC 2498, #2500): the pending decisions of every date, then the one link to the project's Slack channel.
+   A row and the link are the same box, so a tap reaches either with a 44 px target. */
+#now-needs{margin:12px 0}
+#needs-head{display:flex;align-items:baseline;gap:8px;margin:0 0 8px}
+#needs-head h3{margin:0;font-size:var(--fs-heading)}
+#needs-count{color:var(--mute);font-size:var(--fs-caption);font-variant-numeric:tabular-nums}
+#needs-list{list-style:none;padding:0;margin:0 0 8px;display:grid;gap:8px}
+.needrow{display:block;padding:12px;min-height:44px;border:1px solid var(--warn);border-radius:var(--radius-lg);background:var(--panel);color:var(--fg);text-decoration:none}
+.needrow .need-line{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.needrow .mut{margin-top:4px}
+.needs-slack{display:flex;align-items:center;gap:8px;padding:12px;min-height:44px;border:1px solid var(--edge);border-radius:var(--radius-lg);background:var(--panel);color:var(--fg);text-decoration:none}
+.needs-slack b{flex:1;font-weight:600}
+.needs-slack .mut{color:var(--mute)}
+.needs-off{margin:0;padding:12px;min-height:44px;border:1px dashed var(--edge);border-radius:var(--radius-lg);color:var(--mute)}
 #msg,#bmsg{color:var(--err)}
 #bhead{display:flex;align-items:center;gap:8px;touch-action:pan-y}
 #bhead button{min-width:44px;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-display)}
@@ -357,6 +371,12 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <section data-panel="monitor">
 <button id="now-today" type="button" hidden></button>
 <div id="now-head" data-role="header"><h2>Now</h2></div>
+<div id="now-needs">
+<div id="needs-head"><h3>Needs you</h3><span id="needs-count"></span></div>
+<ul id="needs-list"></ul>
+<div id="needs-slack"></div>
+<p id="needs-msg" class="msg" role="status" hidden></p>
+</div>
 <!--INST_CARD-->
 <!-- The loop strip (SPEC 1596, rule 8; #1599): one loop belongs to one project, so the strip aggregates every project
      the hub serves and a row opens that project's loop. It never shows one unnamed switch. -->
@@ -935,7 +955,7 @@ function show(name) {
   if (tabNow !== "board") cancelMove("tab");   // the Undo is on the Work tab: no move runs on unseen (#1007)
   if (tabNow === "board") loadBoard();
   if (tabNow === "runs") loadRuns();
-  if (tabNow === "monitor") { status(); loopView(); loadPoll(); }
+  if (tabNow === "monitor") { status(); loadNeeds(); loopView(); loadPoll(); }
   showStack(tab);
   resumeSearch(tab);
   paintBack();
@@ -1067,6 +1087,50 @@ async function status() {
   } catch (e) { $("msg").textContent = e.message; $("reconnect").hidden = !e.down; }
 }
 $("retry").onclick = status;
+// Needs you (SPEC 2498, #2500): the pending decisions of every date, and the one link to the project's Slack channel.
+// The hub decides each row's label, chip, age, address and the link's state; this draws what it answers. A row whose run
+// names no issue stays plain text, so no anchor is a dead target, and an unavailable link is a box, never an anchor.
+function needRow(r) {
+  const li = document.createElement("li");
+  const box = document.createElement(r.url ? "a" : "div"), line = document.createElement("div"),
+        name = document.createElement("b"), chip = document.createElement("span"), meta = document.createElement("div");
+  box.className = "needrow"; line.className = "need-line";
+  if (r.url) box.href = r.url;
+  name.textContent = r.label || r.id || "a run";
+  chip.className = "run-state b needs-human"; chip.textContent = r.chip;
+  line.append(name, chip);
+  meta.className = "mut";
+  meta.textContent = "age " + ago(r.age || 0) + " · " + money(r.spend);
+  box.append(line, meta); li.append(box);
+  return li;
+}
+function drawSlack(s) {
+  const box = $("needs-slack"); box.replaceChildren();
+  if (s && s.state === "ok" && s.url) {
+    const a = document.createElement("a"), b = document.createElement("b"), name = document.createElement("span"),
+          arrow = document.createElement("span");
+    a.className = "needs-slack"; a.href = s.url;
+    b.textContent = s.text; name.className = "mut"; name.textContent = s.channel || "";
+    arrow.textContent = "↗"; arrow.setAttribute("aria-hidden", "true");
+    a.append(b, name, arrow); box.append(a);
+  } else {
+    const p = document.createElement("p");
+    p.id = "needs-slack-off"; p.className = "needs-off";
+    p.textContent = (s && s.text) || "Slack link unavailable.";
+    box.append(p);
+  }
+}
+async function loadNeeds() {
+  try {
+    const rows = await call("/api/pending"), list = Array.isArray(rows) ? rows : [];
+    $("needs-list").replaceChildren(...list.map(needRow));
+    $("needs-head").hidden = !list.length;
+    $("needs-count").textContent = list.length ? list.length + (list.length === 1 ? " decision" : " decisions") : "";
+    $("needs-msg").hidden = true;
+  } catch (e) { $("needs-msg").textContent = e.message; $("needs-msg").hidden = false; }
+  try { drawSlack(await call("/api/slack-link")); }
+  catch (e) { drawSlack({ state: "unavailable", text: "Slack link unavailable: the hub did not answer." }); }
+}
 // The Monitor (#983) draws with the desktop's own code, substituted here when the hub serves the page. It reads `$` as a
 // selector and `esc`, so it gets both in its own scope; the hub decides every tone and text (ADR-0137).
 const inst = (() => {
@@ -1098,8 +1162,10 @@ const pollOk = name => !document.hidden && !document.querySelector('[data-panel=
 const every = (name, fn, ms) => setInterval(() => { if (pollOk(name)) fn(); }, ms);
 loadPoll();
 every("monitor", loadPoll, 5000);
+every("monitor", loadNeeds, 5000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
 status();
+loadNeeds();
 // The status read drives #reconnect, which covers every tab, so it polls on every tab while the app is in view.
 setInterval(() => { if (!document.hidden) status(); }, 5000);
 

@@ -1968,6 +1968,76 @@ def slack_set(body):
         if err: return {"err": err}
     return {"diff": diff, "state": slack_view(path)}
 
+# --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
+# alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
+# own map, which it filled when it joined the channel once. So the hub calls `auth.test` only: it lists no channel,
+# joins none and writes nothing. The address is cached for a window, and a missing connection, channel or domain answers
+# the unavailable state, which the page draws with no anchor.
+SLACK_TOKEN_SERVICE = "agent-squad-voice-slack-bot-token"   # contrib/voice/keychain.py BOT_TOKEN: the one workspace connection
+SLACK_WORKSPACE = re.compile(r"^https://([A-Za-z0-9][\w.-]*?[A-Za-z0-9])\.slack\.com/?$")
+SLACK_LINK_SECS = 300.0
+_SLACK_LINK = {"at": None, "answer": None}
+_SLACK_LINK_LOCK = threading.Lock()
+
+def voice_state_dir():
+    """The always-on daemon's state directory: VOICE_STATE when the caller exports it, else its default."""
+    return pathlib.Path(os.environ.get("VOICE_STATE") or (pathlib.Path.home() / ".local" / "state" / "agent-squad" / "voiced"))
+
+def slack_token():
+    """The workspace bot token, read from the macOS Keychain. The value never leaves this reader to a print or a log."""
+    try:
+        p = subprocess.run(["security", "find-generic-password", "-s", SLACK_TOKEN_SERVICE, "-w"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (p.stdout.strip() or None) if p.returncode == 0 else None
+
+def slack_api(token, method):
+    """One Slack read. The hub calls `auth.test` alone: it lists no channel, joins none and writes nothing."""
+    req = urllib.request.Request("https://slack.com/api/" + method, headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode() or "{}")
+
+def slack_workspace():
+    """(domain, error): the workspace domain from the Slack connection, never a constant in this repository."""
+    token = slack_token()
+    if not token: return None, "no connection"
+    try: d = slack_api(token, "auth.test")
+    except Exception: return None, "the connection did not answer"
+    if not isinstance(d, dict) or not d.get("ok"): return None, "the connection refused"
+    m = SLACK_WORKSPACE.match(str(d.get("url") or ""))
+    if not m: return None, "no workspace domain"
+    return m.group(1), None
+
+def slack_channel(repo=None):
+    """(channel, error): the project's channel from the daemon's map, a read that never joins a channel."""
+    try: d = json.loads((voice_state_dir() / "channels.json").read_text())
+    except (OSError, ValueError): return None, "no channel for " + str(repo or REPO)
+    ch = d.get(repo or REPO) if isinstance(d, dict) else None
+    if not isinstance(ch, dict) or not ch.get("id"): return None, "no channel for " + str(repo or REPO)
+    return ch, None
+
+def slack_link(now=None, refresh=False):
+    """The project channel's archive address on the workspace domain: {"state", "url", "channel", "text"}.
+
+    The answer is cached for a window; `refresh` resolves again. A missing connection, channel or domain answers the
+    unavailable state with no address, and the page then draws no anchor (SPEC 2498, #2500)."""
+    now = time.monotonic() if now is None else now
+    with _SLACK_LINK_LOCK:
+        at = _SLACK_LINK["at"]
+        if not refresh and at is not None and now - at < SLACK_LINK_SECS: return _SLACK_LINK["answer"]
+        domain, why = slack_workspace()
+        ch = None
+        if domain is not None: ch, why = slack_channel()
+        if domain is not None and ch is not None:
+            answer = {"state": "ok", "url": f"https://{domain}.slack.com/archives/{ch['id']}",
+                      "channel": "#" + str(ch.get("name") or ch["id"]), "text": "Answer in Slack"}
+        else:
+            answer = {"state": "unavailable", "url": None, "channel": None,
+                      "text": "Slack link unavailable: " + str(why) + "."}
+        _SLACK_LINK.update(at=now, answer=answer)
+        return answer
+
 def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
@@ -3708,6 +3778,46 @@ def ended_folders():
 def ended_today():
     """The runs that ended on the machine's local day, latest end first, each with its end time."""
     return [row for _, row in ended_folders()]
+
+def issue_url(n, repo=None):
+    """The plain issue address on github.com, the form iOS opens in the GitHub app: no query string."""
+    return f"https://github.com/{repo or REPO}/issues/{int(n)}"
+
+def pending_decisions():
+    """Every run that ended needs-human and still waits for the owner, across every date, the latest end first (SPEC 2498).
+
+    The ended-runs read covers the local day only, so a decision the owner did not answer yesterday waits here today. A
+    run whose verdict was later handled (its work landed) or verified (every issue was closed afterwards) is not pending,
+    and a run resumed or reclassified after its verdict is live or ended another way. One run gives one row."""
+    now, out, seen = time.time(), [], set()
+    for d in sorted(project_dirs()):
+        for rd in sorted(d.glob("run-*")):
+            if rd.name in seen or not (rd / "record.jsonl").is_file(): continue
+            r = scan(rd / "record.jsonl")
+            if not r or r.get("verdict") is None: continue
+            row, _ = run_row(str(rd), "", [])
+            if row.get("state") != "needs-human": continue
+            seen.add(rd.name)
+            n = next((int(x) for x in r.get("issues") or []), None)
+            ended = float(r.get("t1") or now)
+            out.append({"id": row["id"], "label": row.get("label") or row["id"], "chip": "needs a decision",
+                        "issue": n, "url": issue_url(n) if n is not None else None,
+                        "spend": row.get("spend") or 0, "age": max(0, int(now - ended)), "ended_at": ended})
+    return sorted(out, key=lambda x: -x["ended_at"])
+
+PENDING_POLL_SECS = 5.0   # seconds: the page's own Now poll, so every open page shares one read per window
+_PENDING_KEPT = {"at": None, "answer": None}
+_PENDING_LOCK = threading.Lock()
+
+def pending_served():
+    """The pending decisions, computed at most once per the page's poll window: any number of readers share one read."""
+    now = time.monotonic()
+    with _PENDING_LOCK:
+        at = _PENDING_KEPT["at"]
+        if at is not None and now - at < PENDING_POLL_SECS: return _PENDING_KEPT["answer"]
+        answer = pending_decisions()
+        _PENDING_KEPT.update(at=now, answer=answer)
+        return answer
 
 def open_ended(name, start=None):
     """The port of a dashboard server for a run that ended today, or for a registered run with no server of its own, or None:
@@ -10307,6 +10417,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/adapter-errors"): body, ct = json.dumps(adapter_errors()).encode(), "application/json"
         elif self.path.startswith("/api/delivery"): body, ct = json.dumps(delivery()).encode(), "application/json"
         elif self.path.startswith("/api/ended"): body, ct = json.dumps(ended_today()).encode(), "application/json"
+        elif self.path.startswith("/api/pending"): body, ct = json.dumps(pending_served()).encode(), "application/json"   # Now's decisions across every date (SPEC 2498, #2500)
+        elif self.path.startswith("/api/slack-link"): body, ct = json.dumps(slack_link()).encode(), "application/json"   # the project channel's address, resolved by reads alone (#2500)
         elif self.path.startswith("/api/live"): body, ct = json.dumps(live_served()).encode(), "application/json"   # one compute per poll window, whatever asks (#1933)
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats_served((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
