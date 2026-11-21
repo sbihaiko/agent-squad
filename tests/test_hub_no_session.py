@@ -150,8 +150,8 @@ def test_a_removed_post_answers_400_on_loopback(fleet, path):
     trap = _trap()
     try:
         for port in (fleet["hub"], fleet["mux"]):
-            def call(p):
-                return _request(port, "POST", p if port == fleet["hub"] else _prefix(port, p), body=body)
+            def call(p, _port=port):
+                return _request(_port, "POST", p if _port == fleet["hub"] else _prefix(_port, p), body=body)
             status, ct, raw = call(path)
             cstatus, cct, craw = call("/api/no-such-route")
             assert status == 400, (port, path, status)
@@ -168,8 +168,8 @@ def test_a_removed_post_answers_no_session_from_an_admitted_tailnet_identity(fle
     trap = _trap()
     try:
         for port in (fleet["hub"], fleet["mux"]):
-            def call(p):
-                return _request(port, "POST", p if port == fleet["hub"] else _prefix(port, p),
+            def call(p, _port=port):
+                return _request(_port, "POST", p if _port == fleet["hub"] else _prefix(_port, p),
                                 host=TAILNET, login=ANA, body=body)
             status, _, raw = call(path)
             cstatus, _, craw = call("/api/no-such-route")
