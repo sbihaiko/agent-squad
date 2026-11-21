@@ -10611,8 +10611,6 @@ class H(BaseHTTPRequestHandler):
             return self.answer(413, {"err": "too large"})
         self.answer(*priority_route(a, self.rfile.read(int(length))))
 
-        self.answer(200, out)
-
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data)))
         if self.close_connection: self.send_header("Connection", "close")

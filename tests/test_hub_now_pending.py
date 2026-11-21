@@ -39,6 +39,19 @@ def hub(monkeypatch, tmp_path):
     return mod, tmp_path
 
 
+@pytest.fixture(autouse=True)
+def github_read_is_a_seam(hub, monkeypatch):
+    """The GitHub REST read is a seam of this suite, as the Slack API and the Keychain are: a read no test answers is a
+    failed read, never a live `gh api` call. The pending read asks GitHub for an issue the board cache does not hold, so
+    without this seam the suite spends the runner's network and login, and one call outgrew the 2 s line (#2672)."""
+    mod, _ = hub
+
+    def read(route, transport=None):
+        return mod.ghread.Read(kind=mod.ghread.FAILED, detail="no answer in this suite")
+
+    monkeypatch.setattr(mod.ghread, "read", read)
+
+
 @pytest.fixture
 def served(hub):
     """The hub's own HTTP handler on a loopback port: the two reads are checked through the routes the page calls."""
@@ -151,6 +164,23 @@ def test_the_pending_route_serves_the_decision_of_a_previous_day(served):
     status, body = get(port, "/api/pending")
     assert status == 200
     assert [r["id"] for r in body] == ["run-old"]
+
+
+def test_the_pending_read_reaches_no_live_github_transport(hub, monkeypatch):
+    """A pending read whose issue the board cache does not hold answers through the suite's seam: it never spends a live
+    `gh api` call. The live read is the runner's network, its latency and its login, and it made this suite slow (#2672)."""
+    mod, root = hub
+    run_folder(root, "run-old", [run_start(OLD), verdict(OLD + 60)])
+
+    seen = []
+
+    def live(route, timeout=None):
+        seen.append(route)
+        return mod.ghread.Transport(rc=1)   # a failed read: the run stays pending, so a live call is the only signal
+
+    monkeypatch.setattr(mod.ghread, "gh_transport", live)
+    assert [r["id"] for r in mod.pending_decisions()] == ["run-old"]
+    assert seen == [], "the suite answered through its seam; the live transport was never called"
 
 
 # --- an issue the board cache does not hold (#2661)

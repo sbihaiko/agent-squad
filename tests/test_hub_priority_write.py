@@ -9,6 +9,7 @@ A spec's write reaches its open children by the inheritance rule (#1979).
 """
 import http.client
 import importlib.util
+import io
 import json
 import pathlib
 import re
@@ -207,6 +208,25 @@ def test_a_non_numeric_content_length_ends_the_connection(hub):
 
     assert r.status == 400 and r.getheader("Connection") == "close"
     assert mod.priority_calls == []
+
+
+def test_the_priority_handler_writes_the_route_answer_once(hub, monkeypatch):
+    """The handler writes the route's own answer and nothing after it. A stray second write reached an undefined name, so
+    every served write left a NameError traceback in its handler thread (#2672)."""
+    mod, port = hub
+    body = b'{"issue": 9, "priority": "high"}'
+    wrote = []
+    stub = types.SimpleNamespace(
+        headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}",
+                 "Content-Length": str(len(body))},
+        rfile=io.BytesIO(body), close_connection=False,
+        server=types.SimpleNamespace(server_port=port),
+        answer=lambda code, out: wrote.append((code, out)))
+    monkeypatch.setattr(mod, "priority_route", lambda a, raw: (200, {"ok": True}))
+
+    mod.H.priority_post(stub, mod.Access(True, "", "", False))
+
+    assert wrote == [(200, {"ok": True})]
 
 
 @pytest.mark.parametrize("host", TN_HOSTS)
