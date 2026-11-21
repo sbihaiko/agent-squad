@@ -293,9 +293,16 @@ def _linux_listing() -> list[int]:
 
 
 def _linux_boot_time() -> float:
-    """The boot time in epoch seconds. /proc/uptime carries hundredths, so a start built on it is exact to a clock tick.
-    /proc/stat `btime` is a whole second, so a start built on it reads up to 1 s early: it is the fallback, never the first
-    read (#2591)."""
+    """The boot time in epoch seconds. CLOCK_REALTIME and CLOCK_BOOTTIME are read one after the other, so the boot time
+    holds one value: a start read twice formats as one start (#2610). /proc/uptime carries hundredths, so a start built
+    on it moves inside a clock tick and one live process can read as two starts; /proc/stat `btime` is a whole second, so
+    a start built on it reads up to 1 s early (#2591). Both are fallbacks, never the first read."""
+    clock = getattr(time, "CLOCK_BOOTTIME", None)
+    if clock is not None:
+        try:
+            return time.clock_gettime(time.CLOCK_REALTIME) - time.clock_gettime(clock)
+        except (OSError, ValueError):
+            pass   # no boot clock on this kernel: the hundredths uptime below still beats the whole-second btime
     try:
         with open("/proc/uptime") as f:
             return time.time() - float(f.read().split()[0])

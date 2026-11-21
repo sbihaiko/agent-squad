@@ -219,9 +219,19 @@ class _File:
         return self.data
 
 
-def _patch_proc(monkeypatch, files, now):
+def _patch_proc(monkeypatch, files, now, uptime):
+    """A /proc read at one mocked instant: the files are fixed, and both boot reads answer that instant."""
     monkeypatch.setattr(procs, "open", lambda path, *a, **k: _File(files[path]), raising=False)
     monkeypatch.setattr(procs.time, "time", lambda: now)
+    _patch_boot_clock(monkeypatch, now, uptime)
+
+
+def _patch_boot_clock(monkeypatch, now, uptime):
+    """The boot clock `_linux_boot_time` reads: the wall clock answers `now` and the boot clock the uptime at that instant,
+    so the two answer one boot time. macOS names no CLOCK_BOOTTIME, so the fake supplies its own id and answers it."""
+    realtime = time.CLOCK_REALTIME
+    monkeypatch.setattr(procs.time, "CLOCK_BOOTTIME", 7, raising=False)
+    monkeypatch.setattr(procs.time, "clock_gettime", lambda clock_id: now if clock_id == realtime else uptime)
 
 
 def _sessions_module():
@@ -251,7 +261,7 @@ def test_2596_the_fractional_boot_read_moves_a_start_one_second_ahead(monkeypatc
         "/proc/4242/stat": f"4242 (sleep) {' '.join(fields)}\n",
         "/proc/4242/cmdline": b"sleep\x0030\x00",
     }
-    _patch_proc(monkeypatch, files, now)
+    _patch_proc(monkeypatch, files, now, uptime)
     p = procs._linux_proc(4242, procs._linux_boot_time())
     assert p is not None
     whole_second_start = int(boot) + starttime // hz   # the second the record's whole-second read names
@@ -289,11 +299,45 @@ def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatc
         "/proc/4242/cmdline": b"sleep\x0030\x00",
     }
 
-    _patch_proc(monkeypatch, files, now)
+    _patch_proc(monkeypatch, files, now, uptime)
     p = procs._linux_proc(4242, procs._linux_boot_time())
     assert p is not None
     age = now - p.start
     assert age < 0.1, f"a process started 0.07 s ago read as {age:.3f} s old"
+
+
+def test_2610_one_live_process_names_one_start_read_at_two_instants(monkeypatch):
+    """#2610: the boot time from /proc/uptime carries the kernel's hundredths, and that fraction moves inside one tick.
+    Two reads of one live process then format as two starts on either side of a second, and the supervisor's live check
+    names its live job gone. CLOCK_BOOTTIME and CLOCK_REALTIME are read an instant apart, so the boot time holds one
+    value."""
+    boot = 1_699_998_765.995
+    hz = os.sysconf("SC_CLK_TCK")
+    starttime = 1234 * hz   # the start sits .005 s short of the next whole second
+    fields = ["0"] * 20
+    fields[0], fields[1], fields[2], fields[19] = "S", "1", "4242", str(starttime)
+    files = {
+        "/proc/stat": f"cpu  0 0 0 0\nbtime {int(boot)}\n",
+        "/proc/4242/stat": f"4242 (sleep) {' '.join(fields)}\n",
+        "/proc/4242/cmdline": b"sleep\x0030\x00",
+    }
+
+    def read_at(now):
+        def opened(path, *_a, **_k):
+            if path == "/proc/uptime":
+                uptime = now - boot
+                return _File(f"{int(uptime * 100) / 100:.2f} 99999.99\n")   # the kernel truncates to hundredths
+            return _File(files[path])
+        monkeypatch.setattr(procs, "open", opened, raising=False)
+        monkeypatch.setattr(procs.time, "time", lambda: now)
+        _patch_boot_clock(monkeypatch, now, now - boot)
+        p = procs._linux_proc(4242, procs._linux_boot_time())
+        assert p is not None
+        return procs.format_lstart(p.start)
+
+    first = read_at(boot + 1234.001)
+    second = read_at(boot + 1234.008)
+    assert first == second, f"one live process read as two starts: {first!r} at one instant, {second!r} at the next"
 
 
 def test_2582_vis_prints_every_byte_as_the_listing_does():
