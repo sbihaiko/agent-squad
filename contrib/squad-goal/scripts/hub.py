@@ -2716,7 +2716,9 @@ def loop_switch(a, body, origin_ok, row=None):
         loop_audit_add(who, frm, action, client=client, path=t["audit"])
         return 200, {"ok": True, "action": action}
     if body.get("confirm") is not True: return 400, {"err": "confirm the stop: it kills the live runs and gates listed"}
-    live = loop_live(state=t["state"], checkout=t["checkout"] or None)
+    # The kill path reads the table fresh, never the run readers' 2.5 s window (RUN_TABLE_SECS): a run born inside that
+    # window would read not live, so stop-now would end fewer runs than it names and that run would survive the stop.
+    live = loop_live(state=t["state"], checkout=t["checkout"] or None, procs=_ps_rows())
     if watchd("stop", "--force"): return 500, {"err": "watchd did not stop"}   # stop-now is the hard stop: the snapshot runs first (#1662)
     killed, survived = loop_stop_now(live, t["checkout"] or None)
     extra = {"survived": survived} if survived["runs"] or survived["gates"] else {}
