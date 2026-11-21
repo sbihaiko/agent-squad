@@ -153,6 +153,85 @@ def test_the_pending_route_serves_the_decision_of_a_previous_day(served):
     assert [r["id"] for r in body] == ["run-old"]
 
 
+# --- an issue the board cache does not hold (#2661)
+
+def github_issues(monkeypatch, mod, states):
+    """The GitHub REST seam: one issue read answered from `states` by number, and every route it was asked for.
+
+    The board cache holds the items the REST items route returns, and an issue on another project, or one the cache read
+    misses, is absent from it. `None` answers a failed read. A list answers one state per read, in order, so a later poll
+    window can see the state the owner set after the first read."""
+    calls = []
+
+    def read(route, transport=None):
+        calls.append(route)
+        n = int(route.rsplit("/", 1)[-1])
+        state = states[n]
+        if isinstance(state, list):
+            state = state.pop(0)
+        if state is None:
+            return mod.ghread.Read(kind=mod.ghread.FAILED, detail="no answer")
+        return mod.ghread.Read(kind=mod.ghread.ANSWER, answer={"number": n, "state": state})
+
+    monkeypatch.setattr(mod.ghread, "read", read)
+    return calls
+
+
+def test_a_closed_issue_absent_from_the_board_cache_settles_the_run(hub, monkeypatch):
+    """#544 is on the board but the cache read misses it: the read's own closed state settles the decision."""
+    mod, root = hub
+    run_folder(root, "run-off-cache", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    calls = github_issues(monkeypatch, mod, {544: "closed"})
+    assert mod.pending_decisions() == []
+    assert calls == ["repos/x/y/issues/544"]
+
+
+def test_an_open_issue_absent_from_the_board_cache_keeps_the_run(hub, monkeypatch):
+    """An issue the cache does not hold and GitHub reads as open still waits for the owner."""
+    mod, root = hub
+    run_folder(root, "run-off-cache-open", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    github_issues(monkeypatch, mod, {544: "open"})
+    assert [r["id"] for r in mod.pending_decisions()] == ["run-off-cache-open"]
+
+
+def test_a_failed_issue_read_keeps_the_run(hub, monkeypatch):
+    """A read that does not answer is no closed state: the decision stays pending."""
+    mod, root = hub
+    run_folder(root, "run-read-failed", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    github_issues(monkeypatch, mod, {544: None})
+    assert [r["id"] for r in mod.pending_decisions()] == ["run-read-failed"]
+
+
+def test_the_served_answer_reads_each_issue_once_per_poll_window(hub, monkeypatch):
+    """Two runs name the same off-cache issue: one poll window reads it once, never once per run or per reader, and the
+    next window reads it once again, so the answer is the issue's current state, never an earlier window's."""
+    mod, root = hub
+    run_folder(root, "run-a", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    run_folder(root, "run-b", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    calls = github_issues(monkeypatch, mod, {544: ["open", "closed"]})
+    assert [r["id"] for r in mod.pending_served()] == ["run-a", "run-b"]
+    assert [r["id"] for r in mod.pending_served()] == ["run-a", "run-b"]   # a second reader of the same window
+    assert calls == ["repos/x/y/issues/544"], "one GitHub read for this issue in the window, shared by both runs and readers"
+    mod._PENDING_KEPT.update(at=None, answer=None)   # the next poll window
+    assert mod.pending_served() == [], "the owner closed the issue before this window: the fresh read settles the run"
+    assert calls == ["repos/x/y/issues/544"] * 2, "one fresh read in the next window"
+
+
+def test_an_issue_reopened_after_the_first_window_keeps_the_run(hub, monkeypatch):
+    """A closed answer belongs to its own poll window: an issue reopened before the next one shows its decision again."""
+    mod, root = hub
+    run_folder(root, "run-reopened", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    github_issues(monkeypatch, mod, {544: ["closed", "open"]})
+    assert mod.pending_served() == []
+    mod._PENDING_KEPT.update(at=None, answer=None)   # the next poll window
+    assert [r["id"] for r in mod.pending_served()] == ["run-reopened"]
+
+
 # --- the Slack link
 
 class FakeSlack:
