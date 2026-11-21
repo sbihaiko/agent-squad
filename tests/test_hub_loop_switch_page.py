@@ -105,17 +105,17 @@ def test_a_loopback_get_reads_the_view_with_the_access_rules(hub):
     assert code == 200
     assert {"state", "who", "when", "live", "log", "write", "reason"} <= set(v)
     assert v["write"] is True and v["tailnet"] is False
-    assert v["access"] == {"loop_write": False, "terminals_send": False}   # kept on the loop answer for every existing client (#1285 adds /api/access beside it)
+    assert v["access"] == {"loop_write": False}   # kept on the loop answer for every existing client (#1285 adds /api/access beside it)
     assert v["actions"] == ["start"]
 
 
 def test_the_access_route_answers_on_its_own(hub):
-    """#1285: the reach and the two tailnet rules have their own read, with the reach and the file that holds the rules."""
+    """#1285: the reach and the tailnet rule have their own read, with the reach and the file that holds the rule."""
     mod, port, _, _, _ = hub
     code, v = get_json(port, "/api/access")
     assert code == 200
     assert v["tailnet"] is False and v["reach"] is True and v["login"] == ""
-    assert v["access"] == {"loop_write": False, "terminals_send": False}
+    assert v["access"] == {"loop_write": False}
     assert v["file"].endswith(".env"), v["file"]
 
 
@@ -169,10 +169,10 @@ def test_a_refused_access_read_marks_the_rules_withheld(hub):
 def test_a_tailnet_read_states_the_reach_and_the_rules(hub, monkeypatch):
     mod, port, _, tn, _ = hub
     as_tailnet(mod, monkeypatch)
-    tn["terminals_send"] = True
+    tn["loop_write"] = True
     code, v = get_json(port, "/api/access", origin=f"https://{TN_HOST}", host=TN_HOST)
     assert code == 200 and v["tailnet"] is True and v["reach"] is True and v["login"] == "alice@example.com"
-    assert v["access"] == {"loop_write": False, "terminals_send": True}
+    assert v["access"] == {"loop_write": True}
 
 
 @pytest.mark.parametrize("state,actions", [("off", ["start"]), ("on", ["drain", "stop-now"]), ("draining", ["start", "stop-now"]), ("starting", [])])
@@ -283,8 +283,8 @@ VIEW = {"state": "on", "who": "owner", "when": "2026-10-31T16:02:00-03:00", "wri
         "health": {"starting_left": None},
         "log": [{"at": "2026-10-31T16:02:00-03:00", "who": "owner", "from": "loopback", "action": "start"}]}
 
-# The answer /api/access gives the Access theme (#1285): the reach, the two tailnet rules and the file they live in.
-ACCESS = {"tailnet": False, "reach": True, "access": {"loop_write": False, "terminals_send": True}, "file": "/p/.env"}
+# The answer /api/access gives the Access theme (#1285): the reach, the tailnet rule and the file it lives in.
+ACCESS = {"tailnet": False, "reach": True, "access": {"loop_write": False}, "file": "/p/.env"}
 
 
 def js_view(**over):
@@ -417,16 +417,15 @@ def test_a_draining_loop_offers_stop_now_only():
 
 
 def test_the_access_theme_states_three_toned_tiles_of_allowed_or_refused():
-    """#1285: three Now tiles, each with one of the hub's tones, and every value is allowed or refused. The setting's name
+    """#1285: two Now tiles, each with one of the hub's tones, and every value is allowed or refused. The setting's name
     sits in the tile's hover, never in the value cell, so no environment variable name is a value."""
     out = run_js(f"accHtml({json.dumps(ACCESS)})")
     tiles = re.findall(r'<div class="tile (\w+)"[^>]*><span class=tk>(.*?)</span><span class=tv>(.*?)</span></div>', out)
-    assert [k for _, k, _ in tiles] == ["Reached", "Loop write from the tailnet", "Terminal send from the tailnet"], out
-    assert [v for _, _, v in tiles] == ["allowed", "refused", "allowed"], out
-    assert [t for t, _, _ in tiles] == ["ok", "err", "ok"], out
+    assert [k for _, k, _ in tiles] == ["Reached", "Loop write from the tailnet"], out
+    assert [v for _, _, v in tiles] == ["allowed", "refused"], out
+    assert [t for t, _, _ in tiles] == ["ok", "err"], out
     assert all(v in ("allowed", "refused") for _, _, v in tiles)
     assert 'title="SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"' in out, "the loop write tile's hover names its setting"
-    assert 'title="SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)"' in out, "the terminal send tile's hover names its setting"
     assert 'title="the request from this machine (loopback)"' in out, "the reached tile's hover names the route"
 
 
@@ -450,14 +449,13 @@ def test_the_access_reach_states_allowed_or_refused_and_its_route():
 
 
 def test_a_withheld_read_shows_neutral_values_and_never_refused_for_a_rule():
-    """A refused viewer never read the rules, so the two rule tiles show a neutral withheld value, never "refused", which would
+    """A refused viewer never read the rule, so the rule tile shows a neutral withheld value, never "refused", which would
     claim a rule the page did not read. The reach tile keeps its own refused answer (#1285)."""
     out = run_js(f"accHtml({json.dumps({'tailnet': False, 'reach': False, 'withheld': True, 'access': {}, 'file': ''})})")
     tiles = re.findall(r'<div class="tile (\w+)"[^>]*><span class=tk>(.*?)</span><span class=tv>(.*?)</span></div>', out)
-    assert [(k, v) for _, k, v in tiles] == [("Reached", "refused"), ("Loop write from the tailnet", "withheld"),
-                                             ("Terminal send from the tailnet", "withheld")], out
-    assert [t for t, _, _ in tiles][1:] == ["neutral", "neutral"], out
-    assert "SQUAD_TAILNET_LOOP_WRITE" in out and "SQUAD_TAILNET_TERMINALS_SEND" in out, "the hovers keep the setting names"
+    assert [(k, v) for _, k, v in tiles] == [("Reached", "refused"), ("Loop write from the tailnet", "withheld")], out
+    assert [t for t, _, _ in tiles][1:] == ["neutral"], out
+    assert "SQUAD_TAILNET_LOOP_WRITE" in out, "the hover keeps the setting name"
     assert "Read from" not in out, out
 
 

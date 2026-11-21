@@ -267,15 +267,11 @@ def macos_present():
 
 
 def sdk_present():
-    """True when the interpreter a hosted session starts under imports the SDK. The CI install has no `sdk` extra, so the
-    supervisor refuses every hosted start there, by construction and not by a defect (ADR-0139)."""
+    """True when the interpreter a hosted session starts under imports the SDK. The CI install has no `sdk` extra, so a
+    hosted start refuses there, by construction and not by a defect (ADR-0139)."""
     if ci_runner_simulated():
         return False
-    from squad import supervisor
-    try:
-        return subprocess.run([supervisor.hosted_argv()[0], "-c", "import claude_agent_sdk"], capture_output=True).returncode == 0
-    except OSError:
-        return False
+    return subprocess.run([sys.executable, "-c", "import claude_agent_sdk"], capture_output=True).returncode == 0
 
 
 def process_table_present():

@@ -1,4 +1,8 @@
-"""The tailnet access seam: one decision per request, made from the action it asks for, with a refusal reason that never names the allow list."""
+"""The tailnet access seam: one decision per request, made from the action it asks for, with a refusal reason that never names the allow list.
+
+The hub hosts no terminal (#2492), so the seam holds no `terminals_*` grant and no terminal action; a kept route keeps its
+own rule (a send, the loop switch).
+"""
 import ast
 import inspect
 import pathlib
@@ -16,12 +20,11 @@ TAILNET_HOST = "hub.tail1234.ts.net"
 ALLOW = ["ana@example.com", "bo@example.com"]
 TAILNET_ORIGIN = f"https://{TAILNET_HOST}"
 LOOPBACK = f"127.0.0.1:{PORT}"
-ALL_GRANTS = frozenset({"terminals_read", "terminals_attach", "terminals_send"})
 
 
-def decide(host, action=ta.VIEW, origin=None, login=None, allow=ALLOW, port=PORT, grants=frozenset()):
+def decide(host, action=ta.VIEW, origin=None, login=None, allow=ALLOW, port=PORT):
     return ta.decide(host=host, origin=origin, action=action, login=login, port=port, tailnet_host=TAILNET_HOST,
-                     allowed_logins=allow, grants=grants)
+                     allowed_logins=allow)
 
 
 def test_loopback_host_passes_a_view_with_no_identity():
@@ -32,8 +35,6 @@ def test_loopback_host_passes_a_view_with_no_identity():
 def test_loopback_write_needs_no_grant_and_no_identity():
     assert decide(LOOPBACK, action=ta.CONTROL).allowed
     assert decide(LOOPBACK, action=ta.SEND).allowed
-    assert decide(LOOPBACK, action=ta.ATTACH).allowed
-    assert decide(LOOPBACK, action=ta.READ).allowed
 
 
 def test_loopback_request_with_a_foreign_origin_is_refused():
@@ -92,52 +93,23 @@ def test_listed_login_passes_a_tailnet_view():
     assert decide(TAILNET_HOST, login="bo@example.com").allowed
 
 
-def test_tailnet_terminal_read_without_its_grant_is_refused():
-    v = decide(TAILNET_HOST, action=ta.READ, login="ana@example.com")
+def test_the_seam_holds_no_terminal_action_and_no_terminal_grant():
+    assert not hasattr(ta, "READ") and not hasattr(ta, "ATTACH") and not hasattr(ta, "GRANT_OF")
+    assert ta.ACTIONS == frozenset({ta.VIEW, ta.SEND, ta.CONTROL})
+    with pytest.raises(ValueError, match="unknown action"):
+        decide(TAILNET_HOST, action="read", login="ana@example.com")
+
+
+def test_tailnet_send_with_the_right_origin_passes_for_a_listed_login():
+    """The seam holds no send grant; the send route keeps its own tailnet rule (hub.py send_rule)."""
+    assert decide(TAILNET_HOST, action=ta.SEND, origin=TAILNET_ORIGIN, login="ana@example.com").allowed
+
+
+@pytest.mark.parametrize("origin", [None, "", "https://evil.example", "http://" + TAILNET_HOST, TAILNET_ORIGIN + ":443/x"])
+def test_tailnet_send_with_a_wrong_or_absent_origin_is_refused(origin):
+    v = decide(TAILNET_HOST, action=ta.SEND, origin=origin, login="ana@example.com")
     assert not v.allowed
-    assert v.reason == "tailnet.terminals_read is off"
-
-
-def test_tailnet_terminal_read_with_its_grant_passes_for_a_listed_login():
-    assert decide(TAILNET_HOST, action=ta.READ, login="ana@example.com", grants={"terminals_read"}).allowed
-
-
-def test_tailnet_terminal_read_with_another_grant_alone_is_refused():
-    v = decide(TAILNET_HOST, action=ta.READ, login="ana@example.com", grants={"terminals_send", "terminals_attach"})
-    assert not v.allowed
-    assert v.reason == "tailnet.terminals_read is off"
-
-
-def test_tailnet_attach_without_its_grant_is_refused():
-    v = decide(TAILNET_HOST, action=ta.ATTACH, origin=TAILNET_ORIGIN, login="ana@example.com")
-    assert not v.allowed
-    assert v.reason == "tailnet.terminals_attach is off"
-
-
-def test_tailnet_send_without_its_grant_is_refused_even_with_the_origin():
-    v = decide(TAILNET_HOST, action=ta.SEND, origin=TAILNET_ORIGIN, login="ana@example.com")
-    assert not v.allowed
-    assert v.reason == "tailnet.terminals_send is off"
-
-
-def test_a_listed_login_without_identity_reads_no_stream_even_with_every_grant():
-    v = decide(TAILNET_HOST, action=ta.READ, grants=ALL_GRANTS)
-    assert not v.allowed
-    assert v.reason == "no tailnet identity"
-
-
-def test_an_unlisted_login_with_every_grant_is_refused_with_its_reason():
-    v = decide(TAILNET_HOST, action=ta.SEND, origin=TAILNET_ORIGIN, login="eve@example.com", grants=ALL_GRANTS)
-    assert not v.allowed
-    assert v.reason == "login not allowed"
-
-
-def test_tailnet_send_with_its_grant_and_the_right_origin_passes():
-    assert decide(TAILNET_HOST, action=ta.SEND, origin=TAILNET_ORIGIN, login="ana@example.com", grants={"terminals_send"}).allowed
-
-
-def test_tailnet_attach_with_its_grant_and_the_right_origin_passes():
-    assert decide(TAILNET_HOST, action=ta.ATTACH, origin=TAILNET_ORIGIN, login="ana@example.com", grants={"terminals_attach"}).allowed
+    assert v.reason == "origin not allowed"
 
 
 @pytest.mark.parametrize("origin", [None, "", "https://evil.example", "http://" + TAILNET_HOST, TAILNET_ORIGIN + ":443/x"])
@@ -147,13 +119,13 @@ def test_tailnet_control_with_a_wrong_or_absent_origin_is_refused(origin):
     assert v.reason == "origin not allowed"
 
 
-def test_tailnet_control_with_the_right_origin_passes_without_a_terminal_grant():
+def test_tailnet_control_with_the_right_origin_passes_without_a_grant():
     assert decide(TAILNET_HOST, action=ta.CONTROL, origin=TAILNET_ORIGIN, login="ana@example.com").allowed
 
 
 def test_the_decision_follows_the_action_not_the_method():
-    assert decide(TAILNET_HOST, action=ta.READ, login="ana@example.com", grants={"terminals_read"}).allowed
-    v = decide(TAILNET_HOST, action=ta.SEND, login="ana@example.com", grants={"terminals_send"})
+    assert decide(TAILNET_HOST, action=ta.SEND, origin=TAILNET_ORIGIN, login="ana@example.com").allowed
+    v = decide(TAILNET_HOST, action=ta.SEND, login="ana@example.com")
     assert not v.allowed
     assert v.reason == "origin not allowed"
 
@@ -171,7 +143,7 @@ def test_refusal_text_never_names_a_login_from_the_list():
         decide(TAILNET_HOST, login="ana@example.com", allow=[]),
         decide(TAILNET_HOST, action=ta.CONTROL, login="ana@example.com"),
         decide(TAILNET_HOST, action=ta.CONTROL, origin="https://evil.example", login="bo@example.com"),
-        decide(TAILNET_HOST, action=ta.READ, login="bo@example.com"),
+        decide(TAILNET_HOST, action=ta.SEND, login="bo@example.com"),
     ]
     refusals = [v.reason for v in cases if not v.allowed]
     assert len(refusals) == len(cases)
@@ -183,7 +155,7 @@ def test_refusal_text_never_names_a_login_from_the_list():
 
 def test_decision_takes_no_method_and_no_display_header():
     params = set(inspect.signature(ta.decide).parameters)
-    assert params == {"host", "origin", "action", "login", "port", "tailnet_host", "allowed_logins", "grants"}
+    assert params == {"host", "origin", "action", "login", "port", "tailnet_host", "allowed_logins"}
     assert ta.LOGIN_HEADER == "Tailscale-User-Login"
 
 

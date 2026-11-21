@@ -309,10 +309,6 @@ def server(port, apps, on_new=None):
         def stream(self, a): return self.profile.stream(self, a)
         def send_to_session(self, a): return self.profile.send_to_session(self, a)   # the overlay's and the phone's send (#898)
         def answer_card(self, a): return self.profile.answer_card(self, a)   # the owner's answer to a session's question card (#1093)
-        def terminal_read(self, a): return self.profile.terminal_read(self, a)   # a hosted session's scrollback (ADR-0152 rule 9)
-        def terminal_post(self, a, op, keys): return self.profile.terminal_post(self, a, op, keys)   # an attach, a detach or an input
-        def terminal_start(self, a): return self.profile.terminal_start(self, a)   # a session the supervisor starts (#1216)
-        def terminal_call(self, a, op, **fields): return self.profile.terminal_call(self, a, op, **fields)
         def send_attach(self, a, kind=None): return self.profile.send_attach(self, a, kind)   # one attach route (#1151)
         def answer(self, code, out): return self.profile.answer(self, code, out)
         def loop_post(self, a): return self.profile.loop_post(self, a)   # the loop switch's write (#923)
@@ -365,15 +361,7 @@ def server(port, apps, on_new=None):
     return ThreadingHTTPServer(("127.0.0.1", port), Mux)
 
 
-def supervise(app):
-    """Start the terminal supervisor a profile's terminal routes call (ADR-0152 rule 9). The hub's own start path records
-    the outcome, `up` or `refused` with the reason, so the panel states it; the hub serves its pages either way."""
-    m = app.get("mod")
-    if m is None: return
-    m.start_terminal_supervisor()
-
-
-SAMPLERS = ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
+SAMPLERS =("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
 
 
 def start_profile(a):
@@ -408,9 +396,7 @@ if __name__ == "__main__":
     for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE", "SG_PROJECTS", "SG_FORK_DIR"):   # each page reads its own profile, never the shell's
         os.environ.pop(k, None)
     def added(a):
-        threading.Thread(target=supervise, args=(a,), daemon=True).start()
         start_profile(a)
     for a in apps.values():
-        threading.Thread(target=supervise, args=(a,), daemon=True).start()
         start_profile(a)
     server(PORT, apps, on_new=added).serve_forever()

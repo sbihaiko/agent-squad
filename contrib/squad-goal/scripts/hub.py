@@ -695,7 +695,7 @@ _SQUAD_LOCK = _process_lock()   # one resolution at a time across every profile:
 def _squad_names():
     """The `squad` keys `sys.modules` held at one instant. A plain copy is atomic under the GIL; reading the live dict while
     a second thread imports a module raises "dictionary changed size during iteration", and the live hub reported that as
-    "the terminal supervisor is not running"."""
+    a resolution that failed while a profile loaded."""
     return [m for m in sys.modules.copy() if m == "squad" or m.startswith("squad.")]
 
 def _bound(pkg, name, m):
@@ -2499,10 +2499,10 @@ def loop_view(a):
             "log": loop_audit_last(20)[::-1], "write": write, "reason": "" if write else LOOP_READ_ONLY,
             "projects": loop_projects(a, procs=procs, rows=rows),   # every project this hub serves, each on its own files (#1599)
             "changes": loop_changes(rows),   # one project list, so the strip and the change log never disagree in one answer
-            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True}}   # kept for every client that already reads the loop answer
+            "tailnet": a.tailnet, "access": {"loop_write": tn.get("loop_write") is True}}   # kept for every client that already reads the loop answer
 
 def access_view(a):
-    """Settings > Access reads the reach and the two tailnet rules on their own route (#1285), an additive answer beside the
+    """Settings > Access reads the reach and the tailnet rule on their own route (#1285), an additive answer beside the
     loop route so the theme never waits on the loop answer. `reach` is this request's own access result; each rule says
     allowed or refused, and `file` names the file the rule is read from: the project file when it holds the block, else the
     project's personal `.env`, and none when no file holds one. A request the seam refuses gets its reach and no rule, login
@@ -2511,7 +2511,7 @@ def access_view(a):
         return {"tailnet": a.tailnet, "login": "", "reach": False, "reason": a.reason, "withheld": True, "access": {}, "file": ""}
     tn, path = tailnet_source()
     return {"tailnet": a.tailnet, "login": a.login, "reach": a.allowed, "reason": "",
-            "access": {"loop_write": tn.get("loop_write") is True, "terminals_send": tn.get("terminals_send") is True},
+            "access": {"loop_write": tn.get("loop_write") is True},
             "file": path}
 
 def loop_refusal(a, origin_ok, tn):
@@ -8711,8 +8711,7 @@ const accHtml=v=>{const a=v.access||{},yn=x=>x?"allowed":"refused",ty=x=>x?"ok":
  const note=v.file?`Read from <code>${esc(v.file)}</code>.`:v.withheld?"This read is refused; the two rules are withheld and stay with the owner.":"";
  return setNow("acc",[
   setTile("Reached",yn(v.reach),ty(v.reach),reachTip),
-  setTile("Loop write from the tailnet",rv(a.loop_write),rt(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"),
-  setTile("Terminal send from the tailnet",rv(a.terminals_send),rt(a.terminals_send),"SQUAD_TAILNET_TERMINALS_SEND (tailnet.terminals_send)")],note)
+  setTile("Loop write from the tailnet",rv(a.loop_write),rt(a.loop_write),"SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)")],note)
  +setSettings("acc",[],`Read here; the owner sets each value in the project file or <code>.env</code> on the machine (ADR-0152, ADR-0162). A write the tailnet refuses still works from this machine.`)};
 // The Access theme reads its own route (#1285): the reach and the two rules never ride on the loop answer, so a stopped
 // loop still states them.
@@ -9942,12 +9941,9 @@ def image_payload(query):
     except OSError: return None
 
 def project_payload(a):
-    """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request.
-    It also names the sessions the supervisor hosts, so the panel types into a terminal only there, and the job and checkout
-    a start names (#1216)."""
+    """What /api/sessions/project serves (#898): the sessions in this profile's checkout and the send rule for this request."""
     ok, why = send_rule(a)
-    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why,
-            "supervisor": dict(TERMINAL), "hosted": hosted_sessions(), "start": {"job": PROFILE_NAME, "cwd": CHECKOUT}}
+    return {"sessions": sessions.project_sessions(PROFILE_NAME, CHECKOUT, profiles_of=profiles_of_cwd), "send": ok, "why": why}
 
 # The session overlay (#898): one source, hub-overlay.js, on every page the hub serves. Each page names where its session
 # routes are: the hub and mobile pages a quoted path the mux gives the profile prefix, a run dashboard its own path up to
@@ -10332,67 +10328,21 @@ class Access(NamedTuple):
     tailnet: bool   # the request is addressed to the tailnet name
 
 LOGIN_HEADER = "Tailscale-User-Login"   # the seam's name, for a hub with no seam: a request that carries it is never loopback
-TERMINAL_GRANTS = ("terminals_read", "terminals_attach", "terminals_send")
-TERMINAL_SENDS = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
-                  "/api/sessions/voice", "/api/terminals/write", "/api/terminals/start")
-TERMINAL_ATTACH = ("/api/terminals/attach", "/api/terminals/detach")
-TERMINAL_OPS = {"/api/terminals/attach": ("attach", {"sid", "client_id"}), "/api/terminals/detach": ("detach", {"sid", "client_id"}),
-                "/api/terminals/write": ("write", {"sid", "text", "client_id"})}
-SESSIONS_TERMINALS = "/api/sessions/terminals/"
+SEND_ROUTES = ("/api/sessions/send", "/api/sessions/card/answer", "/api/sessions/screenshot", "/api/sessions/attach",
+               "/api/sessions/voice")
 
 def route_path(path):
-    """The route a request names, its query dropped. The panel composes every terminal call from the sessions base the overlay
-    names (`startInfo.api + "/terminals/<op>"`), so `/api/sessions/terminals/<op>` is the terminal route `/api/terminals/<op>`:
-    one seam for every op and for the access action, so the path the page calls and the route the hub serves never drift op by
-    op (#1307, #1311)."""
-    path = path.split("?", 1)[0]
-    return "/api/terminals/" + path[len(SESSIONS_TERMINALS):] if path.startswith(SESSIONS_TERMINALS) else path
+    """The route a request names, its query dropped (#2492)."""
+    return path.split("?", 1)[0]
 
 PROJECT_LOOP_ROUTE = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9._-]*)/api/loop$")   # one project's loop write (#1599)
 
 def route_action(method, path):
-    """What a request asks for, the access seam's action (ADR-0152 rule 9): a terminal read, an attach or detach, a send to a session, or a control write.
+    """What a request asks for, the access seam's action (ADR-0152 rule 9): a send to a session, or a control write.
     The seam decides on the action; a method only names which routes can write."""
     path = route_path(path)
-    if method == "GET":
-        return "read" if path == "/api/terminals/read" else "view"
-    if path in TERMINAL_ATTACH: return "attach"
-    return "send" if path in TERMINAL_SENDS else "control"
-
-def terminal_supervisor():
-    """The terminal supervisor's client (squad/supervisor.py), loaded from the first root that holds the squad package."""
-    if "sv" not in _PROJECT:
-        (_PROJECT["sv"],) = load_squad(tailnet_roots(), ("supervisor",))
-    return _PROJECT["sv"]
-
-TERMINAL = {"state": "starting", "why": ""}   # the start outcome the panel reads through /api/sessions/project
-TERMINAL_LOCK = threading.Lock()   # one start at a time: ensure() pings first, so a second caller never spawns a second daemon
-
-def start_terminal_supervisor():
-    """Bring the terminal supervisor up for this hub, or record its refusal with the reason. The hub keeps serving either way.
-    ensure() answers at once while a daemon is alive, so a later call after a death starts one again and nothing starts per request."""
-    with TERMINAL_LOCK:
-        try:
-            terminal_supervisor().ensure(STATE)
-            TERMINAL.update(state="up", why="")
-        except Exception as e:
-            TERMINAL.update(state="refused", why=str(e))
-    print(f"terminal supervisor: {TERMINAL['state']}" + (f": {TERMINAL['why']}" if TERMINAL["why"] else ""), file=sys.stderr, flush=True)
-
-def hosted_sessions():
-    """The session ids the terminal supervisor hosts in this profile's checkout (#1216). The supervisor's own list is the one
-    source, so a session that ended is never offered as a terminal. A supervisor that is not up, or that does not answer,
-    hosts none."""
-    if TERMINAL.get("state") != "up": return []
-    try:
-        out = terminal_supervisor().call(STATE, "list")
-    except Exception:   # a daemon that is gone, refused or built without the op: the panel offers a start instead
-        return []
-    home = os.path.realpath(CHECKOUT) if CHECKOUT else ""
-    rows = out.get("sessions") if isinstance(out, dict) else None
-    return [row["sid"] for row in rows or []
-            if isinstance(row, dict) and isinstance(row.get("sid"), str) and home
-            and os.path.realpath(str(row.get("cwd") or "")) == home]
+    if method == "GET": return "view"
+    return "send" if path in SEND_ROUTES else "control"
 
 def access(h, action):
     """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam.
@@ -10404,9 +10354,8 @@ def access(h, action):
     if seam is None: return Access(False, "no tailnet access seam", "", bool(login))
     host = h.headers.get("Host") or ""
     tn = tailnet_block()
-    grants = frozenset(g for g in TERMINAL_GRANTS if tn.get(g) is True)
     v = seam.decide(host=host, origin=h.headers.get("Origin"), action=action, login=login, port=h.server.server_port,
-                    tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [], grants=grants)
+                    tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
     return Access(v.allowed, v.reason, login if v.allowed and not own_host(h) else "", bool(login) or (bool(tn.get("host")) and host == tn["host"]))
 
 DASH_PREFIXES = ("/dash/", "//")
@@ -10588,7 +10537,6 @@ class H(BaseHTTPRequestHandler):
         a = access(self, route_action("GET", self.path))
         if not a.allowed: return self.refuse(a.reason, page=self.path.split("?", 1)[0] in ("/mobile", "/mobile/"))
         if self.path.split("?", 1)[0] == hubstream.PATH and hubstream.enabled(): return self.stream(a)
-        if route_path(self.path) == "/api/terminals/read": return self.terminal_read(a)
         if request_target(self).startswith(DASH_PREFIXES): return self.dash("GET")
         if self.path.startswith(("/held/", "/ended/")):   # a run the childcc pass holds, or one that ended today: its dashboard (#689, #830)
             name = re.sub(r"[^\w-]", "", self.path.split("/", 2)[2].split("?")[0])
@@ -10803,64 +10751,6 @@ class H(BaseHTTPRequestHandler):
             return self.answer(404, {"err": "no session"})
         self.answer(200, out)
 
-    def terminal_read(self, a):
-        """A hosted session's scrollback, through the supervisor for this caller (ADR-0152 rule 9): the read grant on the tailnet."""
-        if not a.allowed: return self.refuse(a.reason)
-        q = urllib.parse.parse_qs(self.path.partition("?")[2])
-        sid, cid, offset = (q.get("sid") or [""])[0], (q.get("client_id") or [""])[0], (q.get("offset") or ["0"])[0]
-        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid) or not offset.isdigit(): return self.answer(400, {"err": "bad request"})
-        self.terminal_call(a, "read", session=sid, offset=int(offset), client_id=cid)
-
-    def terminal_post(self, a, op, keys):
-        """An attach, a detach or an input to a hosted session: a JSON body with exactly `keys`, under the seam's rule for its action."""
-        length = self.headers.get("Content-Length") or "0"
-        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
-        if not a.allowed: return self.refuse(a.reason)
-        if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
-        try: body = json.loads(raw)
-        except ValueError: body = None
-        if not isinstance(body, dict) or set(body) != keys: return self.answer(400, {"err": "bad request"})
-        sid, cid = str(body["sid"]), str(body["client_id"])
-        if not sessions.SID.fullmatch(sid) or not session_send.CLIENT_ID.fullmatch(cid): return self.answer(400, {"err": "bad request"})
-        if op != "write": return self.terminal_call(a, op, session=sid, client_id=cid)
-        if not isinstance(body["text"], str): return self.answer(400, {"err": "bad request"})
-        self.terminal_call(a, op, session=sid, text=body["text"], client_id=cid)
-
-    def terminal_start(self, a):
-        """Start a session the supervisor hosts, in the profile's checkout, and answer its session id (#1216). A JSON body
-        with exactly job, cwd and client_id, under the send rule the other terminal writes keep; the supervisor refuses an
-        invalid job, and its refusal answers the 403."""
-        length = self.headers.get("Content-Length") or "0"
-        raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
-        if not a.allowed: return self.refuse(a.reason)
-        if not (a.tailnet or own_origin(self)) or "json" not in (self.headers.get("Content-Type") or ""): return self.refuse("forbidden")
-        try: body = json.loads(raw)
-        except ValueError: body = None
-        if not isinstance(body, dict) or set(body) != {"job", "cwd", "client_id"}: return self.answer(400, {"err": "bad request"})
-        if not isinstance(body["job"], str) or not isinstance(body["cwd"], str) or \
-           not session_send.CLIENT_ID.fullmatch(str(body["client_id"])): return self.answer(400, {"err": "bad request"})
-        self.terminal_call(a, "start", job=body["job"], cwd=body["cwd"], client_id=str(body["client_id"]))
-
-    def terminal_call(self, a, op, **fields):
-        """One op on the supervisor for this caller: the login it acts for and the transport it came by. A refusal is a 403.
-        A daemon that is not running is started again once and the call retried; a start that refuses answers 503 with its reason."""
-        sv = terminal_supervisor()
-        def call(): return sv.call(STATE, op, login=a.login, transport="tailnet" if a.tailnet else "loopback", **fields)
-        def unreadable(e):   # an answer the hub cannot parse used to raise out of the handler, so the browser got no status (#1308)
-            return self.answer(503, {"err": f"the terminal supervisor answered what the hub could not read: {e}"})
-        try: out = call()
-        except sv.Refused as e: return self.answer(403, {"err": str(e)})
-        except ValueError as e: return unreadable(e)
-        except OSError:
-            start_terminal_supervisor()
-            try: out = call()
-            except sv.Refused as e: return self.answer(403, {"err": str(e)})
-            except ValueError as e: return unreadable(e)
-            except OSError:
-                why = TERMINAL["why"] or "no reason was recorded"
-                return self.answer(503, {"err": f"the terminal supervisor is not running: {why}"})
-        self.answer(200, out)
-
     def answer(self, code, out):
         data = json.dumps(out).encode(); self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data)))
         if self.close_connection: self.send_header("Connection", "close")
@@ -10880,8 +10770,6 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/sessions/attach": return self.send_attach(a)
         if self.path.split("?", 1)[0] == "/api/sessions/voice": return self.send_voice(a)
         if self.path.split("?", 1)[0] == "/api/sessions/screenshot": return self.send_attach(a, "screenshot")
-        if route_path(self.path) == "/api/terminals/start": return self.terminal_start(a)
-        if route_path(self.path) in TERMINAL_OPS: return self.terminal_post(a, *TERMINAL_OPS[route_path(self.path)])
         if self.path.split("?", 1)[0] == "/api/loop": return self.loop_post(a)
         if self.path.split("?", 1)[0] == "/api/profiler": return self.profiler_post(a)
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
@@ -10932,7 +10820,7 @@ def boot():
     profiler switch left on (#1743); off, that starts nothing."""
     refresh_runs()
     warm()   # the sessions read costs seconds on a large profile, so it starts with the hub, never with the first page (#1217)
-    threading.Thread(target=start_terminal_supervisor, daemon=True).start(); threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=refresh_history, daemon=True).start(); threading.Thread(target=refresh_fast, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     profiler_ensure()
 
 if __name__ == "__main__":

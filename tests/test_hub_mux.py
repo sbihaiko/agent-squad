@@ -558,10 +558,8 @@ def test_hubctl_restart_stops_a_running_hubmux_and_names_its_pid(tmp_path):
     drop = {"SG_STATE", "SG_STATE_BASE", "SG_BOARD_CACHE", "SG_HUB_DIR", "SG_PROFILE", "SG_SHARED", "SG_CHECKOUT",
             "SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_PROJECTS", "SG_FORK_DIR"}
     env = {k: v for k, v in os.environ.items() if k not in drop}
-    # The real start path now starts each profile's terminal supervisor; this restart test names a refused start and a
-    # temporary socket folder, so no daemon runs and no socket lands in /tmp/squad-sup-<uid> (#1161).
-    env.update(HOME=str(home), SG_PROFILES_DIR=str(prof), SG_PROFILE="beta",
-               SQUAD_SUPERVISOR_DIR=str(tmp_path / "sup"), SQUAD_SUPERVISOR_CMD=f"{tmp_path}/no-supervisor {{state}}")
+    # The start path starts each profile's background reads and no daemon (#2492).
+    env.update(HOME=str(home), SG_PROFILES_DIR=str(prof), SG_PROFILE="beta")
     hub = subprocess.Popen([sys.executable, str(SCRIPTS / "hubmux.py"), str(port)], cwd=SCRIPTS, env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     listener = None

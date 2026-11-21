@@ -8,11 +8,9 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/home" "$T/profiles" "$T/co"
 echo ': "${SG_REPO:=x/alpha}"; : "${SG_OWNER:=x}"; : "${SG_PROJECT:=3}"; : "${SG_CHECKOUT:='"$T/co"'}"' > "$T/profiles/alpha.sh"
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-# The start path also starts each profile's terminal supervisor: name a refused start and a temp socket folder, so this
-# check hub runs no daemon and leaves no socket in /tmp/squad-sup-<uid> (#1161).
+# The start path starts each profile's background reads and no daemon (#2492).
 env -u SG_STATE -u SG_STATE_BASE -u SG_BOARD_CACHE -u SG_HUB_DIR -u SG_PROFILE -u SG_SHARED -u SG_CHECKOUT \
-  HOME="$T/home" SG_PROFILES_DIR="$T/profiles" SQUAD_SUPERVISOR_DIR="$T/sup" \
-  SQUAD_SUPERVISOR_CMD="$T/no-supervisor {state}" python3 "$here/hubmux.py" "$port" >"$T/hub.log" 2>&1 &
+  HOME="$T/home" SG_PROFILES_DIR="$T/profiles" python3 "$here/hubmux.py" "$port" >"$T/hub.log" 2>&1 &
 pid=$!
 for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$port/api/hub" | grep -q squad-hub && break; sleep 0.2; done
 curl -s "http://127.0.0.1:$port/api/hub" | grep -q squad-hub && ok "the check hub answers on its own port" \

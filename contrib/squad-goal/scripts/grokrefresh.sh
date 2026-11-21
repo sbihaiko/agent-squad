@@ -2,7 +2,7 @@
 # Start the grok TUI briefly so the CLI writes a fresh creditUsagePercent line (#1530).
 #
 # The grok CLI writes that line only when an interactive TUI session starts, and the loop runs grok headless.
-# The hub calls this script; the pseudo-terminal lives here, never on the hub's own path (test_supervisor).
+# The hub calls this script; the pseudo-terminal lives here, never on the hub's own path (#2492).
 #
 # Usage: grokrefresh.sh [--ttl <seconds>] [--seconds <tui life>]
 #   --ttl      skip when the last start is newer than this many seconds (default 3600: at most one start an hour)

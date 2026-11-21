@@ -9,7 +9,6 @@ import importlib.util
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -129,18 +128,6 @@ def _start_hub(base, board, port):
     raise AssertionError("the hub answered no /api/version on its loopback port")
 
 
-def _stop_supervisor(base):
-    """The hub starts a terminal supervisor from its own state directory; the throwaway hub takes its daemon with it."""
-    try:
-        pid = int((base / "state" / "supervisor.pid").read_text().strip())
-    except (OSError, ValueError):
-        return
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        pass
-
-
 @pytest.mark.heavy
 @pytest.mark.skipif(EGO is None, reason="ego-browser is needed to drive the served page")
 def test_the_served_hub_page_draws_the_lead_time_marks_small(tmp_path):
@@ -158,7 +145,6 @@ def test_the_served_hub_page_draws_the_lead_time_marks_small(tmp_path):
     finally:
         hub.terminate()
         hub.wait(timeout=10)
-        _stop_supervisor(tmp_path)
 
     # `mark` is `control.mark`: the page's own route answer for the 48h chart, the one the script renders from.
     assert seen["mark"] == {"dot_radius": 3, "cluster_radius": 5, "outline": 1.5}, \

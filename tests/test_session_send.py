@@ -672,7 +672,7 @@ def test_adr_0152_states_the_loopback_send_rule():
     adr = next((ROOT / "docs" / "adr").glob("0152-*.md")).read_text()
     rule = next(line for line in adr.splitlines() if line.startswith("9. "))
     assert "loopback" in rule and "own Origin" in rule and "always sends" in rule
-    assert "SQUAD_TAILNET_TERMINALS_SEND" in rule
+    assert "tailnet.terminals_send" in rule   # the kept send route's own tailnet rule (#2492)
     assert "tests/test_session_send.py" in rule
 
 

@@ -127,7 +127,7 @@ def _by_class(root, cls):
 
 
 LOOP_VIEW = {"state": "on", "who": "owner", "when": "2026-11-02T09:00:00-03:00", "tailnet": False,
-             "access": {"loop_write": False, "terminals_send": False},
+             "access": {"loop_write": False},
              "health": {"starting_left": None},
              "live": {"runs": [], "gates": []}, "log": []}
 
@@ -209,7 +209,7 @@ def test_the_access_chip_is_written_by_the_client_alone(hub):
 
 
 def test_the_access_theme_states_its_facts_and_names_who_sets_each_value(hub):
-    now, settings = _blocks(_run(hub.PAGE, "accHtml({tailnet:true,reach:true,access:{loop_write:false,terminals_send:false},file:'/p/.env'})"))
+    now, settings = _blocks(_run(hub.PAGE, "accHtml({tailnet:true,reach:true,access:{loop_write:false},file:'/p/.env'})"))
     assert "allowed" in now and "refused" in now and "<input" not in now and "<select" not in now, now
     assert 'title="SQUAD_TAILNET_LOOP_WRITE (tailnet.loop_write)"' in now, "the setting's name sits in the hover, not the value"
     assert "Read from <code>/p/.env</code>." in now, now
