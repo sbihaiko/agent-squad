@@ -28,9 +28,9 @@ FILTER_JS = SCRIPTS / "board-filter.js"
 NODE = shutil.which("node")
 ROUTES = {"/api/status", "/api/hub", "/api/board", "/api/issue", "/api/subs", "/api/models", "/api/stats", "/api/runs", "/api/ended", "/api/version",
           "/api/promote", "/api/loop", "/api/profiler",
-          "/api/load", "/api/chart/lead", "/api/leadtime"}
+          "/api/load", "/api/chart/lead", "/api/chart/cfd", "/api/leadtime"}
 # the owner's move is a write (#829); the Monitor reads the desktop card's route (#983); the lead chart and its zoom read
-# the routes the desktop draws (#1333)
+# the routes the desktop draws (#1333); the Cumulative Flow screen reads the flow chart's own route (#2504)
 
 
 def run_js(src, expr, prelude=""):

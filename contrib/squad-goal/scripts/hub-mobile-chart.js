@@ -12,10 +12,10 @@ const MLT_REF = [   // each reference line: the payload's key, its paint, its 1p
 const mltEsc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const mltFrame = c => c && c.plot_frame && c.plot_frame.width > 0 ? c.plot_frame : { width: 720, height: 240 };
 const mltX = (x, w) => MLT_P + x * w;   // plot fraction to the drawing's x
-const mltY = (y, h) => MLT_P + h - y * h;   // plot fraction to the drawing's y
+const mltY = (y, base, h) => base - y * h;   // plot fraction to the drawing's y, down from the axis baseline
 const mltVal = v => v && v.text ? v.text : "?";
-const mltLine = (v, col, dash, w, h) => v && v.y != null
-  ? `<line x1=${MLT_P} x2=${MLT_P + w} y1=${mltY(v.y, h)} y2=${mltY(v.y, h)} stroke="${col}" stroke-width=1${dash ? ` stroke-dasharray="${dash}"` : ""}></line>`
+const mltLine = (v, col, dash, w, base, h) => v && v.y != null
+  ? `<line x1=${MLT_P} x2=${MLT_P + w} y1=${mltY(v.y, base, h)} y2=${mltY(v.y, base, h)} stroke="${col}" stroke-width=1${dash ? ` stroke-dasharray="${dash}"` : ""}></line>`
   : "";   // one 1px reference line, patterned so it reads in grayscale (#1332)
 const mltLegend = (c, band) => `<p class=mltlg><span><i class=mlthollow></i>Card</span><span><i class=mltfilled></i>Cluster</span><span><i class=mltroll></i>Rolling mean</span>` +
   (band ? `<span><i class=mltband></i>Rolling spread ±1 SD</span>` : "") + `</p>`   // the series legend names every mark the plot draws (#1332, #2504)
@@ -26,22 +26,24 @@ const mltChart = (c, size) => {
   const f = mltFrame(c), box = size ? mcChartBox(size) : null;
   const gut = box ? 74 : 0;   // the reference values sit in the right gutter of a chart screen, as on the desktop (#1332)
   const W = box ? box.width : MLT_P + f.width + 4, H = box ? box.height : f.height + 2 * MLT_P + 8;
-  const w = Math.max(40, W - MLT_P - 4 - gut), h = Math.max(30, H - 2 * MLT_P), base = MLT_P + h, ink = "var(--chart-axis)";
-  const grid = (c.ticks || []).map(t => `<line x1=${MLT_P} y1=${mltY(t.y, h)} x2=${MLT_P + w} y2=${mltY(t.y, h)} stroke="var(--chart-grid)" stroke-dasharray="3 2"></line>` +
-    `<text x=${MLT_P - 6} y=${mltY(t.y, h) + 4} text-anchor=end fill="${ink}">${mltEsc(t.text)}</text>`).join("");
+  const pT = box ? 20 : MLT_P, pB = box ? 40 : MLT_P;   // the phone's short side gives the plot its room; the payload frame keeps its own margins (#2504)
+  const w = Math.max(40, W - MLT_P - 4 - gut), h = Math.max(30, H - pT - pB), base = pT + h, ink = "var(--chart-axis)";
+  const Y = v => mltY(v, base, h);
+  const grid = (c.ticks || []).map(t => `<line x1=${MLT_P} y1=${Y(t.y)} x2=${MLT_P + w} y2=${Y(t.y)} stroke="var(--chart-grid)" stroke-dasharray="3 2"></line>` +
+    `<text x=${MLT_P - 6} y=${Y(t.y) + 4} text-anchor=end fill="${ink}">${mltEsc(t.text)}</text>`).join("");
   const xs = (c.xticks || []).map(t => `<text x=${mltX(t.x, w)} y=${base + 18} text-anchor=middle fill="${ink}">${mltEsc(t.text)}</text>`).join("");
-  const axes = `<line x1=${MLT_P} y1=${MLT_P - 10} x2=${MLT_P} y2=${base} stroke="var(--chart-grid)"></line>` +
+  const axes = `<line x1=${MLT_P} y1=${base - h} x2=${MLT_P} y2=${base} stroke="var(--chart-grid)"></line>` +
     `<line x1=${MLT_P} y1=${base} x2=${MLT_P + w} y2=${base} stroke="var(--chart-grid)"></line>` +
-    `<text x=${MLT_P} y=${MLT_P - 24} text-anchor=start fill="${ink}">Lead time (log)</text>` +
+    `<text x=${MLT_P} y=${base - h - 6} text-anchor=start fill="${ink}">Lead time (log)</text>` +
     `<text x=${MLT_P} y=${base + 36} text-anchor=start fill="${ink}">Date closed</text>`;   // the phone names no board column: the hub's column names stay out of its page (ADR-0137)
-  const refs = MLT_REF.map(([key, col, dash]) => mltLine(c[key], col, dash, w, h)).join("");
+  const refs = MLT_REF.map(([key, col, dash]) => mltLine(c[key], col, dash, w, base, h)).join("");
   // The reference values stand in the right gutter, each joined to its own line by a swatch, as the desktop draws them (#2504).
   const tags = box ? (() => {
     const rows = MLT_REF.map(([key, col, dash]) => {
       const v = c[key]; if (!v || v.y == null) return null;
-      return { name: v.label || key, text: mltVal(v), col, dash, y: mltY(v.y, h) };
+      return { name: v.label || key, text: mltVal(v), col, dash, y: Y(v.y) };
     }).filter(Boolean).sort((a, b) => a.y - b.y);
-    let at = MLT_P;
+    let at = base - h;
     for (const t of rows) { t.ty = Math.max(t.y, at); at = t.ty + 14; }
     const over = rows.length ? rows[rows.length - 1].ty - base : 0;
     if (over > 0) for (const t of rows) t.ty -= over;
@@ -53,10 +55,10 @@ const mltChart = (c, size) => {
   // The rolling spread is the payload's own per-dot high and low readings, drawn as the desktop draws it (#2504, #1334).
   const bp = box && dots.length && dots.every(d => d.rolling && d.rolling.y_high != null && d.rolling.y_low != null)
     ? [...dots.map(d => ({ x: d.x, y: d.rolling.y_high })), ...dots.slice().reverse().map(d => ({ x: d.x, y: d.rolling.y_low }))] : null;
-  const band = bp ? `<polygon points="${bp.map(p => `${mltX(p.x, w)},${mltY(p.y, h)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Rolling spread ±1 SD</title></polygon>` : "";
-  const roll = dots.length ? `<polyline fill=none stroke="var(--chart-bar)" stroke-width=3 points="${dots.map(d => `${mltX(d.x, w)},${mltY(d.rolling.y, h)}`).join(" ")}"></polyline>` : "";   // the trend is the strongest line (#1332)
+  const band = bp ? `<polygon points="${bp.map(p => `${mltX(p.x, w)},${Y(p.y)}`).join(" ")}" fill="var(--chart-series-3)" fill-opacity=".28"><title>Rolling spread ±1 SD</title></polygon>` : "";
+  const roll = dots.length ? `<polyline fill=none stroke="var(--chart-bar)" stroke-width=3 points="${dots.map(d => `${mltX(d.x, w)},${Y(d.rolling.y)}`).join(" ")}"></polyline>` : "";   // the trend is the strongest line (#1332)
   const outline = (c.mark && c.mark.outline) ?? 1.5;   // a payload from before `mark` keeps the 1.5 px ring (#1432)
-  const marks = (c.clusters || []).map((k, i) => `<circle data-lt-k="${i}" cx=${mltX(k.x, w)} cy=${mltY(k.y, h)} r=${k.r} fill="${k.count > 1 ? "var(--chart-ink)" : "var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=${outline} style="cursor:pointer"></circle>`).join("");   // one hollow dot per card, one filled dot per cluster, at the payload's own sizes (#1331, #1432)
+  const marks = (c.clusters || []).map((k, i) => `<circle data-lt-k="${i}" cx=${mltX(k.x, w)} cy=${Y(k.y)} r=${k.r} fill="${k.count > 1 ? "var(--chart-ink)" : "var(--chart-bg)"}" stroke="var(--chart-ink)" stroke-width=${outline} style="cursor:pointer"></circle>`).join("");   // one hollow dot per card, one filled dot per cluster, at the payload's own sizes (#1331, #1432)
   const svg = `<svg data-lt viewBox="0 0 ${W} ${H}" role="img" aria-label="Lead time">${grid}${xs}${axes}${band}${refs}${roll}${marks}${tags}</svg>`;   // a chart screen reserves the right gutter for the reference values (#2504)
   return { svg, legend: mltLegend(c, !!bp) };
 };
