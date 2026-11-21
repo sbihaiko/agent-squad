@@ -1114,7 +1114,7 @@ function needRow(r) {
 }
 function drawSlack(s) {
   const box = $("needs-slack"); box.replaceChildren();
-  if (s && s.state === "ok" && s.url) {
+  if (s && s.url) {   // the hub sends the address only for the ok answer, so the address alone decides the anchor
     const a = document.createElement("a"), b = document.createElement("b"), name = document.createElement("span"),
           arrow = document.createElement("span");
     a.className = "needs-slack"; a.href = s.url;
