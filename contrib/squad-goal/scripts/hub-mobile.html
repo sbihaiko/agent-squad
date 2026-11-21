@@ -1577,14 +1577,17 @@ $("cards").onkeydown = e => {
 let period = "day", moreSeq = 0;   // `moreSeq` numbers every cost and lead read: an answer older than the last one never draws
 const CH_W = 420, CH_H = 120;   // the wide box keeps the scale labels at the caption's own size on a phone (#2503)
 const NS_SVG = "http://www.w3.org/2000/svg";
-function chartEl(buckets, per) {
+function chartEl(buckets, per, width) {
   // Tokens over time, the desktop panel's bars: the loop's segment first, the operator's stacked above it (#1756, #2503).
-  const svg = document.createElementNS(NS_SVG, "svg"), rows = usageBars(buckets, per), bw = CH_W / Math.max(rows.length, 1);
-  svg.setAttribute("viewBox", `0 0 ${CH_W} ${CH_H}`);
+  // The box is drawn at the width it gets, never under CH_W, so a landscape phone keeps the labels at the caption size
+  // instead of scaling them up with the picture; the bars stop under the scale label, which they would cover.
+  const W = Math.max(CH_W, Math.round(width || 0)), TOP = 18;
+  const svg = document.createElementNS(NS_SVG, "svg"), rows = usageBars(buckets, per), bw = W / Math.max(rows.length, 1);
+  svg.setAttribute("viewBox", `0 0 ${W} ${CH_H}`);
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", "tokens per interval");
   rows.forEach((b, i) => {
-    const h = b.h / 100 * (CH_H - 4), hl = b.hLoop / 100 * (CH_H - 4), x = i * bw + 1, w = Math.max(1, bw - 2);
+    const h = b.h / 100 * (CH_H - TOP), hl = b.hLoop / 100 * (CH_H - TOP), x = i * bw + 1, w = Math.max(1, bw - 2);
     const loop = document.createElementNS(NS_SVG, "rect"), t = document.createElementNS(NS_SVG, "title");
     loop.setAttribute("x", x);
     loop.setAttribute("y", CH_H - hl);
@@ -1605,11 +1608,11 @@ function chartEl(buckets, per) {
   });
   const mx = document.createElementNS(NS_SVG, "text"), now = document.createElementNS(NS_SVG, "text");   // the scale and the live end, as the desktop chart names them (#2503)
   mx.textContent = "max " + usageMillions(Math.max(...buckets.map(b => (b.tokens || 0) + (b.op || 0))));
-  mx.setAttribute("x", CH_W - 2);
+  mx.setAttribute("x", W - 2);
   mx.setAttribute("y", 12);
   mx.setAttribute("text-anchor", "end");
   now.textContent = "now";
-  now.setAttribute("x", CH_W - 2);
+  now.setAttribute("x", W - 2);
   now.setAttribute("y", CH_H - 2);
   now.setAttribute("text-anchor", "end");
   svg.append(mx, now);
@@ -1680,7 +1683,9 @@ const MORE = {
     // The Spend tab is the desktop panel stacked (#2503): the summary line, the token bars and the month pie.
     const buckets = d.buckets || [];
     el.querySelector("#cost-sum").textContent = usageSummary(d);
-    el.querySelector("#cchart").replaceChildren(...(buckets.length ? [chartEl(buckets, period)] : []));
+    const box = el.querySelector("#cchart");
+    COST_LAST = [el, d];
+    box.replaceChildren(...(buckets.length ? [chartEl(buckets, period, box.clientWidth)] : []));
     const chlg = el.querySelector("#cost-chlg"), anyOp = buckets.some(b => (b.op || 0) > 0);
     chlg.hidden = !anyOp;
     if (anyOp) chlg.textContent = "● loop   ● operator";
@@ -1840,6 +1845,8 @@ function markChart(draw) {
   if (on && draw !== false) redrawChart();   // the loader marks after its own draw, so it passes false (#2504)
 }
 addEventListener("resize", () => redrawChart());
+let COST_LAST = null;   // the Spend payload last drawn: a rotation redraws its bars at the new width
+addEventListener("resize", () => { const box = document.querySelector("#cchart"); if (COST_LAST && box && box.clientWidth) MORE.cost(...COST_LAST); });
 addEventListener("orientationchange", () => setTimeout(redrawChart, 60));
 // The cost list keeps what it last drew (#1445): the one helper draws the line, the error and then the held rows. The
 // lead-time screen keeps its single line, which this change leaves alone.
