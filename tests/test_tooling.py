@@ -855,6 +855,34 @@ def test_every_shell_fixture_that_runs_a_dispatcher_switches_the_nightly_window_
     assert found == [], f"these fixtures run autobug.sh or autofrontier.sh with the nightly window on: {found}"
 
 
+# #2632: a fixture that calls the dispatch hold directly reads the same wall clock, and a fixture need not run a dispatcher
+# to reach it. test-promote-pass.sh sources ghcall.sh and calls gh_dispatch_hold for its reserve cases, and the nightly
+# window held those cases in the nightly hour alone. Such a fixture switches the window off, or pins the clock the hold
+# reads (a stub `date`, as test-nightly.sh does with FAKE_HOUR).
+_HOLD_CALL = re.compile(r"\bgh_dispatch_hold\b")
+_PINS_THE_WINDOW = re.compile(r"\bSG_NIGHTLY_OFF=|FAKE_HOUR|fakebin")
+
+
+def _calls_the_dispatch_hold_in_the_nightly_window(text):
+    """True when a non-comment line calls the dispatch hold and the file neither switches the window off nor pins the clock."""
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    return bool(_HOLD_CALL.search(code)) and not _PINS_THE_WINDOW.search(code)
+
+
+def test_a_fixture_that_calls_the_dispatch_hold_pins_the_nightly_window_in_the_text():
+    """The guard itself: a fixture that calls the hold with the window on is caught; a switched-off or clock-pinned one is not."""
+    assert _calls_the_dispatch_hold_in_the_nightly_window('. "$d/ghcall.sh"; gh_dispatch_hold\n')
+    assert not _calls_the_dispatch_hold_in_the_nightly_window('export SG_NIGHTLY_OFF=1\ngh_dispatch_hold\n')
+    assert not _calls_the_dispatch_hold_in_the_nightly_window('export FAKE_HOUR=04\ngh_dispatch_hold\n')
+    assert not _calls_the_dispatch_hold_in_the_nightly_window("# gh_dispatch_hold reads the wall clock\n")
+
+
+def test_every_shell_fixture_that_calls_the_dispatch_hold_pins_the_nightly_window():
+    scripts = ROOT / "contrib/squad-goal/scripts"
+    found = [p.name for p in sorted(scripts.glob("test-*.sh")) if _calls_the_dispatch_hold_in_the_nightly_window(p.read_text(errors="replace"))]
+    assert found == [], f"these fixtures call gh_dispatch_hold with the nightly window on: {found}"
+
+
 def test_no_shell_suite_probes_the_machine_for_a_sleep_it_did_not_start():
     """A suite that hangs a process to prove a deadline finds and ends that process by a name only its own run holds
     (#1735). `pgrep -f "sleep 2718"` reads every suite on the machine: two gates side by side then read each other's hang
