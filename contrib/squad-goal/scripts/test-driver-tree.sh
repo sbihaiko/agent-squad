@@ -59,6 +59,19 @@ def reaches(name, seen=()):
 sys.exit(0 if any(reaches(w) for t in traps for w in set(re.findall(r"[A-Za-z_]\w*", t))) else 1)
 PY
 }
+# A one-line function body carries a trailing comment in the suites this guard reads, so its body ends at the `}` and the
+# comment is no body at all (#2625). A snippet proves both answers: the reach through such a line is found, and a trap that
+# reaches nothing still fails.
+cat > "$G/p.closed.sh" <<'EOF'
+stopall() { driver_tree_kill "$1"; }   # the cleanup names its tree
+trap 'stopall "$T"' EXIT
+EOF
+cat > "$G/p.open.sh" <<'EOF'
+trap 'echo done' EXIT
+EOF
+trap_kills_tree "$G/p.closed.sh" && ok "a one-line cleanup with a trailing comment keeps the trap's reach" || ko "a one-line cleanup with a trailing comment loses the trap's reach"
+trap_kills_tree "$G/p.open.sh" && ko "a trap that reaches no driver tree kill passes" || ok "a trap that reaches no driver tree kill fails"
+
 for s in $DRIVERS; do
   trap_kills_tree "$here/$s.sh" && ok "$s kills its driver tree in its EXIT trap" || ko "$s has no EXIT trap that kills its driver tree"
 done
