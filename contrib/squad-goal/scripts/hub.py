@@ -4,8 +4,8 @@ usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers serv
 import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, issue_ledger, modelreg, models_chains, priority_backfill, procscan, provkey, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
-from issue_state import board_state, TEST_CASE_TITLE, _utc
-import board_wait
+from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc   # noqa: F401  the board tests read KINDS through the hub
+import board_wait, issue_state   # noqa: F401  the board tests read the module and its kinds through the hub
 import http.client
 import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
