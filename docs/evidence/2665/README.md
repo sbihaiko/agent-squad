@@ -17,15 +17,22 @@ right half of its "after" image in SPEC 2660, at `docs/spec-assets/mobile-polish
 2. "All projects" reads in `signal-blue` (`--acc`), not in a healthy-state tone.
 3. The Loop-bugs layer with nothing open writes "No open loop-bug in this project." where it draws itself, in
    `ink-muted` (`--mute`), so a redraw keeps the line.
-4. A scrolling loop layer ended under the fixed tab bar in landscape, so its last line was unreachable. The Loops and
-   Loop-bugs layers now take a bottom inset of one tab bar.
+4. A scrolling Now layer ended under the fixed tab bar in landscape, so its last line was unreachable. Every
+   scrolling Now layer now takes a bottom inset of one tab bar.
 
 ## How the renders were read
 
-Every color was read as the value the browser paints: an off loop's name paints `rgb(230, 232, 238)`, the on loop's
-name paints `rgb(62, 207, 142)`, "All projects" paints `rgb(90, 169, 255)` and the empty message paints
-`rgb(138, 147, 163)`. Each pair clears 4.5:1 on its ground: 15.4:1, 9.5:1, 7.1:1 and 6.1:1. No screen cuts text or
-scrolls sideways at either metric, and the last line of each scrolling layer stays above the tab bar.
+Every color was read as the value the browser paints, and each value is the DESIGN.md role that holds it:
+
+| Surface | Painted value | DESIGN.md role | DESIGN.md line |
+| --- | --- | --- | --- |
+| An off loop's name | `rgb(230, 232, 238)` | `ink` | 12 |
+| The on loop's name | `rgb(62, 207, 142)` | `state-ok` | 15 |
+| "All projects" | `rgb(90, 169, 255)` | `signal-blue` | 14 |
+| The empty Loop-bugs message | `rgb(138, 147, 163)` | `ink-muted` | 13 |
+
+Each pair clears 4.5:1 on its ground: 15.4:1, 9.5:1, 7.1:1 and 6.1:1. No screen cuts text or scrolls sideways at
+either metric, and the last line of each scrolling layer stays above the tab bar.
 
 ## Fixture
 

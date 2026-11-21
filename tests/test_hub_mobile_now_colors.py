@@ -6,8 +6,10 @@ sheet wears the accent, so a link never reads as a healthy state. The Loop-bugs 
 redraw keeps it. Every color resolves to a DESIGN.md token through its custom property; no surface names a raw value.
 
 The page is the one the hub serves, composed from `hub-mobile.html` and the client modules it inlines, and booted
-under node over the stub DOM of `tests/hub_mobile_stub.py`. The tests read the screens the page draws and the rules
-it paints them with, never a private helper.
+under node over the stub DOM of `tests/hub_mobile_stub.py`. The tests read the screens the page draws and the color
+each surface paints: `getComputedStyle` answers through the page's own stylesheet cascade, so a different rule, a
+higher-specificity rule or a changed token changes the painted value the test reads. The expectation is a DESIGN.md
+role converted to the form a browser reports, so neither side is the other's copy.
 """
 import json
 import pathlib
@@ -20,8 +22,6 @@ from tests.hub_mobile_stub import HUB_PY, _module, run_page
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DESIGN = ROOT / "DESIGN.md"
 
-# The role each page token plays in DESIGN.md, so a test reads a color as its meaning and never as a value.
-ROLE = {"fg": "ink", "mute": "ink-muted", "acc": "signal-blue", "ok": "state-ok", "warn": "state-warn", "err": "state-err"}
 
 
 def fact():
@@ -70,32 +70,20 @@ def _decls(css, selector):
     return out
 
 
-def _tokens(css):
-    root = re.search(r":root\{([^}]*)\}", css)
-    assert root, "the page carries no token block"
-    return dict(re.findall(r"--([\w-]+):([^;}]+)", root.group(1)))
-
-
 def _design():
     """The color roles DESIGN.md declares, as a name to value map."""
     text = DESIGN.read_text()
     return dict(re.findall(r"^  ([\w-]+):\s*\"(#[0-9a-fA-F]{3,8})\"", text, re.M))
 
 
-def _token(css, selector):
-    """The one DESIGN.md token a rule paints with. A raw color, a missing token or a token that drifted from DESIGN.md
-    fails here, so every color on the screen answers to the design system."""
-    value = _decls(css, selector).get("color", "").strip()
-    m = re.fullmatch(r"var\((--[\w-]+)\)", value)
-    assert m, f"{selector or 'the rule'} paints {value!r}; a surface names a token, never a raw color"
-    name = m.group(1)[2:]
-    tokens = _tokens(css)
-    assert name in tokens, f"{selector} names {m.group(1)}, which the token block does not declare"
-    role = ROLE.get(name)
-    if role:
-        assert tokens[name].strip() == _design()[role], \
-            f"--{name} is {tokens[name]}, but DESIGN.md draws {role} as {_design()[role]}"
-    return name
+def _rgb(distinct):
+    """The color a browser reports for one DESIGN.md value, so a painted color is read against a design role and never
+    against the page's own token block: the role value is the source of truth, and this only spells it as `rgb()`."""
+    h = distinct.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgb({r}, {g}, {b})"
 
 
 @pytest.mark.node_bound
@@ -106,14 +94,18 @@ def test_an_off_loops_name_wears_the_text_color_so_fault_red_keeps_one_meaning(h
       const rows = $("loops-list").querySelectorAll(".looprow");
       const off = rows.find(b => b.dataset.loopProject === "alpha");
       const on = rows.find(b => b.dataset.loopProject === "beta");
-      return { off: off.className, name: off.querySelector("b").textContent,
-               on: on.className, onName: on.querySelector("b").textContent };
+      const paint = row => getComputedStyle(row.querySelector("b")).color;
+      return { off: off.className, name: off.querySelector("b").textContent, offPaint: paint(off),
+               on: on.className, onName: on.querySelector("b").textContent, onPaint: paint(on) };
     """, routes=routes())
     assert out["off"] == "looprow off" and out["name"] == "alpha", out
     assert out["on"] == "looprow on" and out["onName"] == "beta", out
-    css = _css(hub.MOBILE_PAGE)
-    assert _token(css, ".looprow.off b") == "fg", "an off loop's name is not drawn in the text color"
-    assert _token(css, ".looprow.on b") == "ok", "a running loop keeps its healthy green"
+    assert out["offPaint"] == _rgb(_design()["ink"]), \
+        f"an off loop's name paints {out['offPaint']}, not the DESIGN.md ink role"
+    assert out["onPaint"] == _rgb(_design()["state-ok"]), \
+        f"a running loop's name paints {out['onPaint']}, not the DESIGN.md state-ok role"
+    assert out["offPaint"] != _rgb(_design()["state-err"]), \
+        "an off loop's name paints Fault Red, so a fault has lost its one meaning"
 
 
 @pytest.mark.node_bound
@@ -121,15 +113,39 @@ def test_all_projects_wears_the_accent_color_not_a_healthy_state(hub):
     out = run_page(hub.MOBILE_PAGE, """
       await __tick(10);
       switcherPaint($("pswl"), { repos: [{ slug: "alpha", repo: "x/a", live: [], alert: "" }] }, "alpha", "/mobile");
-      return { html: String($("pswl").innerHTML || "") };
+      const all = $("pswl").querySelector(".psw-all");
+      return { html: String($("pswl").innerHTML || ""), paint: all && getComputedStyle(all).color };
     """, routes={})
     rows = [(cls, " ".join(re.sub(r"<[^>]+>", " ", body).split()))
             for cls, body in re.findall(r'<a class="psw-r([^"]*)"[^>]*>(.*?)</a>', out["html"])]
     assert len(rows) == 2 and rows[0][1].startswith("alpha "), out["html"]
     assert rows[-1][1] == "All projects", out["html"]
     assert "psw-all" in rows[-1][0], "the sheet ends with the link to every project"
-    assert _token(_css(hub.MOBILE_PAGE), "#pswl .psw-all") == "acc", \
-        '"All projects" is not drawn in the accent color'
+    assert out["paint"] == _rgb(_design()["signal-blue"]), \
+        f'"All projects" paints {out["paint"]}, not the DESIGN.md signal-blue role'
+    assert out["paint"] != _rgb(_design()["state-ok"]), \
+        '"All projects" paints a healthy-state green, so a link reads as a healthy loop'
+
+
+@pytest.mark.node_bound
+def test_the_open_bugs_layer_takes_the_next_loop_fact(hub):
+    """The Now tab polls the loop fact every 5 s while the layer is open, so the layer a reader holds takes the next
+    answer: entry is not its only draw."""
+    later = fact()
+    later["projects"][0]["bugs"] = 1
+    later["projects"][0]["bugs_open"] = [{"n": 42, "t": "a loop bug"}]
+    out = run_page(hub.MOBILE_PAGE, """
+      await __tick(10);
+      openLayer("loop", { slug: "alpha" });
+      openLayer("bugs");
+      const first = $("bugs-msg").textContent;
+      await loopView();   // the monitor poll's read, as its 5 s tick runs it
+      return { first, rows: $("bugs-list").textContent, msg: $("bugs-msg").textContent };
+    """, routes={"/api/loop": [{"body": json.dumps(fact()), "status": 200},
+                               {"body": json.dumps(later), "status": 200}]})
+    assert out["first"] == "No open loop-bug in this project.", out["first"]
+    assert "#42 a loop bug" in out["rows"], f"the open layer kept its first draw: {out['rows']!r}"
+    assert out["msg"] == "", "the layer keeps the empty message over a bug it now lists"
 
 
 @pytest.mark.node_bound
@@ -139,7 +155,8 @@ def test_the_bugs_layer_with_nothing_open_says_so_in_the_muted_color_and_keeps_i
       openLayer("loop", { slug: "alpha" });
       openLayer("bugs");
       const first = { msg: $("bugs-msg").textContent, list: $("bugs-list").textContent,
-                      title: $("bugs-title").textContent, open: !$("loopbugs").hidden };
+                      title: $("bugs-title").textContent, open: !$("loopbugs").hidden,
+                      paint: getComputedStyle($("bugs-msg")).color };
       openLayer("bugs");   // the layer draws itself again, as a return to its entry does
       return { first, again: $("bugs-msg").textContent };
     """, routes=routes())
@@ -148,17 +165,18 @@ def test_the_bugs_layer_with_nothing_open_says_so_in_the_muted_color_and_keeps_i
     assert out["first"]["list"] == "", "a project with no open loop-bug draws no row"
     assert out["first"]["msg"] == "No open loop-bug in this project.", out["first"]["msg"]
     assert out["again"] == "No open loop-bug in this project.", "a redraw of the layer lost the message"
-    assert _token(_css(hub.MOBILE_PAGE), "#bugs-msg") == "mute", \
-        "the empty Loop-bugs message is not drawn in the muted color"
+    assert out["first"]["paint"] == _rgb(_design()["ink-muted"]), \
+        f"the empty Loop-bugs message paints {out['first']['paint']}, not the DESIGN.md ink-muted role"
 
 
 def test_a_scrolling_loop_layer_ends_above_the_tab_bar(hub):
-    """The tab bar paints over every layer (56 px plus the home indicator). A layer that scrolls under it keeps a
-    bottom inset, so its last line is reachable in landscape, where the Loops list and a long Loop-bugs list overflow."""
+    """The tab bar paints over every layer (56 px plus the home indicator). Every layer that scrolls under it keeps a
+    bottom inset, so its last line is reachable in landscape, where the Loops list, the loop page and a long Loop-bugs
+    list overflow."""
     css = _css(hub.MOBILE_PAGE)
     bar = re.search(r"nav button\{[^}]*min-height:(\d+)px", css)
     assert bar, "the tab bar names no height"
-    for selector in ("#loops-content", "#bugs-content"):
+    for selector in ("#loops-content", "#bugs-content", "#loop-content", "#prof-content"):
         pad = _decls(css, selector).get("padding-bottom", "")
         m = re.search(r"calc\((\d+)px \+ env\(safe-area-inset-bottom\)\)", pad)
         assert m, f"{selector} leaves no room under its last line: padding-bottom is {pad!r}"

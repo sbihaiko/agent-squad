@@ -49,7 +49,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #bugs-msg{color:var(--mute);font-size:var(--fs-caption)}
 #loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 /* The tab bar paints over every layer, so a layer that scrolls under it ends above it, and no line hides behind the bar in landscape (#2665). */
-#loops-content,#bugs-content{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+#loops-content,#bugs-content,#loop-content,#prof-content{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
 #loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
@@ -106,7 +106,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #profb #proftt th:first-child,#profb #proftt td:first-child{width:4.5em}
 #profb #proftt th:not(:first-child),#profb #proftt td:not(:first-child){width:auto}
 
-#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+/* #prof-content paints from the shared layer rule at the top, so one rule sets its padding and its tab-bar inset (#2665). */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 6px;text-align:center}
 .tile b{display:block;font-size:var(--fs-display)}
@@ -1255,7 +1255,7 @@ function drawLoop() {
   const sec = $("loop-secondary");
   sec.hidden = !v.secondary;
   sec.textContent = v.secondary || "";
-  sec.onclick = v.secondary ? () => openBugs() : null;
+  sec.onclick = v.secondary ? () => openLayer("bugs") : null;
   $("loop-dots").hidden = !loopStopNowOffered(p, !!(p && p.write));
   $("loop-menu").hidden = true;
   $("loop-reason").textContent = v.state === "refused" ? v.sub : "";
@@ -1273,7 +1273,6 @@ function drawBugs() {
   }));
   $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug in this project.";
 }
-function openBugs() { openLayer("bugs"); }
 async function loopView(fresh) {
   if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
   try { loopV = await call("/api/loop", fresh); $("loops-msg").textContent = ""; loopDraw(); }

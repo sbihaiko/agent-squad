@@ -49,6 +49,20 @@ class El {
   set className(v) { this.classes = new Set(String(v || "").split(/\s+/).filter(Boolean)); }
   get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
   set textContent(v) { this.children = []; this._text = String(v); }
+  // A markup write becomes real children, as a browser makes it, so a test reads the color of the element the page drew
+  // from `switcherPaint` or a chart draw, not only the markup string it wrote. The getter returns the string the page
+  // wrote when it wrote one, so a test that reads the markup still reads it whole.
+  get innerHTML() { return this._html !== undefined ? this._html : this.children.map(c => c.outer()).join(""); }
+  set innerHTML(v) {
+    this._html = String(v); this._text = ""; this.children = [];
+    for (const k of parseHtml(this._html).children.slice()) { k.parentElement = this; this.children.push(k); }
+  }
+  outer() {
+    const at = Object.entries(this.attrs).map(([k, v]) => ` ${k}="${v}"`).join("");
+    const tag = this.tagName.toLowerCase();
+    return `<${tag}${this.id ? ` id="${this.id}"` : ""}${this.classes.size ? ` class="${this.className}"` : ""}${at}>`
+      + this._text + this.children.map(c => c.outer()).join("") + `</${tag}>`;
+  }
   append(...kids) { for (const k of kids) { if (k && k.tagName) { k.parentElement = this; this.children.push(k); } } }
   appendChild(k) { this.append(...(k.tagName === "#ROOT" ? k.children : [k])); return k; }
   prepend(...kids) { const ok = kids.filter(k => k && k.tagName); for (const k of ok) k.parentElement = this; this.children.unshift(...ok); }
@@ -102,6 +116,96 @@ function qsa(root, sel) {
     hits = next;
   }
   return hits;
+}
+// The page's own stylesheet, resolved the way a browser applies it: a rule whose selector matches an element paints
+// that element, the more specific selector wins and then the later rule, and var(--x) answers through :root. A test
+// that reads a computed color therefore reads what the page paints, not the token block it happens to declare. The
+// harness skips a state or pseudo-element selector and an at-rule (a `@media` rule the base layer does not hold), so a
+// rule it cannot evaluate never paints here, and the read is conservative.
+const CSS = (PAGE.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [])
+  .map(s => s.replace(/^<style[^>]*>/i, "").replace(/<\/style>$/i, "")).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+function stripAtRules(css) {
+  let out = "", i = 0;
+  while (i < css.length) {
+    const at = css.indexOf("@", i);
+    if (at < 0) { out += css.slice(i); break; }
+    out += css.slice(i, at);
+    const open = css.indexOf("{", at);
+    if (open < 0) break;
+    let depth = 0, j = open;
+    for (; j < css.length; j++) { if (css[j] === "{") depth++; else if (css[j] === "}" && --depth === 0) { j++; break; } }
+    i = j;
+  }
+  return out;
+}
+const RULES = [];
+for (const m of stripAtRules(CSS).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  const decls = {};
+  for (const d of m[2].matchAll(/([-\w]+)\s*:\s*([^;]+)/g)) decls[d[1]] = d[2].trim();
+  for (const sel of m[1].split(",").map(s => s.trim()).filter(Boolean)) RULES.push({ sel, decls });
+}
+const TOKENS = {};
+for (const r of RULES) if (r.sel === ":root") Object.assign(TOKENS, r.decls);
+const INHERITED = new Set(["color", "font-size", "font-family", "font-weight", "line-height", "text-align", "visibility"]);
+const selectorOK = s => s === ":root" || !s.includes(":");
+function specificity(sel) {
+  const ids = (sel.match(/#[\w-]+/g) || []).length;
+  const cls = (sel.match(/\.[\w-]+|\[[^\]]*\]/g) || []).length;
+  const tags = (sel.match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length;
+  return ids * 10000 + cls * 100 + tags;
+}
+function complexMatch(el, sel) {
+  const parts = [];
+  let child = false;
+  for (const t of sel.trim().replace(/\s*>\s*/g, " > ").split(/\s+/)) {
+    if (t === ">") { child = true; continue; }
+    parts.push({ t, child }); child = false;
+  }
+  const at = (e, i) => {
+    if (!e || !matches(e, parts[i].t)) return false;
+    if (i === 0) return true;
+    if (parts[i].child) return at(e.parentElement, i - 1);
+    for (let p = e.parentElement; p; p = p.parentElement) if (at(p, i - 1)) return true;
+    return false;
+  };
+  return parts.length > 0 && at(el, parts.length - 1);
+}
+function resolveVars(v, depth) {
+  if ((depth || 0) > 8) return String(v);
+  return String(v).replace(/var\((--[\w-]+)(?:,\s*([^)]*))?\)/g, (_m, name, fb) => {
+    if (TOKENS[name] !== undefined) return resolveVars(TOKENS[name], (depth || 0) + 1);
+    return fb !== undefined ? resolveVars(fb, (depth || 0) + 1) : "";
+  }).trim();
+}
+function declared(el, prop) {
+  let win = null;
+  for (const r of RULES) {
+    if (!(prop in r.decls) || !selectorOK(r.sel) || !complexMatch(el, r.sel)) continue;
+    const sp = specificity(r.sel);
+    if (!win || sp >= win.sp) win = { sp, v: r.decls[prop] };   // a later rule wins at equal specificity
+  }
+  return win ? resolveVars(win.v) : null;
+}
+const asRgb = v => {
+  const m = /^#([0-9a-f]{3,8})$/i.exec(v);
+  if (!m) return v;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map(c => c + c).join("");
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+  return h.length === 8 ? "rgba(" + r + ", " + g + ", " + b + ", " + (parseInt(h.slice(6, 8), 16) / 255).toFixed(3) + ")"
+                        : "rgb(" + r + ", " + g + ", " + b + ")";
+};
+function propValue(el, prop) {
+  if (!el) return "";
+  const inline = el.style && (el.style[prop] || (el.style.getPropertyValue ? el.style.getPropertyValue(prop) : ""));
+  if (inline) return prop === "color" ? asRgb(resolveVars(inline)) : resolveVars(inline);   // an inline style wins
+  if (String(prop).startsWith("--")) return TOKENS[String(prop).slice(2)] === undefined ? "" : resolveVars(TOKENS[String(prop).slice(2)]);
+  const own = declared(el, prop);
+  if (own !== null) return prop === "color" ? asRgb(own) : own;
+  return INHERITED.has(prop) && el.parentElement ? propValue(el.parentElement, prop) : "";
+}
+function getComputedStyle(el) {
+  return { getPropertyValue: p => propValue(el, p), get color() { return propValue(el, "color"); } };
 }
 function parseAttrs(s) {
   const out = {}, re = /([\w:-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
@@ -193,7 +297,7 @@ const box = {
   innerWidth: 800,
   matchMedia: () => ({ matches: false, addEventListener() {}, addListener() {} }),
   requestAnimationFrame: fn => box.setTimeout(fn, 0),
-  getComputedStyle: () => ({ getPropertyValue: () => "" }),
+  getComputedStyle,
   MutationObserver: class { observe() {} disconnect() {} },
   scrollTo: (_x, y) => { box.scrollY = y; },
   __skip: ms => { boot.__skew += ms; return boot.__skew; },
