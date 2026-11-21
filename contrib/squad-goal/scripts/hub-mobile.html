@@ -275,9 +275,9 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
   .chart-screen #ltrow #ltbars,.chart-screen #ltrow #ltzoom{flex:none;margin:0}
   .chart-screen #ltrow #ltbars{flex:1 1 auto}
   .chart-screen #ltrow #ltzoom button{white-space:nowrap}   /* a zoom label stays on its one line (#2663) */
+  .chart-screen .chart-body .msg{margin:0}   /* the empty status line keeps no height from the plot (#2663) */
 }
 .chart-screen #ltsum{margin:2px 0}
-.chart-screen .chart-body .msg{margin:0}   /* the empty status line keeps no height from the plot (#2663) */
 body.chart header,body.chart #control-row,body.chart nav{display:none}   /* a chart screen has no tab bar */
 body.chart{height:100dvh;overflow:hidden}
 body.chart main{height:100dvh;display:flex;flex-direction:column;padding:0}

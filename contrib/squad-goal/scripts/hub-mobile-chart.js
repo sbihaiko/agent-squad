@@ -15,9 +15,9 @@ const mltX = (x, w) => MLT_P + x * w;   // plot fraction to the drawing's x
 const mltY = (y, base, h) => Math.min(base, Math.max(base - h, base - y * h));   // plot fraction to the drawing's y, clamped to the frame so a log-scale tick past 1 stays visible (#2504)
 const mltVal = v => v && v.text ? v.text : "?";
 const MLT_TICK_GAP = 14;   // the y axis keeps a label only this far from the last kept one, so no two labels overlap (#2663)
-const mltThin = (ys, gap = MLT_TICK_GAP) => {   // the drawing positions a dense log scale stacks are thinned in order
+const mltThin = (ys, gap = MLT_TICK_GAP) => {   // the drawing positions a dense log scale stacks are thinned in geometric order, whatever order the payload names its ticks (#2663)
   const keep = [];
-  for (const y of ys) if (!keep.length || Math.abs(y - keep[keep.length - 1]) >= gap) keep.push(y);
+  for (const y of [...ys].sort((a, b) => a - b)) if (!keep.length || y - keep[keep.length - 1] >= gap) keep.push(y);
   return keep;
 };
 const mltLine = (v, col, dash, w, base, h) => v && v.y != null

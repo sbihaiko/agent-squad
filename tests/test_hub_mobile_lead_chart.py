@@ -146,6 +146,17 @@ def test_the_tick_thinning_keeps_a_label_only_fourteen_pixels_from_the_last_kept
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_tick_thinning_keeps_its_set_whatever_order_the_payload_names_the_ticks():
+    """#2663: the payload's tick order is not guaranteed, so the thinning reads the geometric order. Reversed or
+    interleaved input keeps the same set, and no two kept positions stand closer than 14 px."""
+    forward = run_js("mltThin([0, 8, 20, 22, 40, 41])")
+    for order in ("[41, 40, 22, 20, 8, 0]", "[22, 0, 41, 8, 40, 20]", "[20, 40, 0, 41, 8, 22]"):
+        kept = run_js(f"mltThin({order})")
+        assert kept == forward, f"{order} keeps {kept}, not the geometric set {forward}"
+        assert all(b - a >= 14 for a, b in zip(kept, kept[1:], strict=False)), kept
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
 def test_the_lead_axis_draws_no_two_tick_labels_closer_than_fourteen_pixels():
     """#2663: a dense tick set draws fewer labels; every label the svg keeps stands 14 px or more from its neighbour."""
     dense = {**CHART, "ticks": [{"y": i * 0.02, "text": f"t{i}"} for i in range(20)]}
@@ -153,6 +164,21 @@ def test_the_lead_axis_draws_no_two_tick_labels_closer_than_fourteen_pixels():
     ys = [float(v) for v in re.findall(r"<text x=38 y=\"?(-?[\d.]+)\"? text-anchor=end", svg)]
     assert 1 < len(ys) < len(dense["ticks"]), f"the dense axis kept {len(ys)} labels"
     assert all(abs(b - a) >= 14 for a, b in zip(ys, ys[1:], strict=False)), ys
+
+
+@pytest.mark.skipif(NODE is None, reason="node is needed for the chart drawing")
+def test_the_lead_axis_thins_a_payload_named_top_down_about_the_same_drawing():
+    """#2663: a dense log scale served with its ticks top down thins about the same drawing, and the drawn labels
+    still stand 14 px or more apart, so the payload's order never stacks two labels."""
+    ticks = [{"y": i * 0.02, "text": f"t{i}"} for i in range(20)]
+    drawn = {}
+    for name, order in (("up", ticks), ("down", list(reversed(ticks)))):
+        svg = run_js(f"mltChart({json.dumps({**CHART, 'ticks': order})}, {{width: 844, height: 300}})")["svg"]
+        ys = sorted(float(v) for v in re.findall(r"<text x=38 y=\"?(-?[\d.]+)\"? text-anchor=end", svg))
+        assert 1 < len(ys) < len(ticks), f"the {name} payload kept {len(ys)} labels"
+        assert all(b - a >= 14 for a, b in zip(ys, ys[1:], strict=False)), (name, ys)
+        drawn[name] = ys
+    assert drawn["up"] == drawn["down"], f"the tick order changed the drawn labels: {drawn}"
 
 
 def test_the_legend_and_the_reference_values_sit_under_the_plot():

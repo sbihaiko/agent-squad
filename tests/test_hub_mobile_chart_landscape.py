@@ -104,11 +104,50 @@ def parents(markup):
     return parser.parent
 
 
-def media_block(html, query):
-    start = html.find(f"@media ({query}")
-    assert start != -1, f"the page carries no {query} media query"
-    end = html.find("@media", start + 1)
-    return re.sub(r"\s+", "", html[start: len(html) if end == -1 else end])
+def stylesheet(html):
+    return "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+
+
+def declarations(body):
+    """One rule body as its declaration map, keyed by property, never by a whitespace-stripped token."""
+    decls = {}
+    for part in body.split(";"):
+        name, sep, value = part.partition(":")
+        if sep:
+            decls[name.strip()] = value.strip()
+    return decls
+
+
+def parse_rules(css):
+    """Each rule of one style sheet: its selector text (inner whitespace collapsed to one space, so a descendant
+    combinator stays a space) and its declaration map. A selector list gives one entry per selector, and a later rule
+    of the same selector overrides the earlier one, as the cascade does. An at-rule's body is parsed as rules in turn
+    and keyed by its whole prelude, so a media query is read apart from the top-level rules and from the other query."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    rules, at = {}, {}
+    i = 0
+    while i < len(css):
+        brace = css.find("{", i)
+        if brace == -1:
+            break
+        prelude = " ".join(css[i:brace].split())
+        depth, j = 1, brace + 1
+        while j < len(css) and depth:
+            if css[j] == "{":
+                depth += 1
+            elif css[j] == "}":
+                depth -= 1
+            j += 1
+        body = css[brace + 1: j - 1]
+        if prelude.startswith("@"):
+            at[prelude] = parse_rules(body)
+        else:
+            for selector in prelude.split(","):
+                selector = " ".join(selector.split())
+                if selector:
+                    rules.setdefault(selector, {}).update(declarations(body))
+        i = j
+    return {"rules": rules, "at": at}
 
 
 def test_the_landscape_lead_shares_one_row_and_gives_the_plot_the_rest_of_the_height():
@@ -122,21 +161,41 @@ def test_the_landscape_lead_shares_one_row_and_gives_the_plot_the_rest_of_the_he
     assert where.get("ltrow") == "lead-content", "the control row does not sit in the lead screen's own body"
     assert screen.index('id="ltrow"') < screen.index('id="ltplot"'), "the control row does not stand over the plot"
 
-    land = media_block(html, "orientation: landscape")
-    row = re.search(r"\.chart-screen#ltrow\{([^}]*)\}", land)
-    assert row, "the landscape phone has no rule for the control row"
-    assert "display:flex" in row.group(1), "the landscape control row is not a flex row"
-    assert "flex-direction:row" in row.group(1) and "flex-wrap:nowrap" in row.group(1), row.group(1)
-    assert "flex:none" in row.group(1), "the control row takes height from the plot"
+    sheet = parse_rules(stylesheet(html))
+    land = sheet["at"].get("@media (orientation: landscape)")
+    assert land, "the page carries no landscape media query"
+    rules = land["rules"]
+    row = rules.get(".chart-screen #ltrow")
+    assert row, f"the landscape phone has no rule for the control row: {sorted(rules)}"
+    assert row.get("display") == "flex", f"the landscape control row is not a flex row: {row}"
+    assert row.get("flex-direction") == "row" and row.get("flex-wrap") == "nowrap", row
+    assert row.get("flex") == "none", f"the control row takes height from the plot: {row}"
+    for part in ("#ltbars", "#ltzoom"):
+        rule = rules.get(f".chart-screen #ltrow {part}")
+        assert rule and rule.get("margin") == "0", f"the row's {part} keeps its own margin: {rule}"
 
-    plot = re.search(r"\.chart-screen\s+\.chart-plot\{([^}]*)\}", html)
-    assert plot and "flex:1" in plot.group(1) and "min-height:0" in plot.group(1), \
-        "the plot no longer takes the remaining height of the chart area"
+    # The body is a flex column in landscape, so the plot grows into the height the row leaves.
+    body = sheet["rules"].get(".chart-body")
+    assert body and body.get("display") == "flex" and body.get("flex-direction") == "column", body
+    plot = sheet["rules"].get(".chart-screen .chart-plot")
+    assert plot and plot.get("flex") == "1" and plot.get("min-height") == "0", \
+        f"the plot no longer takes the remaining height of the chart area: {plot}"
 
-    port = media_block(html, "orientation: portrait")
-    assert ".chart-body{display:none}" in port and ".chart-hint{display:flex}" in port, \
+    # The empty status line keeps no height in landscape, and its margin stays out of the portrait layout.
+    msg = rules.get(".chart-screen .chart-body .msg")
+    assert msg and msg.get("margin") == "0", f"the landscape status line keeps its margin: {msg}"
+    assert ".chart-screen .chart-body .msg" not in sheet["rules"], \
+        "the status-line margin left the landscape query for every screen"
+
+    port = sheet["at"].get("@media (orientation: portrait)")
+    assert port, "the page carries no portrait media query"
+    prules = port["rules"]
+    assert prules.get("body.chart .chart-body", {}).get("display") == "none", \
+        "the portrait phone still draws the plot"
+    assert prules.get("body.chart .chart-hint", {}).get("display") == "flex", \
         "the portrait phone lost its rotate hint"
-    assert "ltrow" not in port, "the portrait phone picked up the landscape control row"
+    assert not any("ltrow" in selector for selector in prules), \
+        "the portrait phone picked up the landscape control row"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
