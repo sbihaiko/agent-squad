@@ -11,7 +11,7 @@ import threading
 
 import pytest
 
-from tests.test_hub_mobile_move import route_tabs
+from tests.hub_mobile_stub import route_tabs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"

@@ -5,8 +5,8 @@ never inlines ships a dead screen. Two waves that add a screen to the same fill 
 that keeps one side drops the other's fill: each module's text is in the served page, and its placeholder is gone
 (ADR-0137: the rule lives in the module, and the page is a view).
 """
-import tests.test_hub_mobile_move as move
-from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is a fixture)
+import tests.hub_mobile_stub as move
+from tests.hub_mobile_stub import hub  # noqa: F401  (hub is a fixture)
 
 MODULES = (
     ("hub-mobile-loop.js", "LOOP_RULES"),

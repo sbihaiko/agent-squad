@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from tests.test_hub_mobile_move import run_js
+from tests.hub_mobile_stub import run_js
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 USAGE_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "hub-mobile-usage.js"

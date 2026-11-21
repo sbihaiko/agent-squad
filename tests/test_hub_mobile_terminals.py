@@ -3,7 +3,7 @@
 The Terminals tab, its session list and its conversation screen left the page. The server's terminal routes stay for the
 desktop page, and the server rules are in test_hub_terminal_routes.py. The page is read as the hub serves it.
 """
-from tests.test_hub_mobile_move import hub  # noqa: F401  (hub is the page fixture)
+from tests.hub_mobile_stub import hub  # noqa: F401  (hub is the page fixture)
 
 
 def page(hub_):

@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-import tests.test_hub_mobile_move as move
-from tests.test_hub_mobile_move import BOARD_ONE, hub  # noqa: F401  (hub is a fixture)
+import tests.hub_mobile_stub as move
+from tests.hub_mobile_stub import BOARD_ONE, hub  # noqa: F401  (hub is a fixture)
 
 # The stub DOM with its intervals recorded, so a driver can fire every poll the page set.
 INTERVALS = move.DOM_HARNESS.replace(

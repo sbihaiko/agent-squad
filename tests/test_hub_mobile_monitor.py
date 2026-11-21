@@ -1,7 +1,7 @@
 """The phone's first tab is the Monitor: the same card the desktop hub shows in its left pane, drawn by the same code.
 
 The hub cuts the card's markup, style and script out of the desktop page and substitutes them into the phone page, so one
-change draws both. The page is booted under node over the stub DOM of `tests/test_hub_mobile_move.py`, with `/api/load`
+change draws both. The page is booted under node over the stub DOM of `tests/hub_mobile_stub.py`, with `/api/load`
 answered by the hub's own fact builders, never by a hand-made shape.
 """
 import json
@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import HUB_PY, _module, route_tabs, run_js, run_page
+from tests.hub_mobile_stub import HUB_PY, _module, route_tabs, run_js, run_page
 from tests.test_hub_spec_progress import BOARD
 
 NOW = 1_000_000.0

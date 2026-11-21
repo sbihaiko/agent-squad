@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_hub_mobile_move import BOARD_ONE, hub, run_page  # noqa: F401  (hub is a fixture)
+from tests.hub_mobile_stub import BOARD_ONE, hub, run_page  # noqa: F401  (hub is a fixture)
 
 GESTURE_JS = Path(__file__).resolve().parent.parent / "contrib/squad-goal/scripts/hub-mobile-gesture.js"
 NODE = shutil.which("node")
@@ -79,8 +79,8 @@ def test_a_lane_that_shuts_eases_out_with_ease_in(hub):  # noqa: F811
     assert "animation:lout var(--motion-duration-exit) var(--motion-exit-easing)" in _css(hub.MOBILE_PAGE)
 
 
-@pytest.mark.parametrize("sheet", ["#sheet", "#psheet"])
-def test_a_sheet_slides_in_with_ease_out_and_out_with_ease_in(hub, sheet):  # noqa: F811
+def test_the_project_sheet_slides_in_with_ease_out_and_out_with_ease_in(hub):  # noqa: F811
+    sheet = "#psheet"
     css = _css(hub.MOBILE_PAGE)
     shown = re.search(re.escape(sheet) + r"\{(position:fixed[^}]*)\}", css)
     assert shown and "var(--motion-entry-easing)" in shown.group(1), f"{sheet} does not slide in with ease-out"
@@ -93,7 +93,7 @@ def test_reduced_motion_turns_every_animation_off(hub):  # noqa: F811
     blocks = re.findall(r"@media \(prefers-reduced-motion: ?reduce\)\{(.*?\})\}", css, re.S)
     assert blocks, "no reduced-motion rule"
     body = "".join(blocks)
-    for sel in (".card.cin", ".lout", "#sheet", "#psheet"):
+    for sel in (".card.cin", ".lout", "#psheet"):
         assert sel in body, f"{sel} keeps its motion under reduced motion"
     assert "animation:none" in body and "transition:none" in body
 
@@ -122,20 +122,18 @@ def test_reduced_motion_keeps_folded_cards_out_of_the_exit_clone(hub):  # noqa: 
 
 
 @pytest.mark.node_bound
-def test_a_column_switch_or_a_filter_change_fades_no_card(hub):  # noqa: F811
+def test_a_column_switch_fades_no_card(hub):  # noqa: F811
     """The seen set is the board's, kept across renders: only a card new to the board after a read fades in."""
     out = run_page(hub.MOBILE_PAGE, """
       const cin = () => $("cards").querySelectorAll('[data-role="card"]').filter(c => c.classList.contains("cin")).map(c => String(c.dataset.n));
       await loadBoard(); await loadBoard();
       $("col-next").onclick(); const b = cin();
       $("col-prev").onclick(); const a = cin();
-      $("lfl").onchange({ target: { checked: true, value: "x" } }); const narrowed = cin();
-      $("lfl").onchange({ target: { checked: false, value: "x" } }); const widened = cin();
       await loadBoard(); const read = cin();
       $("col-next").onclick(); $("col-prev").onclick(); const after = cin();
-      return { b, a, narrowed, widened, read, after };
+      return { b, a, read, after };
     """, board=[_two_columns(), _two_columns(), _two_columns(10)])
-    assert out == {"b": [], "a": [], "narrowed": [], "widened": [], "read": ["10"], "after": []}, out
+    assert out == {"b": [], "a": [], "read": ["10"], "after": []}, out
 
 
 @pytest.mark.node_bound

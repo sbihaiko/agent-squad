@@ -1,7 +1,7 @@
 """The phone's one route table (SPEC 2498, #2499): five tabs, one address per screen, Back to the parent, and the saved
 addresses of the screens the page dropped.
 
-The page boots under the stub DOM of test_hub_mobile_move, which keeps the address and the state of every history entry,
+The page boots under the stub DOM of hub_mobile_stub, which keeps the address and the state of every history entry,
 so a route is read from the hash the owner would see in the address bar. No server runs and no rule lives in the test.
 """
 import importlib.util
@@ -12,7 +12,7 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import route_tabs, run_page
+from tests.hub_mobile_stub import route_tabs, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
@@ -82,16 +82,19 @@ def test_each_dropped_address_opens_its_screen_and_replaces_the_entry(hub, hash_
 
 
 @pytest.mark.node_bound
-def test_a_saved_issue_link_opens_work_at_the_card(hub):
+def test_a_saved_issue_link_opens_work_and_names_its_own_entry(hub):
+    """A card link in the address opens Work and marks the card (SPEC 2498, #2501). The entry becomes Work's root, so a
+    Back from the tab returns to the route the owner arrived on, never to the card link."""
     out = run_page(hub.MOBILE_PAGE, """
         await __tick(20);
-        const opened = { tab: tabActive, hash: location.hash, open: !$("sheet").hidden,
-                         under: history.entries[history.index - 1].url };
-        $("sh-backtop").onclick(); __popAll();
-        return { opened, back: { hash: location.hash, tab: tabActive, hidden: $("sheet").hidden } };
+        const el = document.querySelector('#cards [data-role="card"][data-n="7"]');
+        return { tab: tabActive, hash: location.hash, focus: !!(el && el.classList.contains("focus")),
+                 entries: history.entries.length, index: history.index };
     """, hash="#issue=7", board=[ROUTE_BOARD])
-    assert out["opened"] == {"tab": "work", "hash": "#/work/card=7", "open": True, "under": "#/work"}, out
-    assert out["back"] == {"hash": "#/work", "tab": "work", "hidden": True}, out
+    assert out["tab"] == "work", out
+    assert out["hash"] == "#/work", out
+    assert out["focus"] is True, out
+    assert out["entries"] == 1 and out["index"] == 0, out
 
 
 @pytest.mark.node_bound
@@ -118,8 +121,7 @@ def test_a_tab_tap_replaces_the_entry_so_back_never_walks_through_tabs(hub):
     ("#/now/loops", "loops", "Now", "#/now"),
     ("#/now/loop=agent-squad", "loop", "Loops", "#/now/loops"),
     ("#/runs/run=r1?url=%2Frun%2Fr1&name=Run%20one", "run", "Runs", "#/runs"),
-    ("#/work/card=7", "sheet", "Work", "#/work"),
-], ids=["loops", "loop", "run", "card"])
+], ids=["loops", "loop", "run"])
 def test_a_direct_entry_on_a_detail_route_backs_to_its_parent(hub, hash_, layer, label, parent):
     """A detail entered straight from the address opens with one Back that names its parent, and that Back opens the parent
     even when no entry stands under it: the address becomes the parent, and the page never leaves on a Back. A parent that

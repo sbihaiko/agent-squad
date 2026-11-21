@@ -5,7 +5,7 @@ under ••• and one more ask that names what it kills; an off loop with open
 offers the bugs as its secondary. The Loops list has no switch for all loops at once.
 
 The rules are one client module (`hub-mobile-loop.js`) inlined into the page; the page is booted under node over the stub
-DOM of `tests/test_hub_mobile_move.py`, whose `fetch` answers `/api/loop` and records every write. The tests assert what
+DOM of `tests/hub_mobile_stub.py`, whose `fetch` answers `/api/loop` and records every write. The tests assert what
 the screens show and what the page sends, never a substring of its source.
 """
 import json
@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from tests.test_hub_mobile_move import HUB_PY, _module, run_js, run_page
+from tests.hub_mobile_stub import HUB_PY, _module, run_js, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"

@@ -1,12 +1,8 @@
-"""The owner's move from the phone (#829): a drag of a promotable Backlog card past the marked threshold, the Undo that
-delays the write, and the cancellation of a pending move when the app is hidden or the profile changes.
+"""The stub DOM every phone-page test boots the served page on (SPEC 2498, #2501).
 
-What may move and where it goes are the hub's facts on the row (`pm`, `pmt`): the page names no column of its own, and
-the server side of the rule is proved beside the promote route (`test_hub_promote.py`).
-
-The rules are one client module, run under node alone with no DOM and no server. The page is composed from its files the
-way the hub composes it, and it is then booted under node over a stub DOM whose `fetch` answers the board and the promote
-route: a refusal is proved on the card itself, after the board reads again, never by a substring of the page's text.
+The page is composed from its files the way the hub composes it, then booted under node over a stub DOM whose `fetch`
+answers the board and the promote route: a screen is read as elements, hrefs, chips and text, never by a substring of the
+page's own source. This module holds no test; the suites for the Work, Specs, Runs and Now screens use it.
 """
 import importlib.util
 import json
@@ -22,7 +18,6 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 HUB_PY = SCRIPTS / "hub.py"
-MOVE_JS = SCRIPTS / "hub-mobile-move.js"
 COLUMNS_PY = SCRIPTS / "board_columns.py"
 NODE = shutil.which("node")
 
@@ -326,170 +321,3 @@ def hub():
     return _module("hub_mobile_move", HUB_PY)
 
 
-@pytest.mark.node_bound
-def test_a_release_before_the_threshold_does_nothing():
-    src = MOVE_JS.read_text()
-    assert run_js(src, "moveDrag({promotable:true,dx:MOVE_MIN-1,dy:2})") is None
-    assert run_js(src, "moveDrag({promotable:true,dx:MOVE_MIN,dy:2})") == {"act": "stage"}
-
-
-@pytest.mark.node_bound
-def test_only_a_card_the_hub_marked_promotable_can_be_staged():
-    src = MOVE_JS.read_text()
-    assert run_js(src, "moveDrag({promotable:false,dx:500,dy:2})") is None
-    assert run_js(src, "moveDrag({promotable:true,dx:-500,dy:2})") is None, "a drag left is no move forward"
-    assert run_js(src, "moveDrag({promotable:true,dx:10,dy:200})") is None, "a vertical move is the list scrolling"
-
-
-@pytest.mark.node_bound
-def test_the_undo_delays_the_write():
-    src = MOVE_JS.read_text()
-    assert run_js(src, "moveAct(moveStage(7,'the row names it',1000),'write',1000+UNDO_MS-1).why") == ""
-    assert run_js(src, "moveAct(moveStage(7,'the row names it',1000),'write',1000+UNDO_MS).why") == "written"
-    assert run_js(src, "moveStage(7,'the row names it',1000).to") == "the row names it", \
-        "the module names no column: the destination is the row's own fact"
-
-
-@pytest.mark.node_bound
-def test_an_undone_move_is_cancelled_and_never_written_later():
-    src = MOVE_JS.read_text()
-    prelude = "const p=moveAct(moveStage(7,'a column',1000),'undo',2000),w=moveAct(p,'write',99999);"
-    assert run_js(src, "[w.why, w.live, w === p]", prelude) == ["undo", False, True]
-
-
-@pytest.mark.node_bound
-@pytest.mark.parametrize("act", ["hidden", "profile", "superseded"])
-def test_a_hidden_app_a_profile_change_or_a_second_move_cancels_the_move(act):
-    src = MOVE_JS.read_text()
-    prelude = f"const p=moveAct(moveStage(7,'a column',1000),{json.dumps(act)},2000),w=moveAct(p,'write',99999);"
-    assert run_js(src, "[w.why, w.live]", prelude) == [act, False]
-
-
-def test_the_move_module_names_no_column_and_makes_no_network_call():
-    text = MOVE_JS.read_text()
-    table = _module("board_columns_move", COLUMNS_PY)
-    for name in [c["name"] for c in table.shipped_columns()] + list(table.ROLE.values()):
-        assert name not in text, f"the move module names the column {name!r}: the row names it"
-    for banned in ("fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "import "):
-        assert banned not in text, f"the move module holds {banned!r}"
-
-
-def test_the_move_rules_are_inlined_not_fetched(hub):
-    assert MOVE_JS.read_text() in hub.MOBILE_PAGE
-    assert "/*MOVE*/" not in hub.MOBILE_PAGE
-    assert "<script src=" not in hub.MOBILE_PAGE
-
-
-def test_the_page_posts_the_promote_route_with_the_desktop_body(hub):
-    page = hub.MOBILE_PAGE
-    assert 'fetch("/api/promote"' in page, "the page does not call the promote route"
-    assert 'method: "POST"' in page and '"Content-Type": "application/json"' in page, "the write is not a JSON POST"
-    assert "JSON.stringify({ issue:" in page, "the body is not the desktop's `{issue: n}`"
-
-
-def test_the_page_cancels_a_pending_move_on_hidden_and_on_a_profile_change(hub):
-    page = hub.MOBILE_PAGE
-    assert 'addEventListener("visibilitychange"' in page and 'if (document.hidden) cancelMove("hidden")' in page
-    assert 'cancelMove("profile")' in page, "a profile change does not cancel a pending move"
-    assert 'cancelMove("undo")' in page and 'move cancelled' in page, "the Undo does not cancel, or says nothing"
-
-
-@pytest.mark.node_bound
-def test_a_refusal_stays_on_the_card_after_the_board_reads_again(hub):
-    """AC4: the promote route's refusal shows its reason on the card, and the reason survives the board read that follows
-    the write and every 10 s poll after it. The card is drawn again on every read, so the reason is page state the card
-    reads, never a span the next render drops (#829)."""
-    err = "the card is a ticket of a spec: it moves with its spec, never alone (ADR-0142)"
-    out = run_page(hub.MOBILE_PAGE, """
-      await loadBoard();
-      const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      stageMove({ n: 7, pmt: "Todo" }, card);
-      __skip(6000);
-      __fire();
-      await __tick(30);
-      const after = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      return { reason: after ? (after.querySelector(".creason") || { textContent: null }).textContent : "(no card)",
-               pending: pending && pending.n, reads: __state.reads };
-    """, promote={"status": 400, "ct": "application/json", "body": json.dumps({"err": err})})
-    assert out["pending"] is None, "a written move is no longer pending"
-    assert out["reason"] == err, f"the refusal is not on the card after the board read: {out}"
-    assert out["reads"] >= 2, "the board did not read again after the write"
-
-
-@pytest.mark.node_bound
-def test_a_refusal_the_hub_answers_as_plain_text_shows_that_text(hub):
-    """A refusal that is not JSON (the seam's own 403) still names its reason on the card: 'the hub did not answer' is
-    kept for a failed request, never for an answer (#829)."""
-    out = run_page(hub.MOBILE_PAGE, """
-      await loadBoard();
-      const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      stageMove({ n: 7, pmt: "Todo" }, card);
-      __skip(6000);
-      __fire();
-      await __tick(30);
-      const after = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      return { reason: after ? (after.querySelector(".creason") || { textContent: null }).textContent : "(no card)" };
-    """, promote={"status": 403, "ct": "text/plain; charset=utf-8", "body": "forbidden host"})
-    assert out["reason"] == "forbidden host", out
-
-
-@pytest.mark.node_bound
-def test_a_second_staged_move_cancels_the_first_and_says_so(hub):
-    """Staging a second move never drops the first without notice: the first is cancelled, and the Undo line names it.
-    Only the second move holds a timer, so the first is never written later (#829)."""
-    out = run_page(hub.MOBILE_PAGE, """
-      await loadBoard();
-      const a = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      stageMove({ n: 7, pmt: "Todo" }, a);
-      stageMove({ n: 8, pmt: "Todo" }, null);
-      return { text: $("undo-text").textContent, pending: pending && pending.n, timers: Object.keys(__timers).length };
-    """, board=[{"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
-                 "groups": [{"name": "Backlog", "n": 2, "items": [
-                     {"n": 7, "t": "first", "l": [], "pm": True, "pmt": "Todo"},
-                     {"n": 8, "t": "second", "l": [], "pm": True, "pmt": "Todo"}]}, {"name": "Todo", "n": 0, "items": []}]}])
-    assert out["pending"] == 8, out
-    assert "#7: move cancelled" in out["text"], f"the first move was dropped without notice: {out}"
-    assert "8" in out["text"], out
-    assert out["timers"] == 1, f"the first move keeps a timer: {out}"
-
-
-@pytest.mark.node_bound
-def test_a_mid_drag_board_read_never_stages_a_different_card(hub):
-    """The release resolves the dragged card by its number against the board as it now stands. A 10 s read that reorders
-    the column during the drag must not stage the card that took the index (#829)."""
-    first = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
-             "groups": [{"name": "Backlog", "n": 2, "items": [
-                 {"n": 7, "t": "dragged", "l": ["wave:2"], "pm": True, "pmt": "Todo"},
-                 {"n": 8, "t": "other", "l": ["wave:1"], "pm": True, "pmt": "Todo"}]}, {"name": "Todo", "n": 0, "items": []}]}
-    second = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
-              "groups": [{"name": "Backlog", "n": 2, "items": [
-                  {"n": 8, "t": "other", "l": ["wave:1"], "pm": True, "pmt": "Todo"},
-                  {"n": 7, "t": "dragged", "l": ["wave:2"], "pm": True, "pmt": "Todo"}]}, {"name": "Todo", "n": 0, "items": []}]}
-    out = run_page(hub.MOBILE_PAGE, """
-      await loadBoard();
-      const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-      __dispatch("touchstart", { target: card, touches: [{ clientX: 0, clientY: 700 }] });
-      await loadBoard();
-      __dispatch("touchend", { changedTouches: [{ clientX: 100, clientY: 700 }] });
-      return { pending: pending && pending.n };
-    """, board=[first, second])
-    assert out["pending"] == 7, out
-
-
-def test_the_card_takes_its_promotable_facts_from_the_row(hub):
-    page = hub.MOBILE_PAGE
-    assert "x.pm" in page and "x.pmt" in page, "the card does not read the row's own facts"
-    assert "dataset.pm" in page, "the drag is not bound to the row's promotable fact"
-
-
-def test_the_mobile_page_holds_no_column_list(hub):
-    table = _module("board_columns_page", COLUMNS_PY)
-    for name in [c["name"] for c in table.shipped_columns()] + list(table.ROLE.values()):
-        assert name not in hub.MOBILE_PAGE, f"the mobile page names the column {name!r}: the rows name them"
-
-
-@pytest.mark.node_bound
-def test_the_phone_page_carries_no_session_overlay(hub):
-    """The phone page shows no chat, so the session overlay's script left it with the chat (#2490)."""
-    out = run_page(hub.MOBILE_PAGE, "return { overlay: window.__sqOverlay === undefined, context: typeof window.squadPageContext };")
-    assert out == {"overlay": True, "context": "undefined"}

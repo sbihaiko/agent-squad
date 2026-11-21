@@ -2,7 +2,7 @@
 
 Every expected value below is written out from the fixture facts the hub serves: the board rows (`t`, `n`, `l`) and the
 run rows (`live`, `running`). The chat's Waiting filter left the page with the chat (#2490). The page is booted under the stub DOM of
-`tests/test_hub_mobile_move.py`, so the labels, the predicates and the remainder line are read where the owner sees them.
+`tests/hub_mobile_stub.py`, so the labels, the predicates and the remainder line are read where the owner sees them.
 The search rule is one pure module with no DOM and no client, run under node alone (ADR-0137).
 
 The issue cites frames 8, 9, 13 and 16 and rules 4, 5 and 6 of a Notion spec the repository does not hold; this suite
@@ -15,18 +15,19 @@ import shutil
 
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_js, run_page  # noqa: F401  (hub is a fixture)
+from tests.hub_mobile_stub import hub, run_js, run_page  # noqa: F401  (hub is a fixture)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SEARCH_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "hub-mobile-search.js"
 NODE = shutil.which("node")
 
 TABS = ["now", "work", "specs", "runs"]
-# The filter of each root, stated as the owner reads it: the last option says what it includes.
+# The filter of each root, stated as the owner reads it: the last option says what it includes. Work and Specs offer none
+# (SPEC 2498, #2501): the board's and the spec list's filters left the page, and only Runs keeps its segment.
 FILTERS = {
     "now": [],
-    "work": ["Live", "Any card"],
-    "specs": ["Any spec"],
+    "work": [],
+    "specs": [],
     "runs": ["Live", "Ended", "Any run"],
 }
 
@@ -58,19 +59,6 @@ def test_no_filter_option_is_labelled_all(hub):  # noqa: F811
     lead = re.search(r'data-ltf="all" type="button">([^<]*)<', hub.MOBILE_PAGE)
     assert lead, "the lead-time period bar lost its whole-series option"
     assert lead.group(1) != "All", "the lead-time filter offers an option labelled All"
-
-
-@pytest.mark.node_bound
-def test_the_scope_pill_reads_all_projects_or_one_project_name(hub):  # noqa: F811
-    out = run_page(hub.MOBILE_PAGE, """
-        location.pathname = "/mobile"; paintControlRow();
-        const all = $("cr-scope").textContent;
-        location.pathname = "/agent-squad/mobile"; paintControlRow();
-        const one = $("cr-scope").textContent;
-        return { all, one };
-    """)
-    assert out == {"all": "All projects", "one": "agent-squad"}, out
-    assert "All" not in (out["one"],), "the scope pill never reads All"
 
 
 # --- (2) the truthful predicates and the remainder line ------------------------------------------------------------
@@ -165,18 +153,17 @@ SEGMENTED_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "fl
 
 
 @pytest.mark.node_bound
-def test_work_search_stays_inside_the_active_segment(hub):  # noqa: F811
-    """With Work on Live, a search names only the cards the segment keeps, and the remainder line steps aside."""
-    out = run_page(hub.MOBILE_PAGE, f"""
+def test_work_search_names_every_card_the_board_holds(hub):  # noqa: F811
+    """Work has no segment (SPEC 2498, #2501): a search names every card the board holds that matches, and the columns
+    step aside while the results stand."""
+    out = run_page(hub.MOBILE_PAGE, """
         await loadBoard(); show("work");
-        {CLICK}
-        tap("Live");
         $("work-search").onclick();
         $("search-input").value = "phone"; $("search-input").oninput();
-        return {{ rows: [...$("work-results").children].map(b => b.dataset.n), rest: $("work-rest").hidden }};
+        return { rows: [...$("work-results").children].map(b => b.dataset.n), cards: $("cards").hidden };
     """, board=[SEGMENTED_BOARD])
-    assert out["rows"] == ["7"], f"the search names a card the segment hides: {out}"
-    assert out["rest"] is True, f"the remainder line still describes the list the search replaced: {out}"
+    assert out["rows"] == ["7", "9"], f"the search leaves a card out: {out}"
+    assert out["cards"] is True, f"the columns still stand behind the results: {out}"
 
 
 @pytest.mark.node_bound
@@ -188,7 +175,7 @@ def test_leaving_work_with_search_open_brings_the_control_row_back(hub):  # noqa
         show("specs");
         return { open, after: $("control-row").hidden, bar: $("searchbar").hidden };
     """)
-    assert out == {"open": True, "after": False, "bar": True}, out
+    assert out == {"open": True, "after": True, "bar": True}, out   # Specs draws no control row either
 
 
 SPEC_BOARD = {"t": 1, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None, "done": "Closed",

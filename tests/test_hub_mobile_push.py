@@ -2,12 +2,12 @@
 no read of its route, and a pushed conversation turn reaches no screen.
 
 The chat left the page with its rule module (#2490), so the page asks the stream for the board alone and holds no thread
-to draw a turn into. The page is booted under the node stub DOM of test_hub_mobile_move.py, whose EventSource records the
+to draw a turn into. The page is booted under the node stub DOM of hub_mobile_stub.py, whose EventSource records the
 stream the page opens; the driver emits its events.
 """
 import json
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is the module fixture)
+from tests.hub_mobile_stub import hub, run_page  # noqa: F401  (hub is the module fixture)
 
 BOARD_TWO = {"t": 2, "err": None, "labels": [], "lc": {}, "cases": [], "flow": None,
              "groups": [{"name": "Backlog", "n": 0, "items": []},

@@ -9,7 +9,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is a fixture)
+from tests.hub_mobile_stub import hub, run_page  # noqa: F401  (hub is a fixture)
 
 STATUS = {
     "loop": {"on": False, "since": "1h"},

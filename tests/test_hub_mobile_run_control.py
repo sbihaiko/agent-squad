@@ -3,7 +3,7 @@ run's own control route, as the desktop page does, and the screen states the two
 call finish, and a resume does not restart a run whose process ended.
 
 The rules are one client module (`hub-mobile-run.js`), run under node alone with no DOM and no server. The page is composed
-from its files the way the hub composes it, then booted under node over the stub DOM of `tests/test_hub_mobile_move.py`,
+from its files the way the hub composes it, then booted under node over the stub DOM of `tests/hub_mobile_stub.py`,
 whose `fetch` answers the run list and the forwarded control route: the write is proved by the request the page makes, never
 by a substring of its text. The module names no loopback address and no tailnet host: the forward route is the only address
 the phone knows, and the tailnet entry stays disabled until #713 proves the forwarded headers.
@@ -16,7 +16,7 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import _module, run_js, run_page
+from tests.hub_mobile_stub import _module, run_js, run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
