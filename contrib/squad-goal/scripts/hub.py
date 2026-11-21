@@ -3821,26 +3821,29 @@ def issue_url(n, repo=None):
     """The plain issue address on github.com, the form iOS opens in the GitHub app: no query string."""
     return f"https://github.com/{repo or REPO}/issues/{int(n)}"
 
-_ISSUE_STATE_KEPT = {}   # (repo, n) -> (monotonic at, the issue's state or None): the pending read's own closed-state memory (#2661)
+_PENDING_WINDOW = [0]    # int: one walk of the pending read is one poll window, and its issue-state memory is keyed on it (#2661)
+_ISSUE_STATE_KEPT = {}   # (repo, n) -> (window id, the issue's state or None): the pending read's memory for one window (#2661)
 
-def github_issue_state(n, repo=None):
+def github_issue_state(n, repo=None, window=None):
     """The issue's own state from one GitHub REST read: `closed`, `open`, or None when the read did not answer. The answer
-    is kept for one pending poll window, so the served answer reads each issue at most once per window (#2661)."""
+    belongs to one pending poll window: a later window never serves it, and one window reads each issue at most once, so
+    the served answer is the issue's state as of this window (#2661)."""
     repo = repo or REPO
-    key = (repo.lower(), int(n)); now = time.monotonic()
+    key = (repo.lower(), int(n)); window = _PENDING_WINDOW[0] if window is None else window
     hit = _ISSUE_STATE_KEPT.get(key)
-    if hit is not None and now - hit[0] < PENDING_POLL_SECS: return hit[1]
+    if hit is not None and hit[0] == window: return hit[1]
     try:
         r = ghread.read(f"repos/{repo}/issues/{int(n)}",
                         lambda route: ghread.gh_transport(route, timeout=REST_TIMEOUT))
         state = str((r.answer or {}).get("state") or "").lower() if r.is_answer and isinstance(r.answer, dict) else None
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+    except Exception as e:                       # a read that does not answer is no closed state: the decision stays pending
+        log_once(f"hub: issue {int(n)} state read failed: {e}")
         state = None
     state = state if state in ("open", "closed") else None
-    _ISSUE_STATE_KEPT[key] = (now, state)
+    _ISSUE_STATE_KEPT[key] = (window, state)
     return state
 
-def settled_on_board(r):
+def settled_on_board(r, window=None):
     """True when the board settles the run's decision: its work landed (handled) or every issue it names is closed
     (verified by hand, evidence on the issue). The pending read asks this itself, so a row leaves Needs you even when
     the run row's own summary cannot see the board. The board cache holds only the items the REST items route returns, so
@@ -3852,7 +3855,7 @@ def settled_on_board(r):
     items = {i["n"]: i for i in board_cache.get("items") or [] if isinstance(i.get("n"), int)}
     closed = {n for n, i in items.items() if i.get("s") == "closed"}
     for n in sorted(issues - set(items)):             # off the cache (another project, or a missed item): ask GitHub
-        if github_issue_state(n) == "closed": closed.add(n)
+        if github_issue_state(n, window=window) == "closed": closed.add(n)
     return issues <= closed or bool(issues & landed)
 
 def pending_decisions():
@@ -3862,7 +3865,9 @@ def pending_decisions():
     record's final verdict is the last invocation's: a run resumed after its verdict has no verdict and is live again, and
     one reclassified by a later verdict ended another way, so neither reaches this read. A run whose verdict was later
     handled (its work landed) or verified (every issue was closed afterwards) is not pending. One run gives one row."""
-    now, out, seen = time.time(), [], set()
+    _PENDING_WINDOW[0] += 1                         # one walk is one poll window: an issue-state answer never leaves its walk (#2661)
+    _ISSUE_STATE_KEPT.clear()
+    window, now, out, seen = _PENDING_WINDOW[0], time.time(), [], set()
     for d in sorted(project_dirs()):
         for rd in sorted(d.glob("run-*")):
             if rd.name in seen or not (rd / "record.jsonl").is_file(): continue
@@ -3870,7 +3875,7 @@ def pending_decisions():
             if not r or r.get("verdict") != "needs-human": continue
             row, _ = run_row(str(rd), "", [])
             if row.get("state") != "needs-human": continue
-            if settled_on_board(r): continue
+            if settled_on_board(r, window): continue
             seen.add(rd.name)
             n = next((int(x) for x in r.get("issues") or []), None)
             ended = float(r.get("t1") or now)

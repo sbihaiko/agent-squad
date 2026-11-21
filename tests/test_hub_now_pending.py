@@ -159,13 +159,16 @@ def github_issues(monkeypatch, mod, states):
     """The GitHub REST seam: one issue read answered from `states` by number, and every route it was asked for.
 
     The board cache holds the items the REST items route returns, and an issue on another project, or one the cache read
-    misses, is absent from it. `None` answers a failed read."""
+    misses, is absent from it. `None` answers a failed read. A list answers one state per read, in order, so a later poll
+    window can see the state the owner set after the first read."""
     calls = []
 
     def read(route, transport=None):
         calls.append(route)
         n = int(route.rsplit("/", 1)[-1])
         state = states[n]
+        if isinstance(state, list):
+            state = state.pop(0)
         if state is None:
             return mod.ghread.Read(kind=mod.ghread.FAILED, detail="no answer")
         return mod.ghread.Read(kind=mod.ghread.ANSWER, answer={"number": n, "state": state})
@@ -203,16 +206,30 @@ def test_a_failed_issue_read_keeps_the_run(hub, monkeypatch):
 
 
 def test_the_served_answer_reads_each_issue_once_per_poll_window(hub, monkeypatch):
-    """Two runs name the same off-cache issue: every poll window reads it once, never once per run or per reader."""
+    """Two runs name the same off-cache issue: one poll window reads it once, never once per run or per reader, and the
+    next window reads it once again, so the answer is the issue's current state, never an earlier window's."""
     mod, root = hub
     run_folder(root, "run-a", [run_start(OLD), verdict(OLD + 60)], request="#544")
     run_folder(root, "run-b", [run_start(OLD), verdict(OLD + 60)], request="#544")
     mod.board_cache = {"items": [], "landed": []}
-    calls = github_issues(monkeypatch, mod, {544: "open"})
+    calls = github_issues(monkeypatch, mod, {544: ["open", "closed"]})
     assert [r["id"] for r in mod.pending_served()] == ["run-a", "run-b"]
-    mod._PENDING_KEPT.update(at=None, answer=None)   # the next poll window, while the issue's own answer is kept
-    assert [r["id"] for r in mod.pending_served()] == ["run-a", "run-b"]
-    assert calls == ["repos/x/y/issues/544"], "one GitHub read for this issue across both windows"
+    assert [r["id"] for r in mod.pending_served()] == ["run-a", "run-b"]   # a second reader of the same window
+    assert calls == ["repos/x/y/issues/544"], "one GitHub read for this issue in the window, shared by both runs and readers"
+    mod._PENDING_KEPT.update(at=None, answer=None)   # the next poll window
+    assert mod.pending_served() == [], "the owner closed the issue before this window: the fresh read settles the run"
+    assert calls == ["repos/x/y/issues/544"] * 2, "one fresh read in the next window"
+
+
+def test_an_issue_reopened_after_the_first_window_keeps_the_run(hub, monkeypatch):
+    """A closed answer belongs to its own poll window: an issue reopened before the next one shows its decision again."""
+    mod, root = hub
+    run_folder(root, "run-reopened", [run_start(OLD), verdict(OLD + 60)], request="#544")
+    mod.board_cache = {"items": [], "landed": []}
+    github_issues(monkeypatch, mod, {544: ["closed", "open"]})
+    assert mod.pending_served() == []
+    mod._PENDING_KEPT.update(at=None, answer=None)   # the next poll window
+    assert [r["id"] for r in mod.pending_served()] == ["run-reopened"]
 
 
 # --- the Slack link
