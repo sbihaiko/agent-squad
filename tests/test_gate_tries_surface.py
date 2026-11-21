@@ -62,7 +62,7 @@ def test_a_row_carries_its_gate_tries(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", _cache([_item(1255, 3), _item(1256, 0), _item(1257)]))
     data = hub.board()
     assert _row(data, 1255)["gt"] == 3
-    assert _row(data, 1255)["gchip"] == "Testing · 3", "the chip text is a fact the row carries"
+    assert _row(data, 1255)["gchip"] == "gate try 3", "the chip text is a fact the row carries"
     assert "gchip" not in _row(data, 1256), "a card with no attempt draws nothing, not an invented 0"
     assert "gt" not in _row(data, 1256), "a card with no attempt draws nothing, not an invented 0"
     assert "gt" not in _row(data, 1257), "a card the read carried no field for draws nothing"
@@ -132,23 +132,23 @@ def test_the_desktop_card_shows_gating_and_its_count(hub):
     assert "Testing ·" not in bare, "a card with no attempt shows no gate count"
 
 
-# ---- what the phone paints (cardButton) --------------------------------------------------------------
+# ---- what the phone paints (cardLink) --------------------------------------------------------------
 
 def test_the_phone_card_shows_gating_and_its_count():
     page = MOBILE_HTML.read_text()
-    fn = re.search(r"^function cardButton\(.*?\n\}\n", page, re.M | re.S)
+    fn = re.search(r"^function cardLink\(.*?\n\}\n", page, re.M | re.S)
     assert fn, "the phone's card renderer is gone"
     script = ("const mk=()=>({className:'',dataset:{},textContent:'',children:[],classList:{add(){}},"
               "setAttribute(){},append(...c){this.children.push(...c)}});"
               "const document={createElement:mk};"
               "const specColor=()=>'#000';const mSlots=()=>({});const cardSpec=x=>x.sp?x.n:x.pa;const cardColor=()=>'#000';"
-              "const reasons={};" + fn.group(0) +
+              "const issueURL=()=>'https://github.com/x/y/issues/1';" + fn.group(0) +
               "const txt=x=>x.textContent+x.children.map(txt).join('');"
-              "const a=cardButton({n:1255,t:'a card',l:[],gchip:'Testing · 3'},0);"
-              "const b=cardButton({n:1255,t:'a card',l:[]},1);"
+              "const a=cardLink({n:1255,t:'a card',l:[],gchip:'gate try 3'},0);"
+              "const b=cardLink({n:1255,t:'a card',l:[]},1);"
               "console.log(JSON.stringify([txt(a),txt(b)]));")
     out = subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     with_count, bare = json.loads(out.stdout)
-    assert "Testing · 3" in with_count, with_count
-    assert "Testing" not in bare, bare
+    assert "gate try 3" in with_count, with_count
+    assert "gate try" not in bare, bare

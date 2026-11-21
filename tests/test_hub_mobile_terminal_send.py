@@ -1,12 +1,12 @@
 """The phone page carries no session send (#2490).
 
 The composer, its per-session draft and its send left the page with the chat, so the phone page posts no message to a
-session. The served page is booted under node over the stub DOM of `tests/test_hub_mobile_move.py`; the test reads the
+session. The served page is booted under node over the stub DOM of `tests/hub_mobile_stub.py`; the test reads the
 requests the page posts, never a substring of its text.
 """
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is the page fixture)
+from tests.hub_mobile_stub import hub, run_page  # noqa: F401  (hub is the page fixture)
 
 
 def test_the_phone_page_holds_no_composer(hub):  # noqa: F811

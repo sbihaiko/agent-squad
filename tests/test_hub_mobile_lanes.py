@@ -159,12 +159,6 @@ def test_an_open_ticket_of_a_closed_spec_lands_in_no_spec():
 
 
 @pytest.mark.node_bound
-def test_a_closed_column_names_the_count_the_answer_carries():
-    out = run_js(GESTURE_JS.read_text(), "carouselColumns([{name: 'Closed', end: true, n: 5, items: []}], [0], true)")
-    assert out["closed"] == [{"name": "Closed", "count": 5}]
-
-
-@pytest.mark.node_bound
 def test_a_saved_collapse_wins_over_the_default_and_the_flat_list_follows_it():
     out = lanes(TODO_CARDS, lc={"10": True, "none": False})
     by_id = {ln["id"]: ln for ln in out["lanes"]}

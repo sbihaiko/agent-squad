@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from tests.test_hub_mobile_move import hub, run_page  # noqa: F401  (hub is a fixture)
+from tests.hub_mobile_stub import hub, run_page  # noqa: F401  (hub is a fixture)
 
 PAGE = pathlib.Path(__file__).resolve().parent.parent / "contrib/squad-goal/scripts/hub-mobile.html"
 
@@ -34,8 +34,8 @@ def test_the_run_action_row_clears_the_bottom_inset():
     assert "env(safe-area-inset-bottom)" in _decls("#runview-actions")
 
 
-@pytest.mark.parametrize("selector", ["#sheet", "#psheet"])
-def test_a_sheet_sizes_to_the_dynamic_viewport(selector):
+def test_the_project_sheet_sizes_to_the_dynamic_viewport():
+    selector = "#psheet"
     assert re.search(r"max-height:\d+dvh", _decls(selector)), f"{selector} does not use dvh"
 
 

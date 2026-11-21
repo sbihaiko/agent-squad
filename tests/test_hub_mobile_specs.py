@@ -11,8 +11,8 @@ import shutil
 
 import pytest
 
-import tests.test_hub_mobile_move as move
-from tests.test_hub_mobile_move import hub, run_js  # noqa: F401  (hub is a fixture)
+import tests.hub_mobile_stub as move
+from tests.hub_mobile_stub import hub, run_js  # noqa: F401  (hub is a fixture)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SPECS_JS = ROOT / "contrib" / "squad-goal" / "scripts" / "hub-mobile-specs.js"

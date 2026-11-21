@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_hub_mobile_move import _module, run_page
+from tests.hub_mobile_stub import _module, run_page
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
@@ -144,7 +144,7 @@ def test_the_mobile_page_carries_the_lane_rules():
 
 def test_a_mobile_card_wears_its_spec_color_and_no_wave_chip():
     page = MOBILE.read_text()
-    card = re.search(r"function cardButton\(x, i\) \{.*?\n\}", page, re.S).group(0)
+    card = re.search(r"function cardLink\(x, i\) \{.*?\n\}", page, re.S).group(0)
     assert "cardColor(mSlots(), x)" in card, "the mobile card does not set its spec color"
     assert "laneWaveOf" not in card and 'chip("wave"' not in card, "the mobile card still draws a wave chip"
     assert re.search(r"\.card\{[^}]*border-top:3px solid var\(--lc", page), "the mobile card has no top line in its color"

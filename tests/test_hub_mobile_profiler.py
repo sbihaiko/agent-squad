@@ -1,6 +1,6 @@
 """The phone's Loop entry (SPEC 1749; #1754): a layer, not a link, that draws the desktop's tree from the same route and the
 same render function, laid out for a narrow screen. The render and the controller live in `hub-profiler.js`, inlined into both
-pages (ADR-0137). The stub DOM of `tests/test_hub_mobile_move.py` cannot parse the tree's markup, so the tree is drawn and
+pages (ADR-0137). The stub DOM of `tests/hub_mobile_stub.py` cannot parse the tree's markup, so the tree is drawn and
 tapped in node against one box, through the shared controller itself.
 """
 import json
@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from tests.test_hub_mobile_move import HUB_PY, _module, run_page
+from tests.hub_mobile_stub import HUB_PY, _module, run_page
 from tests.test_hub_profiler import VIEW
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent

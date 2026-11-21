@@ -1,6 +1,6 @@
 """The phone reloads on a new hub build, and holds the reload while work is open (#1455, part of #1115).
 
-The page is the served phone page, booted under node over the move test's stub DOM. The driver calls the page's own
+The page is the served phone page, booted under node over the shared stub DOM. The driver calls the page's own
 `checkVersion`, which the page's interval calls every 3 s as the desktop does, and counts reloads by replacing the stub's
 `location.reload`. The worker's cache name carries the build.
 """
@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from tests import test_hub_mobile_move as move
+from tests import hub_mobile_stub as move
 
 hub = move.hub
 run_page = move.run_page
@@ -46,28 +46,19 @@ def test_the_same_build_never_reloads_the_phone(hub):
     assert out["reloads"] == 0, out
 
 
+# The reload holds while the page has a write open, and while the page's own promote request record stands (#2501).
 HOLDS = {
     "a write in flight": (
         """
         let release;
-        const hang = fetch;
-        fetch = (p, o) => (o && o.method === "POST")
-          ? new Promise(r => { release = () => r({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => ({ ok: true }), text: async () => "{}" }); })
-          : hang(p, o);
-        await loadBoard();
-        const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-        stageMove({ n: 7, pmt: "Todo" }, card);
-        __skip(6000); __fire(); await __tick(5);
+        window.__held = writing(new Promise(r => { release = () => r({ ok: true, status: 200,
+          headers: { get: () => "application/json" }, json: async () => ({}), text: async () => "{}" }); }));
         """,
         "release(); await __tick(30);",
     ),
-    "a staged move": (
-        """
-        await loadBoard();
-        const card = $("cards").querySelector('[data-role="card"][data-n="7"]');
-        stageMove({ n: 7, pmt: "Todo" }, card);
-        """,
-        'cancelMove("undo");',
+    "a promote request waiting": (
+        "promoReqs[7] = { phase: 'requested' };",
+        "delete promoReqs[7];",
     ),
 }
 
