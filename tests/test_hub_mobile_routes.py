@@ -192,3 +192,31 @@ def test_one_table_names_every_tab_and_its_root(hub):
     route = route[:route.index("\n};") + 3]
     for tab, _ in route_tabs(page):
         assert re.search(rf"\b{tab}:\s*\{{\s*panel:", route), f"the route table has no row for {tab}"
+
+
+@pytest.mark.node_bound
+def test_the_work_column_tabs_and_search_follow_the_design_system(hub):
+    """The Work column tabs take the system corner a tab uses, 6 px, rather than the full pill; the strip fades on its
+    trailing edge so the columns past the edge read as scrollable; and the search field names what it finds (#2666)."""
+    page = hub.MOBILE_PAGE
+    tab_rule = re.search(r"#col-tabs button\{([^}]*)\}", page)
+    assert tab_rule, "the page draws no Work column tab"
+    assert "border-radius:var(--radius-md)" in tab_rule.group(1), tab_rule.group(1)
+    assert "--radius-full" not in tab_rule.group(1), "the column tab still takes the full pill radius"
+
+    fade = re.search(r"#col-tabs\.more\{([^}]*)\}", page)
+    assert fade, "the tab strip shows no fade on its trailing edge"
+    assert re.search(r"mask-image:linear-gradient\(to right,[^;]*transparent\)", fade.group(1)), fade.group(1)
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", fade.group(1)), f"the fade writes a raw color: {fade.group(1)}"
+
+    out = run_page(hub.MOBILE_PAGE, """
+        await loadBoard(); show("work");
+        const strip = $("col-tabs");
+        strip.scrollWidth = 400; strip.clientWidth = 366; renderBoard();
+        const over = strip.classList.contains("more");
+        strip.scrollWidth = 366; renderBoard();
+        const fits = strip.classList.contains("more");
+        $("work-search").onclick();
+        return { over, fits, placeholder: $("search-input").getAttribute("placeholder"), open: !$("searchbar").hidden };
+    """, board=[ROUTE_BOARD])
+    assert out == {"over": True, "fits": False, "placeholder": "Search cards", "open": True}, out
