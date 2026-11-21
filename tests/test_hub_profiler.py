@@ -936,7 +936,7 @@ def quiet_boot(mod, monkeypatch):
     itself, so a read added there is stubbed here too and the two start tests can never drift."""
     reads = re.findall(r"target=(\w+)", inspect.getsource(mod.boot))
     assert "refresh_board" in reads, "the stub list is not read from boot's own calls"
-    for name in ("refresh_runs", "warm", *reads):
+    for name in ("refresh_runs", *reads):
         monkeypatch.setattr(mod, name, lambda: None)
 
 

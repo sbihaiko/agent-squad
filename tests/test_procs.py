@@ -132,15 +132,22 @@ def test_1508_a_script_reads_its_own_tree_before_a_foreign_sg_squad(tmp_path, mo
     foreign = tmp_path / "old" / "squad"
     foreign.mkdir(parents=True)
     (foreign / "procs.py").write_text("STALE = True\n")
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "p1"),
+                 ("SG_CHECKOUT", str(foreign.parent)), ("SG_HUB_DIR", str(tmp_path / "hub")),
+                 ("SG_STATE", str(tmp_path / "state")), ("HOME", str(tmp_path / "home"))):
+        monkeypatch.setenv(k, v)
+    (tmp_path / "home").mkdir(exist_ok=True)
     monkeypatch.setenv("SG_SQUAD", str(foreign.parent))
-    monkeypatch.setenv("SG_CHECKOUT", str(foreign.parent))
     monkeypatch.delitem(sys.modules, "squad_procs", raising=False)
     monkeypatch.syspath_prepend(str(ROOT / "contrib/squad-goal/scripts"))
-    spec = importlib.util.spec_from_file_location("sessions_under_test", ROOT / "contrib/squad-goal/scripts/sessions.py")
+    checkpoint = tmp_path / "checkout"
+    (checkpoint / "docs" / "squad").mkdir(parents=True)
+    monkeypatch.setenv("SG_CHECKOUT", str(checkpoint))
+    spec = importlib.util.spec_from_file_location("hub_procs_under_test", ROOT / "contrib/squad-goal/scripts/hub.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     try:
-        assert hasattr(mod._procs(), "snapshot")
+        assert hasattr(mod.procs_mod(), "snapshot")
     finally:
         sys.modules.pop("squad_procs", None)
 
@@ -234,17 +241,6 @@ def _patch_boot_clock(monkeypatch, now, uptime):
     monkeypatch.setattr(procs.time, "clock_gettime", lambda clock_id: now if clock_id == realtime else uptime)
 
 
-def _sessions_module():
-    """contrib/squad-goal/scripts/sessions.py, loaded by path as the hub loads it."""
-    import importlib.util
-    if str(SCRIPTS) not in sys.path:
-        sys.path.insert(0, str(SCRIPTS))
-    spec = importlib.util.spec_from_file_location("sessions_2596", SCRIPTS / "sessions.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def test_2596_the_fractional_boot_read_moves_a_start_one_second_ahead(monkeypatch):
     """#2596 cause: a start built on the whole-second `btime` truncates to the record's `ps lstart` second, while the
     fractional uptime read carries the boot fraction. When the boot fraction and the process fraction sum past one,
@@ -266,21 +262,6 @@ def test_2596_the_fractional_boot_read_moves_a_start_one_second_ahead(monkeypatc
     assert p is not None
     whole_second_start = int(boot) + starttime // hz   # the second the record's whole-second read names
     assert int(p.start) == whole_second_start + 1
-
-
-def test_2596_a_start_one_second_after_the_record_is_still_alive(monkeypatch):
-    """#2596: the record's startedAt comes from a whole-second read; procs names the start from the fractional boot and
-    may land one second after it. The start is the same process, never a reused pid, so the session stays alive; a start
-    past the window is still a reused pid."""
-    mod = _sessions_module()
-    started_ms = 1_700_000_000 * 1000 + 296
-    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001)   # one second after the record
-    assert mod._alive_since(os.getpid(), started_ms) is True
-    assert mod._alive_since(os.getpid(), started_ms, "bg") is True   # a background job reads the same start, so it has the same slack
-    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_000 - 30)   # at the far edge: still alive
-    assert mod._alive_since(os.getpid(), started_ms) is True
-    monkeypatch.setattr(mod, "_proc_start", lambda pid: 1_700_000_001 + 30)   # a reused pid: the record is far older
-    assert mod._alive_since(os.getpid(), started_ms) is False
 
 
 def test_2591_a_just_started_linux_process_does_not_read_a_second_old(monkeypatch):

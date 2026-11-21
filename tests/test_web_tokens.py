@@ -335,22 +335,6 @@ def test_phone_text_fields_use_field_size(surfaces, tokens):
             assert _size(font, tokens) == 16, f"{selector} resolves to {font!r}, not 16px"
 
 
-def test_hub_overlay_uses_shared_typography_roles():
-    overlay = (SCRIPTS / "hub-overlay.js").read_text()
-    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", overlay, flags=re.S))
-    assert "var(--font-mono)" in css and "var(--sq-mono)" not in css
-    assert not re.search(r"font-size\s*:\s*\d", css), "the overlay has a literal font size"
-    assert not re.search(r"font-weight\s*:\s*(?!400\b|600\b)[^;}]+", css), "the overlay uses an unsupported font weight"
-    assert "font:var(--fs-body)/1.55 var(--font-ui)" in css
-
-
-def test_overlay_migrates_saved_pixel_sizes_to_nearest_role():
-    overlay = (SCRIPTS / "hub-overlay.js").read_text()
-    assert "Number.parseInt(saved, 10)" in overlay, "legacy pixel sizes are not parsed"
-    assert "const sizes = [13, 15, 16, 17, 21]" in overlay, "legacy sizes have no supported-role mapping"
-    assert "FS_ROLES.indexOf(saved)" in overlay, "saved role names are not read"
-
-
 def test_identifiers_keep_mono_and_numeric_rows_keep_tabular_figures(surfaces):
     token_css = TOKENS_FILE.read_text()
     assert ".kr" in token_css and ".runrow" in token_css

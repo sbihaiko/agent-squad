@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
-OVERLAY = ROOT / "tests" / "test_hub_overlay.py"
+NODE_BOUND = ROOT / "tests" / "test_hub_mobile_board.py"
 INSTALL = ROOT / "docs" / "install.md"
 MESENAI_NAMES = ("MESENAI_REPO", "MESENAI_ROOT")
 HOST_BOUND = re.compile(r"@pytest\.mark\.host_bound(?:\([^\n]*\))?\s*\ndef (\w+)\(")
@@ -44,10 +44,10 @@ def test_the_ci_runner_switch_deselects_each_fixture_bound_test_by_id_and_never_
 @pytest.mark.heavy
 def test_the_ci_runner_switch_hides_the_node_binary_and_deselects_the_node_bound_tests():
     """Guard for #1323: the switch hides the node binary too, so a node-bound test is deselected and printed by id."""
-    r = _collect(OVERLAY, {"SQUAD_CI_RUNNER": "1"})
+    r = _collect(NODE_BOUND, {"SQUAD_CI_RUNNER": "1"})
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
-    assert "deselected: tests/test_hub_overlay.py::" in out, out
+    assert "deselected: tests/test_hub_mobile_board.py::" in out, out
     assert "runs the page's JavaScript under node" in out, out
 
 
@@ -95,9 +95,9 @@ def test_the_local_half_switch_keeps_only_what_a_linux_runner_deselects():
     """Guard for the nightly's local half (#1975, ADR-0153, ADR-0139): `SQUAD_NIGHTLY_LOCAL_HALF=1` keeps only the tests
     that a Linux runner deselects by marker, read from the conftest's one deselection rule, never from a second list.
 
-    The node-bound overlay tests stay where node runs, and the unmarked tests of this file are left to the GitHub half.
+    The node-bound gesture and board tests stay where node runs, and the unmarked tests of this file are left to the GitHub half.
     """
-    paths = (OVERLAY, Path(__file__))
+    paths = (NODE_BOUND, Path(__file__))
     every, _ = _ids(paths, {})
     linux_runs, _ = _ids(paths, {"SQUAD_CI_RUNNER": "1"})
     local, out = _ids(paths, {"SQUAD_NIGHTLY_LOCAL_HALF": "1"})

@@ -16,7 +16,7 @@ SCREEN_ROUTES = {"cost": "/api/stats", "lead": "/api/chart/lead"}   # #1028: the
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/columns", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/live", "/api/load", "/api/models",
-    "/api/runs", "/api/sessions", "/api/sessions/card", "/api/sessions/clip", "/api/sessions/conversation", "/api/sessions/image", "/api/sessions/send", "/api/slack", "/api/slots", "/api/speed", "/api/stats", "/api/status",
+    "/api/runs", "/api/slack", "/api/slots", "/api/speed", "/api/stats", "/api/status",
     "/api/subs", "/api/version",
 }   # /api/columns: the Spend & limits theme reads the card limit of each column (#2432); /api/slots: its Machine slots sub-group reads the machine slots (#2435)
 
@@ -56,7 +56,7 @@ def test_each_screen_declares_its_existing_get_route():
 def test_every_api_path_the_page_names_is_an_existing_get_route():
     literals = {re.sub(r"\?.*", "", p) for p in re.findall(r'"(/api/[^"]*)"', page())}
     assert literals
-    assert literals <= HUB_GET_ROUTES | {"/api/promote", "/api/loop", "/api/sessions/card/answer", "/api/sessions/voice"}, literals - HUB_GET_ROUTES   # /api/loop: read and write, matched whole (ADR-0162); the card's answer and the phone's recording are writes (#1093, #1603)
+    assert literals <= HUB_GET_ROUTES | {"/api/promote", "/api/loop"}, literals - HUB_GET_ROUTES   # /api/loop: read and write, matched whole (ADR-0162)
     assert '"/api/promote"' in HUB_PY.read_text(), "the owner's move route the page names is not served"   # #829
 
 
