@@ -169,6 +169,37 @@ def test_the_page_boots_with_no_cost_markup(hub):  # noqa: F811
     assert out == {"booted": True}, out
 
 
+def test_the_spend_legend_dots_carry_the_bar_and_the_second_series_tokens(hub):  # noqa: F811
+    """#2668: the loop dot wears the bar token and the operator dot the second series token, so the legend reads as the
+    bars it names. Both tokens are DESIGN.md roles, and the legend draws no color of its own."""
+    buckets = [dict(b) for b in BUCKETS]
+    buckets[2]["op"] = 500000
+    out = move.run_page(hub.MOBILE_PAGE, """
+      tabTap("spend");
+      await __tick(20);
+      const lg = $("cost-chlg");
+      return { hidden: lg.hidden, keys: [...lg.children].map(c => c.className) };
+    """, routes={"/api/stats": [{"body": json.dumps(dict(STATS, buckets=buckets))}]})
+    assert out["hidden"] is False, "an operator segment leaves its legend hidden"
+    assert out["keys"] == ["k-loop", "k-operator"], out
+    # the stub DOM parses no text node, so the two words are read from the served markup the legend draws
+    assert '<span class="k-loop">loop</span><span class="k-operator">operator</span>' in hub.MOBILE_PAGE, out
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", hub.MOBILE_PAGE, flags=re.S))
+    assert spent_rule(css, "#cost-chlg .k-loop::before").get("background") == "var(--chart-bar)", \
+        "the loop dot does not wear the bar token"
+    assert spent_rule(css, "#cost-chlg .k-operator::before").get("background") == "var(--chart-series-2)", \
+        "the operator dot does not wear the second series token"
+
+
+def spent_rule(css, selector):
+    """The last declaration body the served stylesheet gives `selector`, as a dict of property to value."""
+    bodies = [dict(p.split(":", 1) for p in body.split(";") if ":" in p)
+              for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+              if selector in [s.strip() for s in sel.split(",")]]
+    assert bodies, f"the served page has no rule for {selector}"
+    return {k.strip(): v.strip() for k, v in bodies[-1].items()}
+
+
 def test_the_today_line_on_now_opens_spend(hub):  # noqa: F811
     """The Today line says the day's spend and hands the detail to the tab that owns it."""
     out = boot(hub, """

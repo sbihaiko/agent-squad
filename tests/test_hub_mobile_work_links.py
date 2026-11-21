@@ -203,7 +203,7 @@ def test_every_link_that_leaves_the_page_is_a_plain_anchor(hub):  # noqa: F811
         openLayer("lead"); await __tick(0); scan("lead");
         openLayer("loops"); await __tick(0); scan("loops");
         openLayer("loop", { slug: "x" }); await __tick(0); scan("loop");
-        openBugs(); await __tick(0); scan("bugs");
+        openLayer("bugs"); await __tick(0); scan("bugs");
         openLayer("profiler"); await __tick(0); scan("profiler");
         return out;
     """, board=[BOARD], routes={"/api/runs": [{"body": '{"runs": [], "groups": []}'}],

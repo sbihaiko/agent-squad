@@ -6,10 +6,11 @@
    landscape, and the bottom inset on anything that touches the bottom of the screen. */
 header{display:flex;gap:10px;align-items:baseline;padding:2px 14px 2px;padding-top:calc(2px + env(safe-area-inset-top));border-0;padding-left:calc(12px + env(safe-area-inset-left));padding-right:calc(12px + env(safe-area-inset-right))}
 /* The project switcher (#876): the header names the project; a tap opens the list in a sheet, rows 44 px tall. */
-#profile{flex:1;min-width:0;min-height:44px;display:flex;align-items:baseline;gap:8px;background:none;color:var(--fg);border:0;border-radius:0;padding:0;font-size:var(--fs-body);font-weight:600;text-align:left;line-height:1.25}
+#profile{flex:1;min-width:0;min-height:44px;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px;background:none;color:var(--fg);border:0;border-radius:0;padding:0;font-size:var(--fs-body);font-weight:600;text-align:left;line-height:1.25}
 #profile b{white-space:nowrap;flex:none}
-#profile span{color:var(--mute);font-size:var(--fs-caption);font-weight:400;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#pswm{color:var(--mute);font-size:var(--fs-caption);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* The status takes a full line of its own under the project name (SPEC 2660, #2664): an alert wraps and is never cut off. */
+#profile span{color:var(--mute);font-size:var(--fs-caption);font-weight:400;min-width:0;flex:1 0 100%;white-space:normal;overflow-wrap:anywhere;line-height:1.3}
+#pswm{color:var(--mute);font-size:var(--fs-caption);min-width:0;white-space:normal;overflow-wrap:anywhere}
 #psheet{position:fixed;left:0;right:0;bottom:0;max-height:70vh;max-height:70dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--panel);border-top:1px solid var(--line);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:10px 14px calc(56px + env(safe-area-inset-bottom));padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));z-index:25;translate:0 0;transition:translate var(--motion-duration-enter) var(--motion-entry-easing)}
 #psw-content{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
 #psw-footer{flex:none;margin-top:8px}
@@ -18,7 +19,7 @@ header{display:flex;gap:10px;align-items:baseline;padding:2px 14px 2px;padding-t
 #pswl a{display:flex;flex-direction:column;justify-content:center;min-height:44px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--fg);text-decoration:none;font-size:var(--fs-body)}
 #pswl a[aria-current=page]{color:var(--acc)}
 #pswl .repo,#pswl .psw-m{color:var(--mute);font-size:var(--fs-caption)}
-#pswl .psw-all{color:var(--ok)}
+#pswl .psw-all{color:var(--acc)}   /* a link to every project: the interaction color, never a healthy state (#2665) */
 #pswx{display:block;width:100%;min-height:44px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-body)}
 header a{color:var(--acc);font-size:var(--fs-caption);white-space:nowrap}
 #to-desktop{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;color:var(--mute);font-size:var(--fs-caption)}
@@ -40,9 +41,15 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #loops-open b{font-size:var(--fs-body)}#loops-sub{color:var(--mute);font-size:var(--fs-caption)}
 .looprow{display:block;width:100%;min-height:44px;text-align:left;padding:8px 10px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif}
 .looprow b{display:block;font-weight:600}.looprow .mut{color:var(--mute);font-size:var(--fs-caption)}
-.looprow.on b{color:var(--ok)}.looprow.off b{color:var(--err)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
+/* The name reads in the text color at rest; a state tone marks what the project does, so Fault Red keeps one meaning: a fault (#2665). */
+.looprow.on b{color:var(--ok)}.looprow.off b{color:var(--fg)}.looprow.draining b,.looprow.starting b{color:var(--warn,var(--warn))}
 #loops-msg:not(:empty){color:var(--err);font-size:var(--fs-caption)}
+#loops-msg:empty{display:none}   /* an empty message takes no height, so the strip is only as tall as its content (#2664) */
+/* The empty Loop-bugs layer reports no state, so its line reads in the muted color, not the error color (#2665). */
+#bugs-msg{color:var(--mute);font-size:var(--fs-caption)}
 #loops-content,#loop-content,#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+/* The tab bar paints over every layer, so a layer that scrolls under it ends above it, and no line hides behind the bar in landscape (#2665). */
+#loops-content,#bugs-content,#loop-content,#prof-content{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
 #loops-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 #loops-log{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:var(--mute);font-size:var(--fs-caption)}
 #loop-actions{flex:none;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px var(--page-gutter-phone) calc(64px + env(safe-area-inset-bottom));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
@@ -99,7 +106,7 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #profb #proftt th:first-child,#profb #proftt td:first-child{width:4.5em}
 #profb #proftt th:not(:first-child),#profb #proftt td:not(:first-child){width:auto}
 
-#prof-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+/* #prof-content paints from the shared layer rule at the top, so one rule sets its padding and its tab-bar inset (#2665). */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 6px;text-align:center}
 .tile b{display:block;font-size:var(--fs-display)}
@@ -186,6 +193,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cards[hidden],#work-results[hidden]{display:none}
 #now-head,#more-head,#specs-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0 8px}
 #now-head h2,#more-head h2,#specs-head h2{margin:0}
+/* The Today control looks like a control (SPEC 2660, #2664): the panel surface, the system radius, a thumb target and a
+   trailing chevron. It stays the same button with the same action: the day's Spend detail. */
+#now-today{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:44px;padding:0 12px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);font:var(--fs-body) system-ui,sans-serif;text-align:left}
+#now-today[hidden]{display:none}   /* the author display:flex otherwise outranks the UA [hidden] rule (#2664) */
+#now-today svg{color:var(--mute)}
 [data-topback],#now-more{min-height:44px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-md);padding:0 12px;font-size:var(--fs-body)}
 /* One icon (SPEC 1596, #1605): every icon is an inline SVG, and this rule is the one stroke width they all draw at. */
 .ico{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
@@ -210,6 +222,11 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 #cost-sum{color:var(--mute);font-size:var(--fs-caption);margin:0 0 10px}
 #cost-sub{color:var(--mute);font-size:var(--fs-caption);margin:-2px 0 8px}
 #cost-chlg{display:flex;gap:16px;color:var(--mute);font-size:var(--fs-caption);margin:2px 0 6px}
+/* The legend's dots wear the bars' own tokens (#2668): the bar token for loop, the second series token for operator. */
+#cost-chlg span{display:inline-flex;align-items:center;gap:6px}
+#cost-chlg span::before{content:"";width:10px;height:10px;border-radius:var(--radius-full);flex:none}
+#cost-chlg .k-loop::before{background:var(--chart-bar)}
+#cost-chlg .k-operator::before{background:var(--chart-series-2)}
 #cost-pie{display:flex;flex-direction:column;align-items:stretch;gap:8px}
 #cost-pie svg.pie{width:170px;height:170px;margin:0 auto;display:block}
 #cost-pie svg.pie text{fill:var(--fg);font-size:var(--fs-caption)}
@@ -262,7 +279,15 @@ nav button[aria-current=page]{color:var(--fg);box-shadow:inset 0 2px 0 var(--acc
 }
 @media (orientation: landscape){
   body.chart .chart-hint{display:none}
+  /* The phone in landscape gives the period buttons and the zoom control one row, so the plot takes the rest of the
+     height (#2663). The portrait phone never draws this body: it keeps its rotate hint. */
+  .chart-screen #ltrow{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:8px;flex:none;margin:2px 0}
+  .chart-screen #ltrow #ltbars,.chart-screen #ltrow #ltzoom{flex:none;margin:0}
+  .chart-screen #ltrow #ltbars{flex:1 1 auto}
+  .chart-screen #ltrow #ltzoom button{white-space:nowrap}   /* a zoom label stays on its one line (#2663) */
+  .chart-screen .chart-body .msg{margin:0}   /* the empty status line keeps no height from the plot (#2663) */
 }
+.chart-screen #ltsum{margin:2px 0}
 body.chart header,body.chart #control-row,body.chart nav{display:none}   /* a chart screen has no tab bar */
 body.chart{height:100dvh;overflow:hidden}
 body.chart main{height:100dvh;display:flex;flex-direction:column;padding:0}
@@ -280,7 +305,7 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 [data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 [data-screen][hidden]{display:none}
 [data-screen].root{position:static;z-index:auto;overflow:visible;background:transparent}
-#cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-content,#lead-content,#cfd-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #cost-content{padding-bottom:72px}   /* the floating project pill covers the bottom 57 px, so the last cost row scrolls clear of it (#2503) */
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
@@ -294,6 +319,9 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 #specs-search{display:grid;place-items:center;width:44px;height:44px;padding:0;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-xl)}
 #specs-search svg{width:18px;height:18px}
 .runrow{display:block;width:100%;text-align:left;min-height:44px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px 12px;font:var(--fs-body) system-ui,sans-serif}
+/* A run title on Runs is a name, not code: the row draws it in the body face at 600 (#2668). A run id keeps the
+   monospace face of `.runid`, wherever a detail view names it. */
+.runrow .runid{font-family:var(--font-ui)}
 .runrow .mut{color:var(--mute);font-size:var(--fs-caption);margin-top:2px}
 /* The run row draws the shared state chip: the served word in the state's tone, behind its shared mark (#1142). */
 .runrow .run-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
@@ -361,7 +389,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="reconnect" hidden><p>The hub does not answer. Check Tailscale and that the machine is awake.</p><button id="retry" type="button">Try again</button></div>
 <main>
 <section data-panel="monitor">
-<button id="now-today" type="button" hidden></button>
+<button id="now-today" type="button" hidden><span id="now-today-txt"></span><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2l4 4-4 4"/></svg></button>
 <div id="now-head" data-role="header"><h2>Now</h2></div>
 <div id="now-needs">
 <div id="needs-head"><h3>Needs you</h3><span id="needs-count"></span></div>
@@ -412,20 +440,22 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <div id="lead-content"><div class="scr-head"><button id="lead-backtop" data-topback="lead" type="button"><svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M8 2L4 6l4 4"/></svg><span class="ico-lbl">Now</span></button><h2>Lead Time</h2></div>
 <div class="chart-body">
 <p id="ltsum" class="lt-sum"></p>
+<div id="ltrow">
 <div id="ltbars">
 <button data-ltf="2" type="button">48h</button>
 <button data-ltf="7" type="button">1 week</button>
 <button data-ltf="30" type="button">1 month</button>
 <button data-ltf="all" type="button">All time</button>
 </div>
-<div id="ltplot" class="chart-plot"></div>
-<div id="ltlegend"></div>
-<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
 <div id="ltzoom">
 <button data-ltzoom="in" type="button">Zoom in</button>
 <button data-ltzoom="out" type="button">Zoom out</button>
 <button data-ltzoom="reset" type="button">Reset</button>
 </div>
+</div>
+<div id="ltplot" class="chart-plot"></div>
+<div id="ltlegend"></div>
+<div id="ltpin" hidden><p id="ltpintext"></p><button data-ltpin="dismiss" type="button">Dismiss</button></div>
 <p class="msg" role="status"></p></div>
 <div class="chart-hint" id="lead-hint" role="status">
 <svg class="chart-turn" viewBox="0 0 24 44" aria-hidden="true" focusable="false"><rect x="5" y="7" width="14" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 13a10 10 0 0 1 5-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2 13l4-1M2 13l1-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -520,7 +550,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
 <button data-period="month" type="button">Per month</button>
 </div>
 <div id="cchart"></div>
-<p id="cost-chlg" class="chlg" hidden>loop · operator</p>
+<p id="cost-chlg" class="chlg" hidden><span class="k-loop">loop</span><span class="k-operator">operator</span></p>
 <h3 class="sub">Model tokens · this month</h3>
 <p class="m" id="cost-sub">in + out</p>
 <div id="cost-pie"></div>
@@ -653,7 +683,7 @@ const LAYER = {
   loops: { show() { $("loops").hidden = false; loopDraw(); }, hide() { $("loops").hidden = true; } },
   loop: { show(s) { loopSlug = (s && s.slug) || ""; $("looppage").hidden = false; drawLoop(); },
           hide() { $("looppage").hidden = true; $("loop-confirm").hidden = true; } },
-  bugs: { show() { $("loopbugs").hidden = false; }, hide() { $("loopbugs").hidden = true; } },
+  bugs: { show() { $("loopbugs").hidden = false; drawBugs(); }, hide() { $("loopbugs").hidden = true; } },
   profiler: { show() { $("profpage").hidden = false; markChart(); profPoll(); }, hide() { $("profpage").hidden = true; markChart(); } },
 };
 // The tab a screen belongs to (a screen opened on another tab waits there until the owner returns), its title, and the
@@ -1202,6 +1232,7 @@ function loopDraw() {
     return li;
   }));
   if (loopSlug || topLayer() === "loop") drawLoop();
+  if (topLayer() === "bugs") drawBugs();   // the fact may answer after the layer opens, so the layer draws again
 }
 function drawLoop() {
   const p = loopHere(), name = p ? (p.slug || p.repo || "this project") : "this project";
@@ -1224,12 +1255,14 @@ function drawLoop() {
   const sec = $("loop-secondary");
   sec.hidden = !v.secondary;
   sec.textContent = v.secondary || "";
-  sec.onclick = v.secondary ? () => openBugs() : null;
+  sec.onclick = v.secondary ? () => openLayer("bugs") : null;
   $("loop-dots").hidden = !loopStopNowOffered(p, !!(p && p.write));
   $("loop-menu").hidden = true;
   $("loop-reason").textContent = v.state === "refused" ? v.sub : "";
 }
-function openBugs() {
+// The Loop-bugs layer draws itself: one row per open loop-bug, and the muted line when nothing is open, so every draw of
+// the layer keeps its message (SPEC 2660, #2665).
+function drawBugs() {
   const p = loopHere(), bugs = (p && p.bugs_open) || [];
   $("bugs-title").textContent = "Loop-bugs · " + ((p && (p.slug || p.repo)) || "this project");
   $("bugs-list").replaceChildren(...bugs.map(x => {
@@ -1238,8 +1271,7 @@ function openBugs() {
     b.textContent = "#" + x.n + " " + (x.t || "");
     li.append(b); return li;
   }));
-  $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug is read now: the refusal may have just cleared.";
-  openLayer("bugs");
+  $("bugs-msg").textContent = bugs.length ? "" : "No open loop-bug in this project.";
 }
 async function loopView(fresh) {
   if (!loopV) $("loops-msg").textContent = "Loading the loop status.";
@@ -1692,8 +1724,7 @@ const MORE = {
     COST_LAST = [el, d];
     box.replaceChildren(...(buckets.length ? [chartEl(buckets, period, box.clientWidth)] : []));
     const chlg = el.querySelector("#cost-chlg"), anyOp = buckets.some(b => (b.op || 0) > 0);
-    chlg.hidden = !anyOp;
-    if (anyOp) chlg.textContent = "● loop   ● operator";
+    chlg.hidden = !anyOp;   // the dots and their tokens are the served markup's and CSS's, so a redraw keeps them (#2668)
     const slices = usageSlices(d.models || []), colors = usageSliceColors(slices);
     el.querySelector("#cost-pie").replaceChildren(...(slices.length ? [pieEl(slices, colors), legendEl(slices, colors)] : []));
   },
@@ -1862,7 +1893,7 @@ addEventListener("orientationchange", () => setTimeout(redrawChart, 60));
 async function loadNowToday() {
   try {
     const d = await call("/api/stats?period=day");
-    $("now-today").textContent = "Today · " + usageTodayLine(d.totals || {}, d.operator);
+    $("now-today-txt").textContent = "Today · " + usageTodayLine(d.totals || {}, d.operator);
     $("now-today").hidden = false;
   } catch (e) {
     $("now-today").hidden = true;

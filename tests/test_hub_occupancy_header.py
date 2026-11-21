@@ -53,7 +53,7 @@ def _with_checkout(checkout):
 def test_running_group_header_shows_occupancy_not_spend(hub):
     rows = [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
     h = hub.group_header("running", rows, {"runs": 10, "children": 20})
-    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
+    assert h["text"] == "Runs 3/10 · Agents 9/20"
     assert h["title"] == "$6.60"   # the spend the header no longer prints
 
 
@@ -100,7 +100,7 @@ def test_the_header_prints_runs_then_agents_over_the_ceiling_and_names_what_wait
     rows = [{"state": "running", "live": True, "spend": 1.0, "agents": a} for a in (2, 3)]
     caps = {"runs": 10, "children": 20, "waiting": [{"ceiling": "caps.children", "holder": "run-x:route.router.4"}]}
     h = hub.group_header("running", rows, caps)
-    assert h["text"] == "RUNS 2/10 · AGENTS 5/20 · waiting: run-x:route.router.4 (caps.children)"
+    assert h["text"] == "Runs 2/10 · Agents 5/20 · waiting: run-x:route.router.4 (caps.children)"
     assert hub.run_groups(rows, caps)[0]["text"] == h["text"]              # the runs answer carries the same line
 
 
@@ -121,7 +121,7 @@ def test_the_runs_answer_binds_the_header_tooltip_to_the_group_spend(hub):
     assert "function groupHeader(" not in src                                   # the page holds no copy of the rule
     rows = [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
     h = hub.run_groups(rows, {"runs": 10, "children": 20})[0]
-    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
+    assert h["text"] == "Runs 3/10 · Agents 9/20"
     assert h["title"] == "$6.60"                                                # spend in the tooltip, occupancy as the text
 
 
@@ -131,7 +131,7 @@ def test_the_page_paints_the_text_and_the_title_the_answer_carries(hub):
              "spend": s, "agents": 3, "dur": 1, "port": 1234} for n, s in enumerate((1.1, 2.2, 3.3))]
     groups = hub.run_groups(rows, {"runs": 10, "children": 20})
     out = _run(_js(rows, "const a=boot();a.runs(R,G);a.draw();return {html:a.mainHtml()};", groups))
-    assert '<span class=sr title="$6.60">RUNS 3/10 · AGENTS 9/20</span>' in out["html"]
+    assert '<span class=sr title="$6.60">Runs 3/10 · Agents 9/20</span>' in out["html"]
 
 
 def test_the_real_run_list_row_carries_the_fields_the_group_rule_reads(hub, tmp_path):
@@ -143,14 +143,14 @@ def test_the_real_run_list_row_carries_the_fields_the_group_rule_reads(hub, tmp_
     assert row["state"] in hub.LIVE_STATES and row["live"] is True and isinstance(row["age"], int)
     groups = hub.run_groups([row], {"runs": 6, "children": 20})
     assert [g["key"] for g in groups if not g["empty"]] == ["running"]   # a live row lands in WORKERS, never an age band
-    assert groups[0]["text"] == "RUNS 1/6 · AGENTS 0/20" and groups[0]["title"] == "$0.00"
+    assert groups[0]["text"] == "Runs 1/6 · Agents 0/20" and groups[0]["title"] == "$0.00"
 
 
 def test_the_runs_answer_carries_the_occupancy_header_with_the_graphs_caps(hub):
     rows = [{"state": "completed", "live": False, "age": 600, "spend": 1.0, "agents": 0}]
     rows += [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
     h = hub.run_groups(rows, {"runs": 10, "children": 20})[0]
-    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
+    assert h["text"] == "Runs 3/10 · Agents 9/20"
     assert h["title"] == "$6.60"
 
 
@@ -231,6 +231,6 @@ def test_the_running_header_tooltip_labels_the_per_run_pair_beside_the_spend(hub
     rows = [{"state": "running", "live": True, "spend": 1.0, "agents": 1}]
     caps = {"runs": 10, "children": 20, "per_run": {"label": "per run: max_parallel 2 · route: max_children 4, max_parallel 2"}}
     h = hub.group_header("running", rows, caps)
-    assert h["text"] == "RUNS 1/10 · AGENTS 1/20"          # the machine-wide pair stays the text
+    assert h["text"] == "Runs 1/10 · Agents 1/20"          # the machine-wide pair stays the text
     assert h["title"] == "$1.00 · per run: max_parallel 2 · route: max_children 4, max_parallel 2"
     assert hub.run_groups(rows, caps)[0] == {**h, "key": "running", "label": "WORKERS", "empty": False}   # the answer carries the same line

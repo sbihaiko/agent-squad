@@ -9,9 +9,11 @@ A spec's write reaches its open children by the inheritance rule (#1979).
 """
 import http.client
 import importlib.util
+import io
 import json
 import pathlib
 import re
+import socket
 import sys
 import threading
 import types
@@ -71,6 +73,7 @@ def hub(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "ghread", types.SimpleNamespace(read=fake_read))
     monkeypatch.setattr(mod, "priority_backfill", types.SimpleNamespace(propagate=lambda *a, **k: {}))
     srv = ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
+    mod.test_server = srv   # the test patches `handle_error` on it to see a handler that raised
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield mod, srv.server_port
     mod.priority_release.set()
@@ -117,6 +120,29 @@ def test_a_choice_sends_one_board_write_and_the_card_shows_it_pending(hub):
     assert mod.priority_calls == [(9, "high")]
     row = card_row(mod, 9)
     assert row["pr"]["level"] == "high" and not row.get("prp") and "prr" not in row
+
+
+def test_a_valid_write_answers_once_and_the_handler_raises_no_exception(hub, monkeypatch):
+    mod, port = hub
+    raised = []
+    monkeypatch.setattr(mod.test_server, "handle_error", lambda request, client, *a: raised.append(client))
+
+    raw = (f"POST /api/board/priority HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n"
+           f"Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n"
+           f'Content-Length: {len(json.dumps({"issue": 9, "priority": "high"}))}\r\n\r\n'
+           f'{json.dumps({"issue": 9, "priority": "high"})}')
+    s = socket.create_connection(("127.0.0.1", port), timeout=10)
+    s.sendall(raw.encode())
+    data = b""
+    while chunk := s.recv(65536):
+        data += chunk
+    s.close()
+
+    assert data.count(b"HTTP/1.") == 1
+    head, _, body = data.partition(b"\r\n\r\n")
+    assert head.split(b"\r\n", 1)[0].split() == [b"HTTP/1.0", b"200", b"OK"]
+    assert json.loads(body) == {"ok": True, "issue": 9, "priority": "high", "changed": True, "pending": True}
+    assert raised == []
 
 
 def test_a_second_ask_while_the_first_is_in_flight_starts_no_second_write(hub):
@@ -207,6 +233,25 @@ def test_a_non_numeric_content_length_ends_the_connection(hub):
 
     assert r.status == 400 and r.getheader("Connection") == "close"
     assert mod.priority_calls == []
+
+
+def test_the_priority_handler_writes_the_route_answer_once(hub, monkeypatch):
+    """The handler writes the route's own answer and nothing after it. A stray second write reached an undefined name, so
+    every served write left a NameError traceback in its handler thread (#2672)."""
+    mod, port = hub
+    body = b'{"issue": 9, "priority": "high"}'
+    wrote = []
+    stub = types.SimpleNamespace(
+        headers={"Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}",
+                 "Content-Length": str(len(body))},
+        rfile=io.BytesIO(body), close_connection=False,
+        server=types.SimpleNamespace(server_port=port),
+        answer=lambda code, out: wrote.append((code, out)))
+    monkeypatch.setattr(mod, "priority_route", lambda a, raw: (200, {"ok": True}))
+
+    mod.H.priority_post(stub, mod.Access(True, "", "", False))
+
+    assert wrote == [(200, {"ok": True})]
 
 
 @pytest.mark.parametrize("host", TN_HOSTS)

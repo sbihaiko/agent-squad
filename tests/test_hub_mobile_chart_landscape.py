@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
@@ -67,6 +68,134 @@ def chart_screen(name):
     m = re.search(rf'<article[^>]*data-screen="{name}"[^>]*>(.*?)</article>', page(), re.S)
     assert m, f"the phone has no {name} chart screen"
     return m.group(0)
+
+
+class _Parents(HTMLParser):
+    """Each id of the served markup and the id of its nearest named ancestor, read from the page's own elements."""
+
+    VOID = {"meta", "link", "br", "hr", "img", "input", "source", "area", "base", "col", "embed", "param", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+        self.parent = {}
+
+    def handle_starttag(self, tag, attrs):
+        d = dict(attrs)
+        if d.get("id"):
+            self.parent[d["id"]] = next((i for _, i in reversed(self.stack) if i), None)
+        if tag not in self.VOID:
+            self.stack.append((tag, d.get("id")))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag not in self.VOID:
+            self.stack.pop()
+
+    def handle_endtag(self, tag):
+        while self.stack:
+            if self.stack.pop()[0] == tag:
+                break
+
+
+def parents(markup):
+    parser = _Parents()
+    parser.feed(markup)
+    return parser.parent
+
+
+def stylesheet(html):
+    return "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S))
+
+
+def declarations(body):
+    """One rule body as its declaration map, keyed by property, never by a whitespace-stripped token."""
+    decls = {}
+    for part in body.split(";"):
+        name, sep, value = part.partition(":")
+        if sep:
+            decls[name.strip()] = value.strip()
+    return decls
+
+
+def parse_rules(css):
+    """Each rule of one style sheet: its selector text (inner whitespace collapsed to one space, so a descendant
+    combinator stays a space) and its declaration map. A selector list gives one entry per selector, and a later rule
+    of the same selector overrides the earlier one, as the cascade does. An at-rule's body is parsed as rules in turn
+    and keyed by its whole prelude, so a media query is read apart from the top-level rules and from the other query."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    rules, at = {}, {}
+    i = 0
+    while i < len(css):
+        brace = css.find("{", i)
+        if brace == -1:
+            break
+        prelude = " ".join(css[i:brace].split())
+        depth, j = 1, brace + 1
+        while j < len(css) and depth:
+            if css[j] == "{":
+                depth += 1
+            elif css[j] == "}":
+                depth -= 1
+            j += 1
+        body = css[brace + 1: j - 1]
+        if prelude.startswith("@"):
+            at[prelude] = parse_rules(body)
+        else:
+            for selector in prelude.split(","):
+                selector = " ".join(selector.split())
+                if selector:
+                    rules.setdefault(selector, {}).update(declarations(body))
+        i = j
+    return {"rules": rules, "at": at}
+
+
+def test_the_landscape_lead_shares_one_row_and_gives_the_plot_the_rest_of_the_height():
+    """#2663: in landscape the period buttons and the zoom control stand in one row over the plot, the plot takes the
+    remaining height of the chart area, and the portrait phone keeps the layout it has."""
+    html = page()
+    screen = chart_screen("lead")
+    where = parents(screen)
+    assert where.get("ltbars") == "ltrow" and where.get("ltzoom") == "ltrow", \
+        f"the period buttons and the zoom control share no row: {where.get('ltbars')}, {where.get('ltzoom')}"
+    assert where.get("ltrow") == "lead-content", "the control row does not sit in the lead screen's own body"
+    assert screen.index('id="ltrow"') < screen.index('id="ltplot"'), "the control row does not stand over the plot"
+
+    sheet = parse_rules(stylesheet(html))
+    land = sheet["at"].get("@media (orientation: landscape)")
+    assert land, "the page carries no landscape media query"
+    rules = land["rules"]
+    row = rules.get(".chart-screen #ltrow")
+    assert row, f"the landscape phone has no rule for the control row: {sorted(rules)}"
+    assert row.get("display") == "flex", f"the landscape control row is not a flex row: {row}"
+    assert row.get("flex-direction") == "row" and row.get("flex-wrap") == "nowrap", row
+    assert row.get("flex") == "none", f"the control row takes height from the plot: {row}"
+    for part in ("#ltbars", "#ltzoom"):
+        rule = rules.get(f".chart-screen #ltrow {part}")
+        assert rule and rule.get("margin") == "0", f"the row's {part} keeps its own margin: {rule}"
+
+    # The body is a flex column in landscape, so the plot grows into the height the row leaves.
+    body = sheet["rules"].get(".chart-body")
+    assert body and body.get("display") == "flex" and body.get("flex-direction") == "column", body
+    plot = sheet["rules"].get(".chart-screen .chart-plot")
+    assert plot and plot.get("flex") == "1" and plot.get("min-height") == "0", \
+        f"the plot no longer takes the remaining height of the chart area: {plot}"
+
+    # The empty status line keeps no height in landscape, and its margin stays out of the portrait layout.
+    msg = rules.get(".chart-screen .chart-body .msg")
+    assert msg and msg.get("margin") == "0", f"the landscape status line keeps its margin: {msg}"
+    assert ".chart-screen .chart-body .msg" not in sheet["rules"], \
+        "the status-line margin left the landscape query for every screen"
+
+    port = sheet["at"].get("@media (orientation: portrait)")
+    assert port, "the page carries no portrait media query"
+    prules = port["rules"]
+    assert prules.get("body.chart .chart-body", {}).get("display") == "none", \
+        "the portrait phone still draws the plot"
+    assert prules.get("body.chart .chart-hint", {}).get("display") == "flex", \
+        "the portrait phone lost its rotate hint"
+    assert not any("ltrow" in selector for selector in prules), \
+        "the portrait phone picked up the landscape control row"
 
 
 @pytest.mark.skipif(NODE is None, reason="node is needed for the chart rules")
