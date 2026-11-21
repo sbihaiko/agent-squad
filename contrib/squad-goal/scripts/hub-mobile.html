@@ -129,10 +129,13 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 #col-title{flex:1;text-align:center;min-height:44px;display:flex;flex-direction:column;justify-content:center}
 #col-name{font-size:var(--fs-heading);font-weight:600}
 #col-count{color:var(--mute);font-size:var(--fs-caption);font-variant-numeric:tabular-nums}
-/* The column names of Work (SPEC 2498, #2501): one pill per column, the active one ringed, so the owner switches the
+/* The column names of Work (SPEC 2498, #2501): one tab per column, the active one ringed, so the owner switches the
    column with one tap and every column is drawn, an empty one included. */
+/* A tab takes the system corner (DESIGN.md, 6 px), never the full pill. The strip fades on its trailing edge while it
+   holds columns past that edge, so more columns read as scrollable (#2666). */
 #col-tabs{display:flex;gap:4px;overflow-x:auto;margin:8px 0 10px;scrollbar-width:none}
-#col-tabs button{flex:0 0 auto;min-height:44px;padding:0 10px;background:transparent;color:var(--mute);border:1px solid transparent;border-radius:var(--radius-full);font-size:var(--fs-caption)}
+#col-tabs.more{mask-image:linear-gradient(to right,var(--fg) calc(100% - 24px),transparent);-webkit-mask-image:linear-gradient(to right,var(--fg) calc(100% - 24px),transparent)}
+#col-tabs button{flex:0 0 auto;min-height:44px;padding:0 10px;background:transparent;color:var(--mute);border:1px solid transparent;border-radius:var(--radius-md);font-size:var(--fs-caption)}
 #col-tabs button[aria-pressed=true]{color:var(--fg);border-color:var(--fg)}
 #cards{touch-action:pan-y;min-height:50vh;display:flex;flex-direction:column;gap:var(--card-gap-y)}
 /* A card is a plain anchor to its issue on GitHub (SPEC 2498, #2501): no sheet and no script redirect. */
@@ -540,7 +543,7 @@ input,textarea{font-size:var(--fs-field)}.runid{font:600 var(--fs-body) var(--fo
      Enter-less matching runs on every keystroke, the results replace the root's list, and Esc or Back clears it. -->
 <div id="searchbar" data-role="search" hidden>
 <button id="search-back" type="button">Back</button>
-<input id="search-input" type="search" autocomplete="off" aria-label="Search by title, number or label">
+<input id="search-input" type="search" autocomplete="off" placeholder="Search cards" aria-label="Search by title, number or label">
 </div>
 <!-- The control row of SPEC 1596 (#1598, rule 4): one row on every root, above the tab bar, never on a detail. -->
 <div id="control-row" data-role="control-row"><div id="cr-seg" role="group" aria-label="Filter"></div></div>
@@ -1403,6 +1406,8 @@ function renderBoard() {
   [...tabs.children].forEach((b, i) => {
     if (i === view.col) b.setAttribute("aria-pressed", "true"); else b.removeAttribute("aria-pressed");
   });
+  // The trailing fade shows only while the strip holds a column past its edge (#2666).
+  tabs.classList.toggle("more", tabs.scrollWidth > tabs.clientWidth + 1);
   const empty = document.createElement("p");
   empty.className = "empty";
   empty.textContent = emptyColumnNote({ groups: groups.length, shown: cols.length });
@@ -1844,6 +1849,10 @@ function markChart(draw) {
   document.body.classList.toggle("chart", on);
   if (on && draw !== false) redrawChart();   // the loader marks after its own draw, so it passes false (#2504)
 }
+addEventListener("resize", () => {
+  const tabs = $("col-tabs");   // a rotation changes how many columns fit past the strip's edge (#2666)
+  if (tabs) tabs.classList.toggle("more", tabs.scrollWidth > tabs.clientWidth + 1);
+});
 addEventListener("resize", () => redrawChart());
 let COST_LAST = null;   // the Spend payload last drawn: a rotation redraws its bars at the new width
 addEventListener("resize", () => { const box = document.querySelector("#cchart"); if (COST_LAST && box && box.clientWidth) MORE.cost(...COST_LAST); });
