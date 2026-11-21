@@ -1971,26 +1971,41 @@ def slack_set(body):
 # --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
 # alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
 # own map, which it filled when it joined the channel once. So the hub calls `auth.test` only: it lists no channel,
-# joins none and writes nothing. The address is cached for a window, and a missing connection, channel or domain answers
-# the unavailable state, which the page draws with no anchor.
-SLACK_TOKEN_SERVICE = "agent-squad-voice-slack-bot-token"   # contrib/voice/keychain.py BOT_TOKEN: the one workspace connection
+# joins none and writes nothing. A profile may answer from its own connection and channel: a profile-qualified Keychain
+# entry and a profile-qualified channel entry win over the shared ones, and the kept answer is keyed by profile, so a
+# profile switch never serves another project's link. A missing connection, channel or domain answers the unavailable
+# state, which the page draws with no anchor.
+SLACK_TOKEN_SERVICE = "agent-squad-voice-slack-bot-token"   # contrib/voice/keychain.py BOT_TOKEN: the shared workspace connection
 SLACK_WORKSPACE = re.compile(r"^https://([A-Za-z0-9][\w.-]*?[A-Za-z0-9])\.slack\.com/?$")
 SLACK_LINK_SECS = 300.0
-_SLACK_LINK = {"at": None, "answer": None}
+KEYCHAIN = sys.platform == "darwin"   # the one reader is the macOS Keychain: another host has no connection to read
+_SLACK_LINK = {}   # (profile, repository) -> {"at", "answer"}: one window per profile, never one window for the machine
 _SLACK_LINK_LOCK = threading.Lock()
+
+def profile_of():
+    """The profile a request-time read answers for: the name this hub was loaded under, else the environment's.
+
+    hubmux restores the shell's SG_PROFILE after the import, so the pinned name wins whenever the hub was loaded with one
+    (#1073). A hub loaded with no profile still follows the environment, which is how a hand-run read names its profile."""
+    return PROFILE_NAME or os.environ.get("SG_PROFILE", "")
 
 def voice_state_dir():
     """The always-on daemon's state directory: VOICE_STATE when the caller exports it, else its default."""
     return pathlib.Path(os.environ.get("VOICE_STATE") or (pathlib.Path.home() / ".local" / "state" / "agent-squad" / "voiced"))
 
-def slack_token():
-    """The workspace bot token, read from the macOS Keychain. The value never leaves this reader to a print or a log."""
-    try:
-        p = subprocess.run(["security", "find-generic-password", "-s", SLACK_TOKEN_SERVICE, "-w"],
-                           capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return (p.stdout.strip() or None) if p.returncode == 0 else None
+def slack_token(profile=None):
+    """The workspace bot token, read from the macOS Keychain. A profile's own entry wins over the shared voice entry, so
+    two profiles may answer from two workspaces. The value never leaves this reader to a print or a log."""
+    p = profile_of() if profile is None else profile
+    services = [f"{SLACK_TOKEN_SERVICE}:{p}", SLACK_TOKEN_SERVICE] if p else [SLACK_TOKEN_SERVICE]
+    for service in services:
+        try:
+            r = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                               capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode == 0 and r.stdout.strip(): return r.stdout.strip()
+    return None
 
 def slack_api(token, method):
     """One Slack read. The hub calls `auth.test` alone: it lists no channel, joins none and writes nothing."""
@@ -1998,9 +2013,10 @@ def slack_api(token, method):
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode() or "{}")
 
-def slack_workspace():
+def slack_workspace(profile=None):
     """(domain, error): the workspace domain from the Slack connection, never a constant in this repository."""
-    token = slack_token()
+    if not KEYCHAIN: return None, "no keychain on this host"
+    token = slack_token(profile)
     if not token: return None, "no connection"
     try: d = slack_api(token, "auth.test")
     except Exception: return None, "the connection did not answer"
@@ -2009,33 +2025,45 @@ def slack_workspace():
     if not m: return None, "no workspace domain"
     return m.group(1), None
 
-def slack_channel(repo=None):
-    """(channel, error): the project's channel from the daemon's map, a read that never joins a channel."""
+def slack_channel(repo=None, profile=None):
+    """(channel, error): the project's channel from the daemon's map, a read that never joins a channel.
+
+    The daemon keys the map by repository. A profile-qualified entry (`<profile>:<repo>`) wins when the map holds one, so
+    two profiles that name one repository still resolve their own channel."""
+    repo = repo or REPO
+    profile = profile_of() if profile is None else profile
     try: d = json.loads((voice_state_dir() / "channels.json").read_text())
-    except (OSError, ValueError): return None, "no channel for " + str(repo or REPO)
-    ch = d.get(repo or REPO) if isinstance(d, dict) else None
-    if not isinstance(ch, dict) or not ch.get("id"): return None, "no channel for " + str(repo or REPO)
+    except (OSError, ValueError): return None, "no channel for " + str(repo)
+    ch = None
+    if isinstance(d, dict):
+        if profile: ch = d.get(f"{profile}:{repo}")
+        ch = ch or d.get(repo)
+    if not isinstance(ch, dict) or not ch.get("id"): return None, "no channel for " + str(repo)
     return ch, None
 
-def slack_link(now=None, refresh=False):
+def slack_link(now=None, refresh=False, profile=None, repo=None):
     """The project channel's archive address on the workspace domain: {"state", "url", "channel", "text"}.
 
-    The answer is cached for a window; `refresh` resolves again. A missing connection, channel or domain answers the
-    unavailable state with no address, and the page then draws no anchor (SPEC 2498, #2500)."""
+    The answer is cached for a window per (profile, repository); `refresh` resolves again. A missing connection, channel
+    or domain answers the unavailable state with no address, and the page then draws no anchor (SPEC 2498, #2500)."""
+    profile = profile_of() if profile is None else profile
+    repo = repo or REPO
+    key = (profile, repo)
     now = time.monotonic() if now is None else now
     with _SLACK_LINK_LOCK:
-        at = _SLACK_LINK["at"]
-        if not refresh and at is not None and now - at < SLACK_LINK_SECS: return _SLACK_LINK["answer"]
-        domain, why = slack_workspace()
+        kept = _SLACK_LINK.get(key) or {}
+        at = kept.get("at")
+        if not refresh and at is not None and now - at < SLACK_LINK_SECS: return kept["answer"]
+        domain, why = slack_workspace(profile)
         ch = None
-        if domain is not None: ch, why = slack_channel()
+        if domain is not None: ch, why = slack_channel(repo, profile)
         if domain is not None and ch is not None:
             answer = {"state": "ok", "url": f"https://{domain}.slack.com/archives/{ch['id']}",
                       "channel": "#" + str(ch.get("name") or ch["id"]), "text": "Answer in Slack"}
         else:
             answer = {"state": "unavailable", "url": None, "channel": None,
                       "text": "Slack link unavailable: " + str(why) + "."}
-        _SLACK_LINK.update(at=now, answer=answer)
+        _SLACK_LINK[key] = {"at": now, "answer": answer}
         return answer
 
 def _tok(n):
@@ -3783,20 +3811,33 @@ def issue_url(n, repo=None):
     """The plain issue address on github.com, the form iOS opens in the GitHub app: no query string."""
     return f"https://github.com/{repo or REPO}/issues/{int(n)}"
 
+def settled_on_board(r):
+    """True when the board settles the run's decision: its work landed (handled) or every issue it names is closed
+    (verified by hand, evidence on the issue). The pending read asks this itself, so a row leaves Needs you even when
+    the run row's own summary cannot see the board."""
+    landed = {p["n"] for p in board_cache.get("landed") or [] if p.get("m")}
+    if r.get("fix") in landed: return True
+    issues = {int(n) for n in r.get("issues") or []}
+    if not issues: return False
+    closed = {i["n"] for i in board_cache.get("items") or [] if i.get("s") == "closed"}
+    return issues <= closed or bool(issues & landed)
+
 def pending_decisions():
     """Every run that ended needs-human and still waits for the owner, across every date, the latest end first (SPEC 2498).
 
-    The ended-runs read covers the local day only, so a decision the owner did not answer yesterday waits here today. A
-    run whose verdict was later handled (its work landed) or verified (every issue was closed afterwards) is not pending,
-    and a run resumed or reclassified after its verdict is live or ended another way. One run gives one row."""
+    The ended-runs read covers the local day only, so a decision the owner did not answer yesterday waits here today. The
+    record's final verdict is the last invocation's: a run resumed after its verdict has no verdict and is live again, and
+    one reclassified by a later verdict ended another way, so neither reaches this read. A run whose verdict was later
+    handled (its work landed) or verified (every issue was closed afterwards) is not pending. One run gives one row."""
     now, out, seen = time.time(), [], set()
     for d in sorted(project_dirs()):
         for rd in sorted(d.glob("run-*")):
             if rd.name in seen or not (rd / "record.jsonl").is_file(): continue
             r = scan(rd / "record.jsonl")
-            if not r or r.get("verdict") is None: continue
+            if not r or r.get("verdict") != "needs-human": continue
             row, _ = run_row(str(rd), "", [])
             if row.get("state") != "needs-human": continue
+            if settled_on_board(r): continue
             seen.add(rd.name)
             n = next((int(x) for x in r.get("issues") or []), None)
             ended = float(r.get("t1") or now)
@@ -3805,7 +3846,7 @@ def pending_decisions():
                         "spend": row.get("spend") or 0, "age": max(0, int(now - ended)), "ended_at": ended})
     return sorted(out, key=lambda x: -x["ended_at"])
 
-PENDING_POLL_SECS = 5.0   # seconds: the page's own Now poll, so every open page shares one read per window
+PENDING_POLL_SECS = 15.0   # seconds: every open page shares one walk of the run folders; a decision waits days, not seconds
 _PENDING_KEPT = {"at": None, "answer": None}
 _PENDING_LOCK = threading.Lock()
 

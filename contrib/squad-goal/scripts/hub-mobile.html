@@ -1091,12 +1091,14 @@ $("retry").onclick = status;
 // Needs you (SPEC 2498, #2500): the pending decisions of every date, and the one link to the project's Slack channel.
 // The hub decides each row's label, chip, age, address and the link's state; this draws what it answers. A row whose run
 // names no issue stays plain text, so no anchor is a dead target, and an unavailable link is a box, never an anchor.
+// A link leaves the page only for an absolute http(s) address: anything else stays plain text, never a dead target.
+const safeUrl = u => /^https?:\/\/\S+$/i.test(String(u || "")) ? String(u) : null;
 function needRow(r) {
-  const li = document.createElement("li");
-  const box = document.createElement(r.url ? "a" : "div"), line = document.createElement("div"),
+  const href = safeUrl(r.url), li = document.createElement("li");
+  const box = document.createElement(href ? "a" : "div"), line = document.createElement("div"),
         name = document.createElement("span"), chip = document.createElement("span"), meta = document.createElement("div");
   box.className = "needrow"; line.className = "need-line";
-  if (r.url) box.href = r.url;
+  if (href) box.href = href;
   // The issue number is the row's key, so it runs bold; the words before it stay light, as the mockup draws them.
   const label = r.label || r.id || "a run", cut = /^(.*?\s)?(#\d+)$/.exec(label);
   if (cut) {
@@ -1113,11 +1115,12 @@ function needRow(r) {
   return li;
 }
 function drawSlack(s) {
-  const box = $("needs-slack"); box.replaceChildren();
-  if (s && s.url) {   // the hub sends the address only for the ok answer, so the address alone decides the anchor
+  const box = $("needs-slack"), href = s && s.state === "ok" ? safeUrl(s.url) : null;
+  box.replaceChildren();
+  if (href) {   // the ok state and an absolute address decide the anchor, never a stale address under another state
     const a = document.createElement("a"), b = document.createElement("b"), name = document.createElement("span"),
           arrow = document.createElement("span");
-    a.className = "needs-slack"; a.href = s.url;
+    a.className = "needs-slack"; a.href = href;
     b.textContent = s.text; name.className = "mut"; name.textContent = s.channel || "";
     arrow.className = "mut slk-arrow"; arrow.textContent = "↗"; arrow.setAttribute("aria-hidden", "true");
     a.append(b, name, arrow); box.append(a);
@@ -1172,8 +1175,7 @@ loadPoll();
 every("monitor", loadPoll, 5000);
 every("monitor", loadNeeds, 5000);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/mobile/sw.js", { scope: "/mobile/" }).catch(() => {});
-status();
-loadNeeds();
+status();   // the status read covers every tab; Now's own reads belong to show(), which draws that tab
 // The status read drives #reconnect, which covers every tab, so it polls on every tab while the app is in view.
 setInterval(() => { if (!document.hidden) status(); }, 5000);
 

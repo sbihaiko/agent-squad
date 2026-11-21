@@ -2,7 +2,7 @@
 
 The renders were taken through ego-browser in one private task space, on the phone page served from a loopback server
 with neutral fixtures. The page was entered at `#/now` after a cleared storage, so the render shows the saved address
-opening Now.
+opening Now. The renders were taken again on the final head.
 
 | Render | Address | Viewport | Fixture |
 | --- | --- | --- | --- |
@@ -12,17 +12,23 @@ opening Now.
 
 The comparison used the mockups in #2498: `new-01-now.png` and `new-01b-now-scrolled.png`.
 
-## What the review found
+## The screens this change touches
 
-The Needs you block draws the same as the mockup: the heading with its count, one row per pending run with a bold issue
-number, the warn chip, the age and the spend, and below it the one Slack row with the channel and the arrow. A row and
-the link keep a 44 px target.
+The change touches one screen, Now. No other screen draws the Needs you block or the Slack link, so no other render
+applies. Each render was compared with the mockup of the same state.
+
+| Screen | Mockup | Verdict |
+| --- | --- | --- |
+| Now, the Needs you block | `new-01-now.png` | The heading with its count, one row per pending run with a bold issue number, the warn chip, the age and the spend, and below it the one Slack row with the channel and the arrow. A row and the link keep a 44 px target. |
+| Now, the unavailable state | none | The dashed box carries the reason and no anchor, so a missing connection leaves no dead link. |
 
 The review found one defect and fixed it. The channel sat at the far right of the Slack row, while the mockup puts it
 right after "Answer in Slack". The arrow now takes the free space, and the channel follows the label.
 
-The unavailable state draws as a dashed box with no anchor, so a missing connection leaves no dead link.
+## Open items
 
-The spec's visual-review item stays **open** for the owner's iPhone check (acceptance criterion 6). The render also
-shows the tiles and the warnings below the Monitor card, where the mockup puts them above it. This ticket does not
-change that order.
+- [ ] **Acceptance criterion 6.** The owner checks on the iPhone that the link opens the Slack app on the channel. This
+  is owner-only, and this ticket reports it as open, never as done.
+- [ ] **The tiles/warnings order.** This render shows the tiles and the warnings below the Monitor card, where
+  `new-01-now.png` puts them above it. The order belongs to Now's existing layout, and this ticket does not change it.
+  It needs its own task, with `new-01-now.png` in #2498 as the reference.

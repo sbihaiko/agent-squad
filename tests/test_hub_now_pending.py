@@ -95,31 +95,43 @@ def test_a_needs_human_run_from_a_previous_day_shows(hub):
 
 
 def test_a_handled_run_does_not_show(hub):
+    """The board's landing is what settles the decision: the run itself still reads as needs-human."""
     mod, root = hub
-    run_folder(root, "run-handled", [run_start(OLD), verdict(OLD + 60)])
+    folder = run_folder(root, "run-handled", [run_start(OLD), verdict(OLD + 60)])
+    mod.board_cache = {"items": [], "landed": []}
+    row, _ = mod.run_row(str(folder), "", {})
+    assert row["state"] == "needs-human", "the fixture must reach the exclusion branch, not an empty scan"
     mod.board_cache = {"items": [], "landed": [{"n": 2500, "m": True}]}
     assert mod.pending_decisions() == []
 
 
 def test_a_verified_run_does_not_show(hub):
+    """Every issue the run names is closed on the board: the work was verified by hand, so the decision is settled."""
     mod, root = hub
-    run_folder(root, "run-verified", [run_start(OLD), verdict(OLD + 60)])
+    folder = run_folder(root, "run-verified", [run_start(OLD), verdict(OLD + 60)])
+    mod.board_cache = {"items": [], "landed": []}
+    row, _ = mod.run_row(str(folder), "", {})
+    assert row["state"] == "needs-human", "the fixture must reach the exclusion branch, not an empty scan"
     mod.board_cache = {"items": [{"n": 2500, "s": "closed"}], "landed": []}
     assert mod.pending_decisions() == []
 
 
 def test_a_resumed_run_does_not_show(hub):
+    """A resume after the verdict makes the run live again: its last invocation has no verdict."""
     mod, root = hub
-    run_folder(root, "run-resumed", [run_start(OLD), verdict(OLD + 60),
-                                     {"ts": OLD + 120, "event": "resume", "pos": 10}])
+    folder = run_folder(root, "run-resumed", [run_start(OLD), verdict(OLD + 60),
+                                              {"ts": OLD + 120, "event": "resume", "pos": 10}])
+    assert mod.scan(folder / "record.jsonl")["verdict"] is None
     assert mod.pending_decisions() == []
 
 
 def test_a_reclassified_run_does_not_show(hub):
+    """A later invocation's own verdict replaces the decision: the run ended another way."""
     mod, root = hub
-    run_folder(root, "run-reclassified", [run_start(OLD), verdict(OLD + 60),
-                                          {"ts": OLD + 120, "event": "resume", "pos": 10},
-                                          verdict(OLD + 180, v="completed")])
+    folder = run_folder(root, "run-reclassified", [run_start(OLD), verdict(OLD + 60),
+                                                   {"ts": OLD + 120, "event": "resume", "pos": 10},
+                                                   verdict(OLD + 180, v="completed")])
+    assert mod.scan(folder / "record.jsonl")["verdict"] == "completed"
     assert mod.pending_decisions() == []
 
 
@@ -144,7 +156,9 @@ def test_the_pending_route_serves_the_decision_of_a_previous_day(served):
 # --- the Slack link
 
 class FakeSlack:
-    """The Slack read seam: it records every method it is asked for, and answers auth.test only."""
+    """The Slack read seam: it records every method it is asked for, and answers auth.test only.
+
+    `auth` is one answer, or a function of the token when each profile answers from its own connection."""
 
     def __init__(self, auth):
         self.auth = auth
@@ -152,17 +166,25 @@ class FakeSlack:
 
     def __call__(self, token, method):
         self.calls.append(method)
-        return self.auth if method == "auth.test" else {"ok": False, "error": "unexpected"}
+        if method != "auth.test": return {"ok": False, "error": "unexpected"}
+        return self.auth(token) if callable(self.auth) else self.auth
 
 
-def connection(monkeypatch, hub, auth, repo="x/y", channel=None):
+def connection(monkeypatch, hub, auth, repo="x/y", channel=None, profiles=None, tokens=None):
+    """The connection seam: the daemon's channel map and the Keychain reader, never a Slack call.
+
+    `profiles` writes a profile-qualified entry beside the repository entry, and `tokens` gives each profile its own
+    connection token. With neither, the suite answers with one token and one repository entry."""
     mod, root = hub
     voice = root / "voice"
     voice.mkdir(exist_ok=True)
-    (voice / "channels.json").write_text(json.dumps(
-        {repo: channel} if channel else {}))
+    table = {repo: channel} if channel else {}
+    table.update({f"{p}:{repo}": ch for p, ch in (profiles or {}).items()})
+    (voice / "channels.json").write_text(json.dumps(table))
     monkeypatch.setenv("VOICE_STATE", str(voice))
-    monkeypatch.setattr(mod, "slack_token", lambda: "xoxb-test")
+    monkeypatch.setattr(mod, "slack_token",
+                        (lambda profile=None: (tokens or {}).get(profile or mod.profile_of()))
+                        if tokens else (lambda profile=None: "xoxb-test"))
     fake = FakeSlack(auth)
     monkeypatch.setattr(mod, "slack_api", fake)
     return fake
@@ -184,7 +206,7 @@ def test_the_slack_link_is_the_channel_archive_on_the_connection_domain(hub, mon
 
 def test_the_link_is_unavailable_with_no_connection(hub, monkeypatch):
     connection(monkeypatch, hub, AUTH, channel=CHANNEL)
-    monkeypatch.setattr(hub[0], "slack_token", lambda: None)
+    monkeypatch.setattr(hub[0], "slack_token", lambda profile=None: None)
     link = hub[0].slack_link(refresh=True)
     assert link["state"] == "unavailable" and link["url"] is None
     assert "no connection" in link["text"]
@@ -194,6 +216,14 @@ def test_the_link_is_unavailable_when_the_connection_refuses(hub, monkeypatch):
     connection(monkeypatch, hub, {"ok": False, "error": "invalid_auth"}, channel=CHANNEL)
     link = hub[0].slack_link(refresh=True)
     assert link["state"] == "unavailable" and link["url"] is None
+
+
+def test_the_link_names_a_host_with_no_keychain(hub, monkeypatch):
+    connection(monkeypatch, hub, AUTH, channel=CHANNEL)
+    monkeypatch.setattr(hub[0], "KEYCHAIN", False)
+    link = hub[0].slack_link(refresh=True)
+    assert link["state"] == "unavailable" and link["url"] is None
+    assert "no keychain" in link["text"], "a host with no keychain reader is not the same as no connection"
 
 
 def test_the_link_is_unavailable_with_no_domain(hub, monkeypatch):
@@ -217,9 +247,27 @@ def test_the_link_is_resolved_once_per_window(hub, monkeypatch):
     assert first == second and fake.calls == ["auth.test"], "the address is cached, never resolved per request"
 
 
+def test_each_profile_resolves_its_own_channel_and_domain(hub, monkeypatch):
+    """Two profiles answer from two connections: the channel map and the kept answer are keyed by profile, never shared."""
+    mod, _ = hub
+    auth = {"tok-a": {"ok": True, "url": "https://alpha.slack.com/"},
+            "tok-b": {"ok": True, "url": "https://beta.slack.com/"}}
+    connection(monkeypatch, hub, lambda token: auth[token],
+               profiles={"alpha": CHANNEL, "beta": {"id": "C0EXAMPLE2", "name": "proj-y"}},
+               tokens={"alpha": "tok-a", "beta": "tok-b"})
+    monkeypatch.setenv("SG_PROFILE", "alpha")
+    a = mod.slack_link(refresh=True)
+    monkeypatch.setenv("SG_PROFILE", "beta")
+    b = mod.slack_link()   # a profile switch never reuses the other profile's window
+    assert a["url"] == "https://alpha.slack.com/archives/C0EXAMPLE1"
+    assert a["channel"] == "#proj-x"
+    assert b["url"] == "https://beta.slack.com/archives/C0EXAMPLE2"
+    assert b["channel"] == "#proj-y"
+
+
 def test_the_slack_link_route_serves_an_unavailable_state_with_no_address(served, monkeypatch):
     mod, _, port = served
-    monkeypatch.setattr(mod, "slack_token", lambda: None)
+    monkeypatch.setattr(mod, "slack_token", lambda profile=None: None)
     status, body = get(port, "/api/slack-link")
     assert status == 200
     assert body["state"] == "unavailable" and body["url"] is None
@@ -261,6 +309,29 @@ def test_an_unavailable_slack_link_draws_no_anchor(hub):
     assert out["rows"] == 0
     assert out["slack"] is None, "an unavailable link is no anchor"
     assert "no connection" in out["off"]
+
+
+def test_an_unavailable_state_with_a_stale_address_draws_no_anchor(hub):
+    """The state decides the anchor, never the address alone: a stale address under the unavailable state is no link."""
+    stale = {**SLACK_OK, "state": "unavailable"}
+    out = boot(hub[0], {"/api/pending": [{"body": "[]"}],
+                        "/api/slack-link": [{"body": json.dumps(stale)}]})
+    assert out["slack"] is None, "the unavailable state draws no anchor however its address reads"
+
+
+def test_a_row_with_no_http_address_stays_plain_text(hub):
+    row = {**PENDING_ROW, "url": "javascript:alert(1)"}
+    out = boot(hub[0], {"/api/pending": [{"body": json.dumps([row])}],
+                        "/api/slack-link": [{"body": json.dumps(SLACK_OFF)}]})
+    assert out["rows"] == 0, "a row whose address is not http(s) is no anchor"
+
+
+def test_the_now_reads_wait_for_the_now_tab(hub):
+    """The page boots on Work here: neither read runs until the owner opens Now."""
+    out = run_page(hub[0].MOBILE_PAGE, """
+      return { pending: __state.gets["/api/pending"] || 0, slack: __state.gets["/api/slack-link"] || 0 };
+    """, routes={}, hash="#/work")
+    assert out == {"pending": 0, "slack": 0}
 
 
 def test_a_previous_day_needs_human_run_reaches_the_page(hub):
