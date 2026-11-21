@@ -340,7 +340,8 @@ function profNote(v){
   +(v.coverage==null?"":v.coverage>=1?"Read every process.":`Read ${(100*v.coverage).toFixed(1)}% of the processes.`)
   +" A process that lives between two readings is not counted."}
 function profHtml(v,open,phone){
- const head=`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip,phone);
+ // The phone's own header names the chart Loop, so the body draws no second title: a kicker over the chart is not a heading.
+ const head=phone?"":`<div class=lph><h2>Loop</h2></div>`,trip=profTrip(v.trip,phone);
  // The switch ends the page: the readings stand above it, and the switch that turns them on or off follows them (owner ask).
  const foot=`<div class=lph id=proffoot>${profSw(v)}<span class=lpl aria-hidden=true>CPU sampling</span><span class=lpn>${profNote(v)}</span></div>${!v.write&&v.reason?`<p class=lpr>${esc(v.reason)}</p>`:""}`;
  if(!v.on||!v.tree)return head+trip+foot;   // the file views read files only, so the switch does not gate them

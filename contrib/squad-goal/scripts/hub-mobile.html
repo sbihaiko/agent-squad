@@ -300,7 +300,7 @@ article.chart-screen>div:first-child{flex:1;min-height:0}
 [data-screen]{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 [data-screen][hidden]{display:none}
 [data-screen].root{position:static;z-index:auto;overflow:visible;background:transparent}
-#cost-content,#lead-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
+#cost-content,#lead-content,#cfd-content{flex:1;min-height:0;overflow:auto;padding:12px var(--page-gutter-phone);padding-top:calc(12px + env(safe-area-inset-top));padding-left:calc(var(--page-gutter-phone) + env(safe-area-inset-left));padding-right:calc(var(--page-gutter-phone) + env(safe-area-inset-right))}
 #cost-content{padding-bottom:72px}   /* the floating project pill covers the bottom 57 px, so the last cost row scrolls clear of it (#2503) */
 [data-screen] .msg{color:var(--err)}
 .sub{font-size:var(--fs-body);color:var(--mute);margin:14px 0 6px}
