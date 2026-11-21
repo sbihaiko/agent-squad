@@ -20,7 +20,7 @@ SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 HUB_PY = SCRIPTS / "hub.py"
 MUX_PY = SCRIPTS / "hubmux.py"
 GHREAD_PY = SCRIPTS / "ghread.py"
-TABS = ["now", "work", "specs", "runs"]   # the chat tab left with the session controls (Refs #2490)
+TABS = ["now", "work", "specs", "runs", "spend"]   # five tabs in spec order; the chat tab left with the session controls (Refs #2490, #2499)
 TAILNET = "hub.tail1234.ts.net"
 ANA = "ana@example.com"
 
