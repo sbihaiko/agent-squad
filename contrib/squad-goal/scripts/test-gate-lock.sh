@@ -196,4 +196,16 @@ wait "$rel" 2>/dev/null
   || ko "2330 wait then take: rc $rc out='$out' err=$(tr '\n' ' ' < "$T/err6")"
 [ "$(occ gates)" = 0 ] && ok "2330 the tip check that took its slots gives them back" || ko "2330 slots after the take: $(occ gates)"
 capsctl | /usr/bin/grep -q '"next"' && ko "2330 the tip marker outlived the take: $(capsctl)" || ok "2330 the take leaves no tip marker"
+# (#2604) A tip check takes one slot by default and keeps its worker count. A budget of two slots with one child slot held
+# leaves one free: a check that asks three slots waits out its bound and measures nothing, and the wave it lands waits a cycle.
+# The slot count is the admission; the worker count is the pytest pool, so the command still reads its whole count.
+rm -rf "$T/caps"; mkdir -p "$T/two/docs/squad"; printf 'caps:\n  gates: 2\n' > "$T/two/docs/squad/defaults.yaml"
+capsctl take gates "child-gate-$live" --count 1 --target "$T/two" --pid "$live" >/dev/null
+out=$( (cd "$T/two" && SG_GATE_WORKERS=3 SG_GATE_CALLER=tip SG_GATE_SLOT_COUNT=1 SG_GATE_SLOT_WAIT_SECONDS=2 bash "$T/s/gate.sh" sh -c 'echo "took $SQUAD_GATE_WORKERS"') 2>"$T/err8"); rc=$?
+[ $rc = 0 ] && [ "$out" = "took 3" ] && ok "2604 a tip check that takes one slot runs its whole worker count beside a child slot" \
+  || ko "2604 one-slot tip: rc $rc out='$out' err=$(tr '\n' ' ' < "$T/err8")"
+out=$( (cd "$T/two" && SG_GATE_WORKERS=3 SG_GATE_CALLER=tip SG_GATE_SLOT_WAIT_SECONDS=2 bash "$T/s/gate.sh" sh -c 'echo took') 2>"$T/err9"); rc=$?
+[ $rc = 75 ] && ok "2604 a tip check that asks its whole worker count still waits out the same budget" \
+  || ko "2604 whole-count take: rc $rc out='$out' err=$(tr '\n' ' ' < "$T/err9")"
+capsctl release gates "child-gate-$live" >/dev/null 2>&1
 cd "$T"; rm -rf "$T"; exit $fail
