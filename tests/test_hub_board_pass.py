@@ -150,7 +150,7 @@ def test_moves_closer_than_the_minimum_gap_ask_for_one_full_read(hub, monkeypatc
             raise StopIteration
 
     monkeypatch.setattr(hub, "board_pass", fake_pass)
-    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "read_pause", fake_sleep)
     with pytest.raises(StopIteration):
         hub.refresh_board()
     assert len(passes) == 1, "a move inside the minimum gap waits for the gap instead of re-reading the whole board"
@@ -176,7 +176,7 @@ def test_a_card_the_cache_does_not_hold_asks_for_the_full_read(hub, monkeypatch)
             raise StopIteration
 
     monkeypatch.setattr(hub, "board_pass", fake_pass)
-    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "read_pause", fake_sleep)
     with pytest.raises(StopIteration):
         hub.refresh_board()
     assert len(passes) == 2, "the full read runs again at the flag, not at its period"
@@ -332,7 +332,7 @@ def test_the_board_passes_on_its_own_every_full_read_period(hub, monkeypatch):
             raise StopIteration            # one full wait plus two more: enough to see the second pass and its schedule
 
     monkeypatch.setattr(hub, "board_pass", lambda: passes.append(1))
-    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "read_pause", fake_sleep)
     monkeypatch.setattr(hub, "STATE", Path(tempfile.mkdtemp()))   # no board-dirty flag of a live loop on this machine
     with pytest.raises(StopIteration):
         hub.refresh_board()
@@ -355,7 +355,7 @@ def test_a_pass_that_raises_does_not_end_the_refresh_loop(hub, monkeypatch):
             raise StopIteration
 
     monkeypatch.setattr(hub, "board_pass", bad_pass)
-    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "read_pause", fake_sleep)
     monkeypatch.setattr(hub, "STATE", Path(tempfile.mkdtemp()))
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     with pytest.raises(StopIteration):
@@ -425,7 +425,7 @@ def test_a_move_pass_is_read_again_after_the_board_settles(hub, monkeypatch):
             raise StopIteration
 
     monkeypatch.setattr(hub, "board_pass", fake_pass)
-    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "read_pause", fake_sleep)
     monkeypatch.setattr(hub, "STATE", state)
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     with pytest.raises(StopIteration):
@@ -438,12 +438,15 @@ class _Done(BaseException):
 
 
 class _Clock:
-    """Time that moves only when the refresh loop sleeps: a retry gap is read off the clock, and no test sleeps."""
+    """Time that moves only when the refresh loop pauses: a retry gap is read off the clock, and no test sleeps. The pause
+    patched is the loop's own seam, `read_pause`, never the process-global `time.sleep`: an unrelated thread of this
+    process that sleeps -- a hub server another test of the same worker left running -- moved the clock and stretched a
+    gap to 613.2 s (#2646)."""
 
     def __init__(self, monkeypatch, hub):
         self.now = 1_000_000.0
         monkeypatch.setattr(hub.time, "time", lambda: self.now)
-        monkeypatch.setattr(hub.time, "sleep", self.sleep)
+        monkeypatch.setattr(hub, "read_pause", self.sleep)
 
     def sleep(self, secs):
         self.now += secs
@@ -478,6 +481,18 @@ def test_consecutive_failures_grow_the_wait_and_stop_at_the_full_period(hub, mon
     gaps = _refresh_with(hub, monkeypatch, tmp_path, [False] * 9, clock)
     assert gaps == [16, 30, 60, 120, 240, 480, 600, 600], \
         "each failure doubles the 15 s first wait, rounded to the 2 s beat, and the wait never passes FULL_EVERY"
+
+
+def test_a_sleep_outside_the_refresh_loop_never_moves_its_clock(hub, monkeypatch):
+    """#2646: the gaps are counted on the loop's own pause. Another thread of this process -- a hub server an earlier test
+    of the same worker left running -- calls the global `time.sleep`; that global is not the loop's seam, so with it
+    patched a stray sleep stretched the measured gaps to 613.2 s and 600.2 s instead of 600 s."""
+    clock = _Clock(monkeypatch, hub)
+    before = clock.now
+    hub.time.sleep(0.2)
+    assert clock.now == before, "only the refresh loop's own pause moves its clock"
+    hub.read_pause(2)
+    assert clock.now == before + 2, "the loop's own pause still moves the clock"
 
 
 def test_a_good_read_after_a_failure_restores_the_full_cadence_and_clears_err(hub, monkeypatch, tmp_path):

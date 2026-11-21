@@ -147,6 +147,9 @@ def test_a_real_browser_walks_the_route_table(hub):
             assert page.is_visible('[data-screen="cost"]')
             assert page.eval_on_selector("#cchart svg", "e => e.getBoundingClientRect().width") > 700, \
                 "the Spend chart does not fill the landscape width"
+            assert page.eval_on_selector(
+                "#cchart svg", "e => Math.abs(e.viewBox.baseVal.width - e.getBoundingClientRect().width) < 2"), \
+                "the Spend chart scales its labels up with the picture instead of drawing at its own width"
             page.set_viewport_size({"width": 390, "height": 844})
 
             # A saved address of a dropped screen opens the screen the table names, and the entry is replaced.
