@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-The owner talks to the operator session, the agent that works a card outside the loop ([HAL9k](../../GLOSSARY.md)). The conversation needs one channel, and it is Slack. A `voiced` daemon turns each owner Slack message into one line in the project's inbox, and it posts each answer back into the owner's thread (`contrib/voice/OPERATOR.md`). The hub shows the run dashboard, the board, the loop switch and the settings, and it sets the Slack channels. The hub carries no conversation of its own.
+The owner talks to the operator session, the agent that works a card outside the loop ([HAL9k](../../GLOSSARY.md)). The conversation needs one channel, and it is Slack. A `voiced` daemon turns each owner Slack message into one line in the project's inbox, and it posts each answer back into the owner's thread (`contrib/voice/OPERATOR.md`). The hub shows the run dashboard, the board, the loop switch and the settings, and it sets the Slack channels. The hub carries no conversation of its own. No session wire protocol exists: the hub serves no session route, and the design notes define none.
 
 ## Decision
 
