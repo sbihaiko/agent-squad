@@ -118,8 +118,9 @@ h2{font-size:var(--fs-heading);margin:6px 0 10px}
 .needrow .need-line{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .needrow .mut{margin-top:4px}
 .needs-slack{display:flex;align-items:center;gap:8px;padding:12px;min-height:44px;border:1px solid var(--edge);border-radius:var(--radius-lg);background:var(--panel);color:var(--fg);text-decoration:none}
-.needs-slack b{flex:1;font-weight:600}
+.needs-slack b{font-weight:600}
 .needs-slack .mut{color:var(--mute)}
+.needs-slack .slk-arrow{margin-left:auto}
 .needs-off{margin:0;padding:12px;min-height:44px;border:1px dashed var(--edge);border-radius:var(--radius-lg);color:var(--mute)}
 #msg,#bmsg{color:var(--err)}
 #bhead{display:flex;align-items:center;gap:8px;touch-action:pan-y}
@@ -1093,10 +1094,17 @@ $("retry").onclick = status;
 function needRow(r) {
   const li = document.createElement("li");
   const box = document.createElement(r.url ? "a" : "div"), line = document.createElement("div"),
-        name = document.createElement("b"), chip = document.createElement("span"), meta = document.createElement("div");
+        name = document.createElement("span"), chip = document.createElement("span"), meta = document.createElement("div");
   box.className = "needrow"; line.className = "need-line";
   if (r.url) box.href = r.url;
-  name.textContent = r.label || r.id || "a run";
+  // The issue number is the row's key, so it runs bold; the words before it stay light, as the mockup draws them.
+  const label = r.label || r.id || "a run", cut = /^(.*?\s)?(#\d+)$/.exec(label);
+  if (cut) {
+    const words = document.createElement("span"), num = document.createElement("b");
+    words.textContent = cut[1] || "";
+    num.textContent = cut[2];
+    name.append(words, num);
+  } else name.textContent = label;
   chip.className = "run-state b needs-human"; chip.textContent = r.chip;
   line.append(name, chip);
   meta.className = "mut";
@@ -1111,7 +1119,7 @@ function drawSlack(s) {
           arrow = document.createElement("span");
     a.className = "needs-slack"; a.href = s.url;
     b.textContent = s.text; name.className = "mut"; name.textContent = s.channel || "";
-    arrow.textContent = "↗"; arrow.setAttribute("aria-hidden", "true");
+    arrow.className = "mut slk-arrow"; arrow.textContent = "↗"; arrow.setAttribute("aria-hidden", "true");
     a.append(b, name, arrow); box.append(a);
   } else {
     const p = document.createElement("p");
