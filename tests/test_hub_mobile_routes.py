@@ -12,7 +12,7 @@ import tempfile
 
 import pytest
 
-from tests.test_hub_mobile_move import BOARD_ONE, run_page
+from tests.test_hub_mobile_move import run_page
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
