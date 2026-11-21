@@ -383,3 +383,20 @@ def test_a_band_takes_the_payloads_color_with_no_page_map():
     cfd["bands"][0]["color"] = "var(--chart-series-2)"   # the first band's palette role would be series-1
     svg = run_js(f"mcCfd({json.dumps(cfd)}, {{width: 844, height: 300}}, null)")["svg"]
     assert 'fill="var(--chart-series-2)"' in svg, "the band fell back to the palette role, not the payload's color"
+
+
+def test_the_loop_chart_keeps_no_tab_bar_inset_and_never_clips_its_trip():
+    """#2670: a chart screen draws no tab bar, so the profiler's body keeps no inset for one. The trip is 64 px taller
+    than its body at a landscape phone, and the body clipped it, so the trip bar and its column labels sat below the
+    fold with nothing to scroll. The body scrolls, never clips, as #2504 states."""
+    sheet = parse_rules(stylesheet(page()))
+    inset = sheet["rules"].get("#prof-content", {}).get("padding-bottom", "")
+    assert inset.startswith("calc(64px"), f"the profiler no longer takes the tab-bar inset this rule overrides: {inset}"
+    chart = sheet["rules"].get(".chart-screen #prof-content", {})
+    assert chart, "the chart screen has no rule of its own for the profiler's body"
+    assert "64px" not in chart.get("padding-bottom", ""), \
+        f"the profiler's body keeps the tab-bar inset on a chart screen: {chart.get('padding-bottom')}"
+    assert chart.get("padding-bottom") == "env(safe-area-inset-bottom)", chart
+    body = sheet["rules"].get(".chart-screen #prof-content .chart-body", {})
+    assert body and body.get("overflow") == "visible", \
+        f"the profiler's body still clips its trip, so a short phone cannot scroll to the bar: {body}"
