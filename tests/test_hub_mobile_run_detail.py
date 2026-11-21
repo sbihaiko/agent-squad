@@ -89,13 +89,31 @@ def test_an_ended_run_offers_the_dashboard_it_still_has():
 
 @pytest.mark.node_bound
 @pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
-def test_the_action_row_is_back_dots_pause_and_one_primary(hub):
+def test_the_run_screen_shows_one_back_at_the_top_and_the_row_holds_only_actions(hub):
+    """One back control, at the top of the screen (SPEC 2498, #2502): the action row carries the actions alone."""
     out = run_page(hub.MOBILE_PAGE, OPEN_LIVE + """
-        return [...$("runview-actions").children].map(c => ({ id: c.id, tag: c.tagName, back: "actback" in c.dataset }));
+        const visible = els => els.filter(b => !b.hidden).map(b => b.id);
+        return { top: visible($("runview").querySelectorAll("[data-topback]")),
+                 rowBacks: $("runview-actions").querySelectorAll("[data-actback]").length,
+                 head: visible($("runview-head").querySelectorAll("[data-topback]")),
+                 row: [...$("runview-actions").children].map(c => ({ id: c.id, tag: c.tagName })),
+                 bar: $("runview-actions").hidden };
     """, routes=routes())
-    assert out[0] == {"id": "runview-back", "tag": "BUTTON", "back": True}, f"the first button is no Back: {out}"
-    assert out[1]["id"] == "run-dots" and out[1]["tag"] == "BUTTON", out
-    assert [c["id"] for c in out[2:]] == ["runctl", "run-primary"], f"the row is not one secondary then one primary: {out}"
+    assert out["top"] == ["run-backtop"], f"the run screen shows more than one back control: {out}"
+    assert out["head"] == ["run-backtop"], f"the run's one back control is not at the top: {out}"
+    assert out["rowBacks"] == 0, f"the action row still holds a back control: {out}"
+    assert [c["id"] for c in out["row"]] == ["runctl", "run-primary"], out
+    assert out["bar"] is False, f"the row holds an action and is not drawn: {out}"
+
+
+@pytest.mark.node_bound
+@pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
+def test_an_ended_run_keeps_one_back_at_the_top(hub):
+    out = run_page(hub.MOBILE_PAGE, OPEN_ENDED + """
+        return { top: $("runview").querySelectorAll("[data-topback]").filter(b => !b.hidden).map(b => b.id),
+                 rowBacks: $("runview-actions").querySelectorAll("[data-actback]").length };
+    """, routes=routes(runs=[], ended=[ended_row(time.time())]))
+    assert out == {"top": ["run-backtop"], "rowBacks": 0}, out
 
 
 @pytest.mark.node_bound
@@ -112,10 +130,26 @@ def test_a_held_run_reads_its_resume_on_the_secondary(hub):
 @pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
 def test_an_ended_run_offers_the_dashboard_as_its_primary(hub):
     out = run_page(hub.MOBILE_PAGE, OPEN_ENDED + """
-        return { label: $("run-primary-label").textContent, secondaryHidden: $("runctl-btn").hidden };
+        return { label: $("run-primary-label").textContent, secondaryHidden: $("runctl-btn").hidden,
+                 limits: $("runctl-limits").textContent };
     """, routes=routes(runs=[], ended=[ended_row(time.time())]))
     assert out["label"] == "Desktop dashboard", out
     assert out["secondaryHidden"] is True, out
+    assert out["limits"] == "", f"the ended run draws the rule of a pause it does not offer: {out}"
+
+
+@pytest.mark.node_bound
+@pytest.mark.skipif(NODE is None, reason="node is needed for the run view")
+def test_the_one_primary_names_the_screen_it_opens_back_to(hub):
+    """The dashboard action is one button that names the other screen, so the bar never needs a second menu (#2502)."""
+    out = run_page(hub.MOBILE_PAGE, OPEN_LIVE + """
+        const before = $("run-primary-label").textContent;
+        $("run-primary").onclick();
+        const desk = $("run-primary-label").textContent;
+        $("run-primary").onclick();
+        return { before, desk, back: $("run-primary-label").textContent };
+    """, routes=routes())
+    assert out == {"before": "Desktop dashboard", "desk": "Overview", "back": "Desktop dashboard"}, out
 
 
 # --- the run body: the state, the age, the spend and the issues (AC3, AC4) -------------------------------------------

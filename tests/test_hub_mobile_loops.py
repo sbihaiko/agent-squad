@@ -111,8 +111,42 @@ def test_the_loops_list_has_no_switch_for_all_loops_at_once(hub):
                buttons: $("loops").querySelectorAll("button").map(b => [b.id, b.className]) };
     """, routes=routes())
     assert out["all"] == 0
-    assert sorted(b[0] for b in out["buttons"] if not b[1].startswith("looprow")) == ["loops-backact", "loops-backtop"], \
-        "the only controls are the Back pair and one row per project, so no switch covers all loops"
+    assert sorted(b[0] for b in out["buttons"] if not b[1].startswith("looprow")) == ["loops-backtop"], \
+        "the only control is the one top back and one row per project, so no switch covers all loops"
+
+
+@pytest.mark.node_bound
+def test_the_loops_list_shows_one_back_at_the_top_and_no_action_row(hub):
+    """A detail screen carries one back control, at the top (SPEC 2498, #2502). The list holds no action, so its
+    action row is not drawn; the same holds for the loop-bugs screen and the Loop chart."""
+    out = run_page(hub.MOBILE_PAGE, """
+      await __tick(10);
+      $("loops-open").onclick();
+      return { top: $("loops").querySelectorAll("[data-topback]").filter(b => !b.hidden).map(b => b.id),
+               heads: $("loops").querySelectorAll(".scr-head [data-topback]").map(b => b.id),
+               backs: $("loops").querySelectorAll("[data-actback]").length,
+               row: !!(document.getElementById("loops-actions")) };
+    """, routes=routes())
+    assert out["top"] == ["loops-backtop"], f"the Loops list shows more than one back control: {out}"
+    assert out["heads"] == ["loops-backtop"], f"the Loops list's back is not at the top: {out}"
+    assert out["backs"] == 0, f"the Loops list still holds a second back control: {out}"
+    assert out["row"] is False, f"the Loops list draws an action row with no action: {out}"
+
+
+@pytest.mark.node_bound
+def test_the_loop_page_shows_one_back_at_the_top_and_no_back_in_its_action_row(hub):
+    out = run_page(hub.MOBILE_PAGE, OPEN_LOOP % json.dumps("gamma") + """
+      return { top: $("looppage").querySelectorAll("[data-topback]").filter(b => !b.hidden).map(b => b.id),
+               heads: $("looppage").querySelectorAll(".scr-head [data-topback]").map(b => b.id),
+               backs: $("looppage").querySelectorAll("[data-actback]").length,
+               bar: $("loop-actions").hidden,
+               actions: [...$("loop-actions").querySelectorAll("button")].filter(b => !b.hidden).map(b => b.id) };
+    """, routes=routes())
+    assert out["top"] == ["loop-backtop"], f"the Loop control shows more than one back control: {out}"
+    assert out["heads"] == ["loop-backtop"], f"the Loop control's back is not at the top: {out}"
+    assert out["backs"] == 0, f"the Loop control still holds a second back control: {out}"
+    assert out["bar"] is False, f"the row holds Start or Drain and is not drawn: {out}"
+    assert out["actions"] and "loop-backact" not in out["actions"], out
 
 
 @pytest.mark.node_bound

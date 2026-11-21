@@ -173,6 +173,22 @@ def test_the_status_facts_the_monitor_lacks_stay_in_its_panel(hub):
     assert re.search(r"#loop-actions button[^{]*\{[^}]*min-height:44px", page), "the loop action row is a thumb target"
 
 
+@pytest.mark.node_bound
+def test_monitor_throughput_and_warnings_render_on_now_only(hub):
+    """The Monitor card, the Throughput block and the Warnings live inside the Now panel (SPEC 2498, #2502), so another
+    tab never shows them twice."""
+    out = run_page(hub.MOBILE_PAGE, """
+      const inNow = id => !!document.getElementById(id).closest('[data-panel="monitor"]');
+      show("now");
+      const now = { inst: inNow("inst"), speed: inNow("ispeed"), warn: inNow("warnings") };
+      show("runs");
+      return { now, panelHidden: document.querySelector('[data-panel="monitor"]').hidden,
+               shown: [...document.querySelectorAll("[data-panel]")].filter(p => !p.hidden).map(p => p.dataset.panel) };
+    """, routes=_routes(hub))
+    assert out["now"] == {"inst": True, "speed": True, "warn": True}, out
+    assert out["panelHidden"] is True and out["shown"] == ["runs"], out
+
+
 def test_the_phone_card_never_folds(hub):
     """The Monitor is the whole tab on the phone: a tap on its title does nothing. The desktop card still folds."""
     out = run_page(hub.MOBILE_PAGE, """

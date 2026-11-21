@@ -163,7 +163,7 @@ LAYER_OPEN = {
 }
 
 LAYER_BACK = {
-    "run": '$("runview-back").onclick();',
+    "run": '$("run-backtop").onclick();',
     "lead": '$("lead-backtop").onclick();',
 }
 
@@ -295,13 +295,13 @@ def test_the_layers_open_and_close_by_call_never_by_a_watch_on_hidden(hub):
     assert "MutationObserver" not in block, "a layer never opens or closes on a watch of its hidden attribute"
 
 
-def test_each_full_screen_layer_keeps_a_bottom_close_on_the_one_close_function(hub):
+def test_each_full_screen_layer_keeps_its_actions_and_one_top_back(hub):
+    """One back control sits at the top of each layer, so no footer repeats it (SPEC 2498, #2502). The card sheet
+    keeps its action row, and the project sheet keeps its one Close."""
     page = hub.MOBILE_PAGE
-    dots = '<svg class="ico" viewBox="0 0 12 12" aria-hidden="true" focusable="false">' \
-           '<path d="M2 6h.01M6 6h.01M10 6h.01"/></svg>'
-    assert '<div id="sheet-actions"><button id="sh-backact" data-actback type="button">Back</button>' \
-           f'<button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true">{dots}</button>' \
-           '<button id="sh-close" type="button">Close</button>' in page, \
-        "the card sheet keeps its action row: Back, the dots menu, then the secondary"
-    assert '<div id="psw-footer"><button id="ps-backact" data-actback type="button">Back</button>' \
-           '<button id="pswx" type="button">Close</button></div>' in page, "the project sheet keeps its bottom Back and Close"
+    assert '<div id="sheet-actions"><button id="sh-dots" type="button" aria-label="More actions" aria-haspopup="true">' in page, \
+        "the card sheet keeps its action row, with no footer Back"
+    assert '<div id="psw-footer"><button id="pswx" type="button">Close</button></div>' in page, \
+        "the project sheet keeps its bottom Close, with no footer Back"
+    assert page.count('id="sh-backtop"') == 1 and page.count('id="ps-backtop"') == 1, \
+        "a layer lost its one top back"

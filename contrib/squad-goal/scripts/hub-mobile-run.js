@@ -28,7 +28,8 @@ const runAgeLabel = (row, now) => {
 };
 // The one primary of the run's action row is the dashboard the run always has: the phone offers no session action, and
 // the pause and its resume stay the row's one secondary.
-const runPrimary = () => ({ act: "desk", label: "Desktop dashboard" });
+// The one primary names the screen it opens, so the button is the way back from the dashboard too (SPEC 2498, #2502).
+const runPrimary = (row, desk) => ({ act: "desk", label: desk ? "Overview" : "Desktop dashboard" });
 // The verdict an ended run shows, and the issues the overview lists, one line each with the title the row carries.
 const runVerdict = row => row.running ? "" : row.verdict || (row.running === false ? "killed, no verdict" : "");
 const runIssueLines = row => (row.issues || []).map(n => "#" + n + (row.titles && row.titles[n] ? " " + row.titles[n] : "")).join("\n");
