@@ -87,6 +87,9 @@ class World:
             "SERIAL_POLL_SECONDS": "0.05", "PATH": self.path,
             # The host's own load never decides a case: a case that wants a loaded start names SG_DAYSUITES_LOAD itself.
             "SG_DAYSUITES_LOAD": "0.0",
+            # (#2635) Nor does the host's own clock: CI ran inside the nightly hour (04, America/Sao_Paulo) and every pass
+            # held. The world names an hour outside it, and a case that wants the nightly hour names it itself.
+            "SG_DAYSUITES_HOUR": "09",
         }
         env.update({k: str(v) for k, v in extra.items()})
         return subprocess.run(["bash", str(self.scripts / "daysuites.sh")], capture_output=True, text=True,

@@ -42,9 +42,11 @@ suite() {  # <tree> <name> <shell body>
 commit() { $GIT -C "$1" add -A >/dev/null && $GIT -C "$1" commit -q -m one; }
 newday() { rm -f "$ST"/auto/daysuites-2*; }   # a new day: the marker goes, the last pass's reds stay
 newworld() { newday; rm -f "$ST/auto/daysuites-red"; }   # a new fixture: no marker and no red record from another case
+# (#2635) The host clock never decides a case: the fixture names an hour outside the nightly hour, and a case that wants
+# the nightly hour names it itself. An hour left to the host held every pass when CI ran at 04:00 America/Sao_Paulo.
 run() {  # <tree> [extra VAR=val...]: one pass against the fixture; prints its output
   local tree=$1; shift
-  env SG_DAYSUITES_LOAD=0.0 "$@" SG_STATE="$ST" SG_DAYSUITES_TREE="$tree" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
+  env SG_DAYSUITES_LOAD=0.0 SG_DAYSUITES_HOUR=09 "$@" SG_STATE="$ST" SG_DAYSUITES_TREE="$tree" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
     SG_SQUAD="$SG_SQUAD" SQUAD_CAPS_DIR="$SQUAD_CAPS_DIR" RUNLOG="$T/ran.log" SLOTS_SEEN="$T/slots.log" \
     GHLOG="$T/gh.log" SERIAL_POLL_SECONDS=0.05 bash "$S/daysuites.sh" 2>&1
 }
@@ -136,7 +138,7 @@ LAND
   commit "$feed"; $GIT -C "$feed" push -q "$origin" HEAD:refs/heads/dev
 }
 run_from_origin() {  # the pass with the dev tip read from the bare origin, and no tree override
-  env SG_DAYSUITES_LOAD=0.0 SG_STATE="$ST" SG_DAYSUITES_REMOTE="$T/origin.git" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
+  env SG_DAYSUITES_LOAD=0.0 SG_DAYSUITES_HOUR=09 SG_STATE="$ST" SG_DAYSUITES_REMOTE="$T/origin.git" SG_REPO=o/r SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=dev \
     SG_SQUAD="$SG_SQUAD" SQUAD_CAPS_DIR="$SQUAD_CAPS_DIR" GHLOG="$T/gh.log" SERIAL_POLL_SECONDS=0.05 \
     bash "$S/daysuites.sh" 2>&1
 }
