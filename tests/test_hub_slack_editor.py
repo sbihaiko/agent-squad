@@ -283,6 +283,82 @@ def test_an_unknown_field_is_refused(hub, tmp_path):
     assert out["err"] and "colour" in out["err"], out
 
 
+def test_a_body_with_no_documents_edits_the_files_the_paths_name(hub, tmp_path):
+    """A body that omits `committed` and `local` reads both documents from the two paths, so the edit answers a
+    document of this project and never a shape refusal. The answer carries the documents it used, and the trailing
+    `documents` field names the same pair."""
+    c, loc = paths(tmp_path)
+    op = {"kind": "set", "doc": "committed", "path": ["workspaces", 0, "label"], "value": "renamed"}
+    out = hub.slack_docs_edit({"op": op}, committed=c, local=loc)
+    assert "each one mapping" not in str(out.get("err") or ""), out
+    assert out["err"] is None, out
+    assert out["committed"]["workspaces"][0]["label"] == "renamed", out["committed"]
+    assert out["local"]["workspaces"][0]["id"] == "T0CLIENT01", out["local"]
+    assert out["documents"] == {"committed": out["committed"], "local": out["local"]}, out
+
+
+def test_a_body_that_names_a_document_that_is_not_a_mapping_is_refused(hub, tmp_path):
+    """A body that sends a document of the wrong shape is still refused by name: the loader answers only a document
+    the body omits, never one the caller sent wrong."""
+    c, loc = paths(tmp_path)
+    body = {"committed": [], "local": {}, "op": {"kind": "set", "doc": "committed",
+                                                 "path": ["workspaces", 0, "label"], "value": "x"}}
+    out = hub.slack_docs_edit(body, committed=c, local=loc)
+    assert out["err"] and "each one mapping" in out["err"], out
+
+
+def test_the_second_guest_refusal_keeps_the_mockup_sentence(hub, tmp_path, monkeypatch):
+    """The mockup's sentence belongs to the refusal, not to the policy module: a module that names no
+    `SECOND_GUEST_REASON` still draws it, because the refusal matches the reason the validator answers."""
+    real = hub.slack_policy()
+
+    class NoSecond:
+        def __getattr__(self, name):
+            if name == "SECOND_GUEST_REASON": raise AttributeError(name)
+            return getattr(real, name)
+
+    monkeypatch.setattr(hub, "slack_policy", lambda: NoSecond())
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "local", "path": ["workspaces"],
+                               "value": {"id": "T0CLIENT02", "label": "client-b", "class": "guest", "channels": []}})
+    assert out["err"], out
+    assert out["err"].startswith("One guest Slack workspace at a time"), out["err"]
+    assert "a second guest workspace is refused" in out["err"], out["err"]
+
+
+def test_a_pre_existing_defect_that_shifts_its_row_is_held_not_blamed_on_the_edit(hub, tmp_path):
+    """A defect already in the file stays a held defect when the edit moves another row and shifts its index. The
+    answer names the edit's own new defects apart from the ones the files already carried."""
+    committed = {"workspaces": [
+        {"id": "T0TEAM0001", "label": "a", "class": "owned", "channels": []},
+        {"id": "T0TEAM0002", "label": "b", "class": "owned",
+         "channels": [{"id": "C0TEAM0002", "name": "n", "language": "xx-YY"}]},
+    ]}
+    local = {"version": 1, "workspaces": []}
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["workspaces", 0, "class"],
+                               "value": "guest"}, committed=committed, local=local)
+    assert out["err"], out
+    assert out["new_defects"] == [], out
+    assert any("language" in d for d in out["held_defects"]), out
+
+
+def test_the_draft_edit_does_not_round_trip_the_documents_through_yaml(hub, tmp_path, monkeypatch):
+    """The draft is a copy, so the edit never serializes the documents. A YAML writer that refuses is no obstacle, and
+    a scalar that reads as a boolean keeps its own text."""
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["label"] = "yes"
+    c, loc = paths(tmp_path, committed)
+
+    def boom(*a, **k):
+        raise AssertionError("the draft must not round trip through yaml")
+    monkeypatch.setattr(hub.yaml, "safe_dump", boom)
+    out = hub.slack_docs_edit({"committed": committed, "local": copy.deepcopy(LOCAL),
+                               "op": {"kind": "set", "doc": "committed",
+                                      "path": ["workspaces", 0, "app"], "value": "hal9k"}},
+                              committed=c, local=loc)
+    assert out["err"] is None, out
+    assert out["committed"]["workspaces"][0]["label"] == "yes", out["committed"]
+
+
 # ---------------------------------------------------------------- the renderer
 
 def _node(body):
@@ -333,6 +409,33 @@ def test_the_guest_channel_editor_draws_the_five_guest_fields(hub):
     owned = editor_html(hub, docs(), open_="committed:0:0")
     for field in ("speak", "transcribe", "voice_reply", "draft_for"):
         assert f'data-sle="committed:0:0:{field}"' not in owned, (field, owned)
+
+
+def test_the_guest_channel_editor_draws_the_exponential_poll_fields(hub):
+    """Criterion 3: a guest channel whose poll mode is `exponential` draws the four fields that mode reads, in place
+    of the two-state `fast` and `slow`."""
+    local = copy.deepcopy(LOCAL)
+    local["workspaces"][0]["channels"][0]["poll"] = {"mode": "exponential", "floor": "5m", "ceiling": "1h",
+                                                     "factor": 2, "idle_window": "15m"}
+    html = editor_html(hub, docs(local=local), open_="local:0:0")
+    for field in ("poll.floor", "poll.ceiling", "poll.factor", "poll.idle_window"):
+        assert f'data-sle="local:0:0:{field}"' in html, (field, html)
+    for field in ("poll.fast", "poll.slow"):
+        assert f'data-sle="local:0:0:{field}"' not in html, (field, html)
+
+
+def test_the_read_table_heads_are_the_editor_heads_without_the_edit_column(hub):
+    """The read-only table and the editor draw one header list: the editor adds the guest columns and the Edit column,
+    and the read table keeps the six base columns, so no column is named in one place only."""
+    read = json.loads(_node(_slices(hub.PAGE) + """
+const r={workspaces:[{label:"w",class:"owned",file:"slack.yaml",channels:[{name:"n",id:"C1",mode:"listen",
+ language:"en-US",persona:"",roles:[],announce:[]}]}]};
+console.log(JSON.stringify(slWsReadHtml(r,(xs,or)=>xs.length?xs.join(", "):or)))"""))
+    read_heads = re.findall(r"<th>(.*?)</th>", read)
+    editor = editor_html(hub, docs())
+    editor_heads = re.findall(r"<th>(.*?)</th>", editor)
+    assert read_heads == ["Channel", "Mode", "Language", "Persona", "Roles", "Announce"], read_heads
+    assert editor_heads[:len(read_heads)] == read_heads, (read_heads, editor_heads)
 
 
 def test_the_add_workspace_form_offers_both_classes_and_the_add_channel_form(hub):
