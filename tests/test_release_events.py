@@ -80,11 +80,22 @@ def test_voiced_reads_the_event_record(tmp_path):
     assert got[0]["items"] == ["a1b2c3 Merge the fix"]
 
 
-def test_the_writer_and_the_daemon_share_one_state_directory():
+def test_the_writer_and_the_daemon_share_one_state_directory(tmp_path):
+    """The daemon's `State` and the command name one file for one directory, whatever `VOICE_STATE` says."""
     rel = load("release_events", MODULE)
     voiced = load("voiced_shared", VOICE / "voiced.py")
-    assert os.path.basename(rel.path()) == "release-events.jsonl"
-    assert os.path.dirname(rel.path()) == voiced.DEFAULT_STATE, "the command and the daemon read one directory"
+    directory = str(tmp_path)
+    state = voiced.State(directory)
+    assert state.release_events_path == rel.path(directory), "the command and the daemon read one file of this directory"
+    assert state.release_events_path == os.path.join(directory, "release-events.jsonl")
+
+
+def test_the_writer_and_the_daemon_agree_on_the_default_directory(monkeypatch):
+    """With `VOICE_STATE` unset both take the daemon's default directory, so a pass with no setting announces to it."""
+    monkeypatch.delenv("VOICE_STATE", raising=False)
+    rel = load("release_events", MODULE)
+    voiced = load("voiced_default", VOICE / "voiced.py")
+    assert rel.path() == os.path.join(voiced.DEFAULT_STATE, "release-events.jsonl")
 
 
 def test_a_command_with_no_item_is_refused(tmp_path):
