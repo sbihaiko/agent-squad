@@ -299,6 +299,75 @@ def _second_guests(local_name, local, others):
     return guests[1:]
 
 
+FIELD_CLASSES = ("owned", "guest")
+FIELD_MODES = ("listen", "listen+speak")
+FIELD_SPEAK = ("draft", "send")
+FIELD_TRANSCRIBE = ("off", "local", "gemini")
+FIELD_POLL_MODES = ("two_state", "exponential")
+
+
+def _key(path):
+    """A key path as the validator names it: `workspaces[0].channels[0].speak`."""
+    out = ""
+    for step in path:
+        out += f"[{step}]" if isinstance(step, int) else (f".{step}" if out else str(step))
+    return out
+
+
+def _ids(doc, name):
+    return {str(row.get("id")) for row in _rows((doc or {}).get(name)) if isinstance(row, dict) and row.get("id") is not None}
+
+
+def validate_field(documents, doc, path, field, value):
+    """The one failing key of one editor value, as `(key, reason)`, or None when the value keeps its rule. `documents`
+    holds both files, `doc` names the file the edit writes, and `path` is the key path of the edited field. The hub
+    editor asks this function, so a refusal it shows lives here (ADR-0177 decision 3), never in the view or the hub."""
+    documents = documents or {}
+    committed = documents.get("committed") or {}
+    key = _key(path)
+
+    def bad(reason):
+        return key, reason
+
+    if field == "class" and str(value) not in FIELD_CLASSES:
+        return bad(f"the class is one of {', '.join(FIELD_CLASSES)}")
+    if field == "mode" and str(value) not in FIELD_MODES:
+        return bad(f"the mode is one of {', '.join(FIELD_MODES)}")
+    if field == "language" and str(value) != "" and normalize_language(value) is None:
+        return bad(f"language {value!r} is not one of {', '.join(LANGUAGES)}")
+    if field == "persona" and str(value) != "":
+        known = _ids(committed, "personas")
+        if known and str(value) not in known:
+            return bad(f"persona {value!r} is not one of the project's personas")
+    if field == "roles":
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            return bad("the roles are a list of role ids")
+        known = _ids(committed, "roles")
+        unknown = [x for x in value if known and x not in known]
+        if unknown:
+            return bad(f"role {unknown[0]!r} is not one of the project's roles")
+    if field == "announce":
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            return bad("the announce list is a list of event ids")
+        known = _ids(committed, "events")
+        unknown = [x for x in value if known and x not in known]
+        if unknown:
+            return bad(f"event {unknown[0]!r} is not one of the project's events")
+    if field == "speak" and str(value) not in FIELD_SPEAK:
+        return bad(f"the answer is one of {', '.join(FIELD_SPEAK)}")
+    if field == "transcribe" and str(value) not in FIELD_TRANSCRIBE:
+        return bad(f"the transcription is one of {', '.join(FIELD_TRANSCRIBE)}")
+    if field == "voice_reply" and not isinstance(value, bool):
+        return bad("the voice reply is true or false")
+    if field == "poll" and not isinstance(value, dict):
+        return bad("the poll is a mapping")
+    if field == "poll.mode" and str(value) not in FIELD_POLL_MODES:
+        return bad(f"the poll mode is one of {', '.join(FIELD_POLL_MODES)}")
+    if field == "draft_for" and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+        return bad("draft for is a list of user ids")
+    return None
+
+
 def read_document(text, file, out=None):
     """The mapping a Slack file's text holds, or None with one defect that names the file. A caller that holds the text
     of a file it did not read from disk uses this: `voiced` validates a `slack.yaml` read from a project's dev tip.
