@@ -326,3 +326,35 @@ def test_ac_verify_answers_unproven_for_an_explained_timeout_on_two_dispatches(t
     for _ in range(2):
         r = gates.ac_verify({"commands_from": "spec"}, gates.GateInput(artifacts={"spec": {"ac_commands": [TIMED_SUITE]}}, facts={}, cwd=str(repo)))
         assert r.ok and r.unproven, (r.findings, r.evidence)
+
+
+def pytest_cmd(args):
+    import sys
+    return f"{sys.executable} -m pytest -q -p no:cacheprovider -p no:deepeval -p no:xdist {args}"
+
+
+def two_tests(tmp_path):
+    (tmp_path / "test_two.py").write_text("def test_a():\n    assert True\n\ndef test_b():\n    assert True\n")
+
+
+def test_a_pytest_k_expression_pytest_refuses_is_malformed_not_a_red(tmp_path):
+    """A `-k` expression pytest cannot parse exits 4 before any test runs (#2765): the command text is wrong, nothing was
+    measured, so the gate records it malformed and never fails the run for it."""
+    two_tests(tmp_path)
+    r = workcmd.run(pytest_cmd("test_two.py -k 'test_a or draws the four fields'"), str(tmp_path))
+    assert not r.ok and r.malformed, r
+
+
+def test_a_missing_test_file_stays_a_measured_red(tmp_path):
+    """A test file the child never wrote also exits 4, with `no tests ran` (#2765): that is undelivered work, a red."""
+    two_tests(tmp_path)
+    r = workcmd.run(pytest_cmd("test_missing.py"), str(tmp_path))
+    assert not r.ok and not r.malformed and not r.unproven, r
+
+
+def test_a_bad_k_after_a_red_command_stays_a_measured_red(tmp_path):
+    """A compound command whose first suite named a failure keeps that red, even when its last call is a bad `-k`."""
+    (tmp_path / "test_red.py").write_text("def test_r():\n    assert False\n")
+    two_tests(tmp_path)
+    r = workcmd.run(f"{pytest_cmd('test_red.py')}; {pytest_cmd(chr(39).join(['test_two.py -k ', 'a b', '']))}", str(tmp_path))
+    assert not r.ok and not r.malformed and not r.unproven, r
