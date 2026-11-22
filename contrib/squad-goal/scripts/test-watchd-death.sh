@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 5.04
+# seconds: 4.33
 # A driver that dies leaves one line naming how it died (#1439), and the next start brings the loop back.
 # Offline: a temp skill with stub lanes that exit once orphaned, as the real lanes do.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0
@@ -7,26 +7,37 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export HOME="$T/home"; mkdir -p "$HOME"
 st=$T/st; S=$T/skill/scripts; mkdir -p "$st" "$S"
 cp "$d/watchd.sh" "$S/watchd.sh"
+# The copy reads the process table through caps.sh beside the real watchd.sh (#1508): a sandbox refuses the setuid table
+# binary, and a copy that fell back to it read its own supervisor as gone, so no driver started (#2781).
+python3 - "$S/watchd.sh" "$d" <<'PY'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace('"$(dirname "$0")/caps.sh"','"%s/caps.sh"'%sys.argv[2]))
+PY
 printf 'gh_aggregate() { return 1; }\n' > "$S/ghcall.sh"
 printf 'SG_STATE=%s; SG_PROFILE=; SG_SQUAD=%s\nexport SG_STATE SG_PROFILE SG_SQUAD\n' "$st" "$T/skill" > "$S/env.sh"
 mkdir -p "$T/skill/squad"; : > "$T/skill/squad/__init__.py"; printf 'def free_runs(): return 0\n' > "$T/skill/squad/caps.py"
-cat > "$S/watch.sh" <<'EOF'
+# The lanes read the table through squad.procs too, or they never see themselves orphaned and outlive the driver (#2781).
+capssrc=$(printf '%q' "$d/caps.sh")
+cat > "$S/watch.sh" <<EOF
 #!/bin/bash
-mkdir -p "$SG_STATE/locks/watch"; echo $$ > "$SG_STATE/locks/watch/pid"
-while :; do sleep 0.5; [ "$(ps -o ppid= -p $$ | tr -d ' ')" = 1 ] && exit 0; done
+. $capssrc
+mkdir -p "\$SG_STATE/locks/watch"; echo \$\$ > "\$SG_STATE/locks/watch/pid"
+while :; do sleep 0.5; [ "\$(sg_ps -o ppid= -p \$\$ | tr -d ' ')" = 1 ] && exit 0; done
 EOF
-cat > "$S/fastloop.sh" <<'EOF'
+cat > "$S/fastloop.sh" <<EOF
 #!/bin/bash
-echo $$ > "$SG_STATE/fastloop.pid"
-while :; do sleep 0.5; [ "$(ps -o ppid= -p $$ | tr -d ' ')" = 1 ] && exit 0; done
+. $capssrc
+echo \$\$ > "\$SG_STATE/fastloop.pid"
+while :; do sleep 0.5; [ "\$(sg_ps -o ppid= -p \$\$ | tr -d ' ')" = 1 ] && exit 0; done
 EOF
-cat > "$S/cqflush.sh" <<'EOF'
+cat > "$S/cqflush.sh" <<EOF
 #!/bin/bash
-echo $$ > "$SG_STATE/cqflush.pid"
-while :; do sleep 0.5; [ "$(ps -o ppid= -p $$ | tr -d ' ')" = 1 ] && exit 0; done
+. $capssrc
+echo \$\$ > "\$SG_STATE/cqflush.pid"
+while :; do sleep 0.5; [ "\$(sg_ps -o ppid= -p \$\$ | tr -d ' ')" = 1 ] && exit 0; done
 EOF
 chmod +x "$S"/*.sh
-. "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; driver_tree_kill "$T"; rm -rf "$T"' EXIT
+. "$d/caps.sh"; . "$d/driver-tree.sh"; trap 'bash "$S/watchd.sh" stop >/dev/null 2>&1; driver_tree_kill "$T"; rm -rf "$T"' EXIT
 waitfor() { for _ in $(seq 1 40); do eval "$1" && return 0; sleep 0.25; done; return 1; }
 
 bash "$S/watchd.sh" start >/dev/null 2>&1

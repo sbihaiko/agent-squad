@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 4.15
+# seconds: 6.12
 # One supervisor per state directory (#932). `watchd.sh run` wrote its own pid to watchd.pid with no lock, so two `run`
 # calls whose `alive` checks both ran before either wrote the file both started a lane, and a supervisor that removed the
 # file on its way out let a later `start` add a third beside the two still running. Three cycles, three fast lanes, three
@@ -8,12 +8,16 @@
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); . "$d/driver-tree.sh"; trap 'for p in $supA $supB $supC $supD $spvs; do kill -9 $p 2>/dev/null; done; driver_tree_kill "$T"; rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
+. "$d/caps.sh"   # SG_PS: the process table read through squad.procs, the reader the shipped script uses (#1508)
 cp "$d/watchd.sh" "$T/watchd.sh"
-python3 - "$T/watchd.sh" "$SG_STATE" <<'PY'
+python3 - "$T/watchd.sh" "$SG_STATE" "$d" <<'PY'
 import pathlib,sys
 f,st=sys.argv[1],sys.argv[2]
 p=pathlib.Path(f); t=p.read_text()
 t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
+# The copy reads the process table through caps.sh beside the real watchd.sh, never the `ps` fallback (#1508): a sandbox
+# refuses the setuid table binary, and a copy that fell back to it read its own supervisor as gone (#2781).
+t=t.replace('"$(dirname "$0")/caps.sh"','"%s/caps.sh"'%sys.argv[3])
 t=t.replace('. "$(dirname "$0")/ghcall.sh"   # the one seam the start\'s loop-bug read goes through (ADR-0146)',
             'gh_aggregate() { return 1; }')
 p.write_text(t)

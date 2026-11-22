@@ -6,7 +6,16 @@
 # names the state it ended in. A copy of this script that travels without the writer (a fixture) runs as before: a missing
 # record never stops a step.
 . "$(dirname "$0")/steprec.sh" 2>/dev/null || { srec_start() { srec_id=; }; srec_end() { :; }; srec_skip() { :; }; }
-orphaned() { [ "$($SG_PS -o ppid= -p $$ | tr -d ' ')" = 1 ]; }   # the supervisor is gone (#959): this lane runs no further step
+# orphaned: the supervisor is gone (#959), so this lane runs no further step. pid 1 holding the lane is the usual proof. An
+# empty answer is no proof that the supervisor lives (#2781): a child's sandbox refuses the process reader, and the lane then
+# read "no answer" as "not orphaned" and ran every step of every later cycle. A shell that cannot read the table still knows
+# the pid it started under, and a pid that takes no signal is gone.
+orphaned() {
+  local q; q=$($SG_PS -o ppid= -p $$ 2>/dev/null | tr -d ' ')
+  [ "$q" = 1 ] && return 0
+  [ -n "$q" ] && return 1
+  ! kill -0 "$PPID" 2>/dev/null
+}
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # One watch.sh per repository. Its lock lives in that repository's own state directory, so one supervisor never pauses another.
@@ -57,6 +66,7 @@ verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r
 # childcc pass that left children for later (#590) and a landing that failed each leave the run unread, never a marker.
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
   local run=$1 ran pass L h c lk
+  orphaned && exit 0   # a landing starts no work once the lane is orphaned (#2781)
   ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"; lk="$ran.busy"
   mkdir -p "$SG_STATE/auto"
   # Only a defect in the landing path stops this landing: a `loop-bug:landing` issue names it, so the wave waits and the
@@ -123,6 +133,7 @@ land_fork() {
     # which names the run's folder), up to SG_LAND_BATCH runs behind one tip gate (wave.sh land_queue). A pass that finds the
     # lock held queues its run. SG_LAND_BATCH=1 writes no queue marker, so each run lands in its own pass, as before.
     (
+      orphaned && exit 0   # a detached landing starts no work once the lane is orphaned (#2781)
       export SG_LAND_QUEUE=1
       # (#2607, ADR-0176) Two landings run at once: a wave whose tip check fails spends its ten minutes on one slot, and a healthy
       # wave lands on the other. The push needs no lock of its own: git refuses one that is not a fast-forward, and the refused
@@ -162,6 +173,7 @@ while :; do
   guard_say=$("$(dirname "$0")/token-guard.sh" 2>/dev/null)
   [ -n "$guard_say" ] && { printf '%s %s\n' "$(date +%T)" "$guard_say" >> "$SG_STATE/cycle.log"; printf '%s\n' "$guard_say"; }
   for r in $(cat "$SG_STATE/active-runs.txt"); do
+    orphaned && exit 0   # the per-run reads and the wave calls start no work once the lane is orphaned (#2781)
     # An age-cap requeue waits for the end of its run (#1970): a retirement the landing could not prove is tried again here,
     # each cycle, before the verdict is read, and the issues go back to the queue only once the run is proven ended.
     [ -e "$SG_STATE/auto/retire-${r##*/}" ] && bash "$(dirname "$0")/wave.sh" retire "${r##*/}"
@@ -220,16 +232,16 @@ if v:
   # reconcile.py is the most expensive step of the cycle by a wide margin (137 runs, 22,902 s, ~167 s each) and all it does is move cards
   # from GitHub facts: detached under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
   # instead of holding the cycle (#1845). A pass already running is skipped, not doubled.
-  [ $((tick % 8)) -eq 1 ] && { srec_start reconcile; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log"; srec_end "$drec" reconcile $? ) 2>/dev/null & }   # card Status from GitHub facts, every ~12 min (GraphQL budget)
+  [ $((tick % 8)) -eq 1 ] && { orphaned && exit 0; srec_start reconcile; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log"; srec_end "$drec" reconcile $? ) 2>/dev/null & }   # card Status from GitHub facts, every ~12 min (GraphQL budget)
   # The full suite runs nightly in both modes, heavy included (#704). It is detached under its own single-flight stage and
   # its own log: a suite of hours must never hold this cycle, and it takes its own `nightly` lock, never the landing one.
   # nightly.sh runs at most once a day by its own marker; each later cycle's start costs one file read and exits.
-  { srec_start nightly; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log"; srec_end "$drec" nightly $? ) 2>/dev/null & }
+  { orphaned && exit 0; srec_start nightly; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" nightly bash "$(dirname "$0")/nightly.sh" 2>&1 | sed "s/^/NIGHTLY /" >> "$SG_STATE/nightly.log"; srec_end "$drec" nightly $? ) 2>/dev/null & }
   # Every shell suite runs on the dev tip once a day (#2307), outside the landing path: a landing gate selects only the suites
   # its delta touches, so a suite that no ticket touches stays red on dev until an unrelated ticket's landing fails on it. The
   # pass runs one suite at a time under the gate lock and one gate slot, never beside a landing gate, and its own day marker
   # makes every later cycle's start one file read. It is detached under its own single-flight stage and log, like the nightly.
-  { srec_start daysuites; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" daysuites bash "$(dirname "$0")/daysuites.sh" 2>&1 | sed "s/^/DAYSUITES /" >> "$SG_STATE/daysuites.log"; srec_end "$drec" daysuites $? ) 2>/dev/null & }
+  { orphaned && exit 0; srec_start daysuites; drec=$srec_id; ( set -o pipefail; bash "$(dirname "$0")/single.sh" daysuites bash "$(dirname "$0")/daysuites.sh" 2>&1 | sed "s/^/DAYSUITES /" >> "$SG_STATE/daysuites.log"; srec_end "$drec" daysuites $? ) 2>/dev/null & }
   # The base's own check (#790): read once per cycle, so a red head that no landing reads is reported. It holds nothing.
   ( tm bash "$(dirname "$0")/single.sh" basecheck bash "$(dirname "$0")/basecheckpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
@@ -246,7 +258,7 @@ if v:
   # loaded box and a nightly that owns the machine refuse it nothing, and it takes no gate slot, so no landing waits on it.
   # The merge itself runs through promote-stg.sh, which holds the gate lock as every promotion does, for one pull-request
   # merge and never for a suite. Its own lines go to promote.log, its outcome to this cycle log.
-  promote_quiet && { srec_start promote; drec=$srec_id; ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote "$rc"
+  promote_quiet && { orphaned && exit 0; srec_start promote; drec=$srec_id; ( o=$(SG_PROMOTE_PROOF=ci bash "$(dirname "$0")/single.sh" promote bash "$(dirname "$0")/promote-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote "$rc"
     if [ "$rc" = 76 ]; then echo "$(date +%T) PROMOTE waits: a pass in flight holds the promote lock (pid $(cat "$SG_STATE/locks/single-promote/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
     else [ -n "$o" ] && printf '%s\n' "$o" >> "$SG_STATE/promote.log"; echo "$(date +%T) PROMOTE pass rc=$rc" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & } \
     || promote_defer_note   # a held window names itself once per reason (#2147): a green dev tip that waits is never silent
@@ -255,7 +267,7 @@ if v:
   # the request it left, and moves main by a fast-forward when the tier is green. A landing costs a job on the runner
   # nothing, so no burst postpones the read. The pass says nothing on a cycle with nothing to do; its outcome goes to this
   # cycle log, its reasons to promote.log and alerts.log. SG_PROMOTE=off makes the pass exit 0 at once.
-  { srec_start promote-main; drec=$srec_id; ( o=$(bash "$(dirname "$0")/single.sh" promote-main bash "$(dirname "$0")/promote-main-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote-main "$rc"
+  { orphaned && exit 0; srec_start promote-main; drec=$srec_id; ( o=$(bash "$(dirname "$0")/single.sh" promote-main bash "$(dirname "$0")/promote-main-pass.sh" 2>&1); rc=$?; srec_end "$drec" promote-main "$rc"
     [ "$rc" = 76 ] || { [ "$rc" = 0 ] && [ -z "$o" ]; } || echo "$(date +%T) PROMOTE-MAIN pass rc=$rc: $(printf '%s' "$o" | tail -n 1)" >> "$SG_STATE/cycle.log" ) 2>/dev/null & }
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
@@ -275,7 +287,7 @@ if v:
   # its own single-flight lock, as the promotion does (#1774): one pass of 5046 s held this cycle, and every landing read with
   # it, for 2 h 40 min. A held lock is named, never waited for; the pass bounds itself (SG_JANITOR_DEADLINE in janitor.py) and
   # writes its own time here when it ends. Its summary line still goes to this log's stdout.
-  { srec_start janitor; drec=$srec_id; ( j0=$SECONDS; o=$(bash "$(dirname "$0")/single.sh" janitor "$(dirname "$0")/janitor.sh" 2>&1); rc=$?; je=$((SECONDS - j0)); srec_end "$drec" janitor "$rc"
+  { orphaned && exit 0; srec_start janitor; drec=$srec_id; ( j0=$SECONDS; o=$(bash "$(dirname "$0")/single.sh" janitor "$(dirname "$0")/janitor.sh" 2>&1); rc=$?; je=$((SECONDS - j0)); srec_end "$drec" janitor "$rc"
     if [ "$rc" = 76 ]; then echo "$(date +%T) JANITOR skipped: a pass in flight holds the janitor lock (pid $(cat "$SG_STATE/locks/single-janitor/pid" 2>/dev/null || echo none))" >> "$SG_STATE/cycle.log"
     else [ -n "$o" ] && printf '%s\n' "$o"
       { [ "$je" -ge 5 ] || [ "$rc" != 0 ]; } && echo "$(date +%T) janitor.sh ${je}s$([ "$rc" = 0 ] || echo " rc=$rc")" >> "$SG_STATE/cycle.log"; fi ) 2>/dev/null & }

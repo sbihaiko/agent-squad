@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 3.78
+# seconds: 4.92
 # Rule W (#959): watchd.pid names no live supervisor and a lane of this scripts dir still runs, so the janitor raises WATCHD-ORPHAN
 # in alerts.log, once for the state. A live supervisor, or no lane, raises nothing.
 # Stubbed gh and board; a temp state dir and a temp scripts dir holding the janitor and stub lanes. usage: bash test-janitor-watchd-orphan.sh [janitor.py]
@@ -14,7 +14,8 @@ printf 'skill\n' > "$T/live/SKILL.md"; printf '{}\n' > "$T/live/scripts/models.j
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BASE=main SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/live" JANITOR_NOTIFY="$T/notify" "$@" python3 -I "$T/s/janitor.py" >/dev/null 2>&1; }
 alerts() { /usr/bin/grep -c 'WATCHD-ORPHAN' "$T/st/alerts.log" 2>/dev/null || echo 0; }
 orphan() { bash -c 'bash "$1" >/dev/null 2>&1 & echo $!; sleep 0.3' _ "$1"; }
-ppid_of() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+. "$d/caps.sh"   # SG_PS: the process table read through squad.procs (#1508): a sandbox refuses the setuid table binary
+ppid_of() { "$SG_PS" -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 echo 999999 > "$T/st/watchd.pid"
 lp=$(orphan "$T/s/watch.sh"); sleep 0.5
