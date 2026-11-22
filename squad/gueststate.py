@@ -32,6 +32,7 @@ FILE_MODE = 0o600
 LOG_DIR = "logs"
 LOG_NAME = "guest.log"
 CHECKPOINT_NAME = "guest-checkpoint.json"
+SCHEDULE_NAME = "guest-schedule.json"
 DEFAULT_ENV = "SQUAD_GUEST_STATE"
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")   # never climbs out of its kind folder
 
@@ -108,6 +109,11 @@ class GuestState:
     def checkpoint_path(self):
         """The poller's read cursor, one file for the machine (#2707). It sits in this folder, outside any repository."""
         return self.root / CHECKPOINT_NAME
+
+    def schedule_path(self):
+        """The polling schedule of the guest channels, one file for the machine (#2709). It sits in this folder,
+        outside any repository."""
+        return self.root / SCHEDULE_NAME
 
     def _private_dir(self, path):
         path.mkdir(parents=True, exist_ok=True)
