@@ -460,6 +460,7 @@ def event_of(message, workspace, channel, own=()):
 
 
 _THREAD_OPEN_DEFAULT = "30m"
+_POLL_SLOW_DEFAULT = "10m"     # the slow interval of a two_state channel with no message yet
 _MS = {"s": 1, "m": 60, "h": 3600}
 
 
@@ -487,6 +488,28 @@ def _channel_row(committed, local, workspace, channel):
                 if str(row.get("id")) == str(channel):
                     return row
     return {}
+
+
+def message_time(message, now):
+    """The clock value of one message's `ts`, or `now` when the `ts` is not a number. A message plans the next poll from
+    its own `ts`, never from the clock value of the tick that read it."""
+    stamp = _stamp(message.get("ts"))
+    return datetime.fromtimestamp(stamp) if stamp is not None else now
+
+
+def open_thread_last(threads, committed, local, workspace, channel, now):
+    """The newest activity of the channel's open threads when it is inside `thread_open`, or None. A thread that went
+    quiet hours ago never keeps the channel fast, and a thread of another guest workspace that shares the channel id
+    never counts (the store keys by workspace and channel)."""
+    if threads is None:
+        return None
+    thread = threads.last_at(channel, workspace=workspace)
+    if thread is None:
+        return None
+    poll = _channel_row(committed, local, workspace, channel).get("poll")
+    poll = poll if isinstance(poll, dict) else {}
+    open_ = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
+    return thread if (now - thread).total_seconds() <= open_ else None
 
 
 def guest_channels(committed, local):
@@ -568,23 +591,18 @@ class PollSchedule:
         """The seconds to the next poll of the channel at `now`, from its `poll` block and its last activity. An open
         agent thread newer than `thread_open` keeps the interval fast; an older one is out of the window, so the channel
         falls back on its own silence."""
-        row = _channel_row(self.committed, self.local, workspace, channel)
-        return slackpolicy.poll_interval(now, row, {"last_message_at": self.last_at(workspace, channel),
-                                                    "thread_last_at": self._thread_last(workspace, channel, row, now)})
+        return self._interval_at(workspace, channel, now, self.last_at(workspace, channel))
 
-    def _thread_last(self, workspace, channel, row, now):
-        """The newest activity of the channel's open threads, or None when the store is absent or that activity is
-        older than `thread_open`, so a thread that went quiet hours ago never keeps the channel fast. The store keys a
-        thread by workspace and channel id, so a thread in another guest workspace that shares the channel id never
-        keeps this channel fast."""
-        if self.threads is None:
-            return None
-        thread = self.threads.last_at(channel, workspace=workspace)
-        if thread is None:
-            return None
+    def _interval_at(self, workspace, channel, now, last):
+        """The seconds to the next poll at `now`, with `last` as the channel's last activity. A `two_state` channel with
+        no message and no open thread is quiet, so it waits `slow`: this rule lives in the schedule, and the shared
+        `slackpolicy.poll_interval` keeps its own fast default for a channel with no prior message."""
+        row = _channel_row(self.committed, self.local, workspace, channel)
+        thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
         poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
-        open_ = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
-        return thread if (now - thread).total_seconds() <= open_ else None
+        if last is None and thread is None and str(poll.get("mode") or "two_state") != "exponential":
+            return _duration(poll.get("slow"), _duration(_POLL_SLOW_DEFAULT, 600.0))
+        return slackpolicy.poll_interval(now, row, {"last_message_at": last, "thread_last_at": thread})
 
     def due(self, now):
         """The guest channels whose `next_due` has passed at `now`, as `(workspace, channel)` in file order. A channel
@@ -604,9 +622,11 @@ class PollSchedule:
 
     def note_message(self, workspace, channel, at):
         """A message from another person returns the channel to fast: it is the last activity, and the next poll is one
-        fast interval away."""
-        self._write_entry(workspace, channel, last_at=at.isoformat())
-        self._advance(workspace, channel, at)
+        interval away. One write carries both fields, so an interrupted note never leaves a last activity with a stale
+        due time."""
+        interval = self._interval_at(workspace, channel, at, at)
+        self._write_entry(workspace, channel, last_at=at.isoformat(),
+                          next_due=(at + timedelta(seconds=interval)).isoformat())
 
     def note_event(self, workspace, channel, at):
         """An announced event in the channel returns it to fast, as a new message does, so a reaction is read at once."""
@@ -627,15 +647,19 @@ class Poller:
     advances after each page, so a later poll of the same channel resumes from the next page.
 
     `shadow` runs the poll in shadow mode (#2711): `poll` records each decision in `self.shadow` and hands nothing out,
-    so the caller has no decision to act on and makes no write call."""
+    so the caller has no decision to act on and makes no write call.
+
+    `schedule` is the channel's `PollSchedule`: a poll that delivers a new message notes the newest of them on it, so
+    the channel's next due time follows the message."""
 
     def __init__(self, connect, checkpoint, committed, local, now, own=(), limit=100, owner=(), threads=None,
-                 footers=(), shadow=False):
+                 footers=(), shadow=False, schedule=None):
         self.connect, self.checkpoint = connect, checkpoint
         self.committed, self.local, self.now = committed, local, now
         self.own, self.limit = own, limit
         self.owner, self.threads = tuple(owner), threads
         self.footers, self.marks = tuple(footers), persona_marks(committed)
+        self.schedule = schedule
         # The record lives in the folder the caller chose for the checkpoint, so the private state folder keeps the
         # cursor and the record together and no second path is invented.
         self.shadow = ShadowLog(self.checkpoint.path.with_name(SHADOW_NAME)) if shadow else None
@@ -691,12 +715,24 @@ class Poller:
         own = _own_ts(self.own)
         self.checkpoint.record_page(channel, page, own)
         now = self.now()
-        # The message this read delivers is the channel's last activity, so the decision plans the next poll from it and
-        # never from the silence of a channel the schedule has not seen yet.
-        state = {"last_message_at": now, "thread_last_at": now}
-        pairs = [(m, slackpolicy.decide(self.committed, self.local, event_of(m, workspace, channel, own), now, state))
-                 for m in page if _newer(m.get("ts"), oldest) and not self.is_own(m)]
+        # Each message is the channel's activity at its own `ts`, so a page read late plans an old message at the slow
+        # interval and a fresh one at the fast interval. The tick's clock is never the activity, and only an open agent
+        # thread inside its window turns the thread rule on.
+        thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
+        new = [m for m in page if _newer(m.get("ts"), oldest) and not self.is_own(m)]
+        pairs = [(m, slackpolicy.decide(self.committed, self.local, event_of(m, workspace, channel, own), now,
+                                        {"last_message_at": message_time(m, now), "thread_last_at": thread}))
+                 for m in new]
+        self._note_delivered(workspace, channel, new, now)
         return pairs + self._reread_threads(workspace, channel, now)
+
+    def _note_delivered(self, workspace, channel, messages, now):
+        """Note the newest delivered message on the schedule, so the channel's next poll is one interval from that
+        message. A poller with no schedule leaves the schedule to its caller."""
+        if self.schedule is None or not messages:
+            return
+        self.schedule.note_message(workspace, channel,
+                                   max(message_time(m, now) for m in messages))
 
     def _reread_threads(self, workspace, channel, now):
         """Reread each open thread where the agent replied. A message newer than the thread's cursor reaches the policy;
@@ -723,8 +759,9 @@ class Poller:
             if last_at is not None and (now - last_at).total_seconds() > quiet:
                 self.threads.close(channel, thread_ts, workspace=workspace)
             if new:
+                thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
                 pairs += [(m, slackpolicy.decide(self.committed, self.local,
                                                  event_of(m, workspace, channel, _own_ts(self.own)), now,
-                                                 {"last_message_at": now, "thread_last_at": now}))
+                                                 {"last_message_at": message_time(m, now), "thread_last_at": thread}))
                           for m in new]
         return pairs
