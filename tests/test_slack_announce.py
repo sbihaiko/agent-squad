@@ -9,6 +9,7 @@ import copy
 import pytest
 
 from squad import slackannounce as A
+from squad import slackpolicy as P
 from squad import slackwriter as W
 
 STG = {"id": "stg_release", "key": "stg_release:a1b2c3", "ts": "2026-11-22T12:00:00Z",
@@ -91,18 +92,10 @@ class FakeConnector:
 
 
 def deliver(draft, connector):
-    """One draft through the writer's `PreToolUse` hook, then to the connector when the hook allows it. The model's own
-    copy of the text is wrong on purpose: the hook decides the exact text. The call itself comes from the writer's
-    channel-post path, so the connector receives no thread for an announcement."""
-    hook = W.pre_write_tool_use(draft)
-    call = {"tool": draft.tool, "channel": draft.channel, "text": "a copy the model wrote"}
-    answer = asyncio.run(hook({"tool_name": f"mcp__slack__slack_{call['tool']}", "tool_input": call}, "t1", None))
-    out = answer.get("hookSpecificOutput") or {}
-    if out.get("permissionDecision") != "allow":
-        return out
-    assert out["updatedInput"] == {"channel": draft.channel, "thread_ts": "", "text": draft.text}, out
-    connector(draft.tool, W.channel_post(draft))
-    return out
+    """One draft through the announcement module's own production path: the module runs the writer's `PreToolUse` hook,
+    reads its answer, and hands the connector the channel post it decided. A change to how the answer becomes a
+    connector call therefore fails every fake-connector test below."""
+    return asyncio.run(A.post(draft, connector))
 
 
 # --- 1. a subscribed guest channel gets the event as a draft -------------------------------------------------------
@@ -219,6 +212,16 @@ def test_the_connector_call_of_an_announcement_takes_the_channel_post_path():
     answer = asyncio.run(hook({"tool_name": f"mcp__slack__slack_{W.DRAFT_WORD}",
                                "tool_input": {"channel": GENERAL, "text": "a copy"}}, "t1", None))
     assert answer["hookSpecificOutput"]["updatedInput"]["thread_ts"] == "", "the hook keeps main's shape"
+
+
+def test_the_announcement_reaches_the_connector_through_the_production_post():
+    """The production path is one function in the announcement module: it reads the writer's hook answer and hands the
+    connector the channel post the answer allows, so no caller reaches `channel_post` itself."""
+    d = drafts(STG)[0]
+    connector = FakeConnector()
+    out = asyncio.run(A.post(d, connector))
+    assert out.get("permissionDecision") == "allow", out
+    assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "text": d.text})], connector.calls
 
 
 def test_the_hook_denies_a_thread_on_a_channel_post():
@@ -359,6 +362,23 @@ def test_a_local_channel_persona_wins_over_the_committed_one():
                  committed__personas=[{"id": "iara", "name": "Iara", "voice": "Sulafat", "tone": "Warm."},
                                       {"id": "lia", "name": "Lia", "voice": "Kore", "tone": "Direct."}])
     assert [d.text.splitlines()[0] for d in got] == ["*Lia's Msg*"], got
+
+
+def test_the_merged_channel_row_resolves_the_local_persona_through_effective_persona():
+    """The merge keeps the local `persona` on the merged channel row, and `slackpolicy.effective_persona` reads that row
+    to give Lia, not the committed Iara."""
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "persona": "iara",
+                                   "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "channels": [{"id": GENERAL, "persona": "lia"}]}]
+    committed, local = files(committed__workspaces=committed_ws, local__workspaces=local_ws,
+                             committed__personas=[{"id": "iara", "name": "Iara", "voice": "Sulafat", "tone": "Warm."},
+                                                  {"id": "lia", "name": "Lia", "voice": "Kore", "tone": "Direct."}])
+    group = A._guest_workspaces(committed, local)[0]
+    channel = group["channels"][0]
+    assert channel["persona"] == "lia", "the merged row keeps the local persona"
+    persona = P.effective_persona(committed, local, group["workspace"], channel)
+    assert persona is not None and persona.name == "Lia", persona
 
 
 def test_the_same_channel_id_under_two_guest_workspaces_gets_one_draft_each():

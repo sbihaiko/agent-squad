@@ -21,6 +21,7 @@ import re
 
 from . import slackpolicy
 from . import slackwriter as W
+from .slackpoller import DEFAULT_SERVER
 
 _FIELD = re.compile(r"\{(\w+)\}")
 
@@ -87,6 +88,23 @@ def draft_for(committed, local, workspace, channel, record):
     if not channel_id:
         return None
     return W.Draft(W.DRAFT_WORD, channel_id, "", W.compose(name, body), str(name))
+
+
+async def post(draft, connector):
+    """Write one announcement through the writer's own `PreToolUse` hook and the connector the session talks to.
+
+    The hook reads the model's call and decides the exact channel, text and thread; this function reads that answer and
+    calls the connector with the one call it allows. An announcement is a channel post, so the call comes from
+    `slackwriter.channel_post` and carries no `thread_ts`, which a tool would read as a reply in a thread. A denied
+    answer returns the denial, and the connector is not called at all."""
+    hook = W.pre_write_tool_use(draft)
+    answer = await hook({"tool_name": f"mcp__{DEFAULT_SERVER}__{DEFAULT_SERVER}_{draft.tool}",
+                         "tool_input": {"channel": draft.channel}}, "", None)
+    out = (answer or {}).get("hookSpecificOutput") or {}
+    if out.get("permissionDecision") != "allow":
+        return out
+    connector(draft.tool, W.channel_post(draft))
+    return out
 
 
 def _over(base, row):
