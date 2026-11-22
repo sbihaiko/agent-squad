@@ -16,22 +16,31 @@ The `logs` action answers with the log of the project that owns the channel and 
 one project, and `check` has already refused a request that names another. `scrub` masks every secret and drops every
 guest line, so a client's text never reaches the reply (SPEC 2682, story 42).
 
-The module reads no clock and calls no network: the caller supplies the project status source and the log source,
-because the status of a project comes from the repository and the board, and the log comes from the project's own log.
+The `approve_and_move` action approves the review of one card and moves it between columns after Todo (SPEC 2682,
+stories 26 and 67). `squad/slackboard.py` holds its three rules, and the action writes the board only when each passes.
 
-Guards: `tests/test_slack_executor.py`.
+The module reads no clock and calls no network: the caller supplies the project status source, the log source and the
+board, because the status of a project comes from the repository and the board, the log comes from the project's own
+log, and the board answers the card and takes the move.
+
+Guards: `tests/test_slack_executor.py`, `tests/test_approve_and_move.py`.
 """
 import json
 from typing import NamedTuple
 
+from . import slackboard
 from .redact import redact
 
 STATUS = "status"
 LOGS = "logs"
-ACTIONS = frozenset((STATUS, LOGS))
+APPROVE_AND_MOVE = "approve_and_move"
+ACTIONS = frozenset((STATUS, LOGS, APPROVE_AND_MOVE))
 REQUEST_FIELDS = ("action", "arguments", "project", "channel", "source")
 # The arguments each action takes. `status` and `logs` take none: they answer for the project the caller already named.
-_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {STATUS: frozenset(), LOGS: frozenset()}
+_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {STATUS: frozenset(), LOGS: frozenset(),
+                                                APPROVE_AND_MOVE: frozenset(("card", "to"))}
+# The arguments an action cannot run without. Only `approve_and_move` needs one: an approval needs its card and its column.
+_REQUIRED_ARGUMENTS: dict[str, tuple[str, ...]] = {APPROVE_AND_MOVE: ("card", "to")}
 
 
 class Request(NamedTuple):
@@ -116,7 +125,11 @@ def check(request, decision, line, project):
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:
-        return Refusal("arguments", f"the {request.action} action takes no argument, and the request names {', '.join(extra)}")
+        takes = ", ".join(sorted(allowed)) if allowed else "no argument"
+        return Refusal("arguments", f"the {request.action} action takes {takes}, and the request names {', '.join(extra)}")
+    missing = [name for name in _REQUIRED_ARGUMENTS.get(request.action, ()) if not request.arguments.get(name)]
+    if missing:
+        return Refusal("arguments", f"the {request.action} action needs {', '.join(missing)}")
     if not getattr(decision, "reply", None):
         return Refusal("reply", "the decision names no reply path, so no action runs in this channel")
     return None
@@ -140,17 +153,27 @@ def scrub(text, guest=()):
     return redact("".join(keep))
 
 
-def execute(request, decision, line, project, status=None, logs=None, guest=()):
+def execute(request, decision, line, project, status=None, logs=None, guest=(), board=None):
     """One request through every check, then its action. The action runs only when `check` returns None and its source
     is there; a refusal returns its data record and no reply. The reply carries the path the decision names, the
     channel of the line, and the answer text. `status` answers for the project, `logs` answers with the project's log
-    after `scrub`, and both receive the one project the check proved."""
+    after `scrub`, and both receive the one project the check proved. `board` answers the card and takes the approval
+    and the move of `approve_and_move`; its rules live in `slackboard`."""
     refusal = check(request, decision, line, project)
     if refusal is None and request.action == STATUS and status is None:
         refusal = Refusal("source", "the status action needs a status source")
     if refusal is None and request.action == LOGS and logs is None:
         refusal = Refusal("source", "the logs action needs a logs source")
+    if refusal is None and request.action == APPROVE_AND_MOVE and board is None:
+        refusal = Refusal("source", "the approve_and_move action needs a board source")
     if refusal is not None:
         return Outcome(False, None, data_record(line, refusal))
-    text = status(project) if request.action == STATUS else scrub(logs(project), guest)
+    if request.action == APPROVE_AND_MOVE:
+        text, why = slackboard.approve_and_move(board, request.arguments["card"], request.arguments["to"])
+        if why is not None:
+            return Outcome(False, None, data_record(line, Refusal("board", why)))
+    elif request.action == STATUS:
+        text = status(project)
+    else:
+        text = scrub(logs(project), guest)
     return Outcome(True, {"path": decision.reply, "channel": str((line or {}).get("channel") or ""), "text": text}, None)
