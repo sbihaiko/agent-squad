@@ -266,7 +266,7 @@ def overview(hub, tmp_path):
 
 def render(hub, out, docs=None):
     body = (_slack_js(hub.PAGE) + "\n" + STUB
-            + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR={json.dumps(out)};"
+            + f"\nslS={{}};slR={json.dumps(out)};"
             + f"slDocs={json.dumps(docs if docs is not None else out['docs'])};slSavedDocs=slClone(slDocs);slRender();"
             "console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
@@ -275,7 +275,7 @@ def render(hub, out, docs=None):
 def edit(hub, out, docs, calls):
     """Run edit calls in order and hand back the two documents they left, so a test reads the state the Save posts."""
     body = (_slack_js(hub.PAGE) + "\n" + STUB
-            + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR={json.dumps(out)};"
+            + f"\nslS={{}};slR={json.dumps(out)};"
             + f"slDocs={json.dumps(docs)};slSavedDocs=slClone(slDocs);"
             + "".join(f"slEdit({json.dumps(k)},{json.dumps(v)});" for k, v in calls)
             + "console.log(JSON.stringify(slDocs))")
@@ -296,7 +296,7 @@ def test_a_confirmed_save_reloads_the_read_view(hub, tmp_path):
              'project:{language:"en-US",persona:null,persona_name:null},'
              'docs:{committed:{events:[{id:"fix_release",template:"Fixed: {items}."}]},local:{}}};'
              'let n=0;globalThis.fetch=async()=>({json:async()=>n++?read:save});'
-             f'slS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR=null;'
+             'slS={};slR=null;'
              'slDocs={committed:{events:[]},local:{}};'
              'slSavedDocs=slClone(slDocs);await slPost(true);'
              'console.log(JSON.stringify({docs:slDocs,events:(slR||{}).events,msg:slMsg}))')
@@ -309,7 +309,7 @@ def test_a_confirmed_save_reloads_the_read_view(hub, tmp_path):
 def state(hub, out, docs, lines):
     """Run the functions the editor's buttons call, in order, and hand back the two documents they left."""
     body = (_slack_js(hub.PAGE) + "\n" + STUB
-            + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR={json.dumps(out)};"
+            + f"\nslS={{}};slR={json.dumps(out)};"
             + f"slDocs={json.dumps(docs)};slSavedDocs=slClone(slDocs);" + "".join(lines)
             + "console.log(JSON.stringify(slDocs))")
     return json.loads(_node(body))
