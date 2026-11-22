@@ -97,6 +97,41 @@ r=$(SG_WAVE_TIP_GATES="$TIP2216G" SG_WAVE_CHILD_GATES="$G215" land2 run-215 2>&1
 [ "$(/usr/bin/grep -c '^o 3 Todo 22105$' "$T/board.log")" = 2 ] && ok "W2216: the eviction of the re-entered child moves its card to Todo" || ko "W2216: Todo rows: '$(cat "$T/board.log")' ($r)"
 case "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#22105" 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("requeued") or {}).get("run-215", {}).get("head", ""))')" in
   "$B2") ok "W2216: the eviction writes its requeue on the re-entered commit";; *) ko "W2216: the requeue head is not the re-entered commit $B2: '$r'";; esac
+
+# W2757 (#2757): a child of two commits, where only the newer one is red. The eviction drops every commit of that child, so
+# no unreviewed part of it reaches dev. Before, only the red commit left, and the older one landed.
+# A sibling child entered before it and one entered after it stay in the tip and land.
+W216=wave/run-216; start2 run-216 >/dev/null
+child 27570 g27570 "origin/$W216"; en2 run-216 27570 >/dev/null
+child 27571 g27571 "origin/$W216"
+(cd "$T/c27571" && echo bad > bad2757 && $G add bad2757 && $G -c user.email=a@b -c user.name=t commit -q -m "more work 27571 (Refs #27571)")
+en2 run-216 27571 >/dev/null
+child 27572 g27572 "origin/$W216"; en2 run-216 27572 >/dev/null
+printf 'run-216\n' > "$T/st/auto/disp-27571"; : > "$T/board.log"
+TIP2757="[ ! -e bad2757 ] || exit 1; exit 0"
+C2757='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2757 && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2757" SG_WAVE_CHILD_GATES="$C2757" land2 run-216 2>&1); rc=$?
+$O cat-file -e dev:bad2757 2>/dev/null && ko "W2757: the red commit of the evicted child landed: '$r'" || ok "W2757: the red commit of the evicted child is not in dev"
+$O cat-file -e dev:g27571 2>/dev/null && ko "W2757: the older commit of the evicted child landed: '$r'" || ok "W2757: the older commit of the evicted child is not in dev"
+[ $rc = 0 ] && $O cat-file -e dev:g27570 2>/dev/null && $O cat-file -e dev:g27572 2>/dev/null \
+  && ok "W2757: the sibling children entered before and after the evicted child land" || ko "W2757: a sibling did not land: exit $rc: '$r'"
+[ "$(/usr/bin/grep -c '^o 3 Todo 27571$' "$T/board.log")" = 1 ] && ok "W2757: the evicted child's card goes to Todo once" || ko "W2757: Todo rows: '$(cat "$T/board.log")'"
+# A drop of the older commit conflicts: a sibling commit after it edits the file that commit adds. The eviction takes the
+# "cannot leave it" path, and the wave does not land.
+W217=wave/run-217; start2 run-217 >/dev/null
+child 27573 g27573 "origin/$W217"
+(cd "$T/c27573" && echo bad > bad2757c && $G add bad2757c && $G -c user.email=a@b -c user.name=t commit -q -m "more work 27573 (Refs #27573)")
+en2 run-217 27573 >/dev/null
+child 27574 g27574 "origin/$W217"; en2 run-217 27574 >/dev/null
+# The entry refuses a sibling that shares a file (#1434), so the sibling's edit of g27573 goes on the remote wave by hand.
+(cd "$T/c27574" && $G fetch -q origin && $G reset -q --hard "origin/$W217" && echo edit > g27573 && $G add g27573 \
+  && $G -c user.email=a@b -c user.name=t commit -q -m "edit 27574 (Refs #27574)" && $G push -q origin "HEAD:$W217")
+printf 'run-217\n' > "$T/st/auto/disp-27573"; D217=$($O rev-parse dev)
+C2757C='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2757c && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="[ ! -e bad2757c ] || exit 1; exit 0" SG_WAVE_CHILD_GATES="$C2757C" land2 run-217 2>&1); rc=$?
+[ $rc != 0 ] && case "$r" in *"WAVE CHECK RED $W217: #27573 broke the wave tip and cannot leave it (a rebase conflict)"*) true;; *) false;; esac \
+  && ok "W2757: a conflict in the drop of the child's older commit takes the cannot-leave-it path" || ko "W2757: conflict: exit $rc: '$r'"
+[ "$($O rev-parse dev)" = "$D217" ] && ok "W2757: the conflicted eviction lands nothing in dev" || ko "W2757: dev moved after the conflicted eviction: '$r'"
 # N (#2217): a run that ends owner-only freezes its issue once, and a run that ends does-not-reproduce freezes it at this build.
 # A failed run with no class (a gate reason) is counted as before and freezes nothing. The stub keeps the labels and the
 # comments written, so the freeze reads back what stands.

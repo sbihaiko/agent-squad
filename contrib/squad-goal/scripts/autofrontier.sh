@@ -288,13 +288,12 @@ case "$batching_max" in ''|*[!0-9]*) ;; *) batching_n=$(sg_column_cards Batching
   [ "$batching_n" -lt "$batching_max" ] || { echo "FRONTIER column Batching full: $batching_n of $batching_max card(s) in Batching; the cards unit stopped the pass; nothing dispatched this pass"; exit 0; } ;; esac
 todo=" $(printf '%s\n' "$board" | sg_todo_of | tr '\n' ' ') "   # the issues whose card sits in Todo: the owner's go signal (#550)
 git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-dev}" > "$F/dev-subjects" 2>/dev/null || : > "$F/dev-subjects"
-# An issue whose landing is in the base and whose publish is pending is no work (#2416): the base carries a commit whose
-# message names it with a `Refs #N` line, and the issue is still open because the publish has not closed it yet. A hand
-# landing (`ffland.sh`) writes no ledger, so the commits of the base are the fact; a base that cannot be read lands
-# nothing, and the walk goes on as before.
-landed=$(git -C "${SG_CHECKOUT:-.}" log --format=%B "origin/${SG_LAND_BRANCH:-dev}" 2>/dev/null \
-  | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' ')
-landed=" ${landed} "
+# An issue whose landing is in the base and whose publish is pending is no work (#2416): a landing pass recorded the
+# issue's landing fact in the ledger, and the issue is still open because the publish has not closed it yet. Every landing
+# pass writes that fact: `wave.sh`, `branchland.sh`, and the hand landing `ffland.sh`. A `Refs #N` line in the base proves a
+# commit, never a delivery, so the commit bodies are not read (#2756). A requeue fact newer than the landing undoes it, so a
+# requeued issue is work again. A ledger that cannot be read lands nothing, and the walk goes on as before.
+landed=" $(python3 "$here/issue_ledger.py" standing "$SG_REPO" 2>/dev/null | tr '\n' ' ') "
 closers=" $(python3 "$here/specstall.py" closers "$F/issues.json" "$F/dev-subjects" 2>/dev/null | tr '\n' ' ')"   # a ticket that closes its spec ranks before ordinary work (#1962)
 while IFS=$'\x1f' read -r _rank w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r --arg cl "$closers " '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number as $m | if ($cl | contains(" \($m) ")) then 0 else 1 end),([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0
