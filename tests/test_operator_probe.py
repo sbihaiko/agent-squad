@@ -195,9 +195,15 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         seen["proxy_url"] = proxy_url
         return ({"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False})
 
+    def fake_guest(work, profile, cli, role, proxy_url=None):
+        seen[role] = proxy_url
+        init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
+        return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
+
     monkeypatch.setattr(probe, "session", fake_session)
+    monkeypatch.setattr(probe, "guest_session", fake_guest)
     probe.run_probe(tmp_path, "/bin/true")
-    assert seen["proxy_url"] is None
+    assert seen == {"proxy_url": None, "poller": None, "writer": None}
 
 
 def test_the_session_reaches_the_model_only_through_the_proxy(tmp_path, monkeypatch):
@@ -266,3 +272,206 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
 def test_the_real_cli_probe_passes():
     probe = load("operator_probe")
     assert probe.main([]) == 0
+
+
+# #2716: the guest poller and writer sessions run through the same real CLI and wrapper, each with its real PreToolUse
+# hook (through contrib/voice/guest_probe_hook.py) and a stand-in connector (contrib/voice/fake_slack_mcp.py).
+
+def events_of(calls):
+    """Stream-json events for tool calls: (name, input, result text) each, in order."""
+    events = []
+    for n, (name, arguments, text) in enumerate(calls):
+        tid = f"toolu_{n}"
+        events.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": arguments}]}})
+        events.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "content": [{"type": "text", "text": text}]}]}})
+    return events
+
+
+def reached_text(probe, name, arguments):
+    import json
+    line = json.dumps({"tool": name.split("__")[-1], "arguments": arguments}, sort_keys=True)
+    return f"{probe.CALLED} {line}"
+
+
+def held_calls(probe, role):
+    """The calls of a session whose every denial held and whose control call passed."""
+    calls = []
+    for _label, name, arguments, reason in probe.DENIALS[role]:
+        calls.append((name, arguments, f"PreToolUse:{name} hook error: {reason} (probe)"))
+    name, arguments = probe.CONTROLS[role]
+    calls.append((name, arguments, reached_text(probe, name, probe.expected_control(role))))
+    return calls
+
+
+@pytest.mark.parametrize("role", ["poller", "writer"])
+def test_a_session_whose_denials_held_passes_the_check(role):
+    probe = load("operator_probe")
+    probe.check_guest(role, probe.tool_calls(events_of(held_calls(probe, role))))
+
+
+@pytest.mark.parametrize("role,index", [("poller", 0), ("writer", 0), ("writer", 1), ("writer", 2)])
+def test_a_guest_denial_that_does_not_hold_fails_the_probe(role, index):
+    probe = load("operator_probe")
+    calls = held_calls(probe, role)
+    name, arguments, _ = calls[index]
+    calls[index] = (name, arguments, reached_text(probe, name, arguments))
+    with pytest.raises(probe.ProbeFailed, match="did not hold"):
+        probe.check_guest(role, probe.tool_calls(events_of(calls)))
+
+
+@pytest.mark.parametrize("role,index", [("poller", 0), ("writer", 0), ("writer", 1), ("writer", 2)])
+def test_a_guest_denial_the_session_never_tried_is_unproven(role, index):
+    probe = load("operator_probe")
+    calls = held_calls(probe, role)
+    del calls[index]
+    with pytest.raises(probe.ProbeFailed, match="unproven"):
+        probe.check_guest(role, probe.tool_calls(events_of(calls)))
+
+
+@pytest.mark.parametrize("role", ["poller", "writer"])
+def test_a_refusal_without_the_hook_reason_is_unproven(role):
+    probe = load("operator_probe")
+    calls = held_calls(probe, role)
+    name, arguments, _ = calls[0]
+    calls[0] = (name, arguments, "some other refusal")
+    with pytest.raises(probe.ProbeFailed, match="unproven"):
+        probe.check_guest(role, probe.tool_calls(events_of(calls)))
+
+
+@pytest.mark.parametrize("role", ["poller", "writer"])
+def test_a_control_call_that_did_not_pass_fails_the_probe(role):
+    probe = load("operator_probe")
+    calls = held_calls(probe, role)
+    name, arguments, _ = calls[-1]
+    calls[-1] = (name, arguments, "denied")
+    with pytest.raises(probe.ProbeFailed, match="control"):
+        probe.check_guest(role, probe.tool_calls(events_of(calls)))
+
+
+def test_a_draft_that_reaches_the_connector_with_the_model_text_fails_the_probe():
+    """The writer hook returns updatedInput with the decided text: the model's own text must never reach the connector."""
+    probe = load("operator_probe")
+    calls = held_calls(probe, "writer")
+    name, arguments, _ = calls[-1]
+    calls[-1] = (name, arguments, reached_text(probe, name, arguments))
+    with pytest.raises(probe.ProbeFailed, match="decided"):
+        probe.check_guest("writer", probe.tool_calls(events_of(calls)))
+
+
+def test_the_writer_control_reaches_the_connector_with_the_decided_text_only():
+    probe = load("operator_probe")
+    draft = probe.PROBE_DRAFT
+    assert probe.expected_control("writer") == {"channel": draft.channel, "thread_ts": draft.thread_ts,
+                                                "text": draft.text}
+    assert probe.CONTROLS["writer"][1]["text"] != draft.text
+
+
+@pytest.mark.parametrize("extra", ["mcp__claude_ai_Slack__slack_send_message", "Bash"])
+def test_a_guest_session_with_a_tool_beyond_the_stand_in_fails_the_probe(extra):
+    probe = load("operator_probe")
+    init = {"tools": [*probe.GUEST_TOOLS, extra], "permissionMode": "dontAsk"}
+    with pytest.raises(probe.ProbeFailed, match=extra):
+        probe.check_guest_init(init)
+    probe.check_guest_init({"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"})
+
+
+@pytest.mark.parametrize("role", ["poller", "writer"])
+def test_a_guest_session_runs_through_the_wrapper_with_its_hook_and_the_stand_in(tmp_path, monkeypatch, role):
+    import json
+    probe = load("operator_probe")
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"], seen["env"] = argv, kwargs["env"]
+        init = {"type": "system", "subtype": "init", "tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
+        out = json.dumps(init) + '\n{"type": "result", "subtype": "success"}\n'
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.guest_session(tmp_path, "(version 1)(allow default)", "claude", role, "http://127.0.0.1:4242")
+    argv = seen["argv"]
+    assert argv[0] == probe.WRAPPER
+    assert seen["env"]["SQUAD_CLAUDE_CLI"] == "claude"
+    assert seen["env"]["HTTPS_PROXY"] == "http://127.0.0.1:4242"
+    assert argv[argv.index("--tools") + 1] == ""
+    assert argv[argv.index("--allowedTools") + 1] == "mcp__slack"
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    assert argv[argv.index("--max-budget-usd") + 1] == probe.SPEND
+    assert argv[argv.index("--model") + 1] == probe.MODEL
+    assert "--strict-mcp-config" in argv
+    servers = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
+    assert list(servers) == ["slack"]
+    assert str(probe.FAKE_CONNECTOR) in servers["slack"]["args"]
+    hooks = json.loads(argv[argv.index("--settings") + 1])["hooks"]["PreToolUse"]
+    command = hooks[0]["hooks"][0]["command"]
+    assert str(probe.GUEST_HOOK) in command and f" {role}" in command
+
+
+def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    roles = []
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a: (False, False, False))
+    monkeypatch.setattr(probe, "session", lambda *a, **k: (
+        {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
+
+    def fake_guest(work, profile, cli, role, proxy_url=None):
+        roles.append(role)
+        init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
+        return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
+
+    monkeypatch.setattr(probe, "guest_session", fake_guest)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert roles == ["poller", "writer"]
+
+
+def run_hook(role_args, tool_input):
+    import json
+    return subprocess.run([sys.executable, str(VOICE / "guest_probe_hook.py"), *role_args], input=json.dumps(tool_input),
+                          capture_output=True, text=True, check=False, timeout=20)
+
+
+@pytest.mark.heavy     # four Python starts that each import squad: load can push them over the 1 s line
+def test_the_hook_shim_answers_with_the_real_guest_hooks():
+    import json
+    probe = load("operator_probe")
+    draft = probe.PROBE_DRAFT
+    write = run_hook(["poller"], {"tool_name": "mcp__slack__slack_send_message", "tool_input": {"text": "x"}})
+    assert json.loads(write.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    read = run_hook(["poller"], {"tool_name": "mcp__slack__slack_read_channel", "tool_input": {}})
+    assert json.loads(read.stdout) == {}
+    draft_json = json.dumps(draft._asdict())
+    other = run_hook(["writer", draft_json], {"tool_name": "mcp__slack__slack_send_message_draft",
+                                              "tool_input": {"channel": "COTHER", "text": "x"}})
+    assert json.loads(other.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    passed = run_hook(["writer", draft_json], {"tool_name": "mcp__slack__slack_send_message_draft",
+                                               "tool_input": {"channel": draft.channel, "text": "x"}})
+    assert json.loads(passed.stdout)["hookSpecificOutput"]["updatedInput"]["text"] == draft.text
+
+
+def test_the_hook_shim_blocks_when_it_cannot_run_the_hook():
+    done = run_hook(["nobody"], {"tool_name": "mcp__slack__slack_read_channel", "tool_input": {}})
+    assert done.returncode == 2
+    assert "blocked" in done.stderr
+
+
+def test_the_stand_in_connector_reports_each_call_it_runs():
+    import json
+    lines = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+             {"jsonrpc": "2.0", "method": "notifications/initialized"},
+             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+             {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+              "params": {"name": "slack_send_message_draft", "arguments": {"channel": "C1", "text": "t"}}}]
+    done = subprocess.run([sys.executable, str(VOICE / "fake_slack_mcp.py")], capture_output=True, text=True,
+                          check=False, timeout=20, input="".join(json.dumps(line) + "\n" for line in lines))
+    replies = [json.loads(line) for line in done.stdout.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2, 3]
+    assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
+    names = [t["name"] for t in replies[1]["result"]["tools"]]
+    assert names == ["slack_read_channel", "slack_send_message", "slack_send_message_draft"]
+    text = replies[2]["result"]["content"][0]["text"]
+    assert text.startswith("FAKE-SLACK-CALLED ")
+    assert json.loads(text.split(" ", 1)[1]) == {"tool": "slack_send_message_draft",
+                                                 "arguments": {"channel": "C1", "text": "t"}}

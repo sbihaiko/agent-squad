@@ -6,7 +6,8 @@ sits in the profile folder and never enters a repository. This module loads both
 
 `squad slack check` imports it, and the hub imports it before it writes a Slack setting. No other file holds a copy of
 these rules. `decide` maps one event of one channel to one decision; the caller passes the clock value, and the module
-reads neither a clock nor the network.
+reads neither a clock nor the network. A `send_grant` lives in the local file, where only the hub writes it, and it
+holds the date of the grant (story 38).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
 `contrib/squad-goal/scripts/test-commit-guard.sh`.
@@ -149,6 +150,33 @@ def _rows(value):
     return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def _grant_date(value):
+    """True when the value is the date of a grant: `YYYY-MM-DD`, and a day the calendar holds."""
+    text = str(value)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return False
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _send_grants(file, doc, out, local):
+    """The defects of each `send_grant` of a file. The grant lives in the local file, where only the hub writes it, and
+    it holds the date of the grant. A grant in the committed file is refused, and so is a value that is not a date."""
+    for i, ws in enumerate(_rows(doc.get("workspaces"))):
+        for j, ch in enumerate(_rows(ws.get("channels"))):
+            if ch.get("send_grant") is None:
+                continue
+            key = f"workspaces[{i}].channels[{j}].send_grant"
+            if not local:
+                out.append(_defect(file, key, "the send_grant lives in the local file, where only the hub writes it"))
+            elif not _grant_date(ch["send_grant"]):
+                out.append(_defect(file, key, f"send_grant {ch['send_grant']!r} is not the date of the grant "
+                                              "(YYYY-MM-DD)"))
+
+
 def _guest_ids(local):
     """The team ids and channel ids a local file declares as guest."""
     teams, channels = set(), set()
@@ -183,6 +211,8 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     for file, doc in ours:
         _personas(file, doc, out)
         _roles(file, doc, out)
+    _send_grants("slack.yaml", committed, out, local=False)
+    _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
     for file, doc in ours:
         for i, ws in enumerate(_rows(doc.get("workspaces"))):
@@ -313,7 +343,8 @@ class Decision(NamedTuple):
     and `proposal`, and never in a `listen` channel. `mark` is true exactly when `reply` is `draft` or `send`, because
     that reply leaves from the owner's account; a `bot` reply and a decision with no reply carry no mark. `next_poll` is
     set only for an event of a known `guest` channel, so it is None for an unknown channel and for `ignore`/`data` of a
-    non-guest channel."""
+    non-guest channel. `voice_reply` is true exactly when the `guest` channel asks for the reply also in audio, so a
+    channel that does not ask carries no clip (story 70)."""
     kind: str
     role: str | None
     actions: tuple
@@ -322,6 +353,7 @@ class Decision(NamedTuple):
     reply: str | None
     mark: bool
     next_poll: datetime | None
+    voice_reply: bool = False
 
 
 def _row_at(rows, key, value):
@@ -368,6 +400,27 @@ def _effective_persona(committed, local, workspace, channel):
     return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
 
 
+def identity(committed, local, channel_id):
+    """The language and persona one channel answers with, from its id alone: the same chain `decide` uses.
+
+    The daemon reads them for a channel that no event names, such as the channel of an outbox line. The committed file
+    comes first, then the local file, and a channel neither file names falls back to the project default, as an event of
+    an unknown channel does. The persona is None when no file names one."""
+    committed = committed or {}
+    local = local or {}
+    channel_id = str(channel_id or "")
+    workspace = channel = None
+    for document in (committed, local):
+        for ws in _rows(document.get("workspaces")):
+            row = _row_at(ws.get("channels"), "id", channel_id)
+            if row is not None:
+                workspace, channel = ws, row
+                break
+        if channel is not None:
+            break
+    return _effective_language(committed, local, workspace, channel), _effective_persona(committed, local, workspace, channel)
+
+
 def _member_role(local, workspace_id, channel_id, user, accepted):
     """The role the local file gives this user in this channel, or None. A membership in a role the channel does not
     accept grants nothing, so a stranger's message stays data. `accepted` is None for an unknown channel: no action is
@@ -389,14 +442,20 @@ def _role_actions(committed, role):
     return ()
 
 
-def _reply_path(class_, channel):
+def _reply_path(class_, channel, user):
     """The reply path: `bot` in an `owned` channel, a `draft` by default in a `guest` channel, `send` only with an
-    explicit `speak: send` and a `send_grant`, and none in a `listen` channel."""
+    explicit `speak: send` and a `send_grant`, and none in a `listen` channel.
+
+    A Slack Connect channel (`connect: true`) never gets a direct send, because `slack_send_message` does not post there.
+    A reply addressed to a person in `draft_for` already leaves as a draft, even with a grant, so the owner reviews what
+    goes to that person."""
     if str(channel.get("mode") or "listen") != "listen+speak":
         return None
     if str(class_) != "guest":
         return "bot"
-    if str(channel.get("speak") or "draft") == "send" and channel.get("send_grant"):
+    draft_for = {str(value) for value in channel.get("draft_for") or ()}
+    if (str(channel.get("speak") or "draft") == "send" and channel.get("send_grant")
+            and not channel.get("connect") and str(user) not in draft_for):
         return "send"
     return "draft"
 
@@ -468,12 +527,14 @@ def decide(committed, local, event, now, thread_state=None):
         return Decision(IGNORE, role, (), language, persona, None, False, None)
     class_ = str(workspace.get("class") or "owned")
     next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
+    # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
+    voice = class_ == "guest" and bool(channel.get("voice_reply"))
     role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
     if str(event.get("kind") or "message") != "message" or event.get("own"):
-        return Decision(IGNORE, role, (), language, persona, None, False, next_poll)
+        return Decision(IGNORE, role, (), language, persona, None, False, next_poll, voice)
     if event.get("bot") or event.get("external") or role is None:
-        return Decision(DATA, role, (), language, persona, None, False, next_poll)
-    reply = _reply_path(class_, channel)
+        return Decision(DATA, role, (), language, persona, None, False, next_poll, voice)
+    reply = _reply_path(class_, channel, user)
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
-                    next_poll)
+                    next_poll, voice)

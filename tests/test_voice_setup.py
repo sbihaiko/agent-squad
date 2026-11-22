@@ -34,6 +34,7 @@ def voice_module(name: str):
 
 SPEC_BOT_SCOPES = sorted([
     "chat:write",
+    "chat:write.customize",
     "channels:history",
     "channels:manage",
     "channels:read",

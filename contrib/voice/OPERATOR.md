@@ -18,8 +18,11 @@ is delivered when the turn ends.
 After an upgrade, a Monitor still tailing the old root `$VOICE_STATE/inbox.jsonl` sees no new line, because the
 daemon now writes the DM queue to `$VOICE_STATE/inboxes/dm.jsonl`. Restart that Monitor on the new path.
 
-The inbox line carries `id`, `ts`, `user`, `channel`, `text` and `clip`. `text` is the owner's words, or the
-transcription of the clip. A line from any other user never reaches the inbox.
+The inbox line carries `id`, `ts`, `user`, `channel`, `text`, `clip`, `language`, `persona` and `role`, the decision
+the policy files give the event. `text` is the owner's words, or the transcription of the clip; a line with no text
+carries no `text` key. A line from a bot, a stranger or a Slack Connect user never reaches the inbox; it stays data in
+`other.jsonl` with the same `language`, `persona` and `role` fields, so a reader tells which caller and channel role
+produced it.
 
 ## Answer through the outbox
 
@@ -40,6 +43,18 @@ For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
 
 The daemon posts the text at once, speaks the first sentence while the text goes out, and speaks the rest as one clip.
 It reads every outbox on its own. The session makes no Slack call and waits for no reply.
+
+## Persona and language
+
+Each channel answers with a persona: a name, a Gemini voice, and a tone. The daemon reads the persona and the language
+from the active `slack.yaml` revision of the project that owns the channel.
+
+- The daemon posts the text with the persona `username`. The app manifest carries the scope `chat:write.customize`, and
+  the owner reinstalls the app in each `owned` workspace before Slack accepts the name.
+- The daemon speaks with the persona `voice`, and the persona `tone` is the TTS style prompt.
+- A clip carries no name, so it leaves under the app name until #2726 records what an upload does with a `username`.
+- The brief of the session carries the channel language and the persona tone. The session answers in the channel
+  language, even when the sender writes in another language.
 
 ## No poll
 

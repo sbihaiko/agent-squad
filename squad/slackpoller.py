@@ -20,13 +20,18 @@ replied (`RepliedThreads`) until it goes quiet. The polling schedule is not here
 The policy decision comes from `squad/slackpolicy.py` (#2684), and the caller passes the clock value. This module reads
 no clock of its own and calls no network: the connector is a callable that the caller supplies.
 
+Shadow mode (#2711) is the pilot beside the existing cron. A shadow poll reads a page and records the decision it would
+take for each message in `guest-shadow.json`, beside the checkpoint in the same private state folder. It hands no
+decision to a caller and makes no write call, so nothing leaves the owner's account. The record holds the decision and
+never the message text (story 42).
+
 Guards: `tests/test_slack_poller.py`.
 """
 import json
 from datetime import datetime
 from pathlib import Path
 
-from . import slackpolicy
+from . import guesstranscribe, slackpolicy
 from .record import atomic_write
 
 # The connector's own tool name carries its server: `mcp__slack__slack_read_channel`. A read tool's first word is one of
@@ -35,11 +40,13 @@ READ_VERBS = frozenset(("read", "search", "list"))
 WRITE_VERBS = frozenset(("send", "post", "write", "upload", "schedule", "react", "complete", "create", "update",
                          "delete", "remove", "set", "add", "invite", "archive", "draft"))
 DEFAULT_SERVER = "slack"
+SHADOW_NAME = "guest-shadow.json"     # the shadow record, beside the checkpoint in the private state folder
 
 
-def _tool_word(name, server):
-    """The connector's own name of a tool, or None when the tool belongs to another server. `mcp__slack__slack_read_channel`
-    and a plain `slack_read_channel` both give `slack_read_channel`."""
+def tool_word(name, server=DEFAULT_SERVER):
+    """The connector's own name of a tool, without its server: `mcp__slack__slack_read_channel` and a plain
+    `slack_read_channel` both give `read_channel`. None when the tool belongs to another server, so a writer or a poller
+    never acts on a tool of a different server (the writer uses it too, #2712)."""
     prefix = f"mcp__{server}__"
     if name.startswith(prefix):
         tool = name[len(prefix):]
@@ -52,7 +59,7 @@ def _tool_word(name, server):
 
 def read_denial(name, server=DEFAULT_SERVER):
     """None when the tool is one of the connector's read tools, else the reason the hook denies it."""
-    tool = _tool_word(str(name or ""), server)
+    tool = tool_word(str(name or ""), server)
     if tool is not None:
         words = tool.split("_")
         if words and words[0] in READ_VERBS and not WRITE_VERBS.intersection(words):
@@ -326,6 +333,84 @@ class Checkpoint:
         return self.get(channel)
 
 
+def shadow_entry(ts, decision):
+    """The decision a shadow poll would take for one message, as a JSON-ready row. It records the decision fields only:
+    the message text and its author never enter the record (story 42)."""
+    persona = decision.persona
+    return {
+        "ts": str(ts),
+        "kind": decision.kind,
+        "role": decision.role,
+        "actions": list(decision.actions),
+        "language": decision.language,
+        "persona": persona.id if persona is not None else None,
+        "reply": decision.reply,
+        "mark": decision.mark,
+        "next_poll": decision.next_poll.isoformat() if decision.next_poll is not None else None,
+    }
+
+
+class ShadowLogUnreadable(Exception):
+    """The state file exists but its content cannot be read, so a record never writes over it and drops the decisions
+    it holds. `load` stays the tolerant read path; only `record` raises this."""
+
+
+class ShadowLog:
+    """The decisions a shadow poll would take, one JSON file keyed by channel id, beside the checkpoint in the private
+    state folder. Only code writes it, every write is atomic (ADR-0030). An unreadable file reads as an empty record
+    through `load`, so a broken file never stops a read of the record; `record` refuses to write over a file it could
+    not read. The record holds the decision and never the message text (story 42)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def load(self):
+        try:
+            doc = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return doc if isinstance(doc, dict) else {}
+
+    def _read(self):
+        """The recorded document for a write, or `{}` when the file is absent. A file that exists but cannot be read,
+        or whose content is not a JSON object, raises `ShadowLogUnreadable`: a write never erases what it cannot read."""
+        try:
+            text = self.path.read_text()
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise ShadowLogUnreadable(f"{self.path}: {exc}") from exc
+        try:
+            doc = json.loads(text)
+        except ValueError as exc:
+            raise ShadowLogUnreadable(f"{self.path}: not JSON: {exc}") from exc
+        if not isinstance(doc, dict):
+            raise ShadowLogUnreadable(f"{self.path}: the record is not a JSON object")
+        return doc
+
+    def entries(self, channel=None):
+        """Every recorded decision, by channel then oldest first, or the decisions of one channel."""
+        doc = self.load()
+        if channel is not None:
+            rows = doc.get(str(channel))
+            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        return [row for rows in doc.values() if isinstance(rows, list) for row in rows if isinstance(row, dict)]
+
+    def record(self, channel, ts, decision):
+        """Append one decision for one message of a channel, as one atomic write. A row of the channel already carries
+        the same `ts`, so a repeat of one message appends nothing. A file that exists but cannot be read raises
+        `ShadowLogUnreadable`, so a corrupt file keeps every decision it holds."""
+        doc = self._read()
+        rows = doc.get(str(channel))
+        rows = list(rows) if isinstance(rows, list) else []
+        if any(isinstance(row, dict) and row.get("ts") == str(ts) for row in rows):
+            return
+        rows.append(shadow_entry(ts, decision))
+        doc[str(channel)] = rows
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
+
+
 def checkpoint_hook(checkpoint, server=DEFAULT_SERVER, own=()):
     """The `PostToolUse` hook: it writes the checkpoint from the result of a read tool. The model never computes it, and
     the result of any other tool leaves the checkpoint alone. `own` is the list of `ts` of the session's own posts, so a
@@ -395,15 +480,26 @@ class Poller:
     thread_ts=..., limit=...)` its thread read. `now()` is the caller's clock value. `own` is the list of `ts` of the
     session's own posts, or the `OwnTs` store the writer fills. `owner` names the owner account, `footers` the connector
     footer its texts carry, and `threads` the `RepliedThreads` store. The caller polls one page at a time: the cursor
-    advances after each page, so a later poll of the same channel resumes from the next page."""
+    advances after each page, so a later poll of the same channel resumes from the next page.
+
+    `shadow` runs the poll in shadow mode (#2711): `poll` records each decision in `self.shadow` and hands nothing out,
+    so the caller has no decision to act on and makes no write call."""
 
     def __init__(self, connect, checkpoint, committed, local, now, own=(), limit=100, owner=(), threads=None,
-                 footers=()):
+                 footers=(), shadow=False):
         self.connect, self.checkpoint = connect, checkpoint
         self.committed, self.local, self.now = committed, local, now
         self.own, self.limit = own, limit
         self.owner, self.threads = tuple(owner), threads
         self.footers, self.marks = tuple(footers), persona_marks(committed)
+        # The record lives in the folder the caller chose for the checkpoint, so the private state folder keeps the
+        # cursor and the record together and no second path is invented.
+        self.shadow = ShadowLog(self.checkpoint.path.with_name(SHADOW_NAME)) if shadow else None
+
+    def clips(self, message):
+        """The audio files of one read message, read through `guesstranscribe.audio_clips` (#2714): the file id, the
+        mimetype and the name of each. The caller fetches each clip through the connector's read-file tool."""
+        return guesstranscribe.audio_clips(message)
 
     def read_request(self, workspace, channel):
         """The arguments of the next read of a channel: the channel, the stored cursor as `oldest`, and the page limit.
@@ -432,7 +528,19 @@ class Poller:
     def poll(self, workspace, channel):
         """Read one page, store the cursor at its newest `ts` that is not an own post, reread each open thread, and
         return `(message, decision)` for each new message. A message at or before the cursor, and an own message, never
-        returns. A page with no new message ends the walk of the channel for this tick."""
+        returns. A page with no new message ends the walk of the channel for this tick.
+
+        In shadow mode each decision is recorded in the private state folder, and the poller returns no pair, so no
+        caller can act on a decision and no write call is made (#2711)."""
+        pairs = self._deliveries(workspace, channel)
+        if self.shadow is None:
+            return pairs
+        for message, decision in pairs:
+            self.shadow.record(channel, message.get("ts"), decision)
+        return []
+
+    def _deliveries(self, workspace, channel):
+        """One page read, the cursor stored, and the `(message, decision)` of each new message of the channel."""
         oldest = self.checkpoint.get(channel)
         page = messages_of(self.connect(**self.read_request(workspace, channel)))
         self._remember_own(page)

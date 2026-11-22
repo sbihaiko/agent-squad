@@ -141,6 +141,29 @@ def test_a_guest_send_and_a_draft_leave_the_owner_account_and_both_carry_the_mar
     assert (sent.reply, sent.mark) == ("send", True)
 
 
+def test_a_reply_to_a_user_in_draft_for_stays_a_draft_in_a_speak_send_channel():
+    # The grant makes the channel a send channel, but a person in `draft_for` is reviewed by the owner first.
+    committed, local = files()
+    channel = local["workspaces"][0]["channels"][0]
+    channel.update({"speak": "send", "send_grant": "2026-11-20", "draft_for": ["U0CLIENT01"]})
+    addressed = message(workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    assert S.decide(committed, local, addressed, NOW).reply == "draft"
+    # A person outside `draft_for` still gets the direct send the grant allows.
+    local["members"][3]["users"].append("U0CLIENT02")
+    other = message(workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT02")
+    assert S.decide(committed, local, other, NOW).reply == "send"
+
+
+def test_a_slack_connect_channel_never_gets_a_direct_send():
+    # `slack_send_message` does not post in a Slack Connect channel, so the grant cannot make it a send channel.
+    committed, local = files()
+    channel = local["workspaces"][0]["channels"][0]
+    channel.update({"speak": "send", "send_grant": "2026-11-20", "connect": True})
+    event = message(workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    d = S.decide(committed, local, event, NOW)
+    assert (d.reply, d.mark) == ("draft", True)
+
+
 def test_a_project_block_only_in_the_local_file_supplies_the_language_and_persona():
     committed, local = files()
     del committed["project"]

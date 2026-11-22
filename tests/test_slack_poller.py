@@ -7,6 +7,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 from squad import slackpolicy as S
 from squad import slackpoller as P
 
@@ -45,7 +47,9 @@ def message(ts, user=CLIENT, text="hello", **over):
 class FakeConnector:
     """The connector's calls: one read of a channel from `oldest` (inclusive, as Slack does), one read of a thread, and
     one post. A channel read returns the messages that stand alone, and a thread read returns the thread's root and its
-    replies, as the connector does."""
+    replies, as the connector does.
+
+    `writes` counts every call that would write to Slack, so a shadow poll proves its own zero."""
 
     def __init__(self, messages=(), fail_threads=False):
         self.messages = list(messages)
@@ -53,6 +57,7 @@ class FakeConnector:
         self.thread_reads = []
         self.posts = []
         self.fail_threads = fail_threads          # a transient connector error on every thread read
+        self.writes = 0
 
     def read(self, channel, oldest=None, limit=100, thread_ts=None):
         if thread_ts is not None:
@@ -68,6 +73,7 @@ class FakeConnector:
         return {"ok": True, "messages": page[:limit], "has_more": len(page) > limit}
 
     def post(self, channel, text, user=OWNER, ts="900.000900"):
+        self.writes += 1
         msg = message(ts, user=user, text=text)
         self.messages.append(msg)
         self.posts.append(msg)
@@ -76,6 +82,10 @@ class FakeConnector:
 
 def poller(conn, path, own=(), limit=100, **over):
     return P.Poller(conn.read, P.Checkpoint(path), COMMITTED, LOCAL, lambda: NOW, own=own, limit=limit, **over)
+
+
+def shadow_poller(conn, path, own=(), limit=100):
+    return P.Poller(conn.read, P.Checkpoint(path), COMMITTED, LOCAL, lambda: NOW, own=own, limit=limit, shadow=True)
 
 
 def decision_ts(pairs):
@@ -324,6 +334,80 @@ def test_a_persona_marked_post_the_read_returns_never_moves_the_checkpoint(tmp_p
     assert P.Checkpoint(path).get(CH) == "100.000100"
 
 
+# --- shadow mode (#2711) -------------------------------------------------------------------------------------------
+
+def test_a_shadow_poll_records_one_decision_per_message_and_writes_nothing(tmp_path):
+    conn = FakeConnector([message("100.000100", text="the client asked for a fix"),
+                          message("100.000200", user="U0STRANGER1", text="a stranger writes too")])
+    p = shadow_poller(conn, tmp_path / "checkpoint.json")
+    assert p.poll(WS, CH) == []
+    assert conn.writes == 0 and conn.posts == []
+    entries = p.shadow.entries(CH)
+    assert [e["ts"] for e in entries] == ["100.000100", "100.000200"]
+    assert [e["kind"] for e in entries] == [S.PROPOSAL, S.DATA]
+    # The decision the poller would take is in the record: a role holder's draft, marked as the owner's account.
+    assert entries[0]["reply"] == "draft" and entries[0]["mark"] is True
+    assert entries[0]["role"] == "colleague" and entries[0]["persona"] == "iara"
+    assert entries[1]["reply"] is None and entries[1]["mark"] is False
+
+
+def test_the_shadow_record_sits_beside_the_checkpoint_in_the_state_folder(tmp_path):
+    p = shadow_poller(FakeConnector([message("100.000100")]), tmp_path / "guest-checkpoint.json")
+    assert p.shadow.path == tmp_path / "guest-shadow.json"
+
+
+def test_the_shadow_record_holds_no_guest_text(tmp_path):
+    conn = FakeConnector([message("100.000100", text="CLIENT SECRET do not quote me")])
+    p = shadow_poller(conn, tmp_path / "checkpoint.json")
+    p.poll(WS, CH)
+    assert "CLIENT SECRET" not in (tmp_path / "guest-shadow.json").read_text()
+
+
+def test_a_shadow_poll_advances_the_checkpoint_and_records_no_repeat(tmp_path):
+    path = tmp_path / "checkpoint.json"
+    conn = FakeConnector([message("100.000100")])
+    p = shadow_poller(conn, path)
+    p.poll(WS, CH)
+    p.poll(WS, CH)
+    assert [e["ts"] for e in p.shadow.entries(CH)] == ["100.000100"]
+    assert json.loads(path.read_text())[CH] == "100.000100"
+
+
+def test_a_guest_channel_decision_writes_no_guest_word_to_the_record(tmp_path):
+    p = shadow_poller(FakeConnector([message("100.000100")]), tmp_path / "checkpoint.json")
+    p.poll(WS, CH)
+    text = (tmp_path / "guest-shadow.json").read_text()
+    assert "guest" not in text.lower()
+    assert p.shadow.entries(CH)[0]["kind"] == S.PROPOSAL
+
+
+def test_record_never_overwrites_a_state_file_it_could_not_read(tmp_path):
+    state = tmp_path / "guest-shadow.json"
+    state.write_text("{ this is not json")
+    log = P.ShadowLog(state)
+    decision = S.decide(COMMITTED, LOCAL, {"workspace": WS, "channel": CH, "user": CLIENT}, NOW)
+    with pytest.raises(P.ShadowLogUnreadable):
+        log.record(CH, "100.000100", decision)
+    assert state.read_text() == "{ this is not json"
+
+
+def test_record_appends_a_decision_with_a_duplicate_ts_once(tmp_path):
+    log = P.ShadowLog(tmp_path / "guest-shadow.json")
+    decision = S.decide(COMMITTED, LOCAL, {"workspace": WS, "channel": CH, "user": CLIENT}, NOW)
+    log.record(CH, "100.000100", decision)
+    log.record(CH, "100.000100", decision)
+    assert [row["ts"] for row in log.entries(CH)] == ["100.000100"]
+
+
+def test_a_live_poll_hands_the_message_and_its_decision_out(tmp_path):
+    # The contrast that makes the zero of shadow mode mean something: the live poller returns the decision a caller
+    # acts on, and the shadow poller records it instead. On its own, this test asserts the live return only.
+    conn = FakeConnector([message("100.000100")])
+    live = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
+    assert [(m["ts"], d.reply) for m, d in live] == [("100.000100", "draft")]
+    assert conn.writes == 0
+
+
 # --- the acceptance test -------------------------------------------------------------------------------------------
 
 def test_a_message_posted_between_the_read_and_the_post_is_delivered_by_the_next_read(tmp_path):
@@ -342,3 +426,14 @@ def test_a_message_posted_between_the_read_and_the_post_is_delivered_by_the_next
     assert [m["ts"] for m, _ in second] == ["100.000500"]
     assert second[0][0]["text"] == "the bug report"
     assert json.loads(path.read_text())[CH] == "100.000500"
+
+
+# --- the clip source (#2714) -----------------------------------------------------------------------------------------
+
+def test_the_poller_reads_the_audio_clips_of_a_read_message(tmp_path):
+    conn = FakeConnector([message("100.000100", text="",
+                                  files=[{"id": "F0CLIP001", "mimetype": "audio/mp4", "name": "clip.m4a"},
+                                         {"id": "F0DOC001", "mimetype": "application/pdf", "name": "report.pdf"}])])
+    p = poller(conn, tmp_path / "checkpoint.json")
+    got, _ = p.poll(WS, CH)[0]
+    assert [(c.id, c.mimetype, c.name) for c in p.clips(got)] == [("F0CLIP001", "audio/mp4", "clip.m4a")]

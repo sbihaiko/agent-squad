@@ -35,6 +35,9 @@ REPO = os.environ.get("VOICE_REPO") or os.path.expanduser("~/VSCodeProjects/agen
 MARK = "SQUAD-OPERATOR"                  # the one ownership token: the folder a session runs in, under the root below
 CLI = "claude"
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import voiced  # noqa: E402  the one reader of a scope's active Slack revision, so the supervisor needs no second copy
 WRAPPER = os.path.normpath(os.path.join(HERE, "..", "squad-goal", "scripts", "claude-sandboxed.sh"))
 PROXY = os.path.join(HERE, "model_proxy.py")
 MODEL_URL = "https://api.anthropic.com"  # the endpoint when ANTHROPIC_BASE_URL is unset
@@ -129,11 +132,26 @@ def write_json(path, value):
     os.replace(tmp, path)
 
 
+def reply_instruction(language, persona):
+    """The brief's line for the text reply: the channel language and the persona tone (SPEC 2682, #2688).
+
+    The language is the channel's, not the sender's, so a message in another language is still answered in the channel
+    language. A scope with no persona (the DM) keeps the prototype's Portuguese answer and no tone."""
+    if persona is None:
+        return "Answer the owner in Brazilian Portuguese, concise and concrete."
+    line = (f"Answer in the channel language, {language}, even when the sender writes in another language. "
+            "The inbox line's language field names it.")
+    if persona.tone:
+        line += f" Write in this tone: {persona.tone}"
+    return line
+
+
 def prompt_for(scope, state, repo):
     """The session's brief: the inbox it watches, the outbox it answers into, and the rules it never breaks."""
     where = "the owner's direct messages" if scope == "dm" else f"project channel {scope}"
     inbox = os.path.join(state, "inboxes", f"{scope}.jsonl")
     outbox = os.path.join(state, "outboxes", f"{scope}.jsonl")
+    reply = reply_instruction(*voiced.scope_identity(state, scope))
     return f"""You are the Slack operator session for {where}.
 
 Your only wake path is a Monitor on this scope's inbox. Start it now with the Monitor tool:
@@ -141,7 +159,7 @@ Your only wake path is a Monitor on this scope's inbox. Start it now with the Mo
 
 The full contract is {repo}/contrib/voice/OPERATOR.md. In short:
 - Each line is JSON: id, ts, user, channel, text, clip. `text` is the owner's words, or the transcription of a clip.
-- Answer the owner in Brazilian Portuguese, concise and concrete. Never print a token, a key or a secret.
+- {reply} Never print a token, a key or a secret.
 - Deliver each answer by appending ONE JSON line to {outbox}:
   {{"thread_ts":"<the inbox line's ts>","text":"<the answer>"}} — add "speech":"<a 10 to 30 second summary>" when the answer deserves a voice clip.
 - Never post to Slack directly; the voiced daemon posts your outbox line.

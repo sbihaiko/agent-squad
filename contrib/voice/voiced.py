@@ -37,10 +37,13 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 `speech`, and for the DM an optional `channel`) to its own outbox (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and the daemon answers it with no call from the session:
 
-- the text is posted as the bot at once, threaded under `thread_ts` (else under nothing);
+- the text is posted as the bot at once under the channel persona's `username` (the `chat:write.customize` scope), and
+  threaded under `thread_ts` (else under nothing);
 - the spoken script (the `speech` field, else the text) is split into sentences, and the first sentence is synthesized
   in parallel with the text post and posted as one clip, so a slow Slack write never holds the voice;
-- the rest is synthesized only once the first clip is out, and posted as one clip.
+- the rest is synthesized only once the first clip is out, and posted as one clip;
+- every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
+  app name until #2726 records what an upload does with a `username`.
 
 A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
 posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
@@ -72,6 +75,7 @@ import sys
 import tempfile
 import urllib.request
 import xml.sax.saxutils
+from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -90,7 +94,6 @@ CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
-BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
@@ -411,6 +414,44 @@ def read_schema(directory):
     return version
 
 
+def slack_record_path(state_dir, repo):
+    """The file one project's active Slack revision lives in, named by the repository it belongs to.
+
+    The name is a digest of the full repository name, so two distinct repositories never share one record. A name
+    built from the repository's own characters would collide (`a/b` and `a-b`) and hand one project another's revision.
+    """
+    digest = hashlib.sha256((repo or "").strip().encode("utf-8")).hexdigest()[:16]
+    return os.path.join(state_dir, "slack", digest + ".json")
+
+
+def scope_identity(state_dir, scope):
+    """The language and persona one scope answers with, from the active revision of the project that owns it.
+
+    The registry names the repository of each channel id, and the active revision sits in the digest-named file beside
+    it. A scope no project owns (the DM), a project with no active revision and a registry that cannot be read keep the
+    default language and no persona, so the operator session has an instruction before the first revision loads.
+    """
+    try:
+        with open(os.path.join(state_dir, "channels.json"), encoding="utf-8") as f:
+            channels = json.load(f)
+    except (OSError, ValueError):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    if not isinstance(channels, dict):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    repo = next((name for name, entry in channels.items()
+                 if isinstance(entry, dict) and str(entry.get("id")) == str(scope)), None)
+    if not repo:
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    try:
+        with open(slack_record_path(state_dir, repo), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    if not isinstance(record, dict) or not record.get("revision"):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    return slackpolicy.identity(record["revision"], record.get("local") or {}, scope)
+
+
 class State:
     """The daemon's state in one directory: the inbox, the record of other users, the seen ids and the owner id."""
 
@@ -449,14 +490,8 @@ class State:
         return self.outbox_for(DM)
 
     def slack_path(self, repo):
-        """The file one project's active Slack revision lives in, named by the repository it belongs to.
-
-        The name is a digest of the full repository name, so two distinct repositories never share one record. A name
-        built from the repository's own characters would collide (`a/b` and `a-b`) and hand one project another's
-        revision.
-        """
-        digest = hashlib.sha256((repo or "").strip().encode("utf-8")).hexdigest()[:16]
-        return os.path.join(self.slack_dir, digest + ".json")
+        """The file one project's active Slack revision lives in, named by the repository it belongs to."""
+        return slack_record_path(self.dir, repo)
 
     def refusal_path(self, repo):
         """The file that records the last refused revision of one project, beside its active revision."""
@@ -822,12 +857,14 @@ def outbox_digest(record):
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def spoken_clip(key, script, voice=VOICE):
-    """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it."""
+def spoken_clip(key, script, voice=VOICE, tone=""):
+    """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it.
+
+    The voice and the tone are the persona's, so one answer sounds like the channel it answers in."""
     import tts  # the vendored TTS beside this file, so the daemon keeps no second copy of it
     fd, path = tempfile.mkstemp(prefix="voiced-", suffix=".wav")
     os.close(fd)
-    got, err = tts.synth(key, script, voice, path)
+    got, err = tts.synth(key, script, voice, path, tone=tone)
     if not got:
         try:
             os.unlink(path)
@@ -1064,6 +1101,17 @@ class Daemon:
             return self.bot_tokens[app]
         return next(iter(self.bot_tokens.values()), None)
 
+    def identity_for(self, channel):
+        """The language and persona of one channel: from the active revision of its project, by the decision's chain.
+
+        An outbox line names no event, so the daemon reads the identity from the channel id alone. A channel with no
+        active revision keeps the default language and no persona, so no post carries a name the file never declared."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if not active or not active.get("revision"):
+            return slackpolicy.DEFAULT_LANGUAGE, None
+        return slackpolicy.identity(active["revision"], active.get("local") or {}, channel)
+
     def download_clip(self, channel, url):
         """One clip's bytes, fetched with the token of the app that serves its channel."""
         app = self.app_of(channel)
@@ -1187,7 +1235,7 @@ class Daemon:
             return self.refuse_revision(
                 repo, active, [str(defect) for defect in tip_defects + local_defects], sha=sha,
                 local_files=sorted({defect.file for defect in local_defects}), tip_failed=bool(tip_defects))
-        record = {"repo": repo, "sha": sha, "revision": doc}
+        record = {"repo": repo, "sha": sha, "revision": doc, "local": local or {}}
         try:
             self.state.save_active_revision(repo, record)
         except OSError as x:
@@ -1289,6 +1337,9 @@ class Daemon:
         if client is None:
             return False
         payload = {"channel": question["channel"], "text": text}
+        persona = self.identity_for(question.get("channel"))[1]
+        if persona is not None and persona.name:
+            payload["username"] = persona.name     # the scope `chat:write.customize` is what lets Slack accept it
         if question.get("ts"):
             payload["thread_ts"] = question["ts"]
         got = client.api("chat.postMessage", payload, post=True)
@@ -1297,13 +1348,17 @@ class Daemon:
             return False
         return True
 
-    def answer_failed_clip(self, record):
+    def answer_failed_clip(self, record, decision=None):
         """One line under a clip that did not work, in its own channel and thread, naming the failure in one sentence.
 
         The record is already durable when this runs, so a refused post never loses the failure and never makes the
         clip a second model call on the next start (#1618). The sentence comes from `record['answer']`, which the
-        recording path builds with `one_sentence`, so the line is the same shape whatever failed.
+        recording path builds with `one_sentence`, so the line is the same shape whatever failed. A decision with no
+        reply path is a `listen` channel, and it receives no post, not even this one (SPEC 2682).
         """
+        if decision is not None and decision.reply is None:
+            self.log(f"voiced: failure answer not posted, the channel is listen-only: {record.get('error')}")
+            return
         if not record.get("channel"):
             self.log(f"voiced: failure answer not posted, the clip names no channel: {record.get('error')}")
             return
@@ -1326,11 +1381,17 @@ class Daemon:
         return sources
 
     def post_text(self, channel, thread_ts, text):
-        """Post the readable answer in its channel; True and its ts when Slack accepts it, so the clips answer it."""
+        """Post the readable answer in its channel under the persona name; True and its ts when Slack accepts it.
+
+        The `username` is the channel persona's, so each channel sees the right identity. A channel with no persona
+        sends no name and the bot posts as the app, as it did before the persona existed."""
         client = self.client_for(channel)
         if client is None:
             return False, None
         payload = {"channel": channel, "text": text}
+        persona = self.identity_for(channel)[1]
+        if persona is not None and persona.name:
+            payload["username"] = persona.name     # the scope `chat:write.customize` is what lets Slack accept it
         if thread_ts:
             payload["thread_ts"] = thread_ts
         got = client.api("chat.postMessage", payload, post=True)
@@ -1339,10 +1400,13 @@ class Daemon:
             return False, None
         return True, got.get("ts")
 
-    def synth_clip(self, script):
-        """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer."""
+    def synth_clip(self, script, voice=None, tone=None):
+        """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer.
+
+        `voice` and `tone` are the persona's, so the clip sounds like the channel; a caller that names neither keeps
+        the daemon's default voice."""
         try:
-            return self.synthesizer(script) or None
+            return self.synthesizer(script, voice=voice, tone=tone) or None
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
             # The error type only: a provider message can carry request material, and this log is never redacted.
             self.log(f"voiced: speech skipped: {type(x).__name__}")
@@ -1390,10 +1454,13 @@ class Daemon:
             return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
+        persona = self.identity_for(cid)[1]
+        voice = persona.voice if persona is not None and persona.voice else None
+        tone = persona.tone if persona is not None and persona.tone else None
         posted = self.state.posted().get(digest) if digest else None
         done = set(posted.get("clips_done") or []) if posted else set()
         # The first sentence is synthesized beside the text post when there is one, so the voice never waits for Slack.
-        speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first)) \
+        speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first, voice, tone)) \
             if (first and self.synthesizer and "first" not in done) else None
         if posted is None:
             ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
@@ -1415,7 +1482,7 @@ class Daemon:
                 if digest:
                     self.state.remember_clip(digest, "first")
         if rest and self.synthesizer and "rest" not in done:
-            path = await asyncio.to_thread(self.synth_clip, rest)
+            path = await asyncio.to_thread(self.synth_clip, rest, voice, tone)
             if path:
                 if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
                     return True, False
@@ -1433,7 +1500,12 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            for record in read_lines(path):
+            records = read_lines(path)
+            if records and channel and not self.channel_accepts_answer(channel):
+                # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
+                self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
+                continue
+            for record in records:
                 cid = (record.get("channel") or channel or "").strip()
                 refusal = self.refused_channels.get(cid)
                 if refusal:      # a channel two projects claim is held, never posted, and is told once
@@ -1460,46 +1532,141 @@ class Daemon:
                     self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
         return count
 
+    def policy_decision(self, event):
+        """The decision of one socket event, always: from the loaded files of the project that owns its channel.
+
+        A valid active revision and its local file decide the event, so a bot, a stranger and a Slack Connect user stay
+        data (SPEC 2682). A project channel whose revision is not active yet, the DM, and every channel no project owns
+        run through the daemon's empty policy instead: it names the channel and the owner as its one member, so the
+        owner's message still reaches the operator while a bot, a stranger and a Slack Connect user stay data from the
+        event flags and their missing role alone.
+        """
+        channel = str(event.get("channel") or "")
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if active and active.get("revision"):
+            committed = active["revision"]
+            local = active.get("local") or {}
+        else:
+            committed, local = self.baseline_files(event, repo)
+        return slackpolicy.decide(committed, local, self.policy_event(event, committed), datetime.now())
+
+    def baseline_files(self, event, repo):
+        """The empty policy of a channel with no loaded project files: it names the channel so the decision can
+        classify the event, and it names the owner as its one member, so the owner's message still reaches the
+        operator while every other caller has no role and stays data. A bot and a Slack Connect user stay data from
+        the event flags alone, whatever the owner is. A channel no project owns keeps the same empty policy; `handle`
+        records it as data before it reads the kind, so nothing is granted there."""
+        channel = str(event.get("channel") or "")
+        workspace = str(event.get("team") or event.get("team_id") or "")
+        row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
+        committed = {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
+                     "roles": [{"id": "owner", "actions": []}]}
+        local = {}
+        if self.owner:
+            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner",
+                                  "users": [self.owner]}]}
+        return committed, local
+
+    def channel_accepts_answer(self, channel):
+        """Whether the daemon may post an answer in one channel: its project's active revision names the channel
+        `listen+speak`. A channel with no active revision and a channel the revision does not name keep their answers,
+        because no loaded file forbids them."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if not active or not active.get("revision"):
+            return True
+        for workspace in active["revision"].get("workspaces") or []:
+            for row in workspace.get("channels") or []:
+                if str(row.get("id")) == str(channel):
+                    return str(row.get("mode") or "listen") == "listen+speak"
+        return True
+
+    def policy_event(self, event, committed):
+        """One socket event as the policy event the decision takes: its workspace, channel, caller, and the flags that
+        mark a bot, a Slack Connect user and the daemon's own post."""
+        workspace = self.workspace_of(event, committed)
+        return {"kind": "message",
+                "workspace": workspace,
+                "channel": str(event.get("channel") or ""),
+                "user": str(event.get("user") or event.get("bot_id") or ""),
+                "bot": bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
+                "external": bool(event.get("is_ext_shared_channel") or event.get("is_external")
+                                 or event.get("external")
+                                 or (event.get("user_team") and str(event.get("user_team")) != workspace)),
+                "own": str(event.get("ts") or "") in self.own_posts()}
+
+    @staticmethod
+    def workspace_of(event, committed):
+        """The workspace id of one event: the team the socket names, else the workspace whose file holds the channel.
+        A socket event may carry no team, and the file still tells which workspace the channel belongs to."""
+        team = str(event.get("team") or event.get("team_id") or "")
+        if team:
+            return team
+        channel = str(event.get("channel") or "")
+        for workspace in committed.get("workspaces") or []:
+            for row in workspace.get("channels") or []:
+                if str(row.get("id")) == channel:
+                    return str(workspace.get("id") or "")
+        return ""
+
+    def own_posts(self):
+        """The `ts` of every answer this daemon already posted, so the socket's echo of one is ignored, never recorded."""
+        return {str(row.get("ts")) for row in self.state.posted().values() if row.get("ts")}
+
     def handle(self, envelope):
-        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here."""
+        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here.
+
+        The policy decision decides what the event becomes: an ignored event writes no line, a bot, a stranger and a
+        Slack Connect user stay data, and every line carries the language, the persona and the caller role. A `listen`
+        channel never receives a post, neither the failure reply nor the answer.
+        """
         if (envelope.get("type") or "events_api") != "events_api":
             return "ignored"
         event = (envelope.get("payload") or {}).get("event") or {}
         if event.get("type") != "message":
             return "ignored"
-        if event.get("subtype") in BOT_SKIP or event.get("bot_id"):
+        if event.get("subtype") in ("channel_join", "channel_leave"):
             return "ignored"
         mid = message_id(event)
         if mid in self.state.seen():
             return "duplicate"
+        target = self.inbox_path_of(event)
+        decision = self.policy_decision(event)
         record = {
             "id": mid,
             "ts": event.get("ts"),
             "user": event.get("user"),
             "channel": event.get("channel"),
+            "language": decision.language,
+            "persona": decision.persona.name if decision.persona else None,
+            "role": decision.role,
         }
         if event.get("files"):
             record["files"] = [
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        text = (event.get("text") or "").strip()
         refusal = self.refused_channels.get((event.get("channel") or "").strip())
         if refusal:
             # A channel two projects claim belongs to neither: its events are data, and no project owns the line.
-            record["text"] = (event.get("text") or "").strip()
+            record["text"] = text
             record["error"] = refusal
             self.state.append_other(record)
             return "other"
-        target = self.inbox_path_of(event)
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
-            record["text"] = (event.get("text") or "").strip()
+            if text:
+                record["text"] = text
             record["error"] = "unknown channel: no project owns it"
             self.state.append_other(record)
             return "other"
-        text = (event.get("text") or "").strip()
-        if event.get("user") != self.owner:
-            record["text"] = text
+        if decision.kind == slackpolicy.IGNORE:
+            return "ignored"
+        if decision.kind == slackpolicy.DATA:
+            if text:
+                record["text"] = text
             self.state.append_other(record)
             return "other"
         clip = audio_file(event)
@@ -1515,19 +1682,18 @@ class Daemon:
                 record["answer"] = one_sentence(record["error"])
                 record["bytes"] = x.size
                 self.state.append_other(record)
-                self.answer_failed_clip(record)
+                self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
                 record["error"] = f"transcription failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
-                self.answer_failed_clip(record)
+                self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
         if not text:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
-            record["text"] = text
             record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
             self.state.append_other(record)
             return "other"
@@ -1770,7 +1936,8 @@ def main(argv):
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    synthesizer=lambda script: spoken_clip(key, script),
+                    synthesizer=lambda script, voice=None, tone=None:
+                        spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
                     clients={app_id: SlackClient(entry) for app_id, entry in bots.items()},
                     bot_tokens=bots,
