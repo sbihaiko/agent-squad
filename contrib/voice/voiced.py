@@ -198,7 +198,9 @@ def hub_projects(script=None):
         if not repo or any(entry["repo"] == repo for entry in found):
             continue
         name = (ctx.get("SG_PROJECT") or "").strip() or repo.rsplit("/", 1)[-1]
-        local = slackpolicy.local_path(profiles, name)
+        # The local file sits beside the hub's profile, so its name is the `--list` slug. `SG_PROJECT` and the repo
+        # leaf are the fallback, for a hub that names no profile.
+        local = slackpolicy.local_path(profiles, slug) or slackpolicy.local_path(profiles, name)
         found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(),
                       "local": str(local) if local else ""})
     return found

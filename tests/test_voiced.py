@@ -1489,34 +1489,42 @@ def test_an_unreadable_dev_tip_never_kills_the_daemon_and_warns_the_owner(tmp_pa
 
 
 def test_a_failed_active_revision_write_leaves_the_previous_file_whole(tmp_path, monkeypatch):
-    """Rule (8), ADR-0030: a write that dies halfway leaves the previous revision on disk, never half a new one."""
+    """Rule (8), ADR-0030: a write that dies at the replace leaves the previous revision, and the temp file alone.
+
+    The target bytes are read while the write is refused, so a writer that opens the target and truncates it fails
+    this case even when it never reaches the replace.
+    """
     repo = git_project(tmp_path, SLACK_VALID)
     mod, daemon, _ = revision_daemon(tmp_path)
     daemon.refresh_slack(projects=[project(repo)])
     first = daemon.state.active_revision("acme/app")["sha"]
 
+    path = Path(daemon.state.slack_path("acme/app"))
+    before = path.read_bytes()
+
     moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
 
-    def half_written(obj, f, **kw):
-        f.write('{"repo": "acme/app", "sha": "')
-        f.flush()
+    def refuse_replace(src, dst):
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(mod.json, "dump", half_written)
+    monkeypatch.setattr(mod.os, "replace", refuse_replace)
     daemon.refresh_slack(projects=[project(repo)])
     monkeypatch.undo()
 
+    assert path.read_bytes() == before, "the target changed while the write was refused"
+    assert Path(str(path) + ".tmp").exists(), "the refused write left no temp file behind"
     active = daemon.state.active_revision("acme/app")
     assert active["sha"] == first != moved
     assert active["revision"]["project"]["language"] == "en-US"
 
 
 def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_tip(tmp_path, monkeypatch):
-    """Rule (1): the hub profile is resolved to the repository, its checkout, and the local file beside its profile."""
+    """Rule (1) and rule (2): the local file is the one named after the hub's profile, not after `SG_PROJECT`."""
     mod = voiced()
     profiles = tmp_path / "profiles"
     profiles.mkdir()
-    (profiles / "acme-app.slack.local.yaml").write_text("version: 1\n")
+    # The profile slug is `alpha`; `SG_PROJECT` is `acme-app`, so only the slug names the real local file.
+    (profiles / "alpha.slack.local.yaml").write_text("version: 1\n")
     script = tmp_path / "address.sh"
     script.write_text(
         "#!/bin/bash\n"
@@ -1530,7 +1538,7 @@ def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_ti
 
     got = mod.hub_projects(script=str(script))
 
-    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path), "local": str(profiles / "acme-app.slack.local.yaml")}]
+    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path), "local": str(profiles / "alpha.slack.local.yaml")}]
     assert mod.hub_repos(script=str(script)) == ["Acme/My.App"]
 
 
@@ -1586,3 +1594,31 @@ def test_a_valid_revision_clears_the_refusal_so_a_returning_one_warns_again(tmp_
     daemon.refresh_slack(projects=[project(repo)])
 
     assert len(client.posts()) == 2, client.posts()
+
+
+def test_two_repositories_never_share_one_active_revision_record(tmp_path):
+    """Rule (3): a record is keyed by the full repository name, so two names never collide on one file."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    state.save_active_revision("a/b", {"repo": "a/b", "sha": "111111111111", "revision": {"project": {"language": "en-US"}}})
+    state.save_active_revision("a-b", {"repo": "a-b", "sha": "222222222222", "revision": {"project": {"language": "es-ES"}}})
+
+    assert state.active_revision("a/b")["sha"] == "111111111111"
+    assert state.active_revision("a-b")["sha"] == "222222222222"
+
+
+def test_a_local_file_that_cannot_be_read_is_named_as_the_file_to_fix(tmp_path):
+    """Rule (2) and rule (5): when only the local file fails, the notice says that file must be fixed, not the dev tip."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme-app.slack.local.yaml"
+    local.mkdir()       # a folder where a file belongs: the reader cannot open it
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme-app.slack.local.yaml" in posts[0]["text"]
+    assert "must be fixed" in posts[0]["text"]
+    assert "at its dev tip" not in posts[0]["text"]
