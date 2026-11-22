@@ -10,7 +10,7 @@ reads neither a clock nor the network. A `send_grant` lives in the local file, w
 holds the date of the grant (story 38).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
-`contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_hub_slack_read.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
@@ -503,6 +503,38 @@ def _poll_interval(now, channel, thread_state):
     if last is not None and _elapsed(now, last) >= quiet:
         return slow
     return fast
+
+
+def rows(value):
+    """The row list a key of a Slack file holds: its mappings only, in file order, so a reader never breaks on a bad
+    shape the validator already names."""
+    return _rows(value)
+
+
+def documents(committed_path, local_path):
+    """The two documents of one read, and one `Defect` per file that cannot be read. An absent file is an empty mapping
+    and no defect. The hub's read view asks this, so it holds no copy of the loader (ADR-0177)."""
+    out = []
+    committed = _load(committed_path, Path(committed_path).name, out) if committed_path else None
+    local = _load(local_path, Path(local_path).name, out) if local_path else None
+    return committed or {}, local or {}, out
+
+
+def project_settings(committed, local):
+    """The project row the effective chain ends on: the language as a tag (`en-US` when the files name none or an
+    unknown one) and the persona id, or None when the files name none."""
+    row = _project(committed or {}, local or {})
+    raw = row.get("language")
+    return {"language": (normalize_language(raw) if raw is not None else None) or DEFAULT_LANGUAGE,
+            "persona": row.get("persona")}
+
+
+def effective(committed, local, workspace, channel=None):
+    """The language and the persona one channel row answers with, in the channel, workspace, project order. The channel
+    is None for a workspace row, which resolves in the workspace, project order. The persona is a `Persona` row or None."""
+    committed, local = committed or {}, local or {}
+    return (_effective_language(committed, local, workspace, channel),
+            _effective_persona(committed, local, workspace, channel))
 
 
 def decide(committed, local, event, now, thread_state=None):

@@ -1995,6 +1995,101 @@ def slack_set(body):
         if err: return {"err": err}
     return {"diff": diff, "state": slack_view(path)}
 
+# --- Settings > Communication, the read view (SPEC 2682 #2693). The theme reads the committed `slack.yaml` at the checkout
+# root and the profile's `slack.local.yaml`, and draws the Now tiles and the sections Personas, Roles, Slack workspaces and
+# Project events. Every resolved value comes from the policy module (#2684), and every field names the file it comes from;
+# the hub holds no copy of a rule (ADR-0177). The view constructs and binds: it reads no file and opens no client (ADR-0137).
+SLACK_YAML_REL = pathlib.Path("docs") / "squad" / "slack.yaml"
+
+def slack_yaml_paths():
+    """The committed `slack.yaml` at the checkout root and this profile's local file (SPEC 2682). A profile that names no
+    checkout reads no committed file, and one that names no project reads no local file."""
+    root = pathlib.Path(CHECKOUT) if CHECKOUT else None
+    d = profiles_dir()
+    project = os.environ.get("SG_PROJECT") or PROFILE_NAME or (root.name if root else "")
+    local = slack_policy().local_path(str(d), project) if d is not None and project else None
+    return (root / SLACK_YAML_REL if root else None), (pathlib.Path(local) if local else None)
+
+def _slack_name(path, fallback):
+    return pathlib.Path(path).name if path else fallback
+
+def _slack_text(value):
+    return "" if value is None else str(value)
+
+def _slack_overview_empty(err, committed=None, local=None):
+    """The read view of a theme that can read nothing: its files named, its sections empty, and the reason stated."""
+    return {"err": err, "files": {"committed": _slack_name(committed, "slack.yaml"),
+                                  "local": _slack_name(local, "slack.local.yaml")},
+            "project": {"language": "en-US", "persona": None, "persona_name": None, "file": "slack.yaml"},
+            "now": [], "personas": [], "roles": [], "workspaces": [], "events": [], "defects": [err] if err else []}
+
+def _slack_counts(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+def slack_overview(committed=None, local=None):
+    """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
+    role with its actions, each Slack workspace with its class and channels, and each project event with its template.
+    Each field names the file it comes from. Called with no path, it reads the files of the profile in force."""
+    if committed is None and local is None:
+        try:
+            committed, local = slack_yaml_paths()
+        except Exception as e:
+            return _slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
+    try:
+        P = slack_policy()
+        committed_doc, local_doc, defects = P.documents(committed, local)
+    except Exception as e:
+        return _slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}", committed, local)
+    cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
+    project = P.project_settings(committed_doc, local_doc)
+    personas = [{"id": _slack_text(r.get("id")), "name": _slack_text(r.get("name")), "voice": _slack_text(r.get("voice")),
+                 "tone": _slack_text(r.get("tone")), "file": cf, "channels": []}
+                for r in P.rows(committed_doc.get("personas"))]
+    by_id = {p["id"]: p for p in personas}
+    project["persona_name"] = by_id.get(project["persona"], {}).get("name")
+    project["file"] = cf
+    roles = [{"id": _slack_text(r.get("id")), "file": cf,
+              "actions": [_slack_text(a) for a in r.get("actions") or ()]}
+             for r in P.rows(committed_doc.get("roles"))]
+    events = [{"id": _slack_text(r.get("id")), "template": _slack_text(r.get("template")), "file": cf}
+              for r in P.rows(committed_doc.get("events"))]
+    workspaces = []
+    for doc, file in ((committed_doc, cf), (local_doc, lf)):
+        for row in P.rows(doc.get("workspaces")):
+            label = _slack_text(row.get("label") or row.get("id"))
+            language, persona = P.effective(committed_doc, local_doc, row)
+            channels = []
+            for ch in P.rows(row.get("channels")):
+                ch_language, ch_persona = P.effective(committed_doc, local_doc, row, ch)
+                name = _slack_text(ch.get("name") or ch.get("id"))
+                channels.append({"id": _slack_text(ch.get("id")), "name": name,
+                                 "mode": _slack_text(ch.get("mode") or "listen"), "language": ch_language,
+                                 "persona": ch_persona.id if ch_persona else None,
+                                 "roles": [_slack_text(x) for x in ch.get("roles") or ()],
+                                 "announce": [_slack_text(x) for x in ch.get("announce") or ()], "file": file})
+                if ch_persona and ch_persona.id in by_id:
+                    by_id[ch_persona.id]["channels"].append(f"{label}/#{name}")
+            workspaces.append({"id": _slack_text(row.get("id")), "label": label,
+                               "class": _slack_text(row.get("class") or "owned"), "language": language,
+                               "persona": persona.id if persona else None, "file": file, "channels": channels})
+    owned = sum(1 for w in workspaces if w["class"] == "owned")
+    guest = len(workspaces) - owned
+    speak = sum(1 for w in workspaces for c in w["channels"] if c["mode"] == "listen+speak")
+    subscribers = sum(1 for w in workspaces for c in w["channels"] if c["announce"])
+    tone = lambda n: "ok" if n else "warn"   # noqa: E731  a count of zero needs a look
+    now = [{"key": "Workspaces", "value": f"{len(workspaces)} · {owned} owned · {guest} guest", "tone": tone(len(workspaces))},
+           {"key": "Channels", "value": f"{sum(len(w['channels']) for w in workspaces)} · {speak} speak",
+            "tone": tone(speak)},
+           {"key": "Personas", "value": f"{len(personas)} · default {project['persona_name']}"
+                                        if project["persona_name"] else f"{len(personas)} · no default",
+            "tone": tone(len(personas))},
+           {"key": "Events", "value": f"{len(events)} · {_slack_counts(subscribers, 'channel')} subscribe",
+            "tone": tone(len(events))},
+           {"key": "Files", "value": f"{cf} · {lf}", "tone": "neutral"}]
+    return {"err": None, "files": {"committed": cf, "local": lf}, "project": project, "now": now,
+            "personas": personas, "roles": roles, "workspaces": workspaces, "events": events,
+            "defects": [str(d) for d in defects]}
+
 # --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
 # alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
 # own map, which it filled when it joined the channel once. So the hub calls `auth.test` only: it lists no channel,
@@ -7414,6 +7509,20 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sdiff{margin:8px 0 0;padding:8px 10px;background:var(--tint-warn);border:1px solid var(--tint-warn-line);border-radius:var(--radius-md);font-size:var(--fs-caption)}
 #sbody .sdiff b{display:block;margin-bottom:4px;color:var(--warn)}#sbody .sdiff .ln{overflow-wrap:anywhere}
 #sbody .sact{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}#sbody .sact button{height:var(--ctl-h);padding:0 12px}
+/* The Communication read view (SPEC 2682 #2693): each section states its name and the file its rows come from, and every
+   field is text. The file tag is one quiet chip beside the field, never a second colour of its own. */
+#sbody .slfile{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);font-weight:400;text-transform:none;letter-spacing:0;vertical-align:middle;white-space:nowrap}
+#sbody .slrow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .slrow .sl{color:var(--fg)}#sbody .slrow .sc{justify-self:end;color:var(--mute)}
+#sbody .slsec{margin:14px 0 0}
+#sbody .slsec>h4{margin:0 0 6px;font-size:var(--fs-body);font-weight:600;color:var(--fg)}
+#sbody .slws{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
+#sbody .sltag{padding:0 6px;border-radius:var(--radius-sm);border:1px solid var(--line);font-weight:400;text-transform:none;letter-spacing:0}
+#sbody .sltag.owned{color:var(--ok)}#sbody .sltag.guest{color:var(--warn);border-color:var(--tint-warn-line)}
+#sbody .slt2{width:100%;border-collapse:collapse;font-size:var(--fs-caption)}
+#sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
+#sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
+@media (max-width:600px){#sbody .slt2{display:block;overflow-x:auto}#sbody .slrow{grid-template-columns:minmax(0,1fr) auto}}
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
@@ -8250,9 +8359,40 @@ const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc
  +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
 const slLegend=()=>`<dl>${Object.keys(SL_ROLE).map(k=>`<dt>${esc(k)}</dt><dd>${esc(SL_ROLE[k])}</dd>`).join("")}</dl>`;   // each role stated once, never per row
 const slStatusText=s=>`${s.connection} · ${s.people.length} ${s.people.length===1?"person":"people"}`;   // one text for the chip and the nav line (#1284)
+/* The read view over the two Slack files (SPEC 2682 #2693): the Now tiles and the sections Personas, Roles, Slack
+   workspaces and Project events. The view constructs and binds: it holds no rule of resolution and reads no file
+   (ADR-0137); the hub hands every resolved value in, and each row names the file it comes from. */
+let slR=null;
+const slTag=f=>`<span class=slfile title="this value is written in ${slA(f)}">${esc(f)}</span>`;
+const slSec=(name,file,head,rows,empty)=>`<section class=slsec><h4>${esc(name)} ${slTag(file)}</h4>${rows.length
+ ?`<table class=slt2><thead><tr>${head.map(x=>`<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
+ :`<p class=m>${esc(empty)}</p>`}</section>`;
+function slReadHtml(r){if(!r)return "";
+ if(r.err)return `<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3><p class="mx err" role=status>${esc(r.err)}</p></div>`;
+ const cf=r.files.committed,row=cells=>`<tr>${cells.map(c=>`<td>${c}</td>`).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or;
+ let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>`   // the block names the files under its one title, before the four sections
+ +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
+ +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
+ h+=slSec("Personas",cf,["Persona","Voice","Tone","Used by"],
+  r.personas.map(p=>row([`<b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span>`,esc(p.voice),esc(p.tone),join(p.channels,"no channel")])),
+  "No persona: the project declares no identity.");
+ h+=slSec("Roles",cf,["Role","Actions"],
+  r.roles.map(x=>row([`<b>${esc(x.id)}</b>`,join(x.actions,"no action")])),
+  "No role: only the owner can trigger the agent.");
+ h+=`<section class=slsec><h4>Slack workspaces</h4>${r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`}`
+ +r.workspaces.map(w=>`<h5 class=slws>${esc(w.label)} <span class="sltag ${slA(w.class)}">${esc(w.class)}</span> ${slTag(w.file)}</h5>`
+  +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Answers</th><th>Announce</th></tr></thead><tbody>`
+   +w.channels.map(c=>row([`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`,esc(c.mode),esc(c.language),esc(c.persona||"none"),join(c.roles,"owner only"),join(c.announce,"never posts")])).join("")
+   +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")+`</section>`;
+ h+=slSec("Project events",cf,["Event","Template"],
+  r.events.map(x=>row([`<b>${esc(x.id)}</b>`,`<code>${esc(x.template)}</code>`])),
+  "No event: the agent announces nothing.");
+ return h+`</div>`}
+const slReadTiles=r=>!r?[]:r.err?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
- let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn")],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
+ let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
+ +slReadHtml(slR)
  +setSettings("slk",[
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
  setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
@@ -8277,7 +8417,8 @@ function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.valu
  else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
  else if(k==="tick"||k==="max")slDraft[k]=Number(v);
  else slDraft[k]=v}
-async function slLoad(){try{slS=await (await fetch("/api/slack")).json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}catch(e){slMsg="!load failed";slRender()}}
+async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}
+ catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slDraft,confirm})}),d=await r.json();
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slS=d.state;slDraft=slClone(slS);slD=null;slMsg="saved"}
@@ -10568,6 +10709,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/limits"): body, ct = json.dumps(limits_read()).encode(), "application/json"   # Settings > Spend & limits (#926)
         elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
         elif self.path.startswith("/api/slots"): body, ct = json.dumps(slots_read()).encode(), "application/json"   # Settings > Spend & limits · Machine slots (#2435)
+        elif self.path.split("?", 1)[0] == "/api/slack/files": body, ct = json.dumps(slack_overview()).encode(), "application/json"   # Settings > Communication · the read view (SPEC 2682 #2693)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
