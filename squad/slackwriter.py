@@ -102,15 +102,23 @@ def _allow(arguments):
                                    "updatedInput": arguments}}
 
 
-def _named(args, channel, thread_ts):
+def arguments_differ(args, channel, thread_ts, text=None):
     """The reason the model's arguments differ from the decision, or None. A missing channel or `thread_ts` is not a
-    difference: the hook fills both with the decided values, and the tool never chooses them. A different one is."""
+    difference: the hook fills both with the decided values, and the tool never chooses them. A different one is. When
+    the caller names the decided `text`, a different text is a difference too, so the model never rewrites the write."""
     for key in _CHANNEL_KEYS:
         if key in args and str(args[key]) != str(channel):
             return f"the write names channel {args[key]!r}, not the decided channel {channel!r}"
     if "thread_ts" in args and str(args["thread_ts"]) != str(thread_ts):
         return f"the write names thread {args['thread_ts']!r}, not the thread of the question {thread_ts!r}"
+    if text and "text" in args and str(args["text"]) != str(text):
+        return "the write names a text different from the decided text"
     return None
+
+
+def _named(args, channel, thread_ts):
+    """The reason the model's channel or thread differs from the decision (see `arguments_differ`)."""
+    return arguments_differ(args, channel, thread_ts)
 
 
 def pre_write_tool_use(draft, server=DEFAULT_SERVER):
