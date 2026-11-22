@@ -4,7 +4,8 @@ Guards: a token pattern is refused in every string of both files, the `tone` inc
 digits, space, period, hyphen and underscore set, or over 32 characters, is refused; a voice outside the Gemini list, a
 `tone` over 300 characters, and a language outside the three tags after normalization are refused; a `guest` team id or
 channel id in the committed file is refused; `prod` in a role deploy list, a second `guest` workspace on the machine, and a
-key named `secret` are refused; a language tag normalizes; the new ADR names the one home of the rules.
+key named `secret` are refused; a `send_grant` outside the local file, or without a date, is refused; a language tag
+normalizes; the new ADR names the one home of the rules.
 """
 import copy
 
@@ -156,6 +157,28 @@ def test_prod_in_a_role_deploy_list_is_refused():
 
 def test_a_deploy_list_without_prod_passes():
     committed, local = files(committed__roles__0__deploy=["stg"])
+    assert S.validate(committed, local) == []
+
+
+def test_a_send_grant_in_the_committed_file_is_refused():
+    # The grant is written only by the hub, in the local file, with the date of the grant.
+    committed, local = files()
+    committed["workspaces"][0]["channels"][0]["send_grant"] = "2026-11-20"
+    out = S.validate(committed, local)
+    assert [(d.file, d.key) for d in out] == [("slack.yaml", "workspaces[0].channels[0].send_grant")]
+
+
+def test_a_send_grant_that_is_not_a_date_is_refused():
+    committed, local = files()
+    local["workspaces"][0]["channels"][0].update({"speak": "send", "send_grant": "yesterday"})
+    out = S.validate(committed, local)
+    assert [d.key for d in out] == ["workspaces[0].channels[0].send_grant"]
+    assert "date" in out[0].reason
+
+
+def test_a_dated_send_grant_in_the_local_file_passes():
+    committed, local = files()
+    local["workspaces"][0]["channels"][0].update({"speak": "send", "send_grant": "2026-11-20"})
     assert S.validate(committed, local) == []
 
 

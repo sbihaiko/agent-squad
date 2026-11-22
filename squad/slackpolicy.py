@@ -6,7 +6,8 @@ sits in the profile folder and never enters a repository. This module loads both
 
 `squad slack check` imports it, and the hub imports it before it writes a Slack setting. No other file holds a copy of
 these rules. `decide` maps one event of one channel to one decision; the caller passes the clock value, and the module
-reads neither a clock nor the network.
+reads neither a clock nor the network. A `send_grant` lives in the local file, where only the hub writes it, and it
+holds the date of the grant (story 38).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
 `contrib/squad-goal/scripts/test-commit-guard.sh`.
@@ -149,6 +150,33 @@ def _rows(value):
     return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def _grant_date(value):
+    """True when the value is the date of a grant: `YYYY-MM-DD`, and a day the calendar holds."""
+    text = str(value)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return False
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _send_grants(file, doc, out, local):
+    """The defects of each `send_grant` of a file. The grant lives in the local file, where only the hub writes it, and
+    it holds the date of the grant. A grant in the committed file is refused, and so is a value that is not a date."""
+    for i, ws in enumerate(_rows(doc.get("workspaces"))):
+        for j, ch in enumerate(_rows(ws.get("channels"))):
+            if ch.get("send_grant") is None:
+                continue
+            key = f"workspaces[{i}].channels[{j}].send_grant"
+            if not local:
+                out.append(_defect(file, key, "the send_grant lives in the local file, where only the hub writes it"))
+            elif not _grant_date(ch["send_grant"]):
+                out.append(_defect(file, key, f"send_grant {ch['send_grant']!r} is not the date of the grant "
+                                              "(YYYY-MM-DD)"))
+
+
 def _guest_ids(local):
     """The team ids and channel ids a local file declares as guest."""
     teams, channels = set(), set()
@@ -183,6 +211,8 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     for file, doc in ours:
         _personas(file, doc, out)
         _roles(file, doc, out)
+    _send_grants("slack.yaml", committed, out, local=False)
+    _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
     for file, doc in ours:
         for i, ws in enumerate(_rows(doc.get("workspaces"))):
