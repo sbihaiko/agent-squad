@@ -349,10 +349,16 @@ def shadow_entry(ts, decision):
     }
 
 
+class ShadowLogUnreadable(Exception):
+    """The state file exists but its content cannot be read, so a record never writes over it and drops the decisions
+    it holds. `load` stays the tolerant read path; only `record` raises this."""
+
+
 class ShadowLog:
     """The decisions a shadow poll would take, one JSON file keyed by channel id, beside the checkpoint in the private
-    state folder. Only code writes it, every write is atomic (ADR-0030), and an unreadable file reads as an empty
-    record, so a broken file never stops a poll. The record holds the decision and never the message text (story 42)."""
+    state folder. Only code writes it, every write is atomic (ADR-0030). An unreadable file reads as an empty record
+    through `load`, so a broken file never stops a read of the record; `record` refuses to write over a file it could
+    not read. The record holds the decision and never the message text (story 42)."""
 
     def __init__(self, path):
         self.path = Path(path)
@@ -364,6 +370,23 @@ class ShadowLog:
             return {}
         return doc if isinstance(doc, dict) else {}
 
+    def _read(self):
+        """The recorded document for a write, or `{}` when the file is absent. A file that exists but cannot be read,
+        or whose content is not a JSON object, raises `ShadowLogUnreadable`: a write never erases what it cannot read."""
+        try:
+            text = self.path.read_text()
+        except FileNotFoundError:
+            return {}
+        except OSError as exc:
+            raise ShadowLogUnreadable(f"{self.path}: {exc}") from exc
+        try:
+            doc = json.loads(text)
+        except ValueError as exc:
+            raise ShadowLogUnreadable(f"{self.path}: not JSON: {exc}") from exc
+        if not isinstance(doc, dict):
+            raise ShadowLogUnreadable(f"{self.path}: the record is not a JSON object")
+        return doc
+
     def entries(self, channel=None):
         """Every recorded decision, by channel then oldest first, or the decisions of one channel."""
         doc = self.load()
@@ -373,10 +396,14 @@ class ShadowLog:
         return [row for rows in doc.values() if isinstance(rows, list) for row in rows if isinstance(row, dict)]
 
     def record(self, channel, ts, decision):
-        """Append one decision for one message of a channel, as one atomic write."""
-        doc = self.load()
+        """Append one decision for one message of a channel, as one atomic write. A row of the channel already carries
+        the same `ts`, so a repeat of one message appends nothing. A file that exists but cannot be read raises
+        `ShadowLogUnreadable`, so a corrupt file keeps every decision it holds."""
+        doc = self._read()
         rows = doc.get(str(channel))
         rows = list(rows) if isinstance(rows, list) else []
+        if any(isinstance(row, dict) and row.get("ts") == str(ts) for row in rows):
+            return
         rows.append(shadow_entry(ts, decision))
         doc[str(channel)] = rows
         self.path.parent.mkdir(parents=True, exist_ok=True)
