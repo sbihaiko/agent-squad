@@ -25,8 +25,11 @@ it there, so `squad/slackproposal.py` can offer it to the owner before any work 
 
 The `loop_control` action (#2705) runs no loop file of its own: it calls the hub loop switch the caller supplies, with
 the hub's own action, so a role holder's pause, resume or drain passes the hub's state rule and the hub's audit
-(ADR-0162). The hub loop switch has no pause action, so a pause is the hub's drain. The reply names the state the hub
-reports in its answer; only a body that names no state uses the copy of the action the hub applied.
+(ADR-0162). The hub loop switch has no pause action, so a pause is the hub's drain. Stop-now kills the live runs and
+gates, so the executor refuses it by name whatever a role lists. The audit names a hub login, so the caller passes the
+map of Slack user id to hub login and a request the map does not resolve is refused at the identity. The reply names
+the state the hub reports in its answer; a body that names no state uses the copy of the action the hub itself reports,
+and a body that names neither is a refusal.
 
 The module reads no clock and calls no network: the caller supplies the status, log, work, investigation and board
 sources and the hub loop switch, because those answers come from the repository, the board, the project's own log and
@@ -65,8 +68,11 @@ _ACTION_ARGUMENT = {REQUEST_WORK: ("title",), REQUEST_INVESTIGATION: ("question"
 # the state rule, the audit and the supervisor. A resume is a start, and a drain is a drain. The hub switch has no pause
 # action, so a pause is a drain (the owner's ruling on #2705).
 LOOP_STATES = {"pause": "drain", "resume": "start", "drain": "drain"}
-# The reply of a hub action, used only when the hub's 200 body names no state, so an answer never states a change the hub
-# did not report.
+# The states the executor refuses by name, before the map above. Stop-now kills the live runs and the gates, so no Slack
+# request reaches it whatever a role lists: the owner alone stops the loop there (ADR-0162).
+FORBIDDEN_STATES = frozenset({"stop-now"})
+# The fallback reply of a hub action, used only when the hub's 200 body names the action it applied and no state. The
+# reply names the hub's state whenever the body carries one, so an answer never states a change the hub did not report.
 LOOP_REPLY = {
     "start": "The loop starts again: no new dispatch waits on a drain.",
     "drain": "The loop drains: it dispatches nothing new and stops when the live runs and gates finish.",
@@ -136,7 +142,14 @@ def _actions(decision):
     return tuple(getattr(decision, "actions", ()) or ())
 
 
-def check(request, decision, line, project, listed=None):
+def hub_login(line, logins):
+    """The hub login one inbox line's Slack user id maps to, or `""` when the caller's map names none. The hub audit
+    records a hub login, so a loop_control request is refused at the identity when the map resolves no login."""
+    user = str((line or {}).get("user") or "")
+    return str((logins or {}).get(user) or "")
+
+
+def check(request, decision, line, project, listed=None, logins=None):
     """The one `Refusal` of a request against its decision and its inbox line, or None when every check passes. The
     checks run in one order: revision, identity, project, channel, action, grant, the proposal kind, arguments, and the
     reply path of the decision.
@@ -145,9 +158,10 @@ def check(request, decision, line, project, listed=None):
     came from. A request on a revision no save lists grants nothing. None leaves the check out of force, as it is on a
     machine that names no registry.
 
-    The no-user refusal is loop-only on purpose. `loop_control` writes the loop switch, whose audit names the person who
-    asked, so the hub needs the asker and the action is refused when the line names none. Every other action takes its
-    actor from the role of the decision and writes no audit of its own, so a user-less line still runs it."""
+    `logins` maps a Slack user id to a hub login. The no-user and no-login refusals are loop-only on purpose.
+    `loop_control` writes the loop switch, whose audit names the hub login of the person who asked, so the action is
+    refused when the line names no user and when the map resolves no login for it. Every other action takes its actor
+    from the role of the decision and writes no audit of its own, so a user-less line still runs it."""
     line = line or {}
     if listed is not None:
         revision = str(line.get("revision") or "")
@@ -161,6 +175,9 @@ def check(request, decision, line, project, listed=None):
         return Refusal("identity", "the caller has no role in this channel")
     if request.action == LOOP_CONTROL and not str(line.get("user") or "").strip():
         return Refusal("identity", "the line names no user, and the hub audits the person who asks")
+    if request.action == LOOP_CONTROL and not hub_login(line, logins):
+        return Refusal("identity", f"the Slack user {str(line.get('user'))!r} maps to no hub login, and the hub audits "
+                                   "a hub login")
     if str(request.project) != str(project):
         return Refusal("project", f"the request names project {request.project!r}, not {project!r}")
     channel = str(line.get("channel") or "")
@@ -177,9 +194,16 @@ def check(request, decision, line, project, listed=None):
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
     # One state check, before the extra-key and missing-key checks: one request that names both a bad state and an extra
     # key reports the state, which decides that the action does not apply, so the caller fixes it in one round-trip.
-    if request.action == LOOP_CONTROL and request.arguments.get("state") not in LOOP_STATES:
-        return Refusal("arguments", "the loop_control action takes the state pause, resume or drain, and the request "
-                                    f"names {request.arguments.get('state')!r}")
+    # The forbidden state comes first and names itself: stop-now is a valid hub action that no Slack request takes, so
+    # its refusal says why instead of listing the states the action does take.
+    if request.action == LOOP_CONTROL:
+        state = request.arguments.get("state")
+        if isinstance(state, str) and state in FORBIDDEN_STATES:
+            return Refusal("arguments", "the loop_control action never takes stop-now from Slack: it kills the live "
+                                        "runs and gates, and only the owner stops the loop there")
+        if not isinstance(state, str) or state not in LOOP_STATES:
+            return Refusal("arguments", "the loop_control action takes the state pause, resume or drain, and the "
+                                        f"request names {state!r}")
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:
         takes = f"takes only {', '.join(sorted(allowed))}" if allowed else "takes no argument"
@@ -215,10 +239,9 @@ def _loop_control(state, who, loop):
     """One `loop_control` action through the hub loop switch, whose `(code, body)` answer it returns as a reply text or
     the one `Refusal` the hub gave.
 
-    `who` is the Slack user id of the inbox line, because the hub records the person who asked in its audit. The hub's
-    route takes the login of its own access answer as that name, and this build maps no Slack user id to a hub login, so
-    the audit names the Slack user id as it came from Slack. The switch is the caller's: the hub owns the state rule,
-    the audit and the supervisor (ADR-0162), and the executor writes no loop file of its own."""
+    `who` is the hub login the caller's map resolves for the line's Slack user id, never the raw Slack id, because the
+    hub records a hub login as the person who asked in its audit. The switch is the caller's: the hub owns the state
+    rule, the audit and the supervisor (ADR-0162), and the executor writes no loop file of its own."""
     action = LOOP_STATES[state]
     code, body = loop(action, who)
     # The hub's answer is read defensively: a body that is not one mapping refuses the action with the hub's answer and
@@ -227,16 +250,19 @@ def _loop_control(state, who, loop):
     if code != 200:
         return Refusal("hub", str(body.get("reason") or body.get("err") or f"the hub refused {action} with {code}"))
     # The reply names the state the hub's own body reports, verbatim, so an answer never states a change the hub did not
-    # report. Only a body that names no state falls back to the copy of the action the hub applied.
+    # report. Only a body that names no state falls back to the copy of the action the hub itself reports, and a body
+    # that names neither is a refusal: the requested action never stands in for the hub's answer.
     named = str(body.get("state") or "").strip()
     if named:
         return f"The loop is now {named}."
-    applied = str(body.get("action") or action)
-    return LOOP_REPLY.get(applied) or f"The hub accepted the {action} action."
+    applied = str(body.get("action") or "").strip()
+    if not applied:
+        return Refusal("hub", "the hub answered 200 with no loop state")
+    return LOOP_REPLY.get(applied) or f"The hub accepted the {applied} action."
 
 
 def execute(request, decision, line, project, status=None, logs=None, guest=(), work=None, investigate=None,
-            listed=None, board=None, loop=None):
+            listed=None, board=None, loop=None, logins=None):
     """One request through every check, then its action. The action runs only when `check` returns None and its source
     is there; a refusal returns its data record and no reply. The reply carries the path the decision names, the
     channel of the line, and the answer text.
@@ -245,8 +271,10 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
     project the check proved. `work` starts an issue or a run from `(project, title)` and `investigate` answers
     `(project, question)`: each receives the caller's text as one argument, so it acts only as a request. `board`
     answers the card and takes the approval and the move of `approve_and_move`; its rules live in `slackboard`.
-    `loop` is the hub loop switch: it takes the hub action and the asker's name, and answers the hub's `(code, body)`."""
-    refusal = check(request, decision, line, project, listed)
+    `loop` is the hub loop switch: it takes the hub action and the asker's hub login, and answers the hub's
+    `(code, body)`. `logins` maps a Slack user id to that hub login, and `loop_control` is refused when it resolves
+    none."""
+    refusal = check(request, decision, line, project, listed, logins)
     sources = ((STATUS, status, "status"), (LOGS, logs, "logs"), (REQUEST_WORK, work, "work"),
                (REQUEST_INVESTIGATION, investigate, "investigation"), (APPROVE_AND_MOVE, board, "board"),
                (LOOP_CONTROL, loop, "loop switch"))
@@ -268,7 +296,7 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
         if why is not None:
             return Outcome(False, None, data_record(line, Refusal("board", why)))
     elif request.action == LOOP_CONTROL:
-        text = _loop_control(str(request.arguments["state"]), str((line or {}).get("user") or ""), loop)
+        text = _loop_control(str(request.arguments["state"]), hub_login(line, logins), loop)
         if isinstance(text, Refusal):
             return Outcome(False, None, data_record(line, text))
     else:

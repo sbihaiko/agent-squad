@@ -10,8 +10,10 @@ so the expected answer never repeats the executor's own rule.
 
 The `loop_control` action (#2705) runs no file write of its own: it calls the hub loop switch the caller supplies, so
 pause, resume and drain each pass the hub's one write path and the hub's audit. A pause sets the hub's drain, because
-the hub loop switch has no pause action. The reply names the state the hub's own body reports. The last cases load the
-hub's own `/api/loop` switch and prove the change reaches it, its state rule and its audit line.
+the hub loop switch has no pause action, and stop-now is refused by name. The audit names a hub login, so the caller
+passes the Slack user id to hub login map and a request the map does not resolve is refused. The reply names the state
+the hub's body reports, and the real hub's 200 body names only the action it applied. The last cases load the hub's own
+`/api/loop` switch and prove the change reaches it, its state rule and its audit line.
 """
 import copy
 import importlib.util
@@ -34,6 +36,9 @@ OWNER = "U0OWNER001"
 PEER = "U0PEER0001"
 STRANGER = "U0STRANGER"
 OPERATOR = "U0OPERATOR1"   # the role that lists loop_control, so it may pause, resume and drain the loop
+HUB_LOGIN = "sbihaiko"     # the hub login the operator's Slack user id maps to, so the hub audit names a login
+# The Slack user id to hub login map the caller supplies, as the local Slack file's members give it.
+LOGINS = {OWNER: "sbihaiko", OPERATOR: HUB_LOGIN}
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 MID = "C0PROJ0001:1762500100.000100"
@@ -181,10 +186,10 @@ class Hub:
 
 
 def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source=None, logs=None, guest=(),
-        project=REPO, work=None, investigate=None, loop=None, listed=None, revision=None):
-    """One request through the executor, with its decision, line, status source, work sources and loop switch. The line
-    carries the role the decision named, as #2687 writes it, and the request names the channel of the case unless the
-    test overrides it."""
+        project=REPO, work=None, investigate=None, loop=None, listed=None, revision=None, logins=LOGINS):
+    """One request through the executor, with its decision, line, status source, work sources, loop switch and the Slack
+    user id to hub login map. The line carries the role the decision named, as #2687 writes it, and the request names the
+    channel of the case unless the test overrides it."""
     request, why = X.parse(text if text is not None else request_text(channel=channel))
     assert request is not None, why
     dec = decision(decision_user, channel)
@@ -193,7 +198,7 @@ def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source
              (("work", work), ("investigate", investigate), ("loop", loop), ("listed", listed))
              if value is not None}
     out = X.execute(request, dec, line(line_user, channel, role=dec.role, revision=revision), project, status=src,
-                    logs=logs, guest=guest, **extra)
+                    logs=logs, guest=guest, logins=logins, **extra)
     return out, src
 
 
@@ -533,12 +538,24 @@ def loop_request(state, **over):
 
 def test_a_role_holder_with_loop_control_pauses_the_loop_as_the_hub_drain():
     """Criterion (1): a pause sets the hub loop switch to drain, because the hub has no pause action, and the reply names
-    the state the hub reports."""
+    the state the hub reports. The switch receives the hub login of the asker, never the raw Slack user id."""
     hub = Hub(state="draining")
     out, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
     assert out.ran is True
-    assert hub.calls == [("drain", OPERATOR)]
+    assert hub.calls == [("drain", HUB_LOGIN)]
     assert out.reply["text"] == "The loop is now draining."
+
+
+def test_a_role_holder_cannot_set_stop_now_from_slack():
+    """Criterion (4): stop-now kills the live runs and gates, so the executor refuses it at the arguments before the
+    hub, and the hub switch is never called."""
+    hub = Hub()
+    out, _ = run(text=loop_request("stop-now"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is False
+    assert out.reply is None
+    assert out.record["error"].startswith("arguments:")
+    assert "never takes stop-now" in out.record["error"]
+    assert hub.calls == []
 
 
 def test_the_reply_follows_the_state_the_hub_reports_not_the_state_the_caller_asked_for():
@@ -547,7 +564,7 @@ def test_the_reply_follows_the_state_the_hub_reports_not_the_state_the_caller_as
     hub = Hub(state="draining")
     out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
     assert out.ran is True
-    assert hub.calls == [("start", OPERATOR)]
+    assert hub.calls == [("start", HUB_LOGIN)]
     assert "draining" in out.reply["text"]
     assert out.reply["text"] == "The loop is now draining."
     assert "starts again" not in out.reply["text"]
@@ -568,7 +585,7 @@ def test_a_role_holder_with_loop_control_resumes_the_loop_through_the_hub_switch
     hub = Hub()
     out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
     assert out.ran is True
-    assert hub.calls == [("start", OPERATOR)]
+    assert hub.calls == [("start", HUB_LOGIN)]
     assert out.reply["text"] == "The loop starts again: no new dispatch waits on a drain."
 
 
@@ -577,7 +594,7 @@ def test_a_role_holder_with_loop_control_drains_the_loop_through_the_hub_switch(
     hub = Hub()
     out, _ = run(text=loop_request("drain"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
     assert out.ran is True
-    assert hub.calls == [("drain", OPERATOR)]
+    assert hub.calls == [("drain", HUB_LOGIN)]
     assert out.reply["text"] == "The loop drains: it dispatches nothing new and stops when the live runs and gates finish."
 
 
@@ -611,6 +628,11 @@ def test_a_loop_control_request_for_a_state_it_does_not_take_is_refused():
     assert hub.calls == []
     assert out.record["error"].startswith("arguments:")
     assert "pause, resume or drain" in out.record["error"]
+    # A state that is not a string is a refusal too, never a crash inside the request path.
+    other, _ = run(text=request_text(action="loop_control", arguments={"state": ["drain"]}),
+                   decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert other.ran is False and hub.calls == []
+    assert other.record["error"].startswith("arguments:")
 
 
 def test_a_state_a_loop_control_request_does_not_take_is_reported_before_an_extra_argument():
@@ -635,17 +657,21 @@ def test_a_hub_refusal_of_a_loop_action_is_recorded_as_data_naming_the_reason():
     assert "the loop is not running" in out.record["error"]
 
 
-def test_a_hub_answer_that_is_not_a_mapping_is_a_refusal_or_a_reply_never_a_crash():
-    """Criterion (5): the switch's answer is read defensively, so a body that is not one mapping refuses the action with
-    the hub's answer and never raises inside the request path."""
+def test_a_hub_answer_that_is_not_a_mapping_or_names_no_state_is_a_refusal():
+    """Criterion (5): the switch's answer is read defensively, and a reply states only what the hub reported. A 200 body
+    that is not one mapping, and one that names no state and no action, each refuse the action with the hub's answer and
+    never raise inside the request path."""
+    for answer in ((200, "boom"), (200, {}), (200, {"ok": True})):
+        out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR,
+                     loop=lambda action, who, answer=answer: answer)
+        assert out.ran is False, answer
+        assert out.reply is None, answer
+        assert out.record["error"].startswith("hub:"), answer
+        assert "the hub answered 200 with no loop state" in out.record["error"], answer
     refused, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR,
                      loop=lambda action, who: (409, "boom"))
     assert refused.ran is False
     assert refused.record["error"].startswith("hub:")
-    applied, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR,
-                     loop=lambda action, who: (200, "boom"))
-    assert applied.ran is True
-    assert "starts again" in applied.reply["text"]
 
 
 def test_an_action_with_no_handler_is_refused_and_never_reaches_the_hub(monkeypatch):
@@ -676,6 +702,18 @@ def test_a_loop_control_request_on_a_line_with_no_user_is_refused_before_the_hub
     assert out.record["error"].startswith("identity:")
 
 
+def test_a_loop_control_request_from_a_user_with_no_hub_login_is_refused():
+    """Criterion (6): the hub audit names a hub login, so a Slack user id the caller's map does not resolve is refused
+    at the identity, and the hub switch is never called with a raw Slack id."""
+    hub = Hub()
+    out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub, logins={})
+    assert out.ran is False
+    assert out.reply is None
+    assert hub.calls == []
+    assert out.record["error"].startswith("identity:")
+    assert "hub login" in out.record["error"]
+
+
 def test_a_line_with_no_user_still_runs_an_action_that_is_not_loop_control():
     """The no-user refusal is loop-only: the hub audit needs the asker, and every other action takes its actor from the
     role of the decision, so a manager's request_work runs from a user-less line (the rule is in `check`)."""
@@ -689,26 +727,41 @@ def test_a_line_with_no_user_still_runs_an_action_that_is_not_loop_control():
 @pytest.fixture
 def real_hub(monkeypatch, tmp_path):
     """The hub's own module, loaded with the loop switch's files in a temp state directory; its supervisor call is a stub
-    that brings the loop up on a start, so the switch runs its real state rule and its real audit."""
+    that brings the loop up on a start, so the switch runs its real state rule and its real audit.
+
+    The fixture sets the environment the hub reads at import, so it restores every variable it touches at teardown: a
+    later import of the hub in this process sees the original values, never the temp directory."""
+    env = {}
     for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
                  ("SG_CHECKOUT", str(tmp_path)), ("SG_HUB_DIR", str(tmp_path)), ("SG_STATE", str(tmp_path / "st"))):
-        monkeypatch.setenv(k, v)
+        env[k] = os.environ.get(k)
+        os.environ[k] = v
     for k in ("SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
-        monkeypatch.delenv(k, raising=False)
-    spec = importlib.util.spec_from_file_location("hub_slack_loop", HUB_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    (mod.STATE / "auto").mkdir(parents=True, exist_ok=True)
-    mod.watchd_calls = []
+        env[k] = os.environ.get(k)
+        os.environ.pop(k, None)
+    try:
+        spec = importlib.util.spec_from_file_location("hub_slack_loop", HUB_PY)
+        assert spec is not None and spec.loader is not None, (
+            f"the fixture loads {HUB_PY.name} from {HUB_PY} and found no module spec or no loader")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        (mod.STATE / "auto").mkdir(parents=True, exist_ok=True)
+        mod.watchd_calls = []
 
-    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the supervisor up: this process stands for it
-        mod.watchd_calls.append(list(a))
-        if a == ("start",):
-            (mod.STATE / "watchd.pid").write_text(f"{os.getpid()}\n")
-        return 0
-    monkeypatch.setattr(mod, "loop_watchd", watchd)
-    monkeypatch.setattr(mod, "tailnet_block", lambda checkout=None: {})
-    return mod
+        def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the supervisor up: this process stands for it
+            mod.watchd_calls.append(list(a))
+            if a == ("start",):
+                (mod.STATE / "watchd.pid").write_text(f"{os.getpid()}\n")
+            return 0
+        monkeypatch.setattr(mod, "loop_watchd", watchd)
+        monkeypatch.setattr(mod, "tailnet_block", lambda checkout=None: {})
+        yield mod
+    finally:
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 class Access(NamedTuple):
@@ -742,38 +795,28 @@ def test_the_hub_answer_names_the_action_and_the_reply_copies_that_action(real_h
     ok = [body for code, body in bodies if code == 200]
     # The real hub body names the applied action and no state; the reply is that action's copy.
     assert ok == [{"ok": True, "action": "start"}, {"ok": True, "action": "drain"}]
+    assert all("state" not in body for body in ok)
     assert start.reply["text"] == "The loop starts again: no new dispatch waits on a drain."
     assert drain.reply["text"] == ("The loop drains: it dispatches nothing new and stops when the live runs and gates "
                                    "finish.")
     lines = [json.loads(line) for line in real_hub.LOOP_AUDIT.read_text().splitlines() if line.strip()]
     assert [e["action"] for e in lines] == ["start", "drain"]
-    assert [e["who"] for e in lines] == [OPERATOR, OPERATOR]
+    assert [e["who"] for e in lines] == [HUB_LOGIN, HUB_LOGIN]
 
 
-def test_the_reply_takes_the_state_name_from_the_hub_answer(real_hub):
-    """Criterion (8): when the hub's 200 body names a state, the reply is that name, taken from the body and not from a
-    constant of the executor. The switch here adds the state the hub's own files report after each change."""
-    answers = []
-
-    def loop(action, who):
-        code, body = real_hub.loop_switch(Access(login=who), {"action": action}, True)
-        # the hub's own state after the change, read from its audit tail
-        body = {**body, "state": real_hub.loop_state((real_hub.loop_audit_last(1) or [{}])[-1])} if code == 200 else body
-        answers.append((code, body))
-        return code, body
-
-    start, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=loop)
-    drain, _ = run(text=loop_request("drain"), decision_user=OPERATOR, line_user=OPERATOR, loop=loop)
-    assert start.ran is True and drain.ran is True
-    assert [body["state"] for code, body in answers] == ["on", "on"]
-    assert start.reply["text"] == f"The loop is now {answers[0][1]['state']}."
-    assert drain.reply["text"] == f"The loop is now {answers[1][1]['state']}."
+def test_the_reply_takes_the_state_name_from_the_hub_answer():
+    """A unit test of `_loop_control`: when the hub's 200 body names a state, the reply is that name, taken from the body
+    and not from a constant of the executor. The real hub never sends a state, so this switch is synthetic."""
+    for answer, want in (({"ok": True, "action": "start", "state": "on"}, "The loop is now on."),
+                         ({"ok": True, "action": "drain", "state": "draining"}, "The loop is now draining.")):
+        text = X._loop_control("resume", HUB_LOGIN, lambda action, who, answer=answer: (200, answer))
+        assert text == want
 
 
-def test_the_audit_records_the_identity_the_hub_access_names(real_hub):
-    """Criterion (6): the hub's audit records the login of the access answer the route builds. The executor passes the
-    Slack user id of the line as `who`, and this build maps no Slack user id to a hub login, so the audit names the
-    Slack user id (`_loop_control` documents that)."""
+def test_the_audit_records_the_login_the_slack_user_id_maps_to(real_hub):
+    """Criterion (6): the hub's audit records the login of the access answer the route builds. The executor resolves the
+    Slack user id of the line through the caller's map and passes the hub login as `who`, so the hub never audits a raw
+    Slack user id."""
     seen = []
 
     def loop(action, who):
@@ -783,5 +826,5 @@ def test_the_audit_records_the_identity_the_hub_access_names(real_hub):
     out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=loop)
     assert out.ran is True
     lines = [json.loads(line) for line in real_hub.LOOP_AUDIT.read_text().splitlines() if line.strip()]
-    assert seen == [OPERATOR]
-    assert lines[-1]["who"] == OPERATOR
+    assert seen == [HUB_LOGIN]
+    assert lines[-1]["who"] == HUB_LOGIN
