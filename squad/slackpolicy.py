@@ -10,7 +10,7 @@ reads neither a clock nor the network. A `send_grant` lives in the local file, w
 holds the date of the grant (story 38).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
-`tests/test_hub_slack_read.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
@@ -709,3 +709,134 @@ def decide(committed, local, event, now, thread_state=None):
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
                     next_poll, voice)
+
+
+# --- the one-time migration of the old per-profile Slack file (SPEC 2682 #2700, story 46) -------------
+# The old file named five events, two roles, and one row per channel. This maps each old name to its id in the new
+# files, following the spec's field table. `Manager` and `Colleague` carry `status` only, which is what S1 delivers.
+MIGRATED_EVENTS = {"stg": "stg_release", "prod": "prod_release", "dev": "dev_release",
+                   "bug": "bug_report", "fix": "fix_report"}
+MIGRATED_ROLES = {"Manager": "manager", "Colleague": "colleague"}
+MIGRATION_ACTIONS = ("status",)
+
+
+class Migration(NamedTuple):
+    """The migration's answer: the two documents it builds, the channels still waiting for a Slack id, and the report
+    of what it carried over and what it dropped. It reads no file and writes none, so the hub hands the pair to its
+    usual save path and the owner approves it there."""
+    committed: dict
+    local: dict
+    pending: list
+    report: list
+
+
+def _label(name):
+    return str(name).strip().lstrip("#")
+
+
+def _after_mark(template):
+    """The template without the `prefix` line: the persona mark replaces the prefix, and the writer adds the mark at
+    the post, so the template never holds it."""
+    text = str(template)
+    head = "<prefix>\n"
+    if text.startswith(head):
+        return text[len(head):]
+    return "\n".join(line for line in text.splitlines() if line.strip() != "<prefix>")
+
+
+def _minutes(value, default):
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def migrate(old, workspace=None, ids=None):
+    """The one-time migration of the old per-profile Slack file, by the spec's field table.
+
+    `old` is the document the old hub wrote: `lang`, `prefix`, `tick`, `max`, `quiet`, `other`, `dm`, `audio`,
+    `channels` and `people`, with a template per release event. `workspace` names the Slack workspace the old file
+    posted in, `{"id", "label"}`, because the old file never held a team id. `ids` maps an old channel name to its
+    Slack channel id, from the answer the hub asks for. A channel with no id stays in `pending` and enters neither
+    document; the hub asks for the id before it writes. The answer's `report` names each field carried over and each
+    field dropped."""
+    old = old if isinstance(old, dict) else {}
+    workspace = workspace if isinstance(workspace, dict) else {}
+    given = {}
+    for name, channel_id in (ids or {}).items():
+        if str(channel_id or "").strip():
+            given[_label(name)] = str(channel_id).strip()
+    report = []
+    raw_lang = old.get("lang")
+    language = (normalize_language(raw_lang) if raw_lang is not None else None) or DEFAULT_LANGUAGE
+    committed = {"version": 1, "project": {"language": language}}
+    local = {"version": 1, "workspaces": []}
+    if raw_lang is not None:
+        report.append(f"carried: language {raw_lang} becomes project.language {language}")
+    # The project's events come from the old templates, and each template loses the prefix line.
+    templates = old.get("templates") if isinstance(old.get("templates"), dict) else {}
+    declared = {}
+    for old_id, new_id in MIGRATED_EVENTS.items():
+        text = templates.get(old_id)
+        if isinstance(text, str) and text.strip():
+            declared[new_id] = _after_mark(text)
+    if declared:
+        committed["events"] = [{"id": event_id, "template": text} for event_id, text in declared.items()]
+        for old_id, new_id in MIGRATED_EVENTS.items():
+            if new_id in declared:
+                report.append(f"carried: event {old_id} becomes {new_id} with its template, after the mark")
+    # Both roles exist under the new id, each with only `status`.
+    committed["roles"] = [{"id": role_id, "actions": list(MIGRATION_ACTIONS)}
+                          for role_id in MIGRATED_ROLES.values()]
+    for old_role, new_role in MIGRATED_ROLES.items():
+        report.append(f"carried: role {old_role} becomes {new_role} with action status")
+    fast = f"{_minutes(old.get('tick'), 5)}m"
+    slow = f"{_minutes(old.get('max'), 30)}m"
+    written, pending = [], []
+    for row in _rows(old.get("channels")):
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if row.get("watch") is not True:
+            report.append(f"dropped: channel {name} (watch is off)")
+            continue
+        label = _label(name)
+        poll = {"mode": "two_state", "fast": fast, "slow": slow}
+        channel = {"name": label, "mode": "listen+speak", "poll": poll}
+        channel_lang = normalize_language(row["lang"]) if row.get("lang") is not None else None
+        if channel_lang:
+            channel["language"] = channel_lang
+        events_on = row.get("events") if isinstance(row.get("events"), dict) else {}
+        announce = [new_id for old_id, new_id in MIGRATED_EVENTS.items()
+                    if events_on.get(old_id) is True and new_id in declared]
+        if announce:
+            channel["announce"] = announce
+        report.append(f"carried: channel {name} becomes {label}, {channel.get('language', 'project language')}")
+        report.append(f"carried: channel {name} poll fast {fast} slow {slow} (two_state)")
+        if announce:
+            report.append(f"carried: channel {name} announce {', '.join(announce)}")
+        channel_id = given.get(label)
+        if channel_id:
+            written.append({"id": channel_id, **channel})
+            report.append(f"carried: channel {name} Slack id {channel_id}")
+        else:
+            pending.append(channel)
+            report.append(f"pending: channel {label} (no Slack id; the hub asks for the id before it writes)")
+    team = str(workspace.get("id") or "").strip()
+    if team:
+        row = {"id": team, "label": str(workspace.get("label") or team), "class": "guest"}
+        if written:
+            row["channels"] = written
+        local["workspaces"] = [row]
+        report.append(f"carried: workspace {team} becomes guest of the local file")
+    else:
+        pending = written + pending
+        report.append("pending: the Slack workspace has no team id; the hub asks for it before it writes")
+    report += [
+        "dropped: prefix (the persona mark replaces it)",
+        "dropped: thread and mention (every reply goes in the thread)",
+        "dropped: people (a role needs Slack user ids, and the hub keeps the names)",
+        "dropped: quiet, dm, audio (the new file has no quiet hours and no owner inbox)",
+        "dropped: other (a message from someone without a role is data)",
+    ]
+    return Migration(committed, local, pending, report)

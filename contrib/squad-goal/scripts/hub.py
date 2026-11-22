@@ -1998,6 +1998,31 @@ def slack_set(body):
         if err: return {"err": err}
     return {"diff": diff, "state": slack_view(path)}
 
+def slack_migrate(legacy=None, workspace=None, ids=None):
+    """GET /api/slack/migrate: the one-time report of the old per-profile Slack file (SPEC 2682 #2700).
+
+    It reads the file, builds the two new documents and their report, and writes nothing: the owner approves the pair on
+    the usual save path, and the hub keeps the documents in its draft. `workspace` names the team id the old file never
+    held. A channel with no Slack id stays pending, and the channel editor asks for the id before a write."""
+    if legacy is None: legacy = slack_file()
+    if legacy is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none",
+                               "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
+    path = pathlib.Path(legacy)
+    if not path.is_file(): return {"err": f"no old Slack file in this profile: {path}",
+                                   "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
+    if workspace is None:
+        team, _ = slack_team()
+        if team: workspace = {"id": team}
+    try:
+        P = slack_policy()
+        mig = P.migrate(slack_read(path), workspace=workspace, ids=ids)
+        defects = [str(d) for d in P.validate(mig.committed, mig.local)]
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}",
+                "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
+    return {"err": None, "old": str(path), "report": mig.report, "pending": mig.pending,
+            "committed": mig.committed, "local": mig.local, "defects": defects}
+
 # --- Settings > Communication, the read view (SPEC 2682 #2693). The theme reads the committed `slack.yaml` at the checkout
 # root and the profile's `slack.local.yaml`, and draws the Now tiles and the sections Personas, Roles, Slack workspaces and
 # Project events. Every resolved value comes from the policy module (#2684), and every field names the file it comes from;
@@ -2612,6 +2637,18 @@ def slack_workspace(profile=None):
     m = SLACK_WORKSPACE.match(str(d.get("url") or ""))
     if not m: return None, "no workspace domain"
     return m.group(1), None
+
+def slack_team(profile=None):
+    """(team id, error): the Slack workspace id of the connection, from `auth.test`, never a constant in this repository.
+    The migration needs it: the old per-profile file never held the team id, and a new workspace is placed by its id."""
+    if not KEYCHAIN: return None, "no keychain on this host"
+    token = slack_token(profile)
+    if not token: return None, "no connection"
+    try: d = slack_api(token, "auth.test")
+    except Exception: return None, "the connection did not answer"
+    if not isinstance(d, dict) or not d.get("ok"): return None, "the connection refused"
+    team = str(d.get("team_id") or "")
+    return (team, None) if team else (None, "no team id")
 
 def slack_channel(repo=None, profile=None):
     """(channel, error): the project's channel from the daemon's map, a read that never joins a channel.
@@ -8931,10 +8968,14 @@ function slWsReadHtml(r,join){return (r.workspaces.length?"":`<p class=m>${esc("
   +(w.channels.length?`<table class=slt2><thead><tr>${slChHeads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`
    +w.channels.map(c=>`<tr><td data-l="Channel">#${esc(c.name)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode)}</span></td><td data-l="Language"><span class=nw>${esc(c.language)}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"none")}</span></td><td data-l="Roles">${join(c.roles,"owner only")}</td><td data-l="Announce">${join(c.announce,"never posts")}</td></tr>`).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")}
+let slM=null;   // the migration report of the old per-profile Slack file (#2700): what it carried over and what it dropped
+function slMigHtml(m){if(!m||!Array.isArray(m.report)||!m.report.length)return "";   // the migration report: one line per field
+ return `<h4>Migration of the old Slack file</h4><div class=mx role=status>`+m.report.map(l=>`<div>${esc(l)}</div>`).join("")+`</div>`
+  +`<div class=slad><button id=slmigload>Load the migrated files into the editor</button></div>`}
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
- +slReadHtml(slR)
+ +slReadHtml(slR)+slMigHtml(slM)
  +(slR===null?setSettings("slk",[   // the legacy profile file's surface stays only when the read view could not answer
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
  setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
@@ -9049,7 +9090,7 @@ const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((
  {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Communication",l))}];
 const slAsk=async()=>{try{const r=await(await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm:false})})).json();
  return r.err?[{file:(slR&&slR.files&&slR.files.committed)||"slack.yaml",lines:["! Communication · "+r.err]}]:slGroups(r)}catch(x){return[{file:"slack.yaml",lines:["! Communication · the diff could not be read"]}]}};
-async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
+async function slLoad(){try{const[a,b,c]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files"),fetch("/api/slack/migrate")]);slS=await a.json();slR=await b.json();slM=await c.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
  if(d.err){slD=null;slMsg="!"+d.err}
@@ -9061,6 +9102,7 @@ $("#sbody").addEventListener("change",e=>{const s=e.target.dataset.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
  const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
+ if(b&&b.id==="slmigload"&&slM){slDocs=slClone({committed:slM.committed||{},local:slM.local||{}});slMsg="";slRender();return}   // the migration's pair reaches the editor, and the save path writes it (#2700)
  if(b&&(slDocs||slSavedDocs)){const o=b.dataset.slopen;
   if(o!==undefined){slOpen=slOpen===o?"":o;slRender();return}
   if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
@@ -11353,6 +11395,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
         elif self.path.startswith("/api/slots"): body, ct = json.dumps(slots_read()).encode(), "application/json"   # Settings > Spend & limits · Machine slots (#2435)
         elif self.path.split("?", 1)[0] == "/api/slack/files": body, ct = json.dumps(slack_overview()).encode(), "application/json"   # Settings > Communication · the read view (SPEC 2682 #2693)
+        elif self.path.split("?", 1)[0] == "/api/slack/migrate": body, ct = json.dumps(slack_migrate()).encode(), "application/json"   # the old profile file's one-time report (SPEC 2682 #2700)
         elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
