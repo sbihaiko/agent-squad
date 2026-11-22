@@ -1218,6 +1218,16 @@ tipgate=${SG_WAVE_TIP_GATES-"$(sg_base_gate "origin/$base" "$py" wave-tip)"}
 # child_of <clone> <sha>: the issue a commit names, its last `Refs #N`, empty when it names none.
 child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | refs_in_message | tail -1; }
 
+# evict_child <clone> <issue> <red-sha> (#2757): drop from the clone's tip every commit of origin/$base..HEAD whose child_of is
+# <issue>, and <red-sha> in any case. Exit 1 on a rebase conflict, with the tip restored to where it stood.
+evict_child() { local c=$1 iss=$2 red=$3 head sha
+  head=$($G -C "$c" rev-parse HEAD) || return 1
+  for sha in $($G -C "$c" log --format=%H "origin/$base..HEAD" 2>/dev/null); do
+    [ "$sha" = "$red" ] || { [ -n "$iss" ] && [ "$(child_of "$c" "$sha")" = "$iss" ]; } || continue
+    $G -C "$c" rebase --onto "$sha^" "$sha" >/dev/null 2>&1 && continue
+    $G -C "$c" rebase --abort >/dev/null 2>&1; $G -C "$c" reset -q --hard "$head" >/dev/null 2>&1; return 1
+  done; }
+
 # held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
 # the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the first holder it names (#567). The budget writes
 # that skip in three shapes, and each names its holders right after the shape's own words: `is full (N slots), held by`, `has N free
@@ -1515,8 +1525,11 @@ wave_check() {
       continue
     fi
     cx=$(child_of "$S" "$found")
-    $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; rm -f "$of"
-      echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
+    # (#2757) The child leaves whole: every commit of the range that names its issue is dropped, not the red one only, so no
+    # unreviewed part of it lands. The walk is newest first, so a drop rewrites only the commits above it and the older shas
+    # still hold. A conflict on any drop restores the tip and takes the path below.
+    if ! evict_child "$S" "$cx" "$found"; then rm -f "$of"
+      echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; fi
     # (#2209) One eviction of a child is one refused fact and one requeue per run. The eviction lives in the scratch clone
     # only, so a pass that pushes nothing leaves the commit on the remote wave and the next pass evicts it again: the
     # requeue fact of the issue's ledger, the read the empty landing uses, says the run already sent it back. The commit
