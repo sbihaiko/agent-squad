@@ -211,6 +211,142 @@ def test_an_invalid_file_is_refused_with_the_key_it_breaks(hub, tmp_path, monkey
     assert yaml.safe_load(c.read_text()) == COMMITTED
 
 
+def test_a_moved_worktree_refuses_the_save_before_any_write(hub, tmp_path, monkeypatch):
+    """A hub worktree that carries another commit is not the base a land needs. The save refuses it before either file
+    is written, so the worktree keeps no uncommitted change and the local file keeps its value."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    (wt / "extra.txt").write_text("x\n")
+    git(wt, "add", "--", "extra.txt")
+    git(wt, "commit", "-q", "-m", "other work")
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    new_c, new_l = copy.deepcopy(COMMITTED), copy.deepcopy(LOCAL)
+    new_c["project"]["language"] = "pt-BR"
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, new_local=new_l, confirm=True)
+    assert "err" in out and "origin/dev" in out["err"], out
+    assert yaml.safe_load((wt / "docs" / "squad" / "slack.yaml").read_text())["project"]["language"] == "en-US"
+    assert yaml.safe_load(loc.read_text())["workspaces"][0]["label"] == "client-a"
+    assert git(wt, "status", "--porcelain") == ""
+
+
+def test_a_local_only_save_records_the_save_in_the_registry(hub, tmp_path, monkeypatch):
+    """A save that changes only the local file still records its save: the registry names the file, the time, and that
+    no commit landed, so a reader of the registry never sees an old save as the last one."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    (tmp_path / "state").mkdir()
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "checkout"))
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_local=new_l, confirm=True)
+    assert "err" not in out, out
+    data = json.loads(hub.slack_registry_path().read_text())
+    entry = data[str(c)]
+    assert entry["committed"] is False and entry["at"], data
+
+
+def test_a_local_only_save_keeps_the_last_landed_sha(hub, tmp_path, monkeypatch):
+    """A save after a land keeps the landed sha in its registry entry, so a reader still knows the commit the files
+    come from, and the entry says the latest save landed no commit of its own."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    (tmp_path / "state").mkdir()
+    wt, origin = worktree(tmp_path)
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    landed = out["sha"]
+    landed_doc = yaml.safe_load((wt / "docs" / "squad" / "slack.yaml").read_text())
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=landed_doc, new_local=new_l, confirm=True)
+    assert "err" not in out, out
+    entry = json.loads(hub.slack_registry_path().read_text())[str(wt / "docs" / "squad" / "slack.yaml")]
+    assert entry["sha"] == landed, entry
+    assert entry["committed"] is False, entry
+
+
+def test_a_registry_write_that_fails_is_a_warning_and_the_save_stands(hub, tmp_path, monkeypatch):
+    """The landed sha that the registry cannot keep is stated as a warning beside the save, never hidden: the file
+    landed, so the save stands, and the owner still learns that the registry did not record it."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "_slack_record", lambda *a, **k: "no space left on device")
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    assert out["sha"] and "no space left on device" in out.get("warn", ""), out
+
+
+def test_a_failed_push_reports_the_state_the_save_left(hub, tmp_path, monkeypatch):
+    """A push the origin rejects comes back as an error that names the commit and the files the save already wrote, so
+    a partial save is stated, never silent."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    real = hub._slack_git
+
+    def fake(cwd, *args):
+        if args[:1] == ("push",):
+            return subprocess.CompletedProcess(["git"], 1, "", "rejected: non-fast-forward")
+        return real(cwd, *args)
+
+    monkeypatch.setattr(hub, "_slack_git", fake)
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" in out and "non-fast-forward" in out["err"], out
+    assert "commit" in out["err"] and str(wt) in out["err"], out
+    assert yaml.safe_load((wt / "docs" / "squad" / "slack.yaml").read_text())["project"]["language"] == "pt-BR"
+
+
+def test_the_preview_carries_the_files_it_was_computed_from(hub, tmp_path, monkeypatch):
+    """The preview states the size and time of every file it read, the sibling profile files included, so a page can
+    see that a file changed after its preview and ask again before it confirms."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "checkout"))
+    c, loc = files(tmp_path)
+    sibling = loc.parent / "7.slack.local.yaml"
+    sibling.write_text(yaml.safe_dump({"version": 1, "workspaces": []}, sort_keys=False))
+    out = hub.slack_files_set({"committed": COMMITTED, "local": LOCAL}, committed=c, local=loc)
+    assert "err" not in out, out
+    base = out["base"]
+    assert base[str(loc)]["size"] == loc.stat().st_size, base
+    assert base[str(c)]["size"] == c.stat().st_size, base
+    assert base[str(sibling)]["size"] == sibling.stat().st_size, base
+
+
+def test_a_sibling_profile_file_is_validated_at_the_save(hub, tmp_path, monkeypatch):
+    """The profile folder's other local files are read at the save, and a rule they break names the sibling file, not
+    the file being saved."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "checkout"))
+    c, loc = files(tmp_path)
+    sibling = loc.parent / "7.slack.local.yaml"
+    sibling.write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    out = hub.slack_files_set({"committed": COMMITTED, "local": LOCAL, "confirm": True}, committed=c, local=loc)
+    assert "err" in out and "7.slack.local.yaml" in out["err"], out
+    assert "workspaces[0].id" in out["err"], out
+
+
 # ---------------------------------------------------------------- the save-dialog renderer
 
 def _node(body):

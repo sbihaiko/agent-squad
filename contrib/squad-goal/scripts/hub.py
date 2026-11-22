@@ -2167,9 +2167,9 @@ def _slack_atomic(path, text):
         except OSError: pass
     return None
 
-def _slack_land(wt, rel, message):
-    """Commit one file in the hub's worktree and push that commit to the landing branch by fast-forward: (sha, error).
-    The worktree must stand one commit above origin/<land>, so the landing carries the saved file and no other work."""
+def _slack_land_check(wt):
+    """(base sha, error): the fetch and branch check a land needs. It runs before the save writes any file, so a hub
+    worktree that carries other work, or stands away from origin/<land>, refuses the save with no half write."""
     g = lambda *a: _slack_git(wt, *a)   # noqa: E731
     r = g("fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
     if r.returncode: return None, f"git fetch failed: {(r.stderr or r.stdout).strip()}"
@@ -2177,23 +2177,57 @@ def _slack_land(wt, rel, message):
     if base.returncode or head.returncode: return None, f"the worktree has no origin/{LAND} to land on"
     if head.stdout.strip() != base.stdout.strip():
         return None, f"the hub's worktree is not one commit above origin/{LAND}: the save would carry other work"
+    return base.stdout.strip(), None
+
+def _slack_land(wt, rel, message, base=None):
+    """Commit one file in the hub's worktree and push that commit to the landing branch by fast-forward: (sha, error).
+    `base` is the sha `_slack_land_check` read before the save wrote anything, so a moved branch refuses before any
+    write. A push that fails reports the commit and the file the save left in the worktree."""
+    if base is None:
+        base, err = _slack_land_check(wt)
+        if err: return None, err
+    g = lambda *a: _slack_git(wt, *a)   # noqa: E731
     r = g("add", "--", rel)
     if r.returncode: return None, f"git add failed: {(r.stderr or r.stdout).strip()}"
     r = g("commit", "-q", "-m", message, "--", rel)
     if r.returncode: return None, f"git commit failed: {(r.stderr or r.stdout).strip()}"
+    if g("merge-base", "--is-ancestor", base, "HEAD").returncode:
+        return None, f"the commit is not one above the base {base[:12]} the save checked"
     sha = g("rev-parse", "HEAD").stdout.strip()
     r = g("push", "-q", "origin", f"HEAD:refs/heads/{LAND}")
-    if r.returncode: return None, f"the push to {LAND} failed: {(r.stderr or r.stdout).strip()}"
+    if r.returncode:
+        return None, (f"the push to {LAND} failed: {(r.stderr or r.stdout).strip()}; the save left commit {sha} "
+                      f"in the hub worktree {wt} with {rel} written there, and the local file written")
     return sha, None
 
-def _slack_record(path, sha):
-    """Record the landed sha in the local registry, keyed by the file it saved. Returns an error, or None."""
-    p = slack_registry_path()
-    try: data = json.loads(p.read_text())
+def _slack_registry_data():
+    try: data = json.loads(slack_registry_path().read_text())
     except (OSError, ValueError): data = {}
-    if not isinstance(data, dict): data = {}
-    data[str(path)] = {"sha": sha, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds")}
+    return data if isinstance(data, dict) else {}
+
+def _slack_record(path, sha, committed=True):
+    """Record a save in the local registry, keyed by the file it saved: the landed sha of a committed save, or the last
+    landed sha of a save that changed only the local file. Returns an error, or None."""
+    p = slack_registry_path()
+    data = _slack_registry_data()
+    if sha is None:
+        last = data.get(str(path)) if isinstance(data.get(str(path)), dict) else {}
+        sha = last.get("sha")
+    data[str(path)] = {"sha": sha, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                       "committed": bool(committed)}
     return _slack_atomic(p, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+def _slack_base(paths):
+    """The files a preview read, each with its size and time, so the page can tell that a file changed after its
+    preview and ask again before it confirms."""
+    out = {}
+    for p in paths:
+        try:
+            st = pathlib.Path(p).stat()
+            out[str(p)] = {"size": st.st_size, "mtime": int(st.st_mtime)}
+        except (OSError, TypeError):
+            out[str(p)] = None
+    return out
 
 def slack_files_set(body, committed=None, local=None):
     """POST /api/slack for the Communication theme: validate, diff, then write. With `confirm` false it answers the diff
@@ -2206,12 +2240,15 @@ def slack_files_set(body, committed=None, local=None):
     new_c, new_l = body.get("committed"), body.get("local")
     if not isinstance(new_c, dict) or not isinstance(new_l, dict):
         return {"err": "committed and local: each one mapping"}
+    if not committed and new_c:
+        return {"err": "the committed file needs the checkout: set SG_CHECKOUT"}
     try: P = slack_policy()
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
-    others = []
+    others, siblings = [], []
     for other in sorted(pathlib.Path(local).parent.glob("*slack.local.yaml")):
         if other.resolve() == pathlib.Path(local).resolve(): continue
+        siblings.append(other)
         try: doc = yaml.safe_load(other.read_text())
         except (OSError, yaml.YAMLError): continue
         if isinstance(doc, dict): others.append((other.name, doc))
@@ -2222,20 +2259,30 @@ def slack_files_set(body, committed=None, local=None):
     wt, why = slack_worktree()
     target = wt / SLACK_YAML_REL if wt else pathlib.Path(committed)
     files = {"committed": str(target), "local": str(local)}
-    diff = {"committed": _slack_yaml_lines(target if target.exists() else committed, new_c) if target else [],
+    diff = {"committed": _slack_yaml_lines(target if target.exists() else committed, new_c),
             "local": _slack_yaml_lines(local, new_l)}
-    if body.get("confirm") is not True: return {"diff": diff, "files": files}
-    if diff["committed"] and why: return {"err": why, "diff": diff, "files": files}   # no half save: refuse before the local write
+    if body.get("confirm") is not True:
+        return {"diff": diff, "files": files, "base": _slack_base([target, committed, local] + siblings)}
+    out = {"diff": diff, "files": files}
+    needs_commit = bool(diff["committed"])
+    base = None
+    if needs_commit:
+        # No half save: the worktree the land needs is checked, and the land refused, before any file is written.
+        if why: return {"err": why, "diff": diff, "files": files}
+        base, err = _slack_land_check(wt)
+        if err: return {"err": err, "diff": diff, "files": files}
     err = _slack_atomic(local, _slack_yaml_text(new_l))
     if err: return {"err": err}
-    out = {"diff": diff, "files": files}
-    if diff["committed"]:
+    if needs_commit:
         err = _slack_atomic(target, _slack_yaml_text(new_c))
-        if err: return {"err": err, "files": files}
-        sha, err = _slack_land(wt, SLACK_YAML_REL, "Save the Communication Slack file")
-        if err: return {"err": err, "files": files}
+        if err: return {"err": f"{err}; the local file was written", "diff": diff, "files": files}
+        sha, err = _slack_land(wt, SLACK_YAML_REL, "Save the Communication Slack file", base=base)
+        if err: return {"err": err, "diff": diff, "files": files, "local_applied": True}
         out["sha"] = sha
-        _slack_record(target, sha)
+        warn = _slack_record(target, sha)
+    else:
+        warn = _slack_record(target, None, committed=False)   # a local-only save keeps the last landed sha and its time
+    if warn: out["warn"] = f"the save state was not recorded in the registry: {warn}"
     try:
         out["documents"] = {"committed": yaml.safe_load(target.read_text()) if target.exists() else {},
                             "local": yaml.safe_load(pathlib.Path(local).read_text())}
