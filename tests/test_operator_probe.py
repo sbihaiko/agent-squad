@@ -110,10 +110,25 @@ def test_the_profile_grants_the_cli_background_service_its_runtime():
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
                                   "/work/state/inboxes/dm.jsonl")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
-    assert '(literal "/dev/null")' in write
+    assert f'(literal "{os.path.realpath(os.devnull)}")' in write
     assert f'(subpath "{operators.daemon_root()}")' in write
     assert operators.daemon_root() == f"/private/tmp/cc-daemon-{os.getuid()}"
     assert f'(allow network-outbound (remote unix-socket (subpath "{operators.daemon_root()}")))' in text.splitlines()
+
+
+def test_the_profile_writes_the_resolved_device_path(tmp_path, monkeypatch):
+    """#2768: the write grant must name the device path the kernel resolves, never a symlink spelling that never
+    appears at open time. `os.devnull` is resolved the way `daemon_root()` resolves `/tmp`."""
+    operators = load("operators")
+    target = tmp_path / "real-dev-null"
+    target.write_text("")
+    link = tmp_path / "dev-null-link"
+    link.symlink_to(target)
+    monkeypatch.setattr(operators.os, "devnull", str(link))
+    text = operators.profile_text("/w/state/outboxes/dm.jsonl", "/w/state/inboxes", "/w/state/inboxes/dm.jsonl")
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(literal "{os.path.realpath(str(link))}")' in write, write
+    assert f'(literal "{target}")' in write, write
 
 
 def test_a_bg_session_that_cannot_start_fails_the_probe(tmp_path, monkeypatch):

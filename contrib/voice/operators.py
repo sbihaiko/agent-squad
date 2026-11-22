@@ -189,11 +189,15 @@ def profile_text(outbox, inboxes, own_inbox):
     """
     home = os.path.realpath(os.path.expanduser("~"))
     daemon = daemon_root()
+    # The device path the kernel opens is the resolved one, as `/tmp` is; its symlink spelling is kept too, in case the
+    # CLI names that spelling. A path that resolves to itself is emitted once.
+    devnull = os.path.realpath(os.devnull)
+    devices = " ".join(f'(literal "{path}")' for path in dict.fromkeys((os.devnull, devnull)))
     return "\n".join([
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
-        f'(allow file-write* (literal "/dev/null") (literal "{outbox}") (subpath "{home}/.claude") '
+        f'(allow file-write* {devices} (literal "{outbox}") (subpath "{home}/.claude") '
         f'(literal "{home}/.claude.json") (subpath "{daemon}"))',
         f'(deny file-read* (subpath "{inboxes}"))',
         f'(allow file-read* (literal "{own_inbox}"))',
