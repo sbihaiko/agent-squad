@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1301,3 +1302,233 @@ def test_a_second_start_on_one_state_stands_aside_before_the_keychain(tmp_path, 
     assert code != 0
     assert reads == [], "a second daemon read the Keychain before it proved it was the only one"
     assert "another daemon holds" in err.getvalue()
+
+
+# --- the project Slack file at the dev tip (#2685, SPEC #2682 story 43)
+
+SLACK_PATH = Path("docs") / "squad" / "slack.yaml"
+
+# One valid file in the format of #2683, written as text so the expectation never comes from the loader itself.
+SLACK_VALID = """\
+version: 1
+project:
+  language: en-US
+  persona: hal
+apps:
+  - id: hal9k
+    keychain: {bot: agent-squad-slack-bot, app: agent-squad-slack-app}
+personas:
+  - id: hal
+    name: HAL9K
+    voice: Kore
+    tone: "Calm and direct. Starts with the result."
+roles:
+  - id: manager
+    actions: [status, logs]
+workspaces:
+  - id: T0TEAM0001
+    label: team
+    class: owned
+    app: hal9k
+    channels:
+      - id: C0PROJ0001
+        name: proj-acme-app
+        mode: listen+speak
+        language: pt-BR
+        roles: [manager]
+"""
+
+# The same file with one broken key: the voice is not a Gemini voice.
+SLACK_BAD_VOICE = SLACK_VALID.replace("voice: Kore", "voice: NotAVoice")
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def git_project(tmp_path, text, name="acme-app"):
+    """A project checkout whose `origin/dev` holds one commit with the given Slack file; returns it and the commit sha."""
+    repo = tmp_path / name
+    (repo / SLACK_PATH.parent).mkdir(parents=True)
+    git(repo, "init", "-q", "-b", "dev")
+    git(repo, "config", "user.email", "t@t")
+    git(repo, "config", "user.name", "t")
+    git(repo, "config", "maintenance.auto", "false")
+    commit(repo, text)
+    return repo
+
+
+def commit(repo, text):
+    """Write the Slack file, commit it on dev, and move the checkout's `origin/dev` tip to the new commit."""
+    (repo / SLACK_PATH).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "slack")
+    sha = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-ref", "refs/remotes/origin/dev", sha)
+    return sha
+
+
+def revision_daemon(tmp_path, client=None, log=None):
+    """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives."""
+    mod = voiced()
+    lines = log if log is not None else []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lines.append if isinstance(lines, list) else lines, client=client)
+    return mod, daemon, lines
+
+
+def project(repo, local=None):
+    return {"repo": "acme/app", "checkout": str(repo), "local": local}
+
+
+def test_voiced_reads_a_projects_slack_file_from_its_dev_tip(tmp_path):
+    """Rule (1) and (7): the committed file comes from git's own object store at the dev tip, and its revision is logged."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, lines = revision_daemon(tmp_path)
+
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == sha
+    assert active["revision"]["project"]["language"] == "en-US"
+    assert any("acme/app" in line and sha[:12] in line for line in lines), lines
+
+
+def test_an_uncommitted_edit_never_changes_the_active_revision(tmp_path):
+    """Story 43: an edit in progress in the working tree is not the dev tip, so it never reaches a live channel."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    (repo / SLACK_PATH).write_text(SLACK_BAD_VOICE)     # uncommitted: the tip does not move
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == sha
+
+
+def test_a_valid_revision_replaces_the_active_one_when_the_dev_tip_moves(tmp_path):
+    """Rule (3) and rule (6): a moved tip is read again, and a valid revision becomes the active one."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    _, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert moved != first
+    assert active["sha"] == moved
+    assert active["revision"]["project"]["language"] == "es-ES"
+
+
+def test_a_tip_that_did_not_move_is_not_read_again(tmp_path):
+    """Rule (6): a second refresh over an unchanged tip adds no revision read and no line."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    _, daemon, lines = revision_daemon(tmp_path)
+
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len([line for line in lines if "slack.yaml" in line]) == 1, lines
+
+
+def test_an_invalid_revision_keeps_the_previous_one_and_warns_the_owner_by_key(tmp_path):
+    """Rules (4) and (5): the key that fails is named in one DM to the owner, and the old revision stays active."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    commit(repo, SLACK_BAD_VOICE)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == first
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == OWNER
+    assert "personas[0].voice" in posts[0]["text"]
+    assert "acme/app" in posts[0]["text"]
+
+
+def test_a_revision_is_validated_together_with_the_local_file(tmp_path):
+    """Rule (2): a defect in the local file refuses the revision too, and the notice names that file and its key."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme-app.slack.local.yaml"
+    local.write_text("version: 1\nworkspaces:\n  - id: T0CLIENT01\n    label: xoxb-token-here\n")
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    assert daemon.state.active_revision("acme/app") is None
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme-app.slack.local.yaml" in posts[0]["text"]
+    assert "workspaces[0].label" in posts[0]["text"]
+
+
+def test_an_unreadable_dev_tip_never_kills_the_daemon_and_warns_the_owner(tmp_path):
+    """Rule (4): an incompatible or unreadable revision keeps the previous one active and never stops the daemon."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    git(repo, "update-ref", "-d", "refs/remotes/origin/dev")     # the tip is now unreadable
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == first
+    assert len(client.posts()) == 1
+    assert "acme/app" in client.posts()[0]["text"]
+
+
+def test_a_failed_active_revision_write_leaves_the_previous_file_whole(tmp_path, monkeypatch):
+    """Rule (8), ADR-0030: a write that dies halfway leaves the previous revision on disk, never half a new one."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    mod, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+
+    def half_written(obj, f, **kw):
+        f.write('{"repo": "acme/app", "sha": "')
+        f.flush()
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(mod.json, "dump", half_written)
+    daemon.refresh_slack(projects=[project(repo)])
+    monkeypatch.undo()
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == first != moved
+    assert active["revision"]["project"]["language"] == "en-US"
+
+
+def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_tip(tmp_path, monkeypatch):
+    """Rule (1): the hub profile is resolved to the repository, its checkout, and the local file beside its profile."""
+    mod = voiced()
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    (profiles / "acme-app.slack.local.yaml").write_text("version: 1\n")
+    script = tmp_path / "address.sh"
+    script.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        '  --list) printf "alpha\\tAcme/My.App\\n" ;;\n'
+        f'  alpha) printf "SG_REPO=Acme/My.App\\nSG_OWNER=Acme\\nSG_PROJECT=acme-app\\n'
+        f'SG_CHECKOUT={tmp_path}\\n" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("SG_PROFILES_DIR", str(profiles))
+
+    got = mod.hub_projects(script=str(script))
+
+    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path), "local": str(profiles / "acme-app.slack.local.yaml")}]
+    assert mod.hub_repos(script=str(script)) == ["Acme/My.App"]

@@ -74,10 +74,15 @@ import urllib.request
 import xml.sax.saxutils
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 import channels  # noqa: E402  the one Slack call path, so this daemon keeps no second copy of it
 import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
+
+from squad import slackpolicy  # noqa: E402  the one home of the Slack file rules (ADR-0177)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
@@ -90,6 +95,8 @@ AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
 CHUNK = 1 << 16
+DEV_REF = "refs/remotes/origin/dev"   # the tip a project's Slack file is read from, never the working tree
+CONFIG_POLL = 60.0                    # how long a moved dev tip waits for its revalidation
 VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
@@ -166,11 +173,11 @@ def context_of(text):
     return ctx
 
 
-def hub_repos(script=None):
-    """Every repository the hub lists: the profile names `address.sh --list` prints, each resolved to its SG_REPO.
+def hub_projects(script=None):
+    """Every project the hub lists: its `SG_REPO`, the checkout its dev tip is read from, and its local Slack file.
 
     The seam is the hub's own (ADR-0138), so a project added to the hub needs no second list beside it. A seam that
-    refuses or a profile that names no repository contributes nothing, and the daemon keeps the channels it already has.
+    refuses or a profile that names no repository contributes nothing, and the daemon keeps the revisions it holds.
     """
     script = script or ADDRESS
     try:
@@ -178,16 +185,59 @@ def hub_repos(script=None):
         slugs = [ln.split("\t")[0].strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
     except (OSError, subprocess.SubprocessError):
         return []
-    repos = []
+    profiles = os.environ.get("SG_PROFILES_DIR") or os.path.abspath(
+        os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
+    found = []
     for slug in slugs:
         try:
             p = subprocess.run(["bash", script, slug], capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             continue
-        repo = (context_of(p.stdout).get("SG_REPO") or "").strip()
-        if repo and repo not in repos:
-            repos.append(repo)
-    return repos
+        ctx = context_of(p.stdout)
+        repo = (ctx.get("SG_REPO") or "").strip()
+        if not repo or any(entry["repo"] == repo for entry in found):
+            continue
+        name = (ctx.get("SG_PROJECT") or "").strip() or repo.rsplit("/", 1)[-1]
+        local = slackpolicy.local_path(profiles, name)
+        found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(),
+                      "local": str(local) if local else ""})
+    return found
+
+
+def hub_repos(script=None):
+    """Every repository the hub lists: the `SG_REPO` of each project `hub_projects` names."""
+    return [entry["repo"] for entry in hub_projects(script)]
+
+
+class TipUnreadable(Exception):
+    """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
+
+
+def git_output(checkout, *args):
+    """One git read in a project's checkout, or None when git refuses: a broken checkout is a notice, never a dead daemon."""
+    if not checkout:
+        return None
+    try:
+        done = subprocess.run(["git", "-C", checkout, *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def dev_tip(checkout):
+    """The `(sha, text)` of a project's committed Slack file at its dev tip, or `TipUnreadable`.
+
+    The tip is read from git's object store, never from the working tree, so an edit in progress in a checkout never
+    becomes the active revision (#2685).
+    """
+    sha = (git_output(checkout, "rev-parse", "--verify", DEV_REF) or "").strip()
+    if not sha:
+        raise TipUnreadable(f"cannot read the dev tip {DEV_REF} of the checkout {checkout or '(none named)'}")
+    name = slackpolicy.COMMITTED.as_posix()
+    text = git_output(checkout, "show", f"{sha}:{name}")
+    if text is None:
+        raise TipUnreadable(f"the dev tip {sha[:12]} holds no {name}")
+    return sha, text
 
 
 class SlackClient:
@@ -241,6 +291,7 @@ class State:
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
         self.release_events_path = os.path.join(directory, releases.RECORD)
+        self.slack_dir = os.path.join(directory, "slack")
         self._seen = None
         self._channels = None
         self._registry_read = False
@@ -259,6 +310,32 @@ class State:
     def outbox_path(self):
         """The DM's outbox: the file the owner's session appends its DM answers to."""
         return self.outbox_for(DM)
+
+    def slack_path(self, repo):
+        """The file one project's active Slack revision lives in, named by the repository it belongs to."""
+        leaf = re.sub(r"[^A-Za-z0-9_.-]", "-", (repo or "").strip()) or "project"
+        return os.path.join(self.slack_dir, leaf + ".json")
+
+    def active_revision(self, repo):
+        """The Slack revision this daemon accepted for one project, or None. The file survives a restart, so a refused
+        revision keeps the previous one active across one (#2685)."""
+        try:
+            with open(self.slack_path(repo), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data.get("sha") else None
+
+    def save_active_revision(self, repo, record):
+        """The active revision as one atomic write (ADR-0030): a crash leaves the previous file, never half of a new one."""
+        os.makedirs(self.slack_dir, exist_ok=True)
+        path = self.slack_path(repo)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(record, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
 
     def release_events(self):
         """Every release event the promotion pass or a project emitted, oldest first (#2702).
@@ -721,7 +798,7 @@ class Daemon:
     """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
-                 synthesizer=None, uploader=None):
+                 synthesizer=None, uploader=None, configs=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
@@ -729,9 +806,110 @@ class Daemon:
         self.log = log or (lambda line: print(line, file=sys.stderr))
         self.client = client
         self.projects = projects
+        self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+
+    def refresh_slack(self, projects=None):
+        """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
+
+        A tip that did not move is not read again. A valid revision replaces the active one. A revision that breaks a
+        rule, or a tip that cannot be read, keeps the previous revision active, so an invalid edit never changes a live
+        channel. The owner gets one DM naming the failing key, and every write is atomic (ADR-0030).
+        """
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        local_docs, local_defects = self.local_documents(projects)
+        results = []
+        for entry in projects:
+            repo = (entry.get("repo") or "").strip()
+            if not repo:
+                continue
+            results.append(self.refresh_one(repo, entry, local_docs, local_defects))
+        return results
+
+    def local_documents(self, projects):
+        """Each project's local Slack file read once: `(file name, document)` by repository, and the defects of reading it.
+
+        The local file stays outside the repository, so its defect is one that names the file a person edits. A missing
+        local file is no defect, and the committed revision is validated without it.
+        """
+        docs, defects = {}, {}
+        for entry in projects:
+            repo = (entry.get("repo") or "").strip()
+            path = (entry.get("local") or "").strip()
+            if not repo or not path:
+                continue
+            out = []
+            try:
+                with open(path, encoding="utf-8") as f:
+                    text = f.read()
+            except FileNotFoundError:
+                continue
+            except OSError as x:
+                out.append(slackpolicy.Defect(os.path.basename(path), "(root)",
+                                              f"cannot read the file: {x.strerror or x}"))
+                docs[repo] = (os.path.basename(path), {})
+            else:
+                docs[repo] = (os.path.basename(path), slackpolicy.read_document(text, os.path.basename(path), out) or {})
+            defects[repo] = out
+        return docs, defects
+
+    def refresh_one(self, repo, entry, local_docs, local_defects):
+        """One project's revision: read, validate with its local file, then save it or keep the previous one."""
+        active = self.state.active_revision(repo)
+        try:
+            sha, text = dev_tip((entry.get("checkout") or "").strip())
+        except TipUnreadable as x:
+            return self.refuse_revision(repo, active, [str(x)])
+        if active is not None and active.get("sha") == sha:
+            return {"repo": repo, "sha": sha, "changed": False, "active": active}
+        out = []
+        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
+        name, local = local_docs.get(repo, (None, None))
+        out.extend(local_defects.get(repo) or [])
+        others = [(other_name, other_doc) for other_repo, (other_name, other_doc) in local_docs.items()
+                  if other_repo != repo]
+        if doc is not None:
+            out.extend(slackpolicy.validate(doc, local or {}, others, local_name=name or slackpolicy.LOCAL_SUFFIX))
+        if out:
+            return self.refuse_revision(repo, active, [str(defect) for defect in out])
+        record = {"repo": repo, "sha": sha, "revision": doc}
+        try:
+            self.state.save_active_revision(repo, record)
+        except OSError as x:
+            self.log(f"voiced: {repo}: cannot write the Slack revision: {type(x).__name__}: {x.strerror or x}")
+            return {"repo": repo, "sha": sha, "changed": False, "active": active}
+        self.log(f"voiced: {repo}: slack.yaml revision {sha[:12]} is active")
+        return {"repo": repo, "sha": sha, "changed": True, "active": record}
+
+    def refuse_revision(self, repo, active, reasons):
+        """Keep the active revision, log each reason, and send the owner one notice that names the failing key."""
+        kept = (active or {}).get("sha")
+        stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
+        self.log(f"voiced: {repo}: slack.yaml refused; {stays}")
+        for reason in reasons:
+            self.log(f"voiced: {repo}: {reason}")
+        self.notice_owner(repo, reasons, active)
+        return {"repo": repo, "changed": False, "active": active, "defects": reasons}
+
+    def notice_owner(self, repo, reasons, active):
+        """One DM to the owner about a refused revision; a refused DM is a log line, never a lost notice."""
+        if self.client is None or not self.owner:
+            return False
+        kept = (active or {}).get("sha")
+        stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
+        text = f"voiced: I refused the slack.yaml of {repo} at its dev tip, so {stays}.\n" + "\n".join(reasons)
+        try:
+            got = self.client.api("chat.postMessage", {"channel": self.owner, "text": text}, post=True)
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops answering
+            self.log(f"voiced: {repo}: the Slack notice was not sent: {type(x).__name__}")
+            return False
+        if not got.get("ok"):
+            self.log(f"voiced: {repo}: the Slack notice was refused: {got.get('error')}")
+            return False
+        return True
 
     def sync_projects(self):
         """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are.
@@ -1066,18 +1244,34 @@ async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
         await asyncio.sleep(interval)
 
 
-async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
-    """Hear Slack and answer the outboxes at once: the connection loop runs beside the outbox watcher.
+async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
+    """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
-    The watcher is one task of the same loop, so an answer the session appends is posted while the socket is open and
-    while it reconnects. Both stop together, and the watcher is cancelled with the connection loop.
+    A refused revision keeps the active one and is a log line, never a watcher that stops reading.
     """
-    watcher = asyncio.create_task(watch_outboxes(daemon, stop))
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.refresh_slack)
+        except Exception as x:      # noqa: BLE001 - one project's failure is a log line, never a daemon that stops
+            daemon.log(f"voiced: Slack file refresh failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
+async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
+    """Hear Slack and answer the outboxes at once: the connection loop runs beside two watchers.
+
+    The outbox watcher and the Slack-file watcher are tasks of the same loop, so an answer the session appends is posted
+    while the socket is open and a moved dev tip is read while the daemon answers. All stop together, and the watchers
+    are cancelled with the connection loop.
+    """
+    outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
+    configs = asyncio.create_task(watch_configs(daemon, stop))
     try:
         await hear(daemon, app_token, connect=connect, open_connection=open_connection, stop=stop)
     finally:
-        watcher.cancel()
-        await asyncio.gather(watcher, return_exceptions=True)
+        for task in (outboxes, configs):
+            task.cancel()
+        await asyncio.gather(outboxes, configs, return_exceptions=True)
 
 
 async def hear(daemon, app_token, connect=None, open_connection=None, stop=None):
@@ -1188,7 +1382,7 @@ def main(argv):
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
-                    client=SlackClient(bot), projects=hub_repos,
+                    client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
                     synthesizer=lambda script: spoken_clip(key, script),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title))
     try:
