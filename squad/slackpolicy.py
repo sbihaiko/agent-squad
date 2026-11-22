@@ -442,6 +442,12 @@ def _role_actions(committed, role):
     return ()
 
 
+def can_speak(channel):
+    """True when the channel's `mode` lets the agent post. One mode name answers every writer: the reply path and the
+    announcement writer both read it here, so a new writable mode is added in one place."""
+    return str(channel.get("mode") or "listen") == "listen+speak"
+
+
 def _reply_path(class_, channel, user):
     """The reply path: `bot` in an `owned` channel, a `draft` by default in a `guest` channel, `send` only with an
     explicit `speak: send` and a `send_grant`, and none in a `listen` channel.
@@ -449,7 +455,7 @@ def _reply_path(class_, channel, user):
     A Slack Connect channel (`connect: true`) never gets a direct send, because `slack_send_message` does not post there.
     A reply addressed to a person in `draft_for` already leaves as a draft, even with a grant, so the owner reviews what
     goes to that person."""
-    if str(channel.get("mode") or "listen") != "listen+speak":
+    if not can_speak(channel):
         return None
     if str(class_) != "guest":
         return "bot"

@@ -43,18 +43,27 @@ LOCAL = {
 }
 
 
+def _put(doc, parts, value):
+    """Set one nested path of a document: a number indexes a list, any other part indexes a mapping. The last part is
+    the key that takes the value, and a single part replaces a top-level section."""
+    node = doc
+    for part in parts[:-1]:
+        node = node[int(part)] if isinstance(node, list) else node[part]
+    last = parts[-1]
+    if isinstance(node, list):
+        node[int(last)] = value
+    else:
+        node[last] = value
+
+
 def files(**over):
-    """A valid committed and local pair; a keyword names a key path of one document, indices as numbers."""
+    """A valid committed and local pair; a keyword names a `__`-separated path of one document, a number indexing a
+    list and any other part indexing a mapping, so `committed__workspaces__0__channels__0__templates` sets a nested map."""
     committed, local = copy.deepcopy(COMMITTED), copy.deepcopy(LOCAL)
     for name, value in over.items():
         target, _, rest = name.partition("__")
         doc = committed if target == "committed" else local
-        head, _, tail = rest.partition("__")
-        if tail:
-            a, _, b = tail.partition("__")
-            doc[head][int(a)][b] = value
-        else:
-            doc[head] = value
+        _put(doc, rest.split("__"), value)
     return committed, local
 
 
@@ -127,6 +136,32 @@ def test_a_channel_override_wins_over_the_event_template():
     assert body(got[0]) == "No ar em STG (a1b2c3 Merge the fix, d4e5f6 Land the doc)."
 
 
+def test_a_numeric_override_key_still_wins():
+    record = {"id": "2702", "items": ["x"]}
+    got = drafts(record, committed__events=[{"id": "2702", "template": "Event {items}."}],
+                 local__workspaces__0__channels=[{"id": GENERAL, "mode": "listen+speak", "speak": "draft",
+                                                  "announce": ["2702"], "templates": {2702: "Override {items}."}}])
+    assert body(got[0]) == "Override x."
+
+
+def test_a_placeholder_the_record_does_not_carry_stays_as_written():
+    record = {"id": "stg_release", "items": ["a"]}
+    got = drafts(record, committed__events=[{"id": "stg_release", "template": "Key {key}: {items}."}])
+    assert body(got[0]) == "Key {key}: a.", "a placeholder the record omits stays as written"
+
+
+def test_a_committed_guest_channel_with_a_local_override_is_announced_once_with_the_override():
+    committed_ws = [{"id": "T0CLIENT01", "label": "client-a", "class": "guest", "language": "en-US",
+                     "persona": "iara", "channels": [
+                         {"id": GENERAL, "name": "general", "mode": "listen+speak", "speak": "draft",
+                          "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "class": "guest",
+                 "channels": [{"id": GENERAL, "templates": {"stg_release": "Local: {items}."}}]}]
+    got = drafts(STG, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    assert [d.channel for d in got] == [GENERAL], "one channel id yields one draft"
+    assert body(got[0]) == "Local: a1b2c3 Merge the fix, d4e5f6 Land the doc.", "the local override wins"
+
+
 # --- 3. the draft carries the mark ----------------------------------------------------------------------------------
 
 def test_the_draft_carries_the_persona_mark():
@@ -161,8 +196,16 @@ def test_the_draft_goes_through_the_write_hook_and_the_connector_gets_the_decide
     connector = FakeConnector()
     out = deliver(d, connector)
     assert out.get("permissionDecision") == "allow", out
-    assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "text": d.text})], connector.calls
-    assert "thread_ts" not in connector.calls[0][1], "an announcement is a channel post, not a reply in a thread"
+    assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "thread_ts": "", "text": d.text})], connector.calls
+    assert connector.calls[0][1]["thread_ts"] == "", "an announcement is a channel post, not a reply in a thread"
+
+
+def test_the_hook_denies_a_thread_on_a_channel_post():
+    d = drafts(STG)[0]
+    hook = W.pre_write_tool_use(d)
+    answer = asyncio.run(hook({"tool_name": f"mcp__slack__slack_{W.DRAFT_WORD}",
+                               "tool_input": {"channel": GENERAL, "thread_ts": "123.45", "text": d.text}}, "t1", None))
+    assert (answer.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny", answer
 
 
 def test_the_hook_denies_an_announcement_the_connector_tries_to_redirect():
@@ -191,3 +234,18 @@ def test_a_fake_connector_receives_each_rule():
         (W.DRAFT_WORD, SUPPORT, "*Iara's Msg*\n_Publicado em PROD: 99aa Ship the release._"),
     ], calls
     assert all(channel != QUIET for _, channel, _ in calls), "a channel that does not subscribe gets no call"
+
+
+def test_a_fake_connector_receives_a_committed_channel_and_its_local_override():
+    committed_ws = [{"id": "T0CLIENT01", "label": "client-a", "class": "guest", "language": "en-US",
+                     "persona": "iara", "channels": [
+                         {"id": GENERAL, "name": "general", "mode": "listen+speak", "speak": "draft",
+                          "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "class": "guest",
+                 "channels": [{"id": GENERAL, "templates": {"stg_release": "Local: {items}."}}]}]
+    committed, local = files(committed__workspaces=committed_ws, local__workspaces=local_ws)
+    connector = FakeConnector()
+    for draft in A.announcements(committed, local, STG):
+        deliver(draft, connector)
+    calls = [(tool, args["channel"], args["text"]) for tool, args in connector.calls]
+    assert calls == [(W.DRAFT_WORD, GENERAL, "*Iara's Msg*\n_Local: a1b2c3 Merge the fix, d4e5f6 Land the doc._")], calls
