@@ -1826,3 +1826,188 @@ def test_two_projects_on_one_app_with_distinct_channels_are_not_refused(tmp_path
 
     assert daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}]) == []
     assert client.posts() == []
+
+
+# --- the refusal holds the shared channel, and each app keeps its own token (#2686 review)
+
+# A second project revision on a different app id, so two sockets and two bot tokens are observable as data.
+SLACK_SECOND_APP = {
+    "version": 1,
+    "apps": [{"id": "astra", "keychain": {"bot": "astra-slack-bot", "app": "astra-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0002", "label": "other", "class": "owned", "app": "astra",
+        "channels": [{"id": "C0OTHER001", "name": "proj-acme-other", "mode": "listen+speak"}],
+    }],
+}
+
+# One revision two projects both claim.
+SLACK_SHARED = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0SHARED01", "name": "shared"}],
+    }],
+}
+
+
+def shared_revisions(daemon):
+    """Two projects whose active revisions claim one channel id."""
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_SHARED})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": SLACK_SHARED})
+
+
+def test_a_refused_channel_holds_its_outbox_line_and_never_posts_it(tmp_path):
+    """Criterion 4: the refusal drops the shared channel from routing, so no answer reaches it."""
+    mod = voiced()
+    client = FakeClient()
+    log = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client)
+    shared_revisions(daemon)
+    assert daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}]) == [
+        "voiced: acme/app and acme/other claim the channel C0SHARED01; refused"]
+
+    append_outbox(daemon.state.outbox_path, {"text": "this answer must stay held", "channel": "C0SHARED01"})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [p for p in client.posts() if p.get("channel") == "C0SHARED01"] == [], \
+        "an answer was posted to a channel two projects claim"
+    assert any("held" in line and "C0SHARED01" in line for line in log), log
+
+
+def test_an_event_on_a_refused_channel_never_reaches_a_project_inbox(tmp_path):
+    """Criterion 4: an inbound message on the shared channel is data, never one project's inbox line."""
+    mod = voiced()
+    client = FakeClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    shared_revisions(daemon)
+    daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+    daemon.state.save_channels({"acme/app": {"name": "shared", "id": "C0SHARED01"}})
+
+    outcome = daemon.handle(message_event(text="who owns this?", channel="C0SHARED01"))
+
+    assert outcome == "other"
+    assert lines(daemon.state.inbox_for("C0SHARED01")) == []
+    assert [r for r in lines(daemon.state.other_path) if r.get("channel") == "C0SHARED01"], "the event was not recorded"
+
+
+def test_a_channel_conflict_is_refused_before_any_revision_is_active(tmp_path):
+    """Criterion 4 at startup: the dev tips alone prove the conflict, with no active revision saved yet."""
+    mod = voiced()
+    client = FakeClient()
+    first = git_project(tmp_path, SLACK_VALID, name="acme-app")
+    second = git_project(tmp_path, SLACK_VALID, name="acme-other")
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+
+    got = daemon.refuse_channel_claims([{"repo": "acme/app", "checkout": str(first)},
+                                        {"repo": "acme/other", "checkout": str(second)}])
+
+    assert got == ["voiced: acme/app and acme/other claim the channel C0PROJ0001; refused"]
+    assert daemon.state.active_revision("acme/app") is None
+    assert len(client.posts()) == 1 and "C0PROJ0001" in client.posts()[0]["text"]
+
+
+def test_two_apps_open_two_sockets_each_with_its_own_app_token(tmp_path, monkeypatch):
+    """Criterion 1 and 2: one socket per distinct app, opened with that app's own token."""
+    mod = voiced()
+    specs = mod.app_keychains({"acme/app": SLACK_APP_A, "acme/other": SLACK_SECOND_APP})
+    assert specs == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"},
+                     "astra": {"bot": "astra-slack-bot", "app": "astra-slack-app"}}
+    opened = []
+
+    def api(token, method, params=None, post=False):
+        opened.append((token, method))
+        return {"url": "wss://fake"}
+
+    monkeypatch.setattr(mod.channels, "api", api)
+    stop = asyncio.Event()
+    sockets = []
+
+    def connect(url, **kw):
+        socket = FakeWebSocket([], stop)
+        sockets.append(socket)
+        return socket
+
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"", log=lambda line: None)
+    app_tokens = {"hal9k": "xapp-hal", "astra": "xapp-astra"}
+    asyncio.run(mod.serve(daemon, app_tokens, connect=connect, stop=stop))
+
+    assert len(sockets) == 2, "two distinct apps did not open two sockets"
+    assert sorted(token for token, method in opened if method == "apps.connections.open") == \
+        ["xapp-astra", "xapp-hal"], opened
+
+
+def test_each_app_serves_its_own_channels_with_its_own_bot_token(tmp_path):
+    """Criterion 2 and 3: a channel is answered, downloaded and uploaded with its own app's bot token."""
+    mod = voiced()
+    hal, astra = FakeClient(), FakeClient()
+    uploads = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"default",
+                        log=lambda line: None, clients={"hal9k": hal, "astra": astra},
+                        bot_tokens={"hal9k": "xoxb-hal", "astra": "xoxb-astra"},
+                        downloaders={"hal9k": lambda url: b"hal", "astra": lambda url: b"astra"},
+                        uploaders={"hal9k": lambda path, cid, ts, title: uploads.append(("hal", cid)) or ("F1", None),
+                                   "astra": lambda path, cid, ts, title: uploads.append(("astra", cid)) or ("F2", None)})
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_APP_A})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12,
+                                                     "revision": SLACK_SECOND_APP})
+    daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+
+    assert daemon.bot_for("C0PROJ0001") == "xoxb-hal"
+    assert daemon.bot_for("C0OTHER001") == "xoxb-astra"
+    assert daemon.download_clip("C0OTHER001", "https://files/x") == b"astra"
+
+    daemon.post_text("C0OTHER001", None, "an answer for the second app")
+    assert [p["text"] for p in astra.posts()] == ["an answer for the second app"]
+    assert hal.posts() == []
+
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF")
+    assert daemon.post_clip(str(clip), "C0OTHER001", None, "the answer")
+    assert uploads == [("astra", "C0OTHER001")]
+
+
+def test_a_conflict_notice_is_retried_and_a_returning_conflict_is_announced_again(tmp_path):
+    """Criterion 5: a refused DM is retried, and a conflict resolved then reintroduced warns again."""
+    mod = voiced()
+
+    class FlakyClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.refuse_next = 1
+
+        def api(self, method, params=None, post=False):
+            if method == "chat.postMessage" and self.refuse_next:
+                self.refuse_next -= 1
+                self.calls.append((method, dict(params or {}), post))
+                return {"ok": False, "error": "ratelimited"}
+            return super().api(method, params, post)
+
+    client = FlakyClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    shared_revisions(daemon)
+    projects = [{"repo": "acme/app"}, {"repo": "acme/other"}]
+
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 1 and "C0SHARED01" in client.posts()[0]["text"]
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 2, "a refused conflict DM was not retried on the next poll"
+
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "3" * 12,
+                                                     "revision": SLACK_SECOND_APP})
+    assert daemon.refuse_channel_claims(projects) == []
+
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "4" * 12,
+                                                     "revision": SLACK_SHARED})
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 3, "a conflict that returned after being resolved was not announced again"

@@ -291,6 +291,36 @@ def project_documents(state, projects):
     return docs
 
 
+def effective_documents(state, projects, read_start=None):
+    """Each project's active revision, or its dev-tip document while it has none: repository -> document.
+
+    The dev tip answers on a fresh start, before the first revision is promoted, so a channel claim is refused from
+    the first poll. A tip is read only for a project with no active revision, so a steady daemon reads no extra tip.
+    """
+    active = project_documents(state, projects)
+    missing = []
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if repo and repo not in active:
+            missing.append(entry)
+    docs = dict((read_start or project_documents_at_start)(missing))
+    docs.update(active)
+    return docs
+
+
+def channel_apps(documents):
+    """channel id -> the app id its workspace names, read from the same documents the revision check reads."""
+    apps = {}
+    for repo in sorted(documents or {}):
+        for ws in _rows((documents[repo] or {}).get("workspaces")):
+            app_id = str(ws.get("app") or "").strip()
+            for channel in _rows(ws.get("channels")):
+                cid = str(channel.get("id") or "").strip()
+                if cid and app_id:
+                    apps.setdefault(cid, app_id)
+    return apps
+
+
 def app_keychains(documents):
     """app id -> {"bot", "app"}: the Keychain entry names of each app an owned workspace names.
 
@@ -992,20 +1022,54 @@ class Daemon:
     """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
-                 synthesizer=None, uploader=None, configs=None):
+                 synthesizer=None, uploader=None, configs=None,
+                 clients=None, bot_tokens=None, downloaders=None, uploaders=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
         self.log = log or (lambda line: print(line, file=sys.stderr))
         self.client = client
+        # One Slack client, token and clip path per app id, so two projects that name different apps never borrow each
+        # other's bot. A channel resolves its app from the active revisions; `client`, `downloader` and `uploader` are
+        # the fallback when the start named no app for it.
+        self.clients = clients or {}
+        self.bot_tokens = bot_tokens or {}
+        self.downloaders = downloaders or {}
+        self.uploaders = uploaders or {}
+        self.channel_apps = {}     # channel id -> app id, rebuilt from the documents each refusal pass reads
+        self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
         self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
-        self._channel_conflicts = set()   # each refused channel claim, so one conflict is not one DM per poll
+        self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
+        self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
+        self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
+
+    def app_of(self, channel):
+        """The app id that owns one channel, or None when no active document names it."""
+        return self.channel_apps.get((channel or "").strip())
+
+    def client_for(self, channel):
+        """The Slack client of the app that owns `channel`, else the daemon's one fallback client."""
+        return self.clients.get(self.app_of(channel)) or self.client
+
+    def bot_for(self, channel):
+        """The bot token of the app that owns `channel`, else the first app's token (the daemon's fallback)."""
+        app = self.app_of(channel)
+        if app in self.bot_tokens:
+            return self.bot_tokens[app]
+        return next(iter(self.bot_tokens.values()), None)
+
+    def download_clip(self, channel, url):
+        """One clip's bytes, fetched with the token of the app that serves its channel."""
+        app = self.app_of(channel)
+        if app in self.downloaders:
+            return self.downloaders[app](url)
+        return self.downloader(url)
 
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
@@ -1029,18 +1093,33 @@ class Daemon:
     def refuse_channel_claims(self, projects=None):
         """Refuse every channel id two projects claim: one line and one DM that name both projects and the id.
 
-        The claim is read across the projects' active revisions, so a file edit alone never widens one project's reach.
-        A conflict already told is not told again on the next poll.
+        The claim is read across each project's active revision, or its dev tip while it has none, so a file edit alone
+        never widens one project's reach and a fresh start refuses before any socket answers. A refused channel leaves
+        the effective routing for both projects, so no answer and no clip reaches it (criterion 4). A conflict already
+        told is not told again, and a DM Slack refuses is retried on the next poll; a conflict that is resolved and
+        later reintroduced is told again once.
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
-        lines = channel_claim_refusals(project_documents(self.state, projects))
+        documents = effective_documents(self.state, projects)
+        claims = channel_claims(documents)
+        lines = channel_claim_refusals(documents)
+        self.refused_channels = {cid: f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused"
+                                 for cid, repos in claims.items() if len(repos) > 1}
+        if not self.refused_channels:
+            self._held.clear()
+        self.channel_apps = channel_apps(documents)
+        current = set(lines)
+        self._channel_logged &= current
+        self._channel_conflicts &= current
         for line in lines:
+            if line not in self._channel_logged:
+                self._channel_logged.add(line)
+                self.log(line)
             if line in self._channel_conflicts:
                 continue
-            self._channel_conflicts.add(line)
-            self.log(line)
-            self.notice_channel_conflict(line)
+            if self.notice_channel_conflict(line):
+                self._channel_conflicts.add(line)
         return lines
 
     def notice_channel_conflict(self, line):
@@ -1204,12 +1283,15 @@ class Daemon:
 
     def answer(self, question, text):
         """Post one answer in the channel its question came from, threaded under it. True when Slack accepts it."""
-        if self.client is None or not question.get("channel"):
+        if not question.get("channel"):
+            return False
+        client = self.client_for(question.get("channel"))
+        if client is None:
             return False
         payload = {"channel": question["channel"], "text": text}
         if question.get("ts"):
             payload["thread_ts"] = question["ts"]
-        got = self.client.api("chat.postMessage", payload, post=True)
+        got = client.api("chat.postMessage", payload, post=True)
         if not got.get("ok"):
             self.log(f"voiced: answer refused: {got.get('error')}")
             return False
@@ -1245,12 +1327,13 @@ class Daemon:
 
     def post_text(self, channel, thread_ts, text):
         """Post the readable answer in its channel; True and its ts when Slack accepts it, so the clips answer it."""
-        if self.client is None:
+        client = self.client_for(channel)
+        if client is None:
             return False, None
         payload = {"channel": channel, "text": text}
         if thread_ts:
             payload["thread_ts"] = thread_ts
-        got = self.client.api("chat.postMessage", payload, post=True)
+        got = client.api("chat.postMessage", payload, post=True)
         if not got.get("ok"):
             self.log(f"voiced: answer refused: {got.get('error')}")
             return False, None
@@ -1265,12 +1348,20 @@ class Daemon:
             self.log(f"voiced: speech skipped: {type(x).__name__}")
             return None
 
+    def upload_for(self, channel):
+        """The clip uploader of the app that owns `channel`, else the daemon's one fallback uploader."""
+        app = self.app_of(channel)
+        if app in self.uploaders:
+            return self.uploaders[app]
+        return self.uploader
+
     def post_clip(self, path, channel, thread_ts, title):
         """Upload one spoken clip, then drop its temporary file; False when the upload was refused."""
+        uploader = self.upload_for(channel)
         try:
-            if self.uploader is None:
+            if uploader is None:
                 return False
-            fid, err = self.uploader(path, channel, thread_ts, title)
+            fid, err = uploader(path, channel, thread_ts, title)
             if not fid:
                 self.log(f"voiced: clip refused: {err}")
                 return False
@@ -1343,6 +1434,14 @@ class Daemon:
         count = 0
         for channel, path in self.outbox_sources():
             for record in read_lines(path):
+                cid = (record.get("channel") or channel or "").strip()
+                refusal = self.refused_channels.get(cid)
+                if refusal:      # a channel two projects claim is held, never posted, and is told once
+                    digest = outbox_digest(record)
+                    if digest not in self._held:
+                        self._held.add(digest)
+                        self.log(f"voiced: outbox line held: {refusal}")
+                    continue
                 digest = outbox_digest(record)
                 if digest in delivered:
                     continue
@@ -1384,6 +1483,13 @@ class Daemon:
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        refusal = self.refused_channels.get((event.get("channel") or "").strip())
+        if refusal:
+            # A channel two projects claim belongs to neither: its events are data, and no project owns the line.
+            record["text"] = (event.get("text") or "").strip()
+            record["error"] = refusal
+            self.state.append_other(record)
+            return "other"
         target = self.inbox_path_of(event)
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
@@ -1400,7 +1506,7 @@ class Daemon:
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
             try:
-                audio = self.downloader(url)
+                audio = self.download_clip(event.get("channel"), url)
                 if len(audio) > MAX_CLIP_BYTES:
                     raise ClipTooLarge(len(audio))
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
@@ -1657,14 +1763,24 @@ def main(argv):
     except keychain.SecretMissing as x:
         print(f"voiced: Keychain entry missing: {x}", file=sys.stderr)
         return 1
-    bot = next(iter(tokens.values()))["bot"]
+    bots = {app_id: entry["bot"] for app_id, entry in tokens.items()}
+    bot = next(iter(bots.values()))      # the fallback for a channel no active document maps to an app
     apps = {app_id: entry["app"] for app_id, entry in tokens.items()}
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
                     synthesizer=lambda script: spoken_clip(key, script),
-                    uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title))
+                    uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
+                    clients={app_id: SlackClient(entry) for app_id, entry in bots.items()},
+                    bot_tokens=bots,
+                    downloaders={app_id: (lambda url, token=entry: download(url, token))
+                                 for app_id, entry in bots.items()},
+                    uploaders={app_id: (lambda path, channel, thread_ts, title, token=entry:
+                                        upload_clip(token, path, channel, thread_ts, title))
+                               for app_id, entry in bots.items()})
+    # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
+    daemon.refuse_channel_claims(projects)
     try:
         asyncio.run(serve(daemon, apps))
     except KeyboardInterrupt:
