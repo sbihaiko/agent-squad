@@ -2117,30 +2117,49 @@ def slack_overview(committed=None, local=None):
 
 
 def _slack_reply_previews(P, committed, local):
-    """One row per channel: the four facts of its reply, resolved through the policy module. The mark is the policy
-    rule, and a channel with no persona carries empty fields, never another persona's name."""
+    """One row per effective channel: the four facts of its reply, resolved through the policy module. The local file
+    fills a channel the commit does not name, and a channel both files name is drawn once, the committed row winning as
+    it does at run time. The mark is the policy rule, and a channel with no persona carries empty fields, never another
+    persona's name."""
     committed, local = committed or {}, local or {}
+    order, groups = [], {}
+    for di, doc in enumerate((committed, local)):
+        for wi, ws in enumerate(P.rows(doc.get("workspaces"))):
+            wid = _slack_text(ws.get("id")) or f"\0{di}:{wi}"
+            if wid not in groups:
+                order.append(wid)
+                groups[wid] = {"ws": ws, "rows": []}   # the first document's workspace row: the commit when both name it
+            groups[wid]["rows"].extend((ci, ch) for ci, ch in enumerate(P.rows(ws.get("channels"))))
     out = []
-    for doc in (committed, local):
-        for ws in P.rows(doc.get("workspaces")):
-            label = _slack_text(ws.get("label") or ws.get("id"))
-            for ch in P.rows(ws.get("channels")):
-                language, persona = P.effective(committed, local, ws, ch)
-                name = _slack_text(ch.get("name") or ch.get("id"))
-                out.append({"channel": f"{label}/#{name}", "mark": P.mark(persona), "language": language,
-                            "tone": persona.tone if persona else "", "voice": persona.voice if persona else ""})
+    for wid in order:
+        ws = groups[wid]["ws"]
+        label = _slack_text(ws.get("label") or ws.get("id"))
+        seen = set()
+        for ci, ch in groups[wid]["rows"]:
+            cid = _slack_text(ch.get("id")) or f"\0{ci}"
+            if cid in seen:
+                continue
+            seen.add(cid)
+            language, persona = P.effective(committed, local, ws, ch)
+            name = _slack_text(ch.get("name") or ch.get("id"))
+            out.append({"channel": f"{label}/#{name}", "mark": P.mark(persona), "language": language,
+                        "tone": persona.tone if persona else "", "voice": persona.voice if persona else ""})
     return out
 
 
-def slack_preview(committed, local=None):
-    """The reply preview of the documents the view hands in, before the save: one row per channel with the mark, the
-    language, the tone and the voice. The policy module resolves them; the hub holds no copy of a rule (ADR-0177)."""
-    if not isinstance(committed, dict) or not isinstance(local, (dict, type(None))):
-        return {"err": "committed and local: each one mapping", "previews": []}
+def slack_preview(committed=None, local=None):
+    """The reply preview of the documents the view hands in, before the save: one row per effective channel with the
+    mark, the language, the tone and the voice. Either document may be absent, so a draft that carries only the local
+    overrides still previews; a value that is neither a mapping nor None is refused. The policy module resolves the
+    rows; the hub holds no copy of a rule (ADR-0177)."""
+    committed = {} if committed is None else committed
+    local = {} if local is None else local
+    if not isinstance(committed, dict) or not isinstance(local, dict):
+        return {"err": "committed and local: each one a mapping or none", "previews": []}
     try: P = slack_policy()
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "previews": []}
-    return {"err": None, "previews": _slack_reply_previews(P, committed, local or {})}
+    return {"err": None, "previews": _slack_reply_previews(P, committed, local)}
 
 
 # --- Settings > Communication, the persona sample (SPEC 2682 #2697). The sample button asks the hub for one voice and
@@ -2150,14 +2169,51 @@ def slack_preview(committed, local=None):
 SLACK_SAMPLES = "slack-samples"   # in the loop state directory, outside every repository
 SLACK_SAMPLE_TEXT = "This is how the persona sounds. Short sentences, no filler."
 SLACK_SAMPLE_TIMEOUT = 90
+SLACK_SAMPLE_LOCK_STALE = SLACK_SAMPLE_TIMEOUT + 30   # a lock older than this belongs to a killed request
 
 def slack_samples_dir():
     """The sample cache: one folder in the loop state directory, outside every repository."""
     return pathlib.Path(STATE) / SLACK_SAMPLES
 
 def slack_sample_key(voice, tone):
-    """The cache key of one voice and tone pair: a hash, so the file name is stable and carries no tone text."""
-    return hashlib.sha256(f"{voice}\0{tone}".encode()).hexdigest()[:32]
+    """The cache key of one voice and tone pair: a hash of the pair and the sample text, so a new script is a new key
+    and the file name is stable and carries no tone text."""
+    return hashlib.sha256(f"{voice}\0{tone}\0{SLACK_SAMPLE_TEXT}".encode()).hexdigest()[:32]
+
+def _slack_wav_ok(path):
+    """A cache hit needs a whole WAV: the RIFF/WAVE header and more than its twelve bytes. A cut file left by a killed
+    synthesis is no hit, so the next request makes the sample again."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+        return head[:4] == b"RIFF" and head[8:12] == b"WAVE" and pathlib.Path(path).stat().st_size > 12
+    except OSError:
+        return False
+
+def _slack_lock(path):
+    """One exclusive lock file per key: the request that creates it synthesizes, and the rest wait for its WAV. A lock
+    older than a synthesis plus a margin is stale, so a killed request never wedges its pair."""
+    for _ in range(2):
+        try:
+            return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                if time.time() - pathlib.Path(path).stat().st_mtime > SLACK_SAMPLE_LOCK_STALE:
+                    pathlib.Path(path).unlink(); continue
+            except OSError:
+                pass
+            return None
+        except OSError:
+            return None
+    return None
+
+def _slack_await_wav(path, seconds):
+    """Wait for another request's synthesis to land its WAV, and answer whether the file is now whole."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if _slack_wav_ok(path): return True
+        time.sleep(0.05)
+    return _slack_wav_ok(path)
 
 def _slack_tts_cli(voice, tone, out):
     """The real client: the vendored TTS script, found by name (ADR-0129), in its own process, so no key and no module
@@ -2179,7 +2235,8 @@ def _slack_tts_cli(voice, tone, out):
 def slack_sample(body, client=None):
     """POST /api/slack/sample: the WAV of one voice and tone pair, made once and kept in the cache. A body that names a
     voice outside the policy list, or a tone over its limit, is refused with a message that names the key and calls
-    nothing. The answer carries the audio as a data URL and states whether it came from the cache."""
+    nothing. One lock per pair makes exactly one synthesis under concurrent presses, the WAV lands whole by rename, and
+    a cut file is no hit. The answer carries the audio as a data URL and states whether it came from the cache."""
     if not isinstance(body, dict): return {"err": "bad request"}
     voice, tone = str(body.get("voice") or ""), str(body.get("tone") or "")
     try: P = slack_policy()
@@ -2187,13 +2244,38 @@ def slack_sample(body, client=None):
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     if voice not in P.GEMINI_VOICES: return {"err": f"personas[].voice: voice {voice!r} is not a Gemini voice"}
     if len(tone) > P.TONE_MAX: return {"err": f"personas[].tone: a tone holds at most {P.TONE_MAX} characters ({len(tone)} given)"}
-    path = slack_samples_dir() / f"{slack_sample_key(voice, tone)}.wav"
-    cached = path.is_file() and path.stat().st_size > 0
+    key = slack_sample_key(voice, tone)
+    d = slack_samples_dir()
+    path = d / f"{key}.wav"
+    cached = _slack_wav_ok(path)
     if not cached:
-        try: path.parent.mkdir(parents=True, exist_ok=True)
+        try: d.mkdir(parents=True, exist_ok=True)
         except OSError as e: return {"err": f"the sample cache could not be made: {e.strerror or e}"}
-        got, err = (client or _slack_tts_cli)(voice, tone, path)
-        if err or not got: return {"err": f"the sample could not be made: {err or 'no WAV'}"}
+        lock = d / f"{key}.lock"
+        fd = _slack_lock(lock)
+        if fd is None:
+            cached = _slack_await_wav(path, SLACK_SAMPLE_TIMEOUT)   # another request is making it: never call twice
+            if not cached: return {"err": "the sample is being made by another request; try again"}
+        else:
+            try:
+                cached = _slack_wav_ok(path)   # the request that held the lock before may have finished it
+                if not cached:
+                    tmp = d / f".{key}.{os.getpid()}.{time.monotonic_ns()}.tmp.wav"
+                    got, err = (client or _slack_tts_cli)(voice, tone, tmp)
+                    if err or not got or not _slack_wav_ok(tmp):
+                        try: tmp.unlink()
+                        except OSError: pass
+                        return {"err": f"the sample could not be made: {err or 'no WAV'}"}
+                    try: os.replace(tmp, path)   # the WAV lands whole or not at all
+                    except OSError as e:
+                        try: tmp.unlink()
+                        except OSError: pass
+                        return {"err": f"the sample could not be kept: {e.strerror or e}"}
+            finally:
+                try: os.close(fd)
+                except OSError: pass
+                try: lock.unlink()
+                except OSError: pass
     try: data = path.read_bytes()
     except OSError as e: return {"err": f"the sample could not be read: {e.strerror or e}"}
     return {"err": None, "url": "data:audio/wav;base64," + base64.b64encode(data).decode(), "cached": cached,
@@ -8762,7 +8844,8 @@ const slVoiceOpts=(voices,cur)=>voices.map(v=>`<option${v===cur?" selected":""}>
 const slPick=(ids,cur,empty)=>`<option value=""${cur?"":" selected"}>${esc(empty)}</option>`+ids.map(i=>`<option${i===cur?" selected":""}>${slA(i)}</option>`).join("");
 const slVoiceFirst=()=>(((slR&&slR.voices)||[])[0])||"Kore";
 function slPersonaSet(d,id,f,v){const p=slPersonaAt(d,id);if(!p||!["name","voice","tone"].includes(f))return false;p[f]=v;return true}   // a field outside name, voice and tone never edits a persona
-function slPersonaAdd(d,name){const k=String(name||"").trim();if(!k)return false;const c=slDoc(d,"committed"),ps=c.personas||(c.personas=[]);
+const SL_ID=/^[A-Za-z0-9 _.\-]{1,32}$/;   // the id rule the detail hint states, so a bad name never stages a persona
+function slPersonaAdd(d,name){const k=String(name||"").trim();if(!SL_ID.test(k))return false;const c=slDoc(d,"committed"),ps=c.personas||(c.personas=[]);
  if(ps.some(p=>String(p.id)===k))return false;ps.push({id:k,name:k,voice:slVoiceFirst(),tone:""});return true}
 function slDefaultSet(d,id){const c=slDoc(d,"committed");c.project=c.project||{};if(id)c.project.persona=id;else delete c.project.persona;return true}
 function slOverrideSet(d,file,wi,ci,id){const ws=(slDoc(d,file).workspaces||[])[wi];if(!ws)return false;const row=ci==null?ws:(ws.channels||[])[ci];

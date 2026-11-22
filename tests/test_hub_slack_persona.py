@@ -139,6 +139,34 @@ def test_the_preview_follows_the_draft_documents_before_a_save(hub, tmp_path):
     assert (first["mark"], first["tone"]) == ("*Hal 9000's Msg*", "Short sentences."), first
 
 
+def test_the_preview_accepts_a_draft_with_one_document(hub):
+    """Criterion (6): a draft that carries only one document is previewed, not refused, so a local override shows
+    before a save. A value that is neither a mapping nor None is still refused."""
+    local_only = {"version": 1, "workspaces": LOCAL["workspaces"],
+                  "personas": [{"id": "iara", "name": "Iara", "voice": "Sulafat", "tone": "Warm and patient."}]}
+    only_local = hub.slack_preview(None, local_only)
+    assert only_local["err"] is None, only_local
+    assert [(p["channel"], p["mark"]) for p in only_local["previews"]] == [("client-a/#support", "*Iara's Msg*")]
+    only_committed = hub.slack_preview(COMMITTED, None)
+    assert only_committed["err"] is None, only_committed
+    assert [p["channel"] for p in only_committed["previews"]] == ["team/#proj-agent-squad", "team/#squad-alerts"]
+    assert hub.slack_preview(None, None)["err"] is None
+    assert hub.slack_preview([], None)["err"], "a list is not a document mapping"
+
+
+def test_the_preview_shows_one_row_per_effective_channel(hub):
+    """Criterion (6): a channel the local file repeats is previewed once, and the commit wins, as at run time."""
+    committed = json.loads(json.dumps(COMMITTED))
+    local = {"version": 1, "workspaces": [
+        {"id": "T0TEAM0001", "label": "team", "class": "owned", "language": "en-US",
+         "channels": [{"id": "C0PROJ0001", "name": "proj-agent-squad", "persona": "iara"},
+                      {"id": "C0NEW00001", "name": "extra", "persona": "iara"}]}]}
+    out = hub.slack_preview(committed, local)
+    rows = [(p["channel"], p["mark"]) for p in out["previews"]]
+    assert rows == [("team/#proj-agent-squad", "*HAL9K's Msg*"), ("team/#squad-alerts", "*HAL9K's Msg*"),
+                    ("team/#extra", "*Iara's Msg*")], rows
+
+
 class FakeGemini:
     """The fake Gemini client: it records every synthesis request and writes a small WAV, so a cache hit is visible as
     a missing call."""
@@ -200,8 +228,56 @@ def test_a_client_error_is_a_message_and_leaves_no_cache_entry(hub, state):
 
     out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=broken)
     assert out["err"] and "no TTS model answered" in out["err"], out
-    assert hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=FakeGemini())["cached"] is False
-    assert len(calls) == 1
+    assert not list((state / "slack-samples").glob("*.wav")), "a failed synthesis leaves no WAV"
+    retry = FakeGemini()
+    assert hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=retry)["cached"] is False
+    assert len(calls) == 1 and len(retry.calls) == 1
+
+
+def test_a_partial_wav_in_the_cache_is_not_served(hub, state):
+    """A truncated file left by a killed synthesis is no cache hit: the next request makes the sample again."""
+    d = state / "slack-samples"
+    d.mkdir(parents=True)
+    (d / f"{hub.slack_sample_key('Kore', 'Calm.')}.wav").write_bytes(b"RIFF")
+    gemini = FakeGemini()
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    assert out["err"] is None and out["cached"] is False, out
+    assert len(gemini.calls) == 1, gemini.calls
+
+
+def test_a_changed_sample_text_makes_a_new_sample(hub, state, monkeypatch):
+    """The cache key holds the sample text: a new script is spoken, not the old cached sentence."""
+    gemini = FakeGemini()
+    hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    monkeypatch.setattr(hub, "SLACK_SAMPLE_TEXT", "A different sentence now.")
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    assert out["cached"] is False and len(gemini.calls) == 2, gemini.calls
+
+
+def test_two_concurrent_requests_make_one_call(hub, state):
+    """Criteria (4) and (5) under concurrency: two simultaneous Sample presses on one pair make one synthesis."""
+    import threading
+
+    calls = []
+
+    def slow(voice, tone, out):
+        calls.append((voice, tone))
+        threading.Event().wait(0.3)
+        pathlib.Path(out).write_bytes(b"RIFF....WAVEslow")
+        return str(out), None
+
+    started = threading.Barrier(2)
+    results = []
+
+    def run():
+        started.wait()
+        results.append(hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=slow))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(calls) == 1, calls
+    assert all(r["err"] is None for r in results), results
 
 
 # ---------------------------------------------------------------- the renderer
@@ -304,3 +380,15 @@ def test_an_added_persona_takes_a_gemini_voice(hub):
             "console.log(JSON.stringify({ok,p:slDocs.committed.personas[0]}))")
     got = json.loads(_node(body))
     assert got["ok"] is True and got["p"]["voice"] in ("Kore", "Puck"), got
+
+
+def test_an_added_persona_id_follows_the_declared_name_rule(hub):
+    """Criterion (1): a name outside the declared id rule stages no persona, so the save never reports it late."""
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps({'voices': ['Kore', 'Puck']})};"
+            "slDocs={committed:{version:1,project:{},personas:[]},local:{}};"
+            "const bad=slPersonaAdd(slDocs,'my/persona#1');"
+            "const long=slPersonaAdd(slDocs,'x'.repeat(33));"
+            "const ok=slPersonaAdd(slDocs,'Nova 2');"
+            "console.log(JSON.stringify({bad,long,ok,ids:slDocs.committed.personas.map(p=>p.id)}))")
+    got = json.loads(_node(body))
+    assert got == {"bad": False, "long": False, "ok": True, "ids": ["Nova 2"]}, got
