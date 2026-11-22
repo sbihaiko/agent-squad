@@ -24,6 +24,17 @@ PEER = "U0PEER0001"
 STRANGER = "U0STRANGER"
 MID = "C0PROJ0001:1762500100.000100"
 STATUS_TEXT = "3 open, 1 in review, 12 done"
+GUEST_TEAM = "T0CLIENT01"
+GUEST_CHANNEL = "C0CLIENT01"
+# The project log: one normal pass, one line with a leaked token, two guest lines and one quiet pass.
+LOG_TEXT = (
+    "2026-11-22T03:00:00Z autobug pass 4: dispatched #2690 (acme/app)\n"
+    "2026-11-22T03:01:00Z run refused: the token xoxb-1234567890-abcdefghij is still set\n"
+    f"2026-11-22T03:02:00Z guest inbox {GUEST_CHANNEL}: the client asks about the build\n"
+    f"2026-11-22T03:03:00Z guest team {GUEST_TEAM} channel {GUEST_CHANNEL} read\n"
+    "2026-11-22T03:04:00Z autobug pass 5: none (no work)\n"
+)
+GUEST_IDS = (GUEST_TEAM, GUEST_CHANNEL)
 
 COMMITTED = {
     "version": 1,
@@ -86,14 +97,22 @@ class Source:
         return self.text
 
 
-def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source=None, project=REPO):
+class Logs(Source):
+    """The project log source the executor calls, with the same record of each project it was asked for."""
+
+    def __init__(self, text=LOG_TEXT):
+        super().__init__(text)
+
+
+def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source=None, logs=None, guest=(),
+        project=REPO):
     """One request through the executor, with its decision, line and status source. The line carries the role the
     decision named, as #2687 writes it, and the request names the channel of the case unless the test overrides it."""
     request, why = X.parse(text if text is not None else request_text(channel=channel))
     assert request is not None, why
     dec = decision(decision_user, channel)
     src = source if source is not None else Source()
-    out = X.execute(request, dec, line(line_user, channel, role=dec.role), project, status=src)
+    out = X.execute(request, dec, line(line_user, channel, role=dec.role), project, status=src, logs=logs, guest=guest)
     return out, src
 
 
@@ -232,3 +251,70 @@ def test_every_refusal_is_recorded_as_data_with_the_check_that_refused_it():
             assert field in out.record, f"the refusal record lost {field}"
         checks.append(out.record["error"].split(":", 1)[0])
     assert checks == ["identity", "project", "channel", "grant", "arguments"]
+
+
+def test_a_manager_whose_role_lists_logs_gets_the_logs_of_the_channel_project():
+    """Criteria (1) and (5): the manager's role lists `logs`, and the answer is the log of the project the channel owns."""
+    logs = Logs()
+    out, _ = run(text=request_text(action="logs"), logs=logs)
+    assert out.ran is True
+    assert logs.calls == [REPO]
+    assert out.reply["path"] == "bot"
+    assert out.reply["channel"] == CHANNEL
+    assert "dispatched #2690" in out.reply["text"]
+
+
+def test_the_logs_action_asks_no_other_project_for_its_logs():
+    """Criterion (1): the source receives the project of the channel and nothing else, called once."""
+    logs = Logs()
+    out, _ = run(text=request_text(action="logs"), logs=logs)
+    assert out.ran is True
+    assert logs.calls == [REPO]
+
+
+def test_a_request_for_the_logs_of_another_project_is_refused():
+    """Criterion (2): the executor holds one project, so a request that names another reads no log at all."""
+    logs = Logs()
+    out, _ = run(text=request_text(action="logs", project=OTHER_REPO), logs=logs)
+    assert out.ran is False
+    assert logs.calls == []
+    assert out.record["error"].startswith("project:")
+
+
+def test_a_role_that_does_not_list_logs_is_refused():
+    """Criterion (5): the colleague's role lists only `status`, so a `logs` request is refused and reads no log."""
+    logs = Logs()
+    out, _ = run(text=request_text(action="logs"), decision_user=PEER, line_user=PEER, logs=logs)
+    assert out.ran is False
+    assert logs.calls == []
+    assert out.record["error"].startswith("grant:")
+
+
+def test_the_logs_result_removes_every_secret():
+    """Criteria (3) and (6): the fixture log holds a token pattern, and the answer carries a mask in its place."""
+    out, _ = run(text=request_text(action="logs"), logs=Logs())
+    text = out.reply["text"]
+    assert "xoxb-1234567890" not in text
+    assert "abcdefghij" not in text
+    assert "[redacted]" in text
+    assert "dispatched #2690" in text
+
+
+def test_the_logs_result_removes_all_guest_content():
+    """Criterion (4): every line that names a guest team or channel is dropped, and the project lines stay."""
+    out, _ = run(text=request_text(action="logs"), logs=Logs(), guest=GUEST_IDS)
+    text = out.reply["text"]
+    assert GUEST_CHANNEL not in text
+    assert GUEST_TEAM not in text
+    assert "the client asks about the build" not in text
+    assert "dispatched #2690" in text
+    assert "autobug pass 5" in text
+
+
+def test_the_logs_action_refuses_a_request_with_no_log_source():
+    """Criterion (1): the executor runs no action without its source, so a missing log source is a refusal, not an empty answer."""
+    out, _ = run(text=request_text(action="logs"))
+    assert out.ran is False
+    assert out.reply is None
+    assert out.record["error"].startswith("source:")
+    assert "logs" in out.record["error"]
