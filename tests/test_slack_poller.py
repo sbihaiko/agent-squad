@@ -5,7 +5,7 @@ a page of messages. Every id and every `ts` here is a placeholder.
 """
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from squad import slackpolicy as S
 from squad import slackpoller as P
@@ -13,6 +13,8 @@ from squad import slackpoller as P
 OWNER = "U0OWNER001"
 CLIENT = "U0CLIENT01"
 NOW = datetime(2026, 11, 22, 12, 0, 0)
+THREAD = "100.000100"
+FOOTER = "O envio foi feito usando Claude"
 
 COMMITTED = {
     "version": 1,
@@ -41,16 +43,24 @@ def message(ts, user=CLIENT, text="hello", **over):
 
 
 class FakeConnector:
-    """The connector's calls: one read of a channel from `oldest` (inclusive, as Slack does), and one post."""
+    """The connector's calls: one read of a channel from `oldest` (inclusive, as Slack does), one read of a thread, and
+    one post. A channel read returns the messages that stand alone, and a thread read returns the thread's root and its
+    replies, as the connector does."""
 
     def __init__(self, messages=()):
         self.messages = list(messages)
         self.reads = []
+        self.thread_reads = []
         self.posts = []
 
-    def read(self, channel, oldest=None, limit=100):
-        self.reads.append({"channel": channel, "oldest": oldest, "limit": limit})
-        page = [m for m in self.messages if oldest is None or float(m["ts"]) >= float(oldest)]
+    def read(self, channel, oldest=None, limit=100, thread_ts=None):
+        if thread_ts is not None:
+            self.thread_reads.append({"channel": channel, "thread_ts": thread_ts, "limit": limit})
+            page = [m for m in self.messages if m["ts"] == thread_ts or m.get("thread_ts") == thread_ts]
+        else:
+            self.reads.append({"channel": channel, "oldest": oldest, "limit": limit})
+            page = [m for m in self.messages if not m.get("thread_ts") or m.get("thread_ts") == m["ts"]]
+            page = [m for m in page if oldest is None or float(m["ts"]) >= float(oldest)]
         page.sort(key=lambda m: float(m["ts"]))
         return {"ok": True, "messages": page[:limit], "has_more": len(page) > limit}
 
@@ -61,8 +71,8 @@ class FakeConnector:
         return {"ok": True, "channel": channel, "ts": ts}
 
 
-def poller(conn, path, own=(), limit=100):
-    return P.Poller(conn.read, P.Checkpoint(path), COMMITTED, LOCAL, lambda: NOW, own=own, limit=limit)
+def poller(conn, path, own=(), limit=100, **over):
+    return P.Poller(conn.read, P.Checkpoint(path), COMMITTED, LOCAL, lambda: NOW, own=own, limit=limit, **over)
 
 
 def decision_ts(pairs):
@@ -185,6 +195,64 @@ def test_an_own_message_is_not_delivered_and_never_moves_the_checkpoint(tmp_path
     got = poller(conn, path, own=("100.000100",)).poll(WS, CH)
     assert got == []
     assert not path.exists()
+
+
+# --- own-message detection and thread rereads (#2708) --------------------------------------------------------------
+
+def test_a_ts_in_the_own_store_is_never_delivered(tmp_path):
+    own = P.OwnTs(tmp_path / "own.json")
+    own.add("900.000900")
+    conn = FakeConnector([message("100.000100"), message("900.000900", user=OWNER)])
+    got = poller(conn, tmp_path / "checkpoint.json", own=own).poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.000100"]
+    assert P.Checkpoint(tmp_path / "checkpoint.json").get(CH) == "100.000100"
+
+
+def test_an_owner_message_that_starts_with_a_persona_mark_is_never_delivered(tmp_path):
+    marked = message("100.000900", user=OWNER, text="*Iara's Msg*\n_hello_")
+    unmarked = message("100.001000", user=OWNER, text="hello")
+    conn = FakeConnector([marked, unmarked])
+    got = poller(conn, tmp_path / "checkpoint.json", owner=(OWNER,)).poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.001000"]
+
+
+def test_the_persona_mark_comparison_ignores_the_connector_footer(tmp_path):
+    marked = message("100.000900", user=OWNER, text=f"*Iara's Msg*\n_hello_\n\n{FOOTER}")
+    plain = message("100.001000", user=OWNER, text=f"hello\n\n{FOOTER}")
+    conn = FakeConnector([marked, plain])
+    got = poller(conn, tmp_path / "checkpoint.json", owner=(OWNER,), footers=(FOOTER,)).poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.001000"]
+
+
+def test_a_thread_where_the_agent_replied_is_reread(tmp_path):
+    first, second = THREAD, "100.000200"
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    conn = FakeConnector([message(first, text="question"), message(second, text="other question"),
+                          message("100.000700", text="first answer", thread_ts=first),
+                          message("100.000800", text="second answer", thread_ts=second),
+                          message("100.001200", text="more on the first", thread_ts=first),
+                          message("100.001300", text="more on the second", thread_ts=second)])
+    p = poller(conn, tmp_path / "checkpoint.json", threads=threads)
+    assert [m["ts"] for m, _ in p.poll(WS, CH)] == [first, second]
+    threads.record(CH, first, at=NOW, ts="100.000900")
+    threads.record(CH, second, at=NOW, ts="100.001000")
+    got = p.poll(WS, CH)
+    assert [(r["channel"], r["thread_ts"]) for r in conn.thread_reads] == [(CH, first), (CH, second)]
+    assert sorted(m["ts"] for m, _ in got) == ["100.001200", "100.001300"]
+
+
+def test_a_quiet_thread_is_no_longer_reread(tmp_path):
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    conn = FakeConnector([message(THREAD, text="question")])
+    clock = [NOW]
+    p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
+                 threads=threads)
+    threads.record(CH, THREAD, at=NOW, ts="100.000900")
+    clock[0] = NOW + timedelta(minutes=31)
+    p.poll(WS, CH)
+    assert len(conn.thread_reads) == 1        # one last read collects a reply that arrived before it closed
+    p.poll(WS, CH)
+    assert len(conn.thread_reads) == 1        # quiet: the thread is never reread again
 
 
 # --- the acceptance test -------------------------------------------------------------------------------------------
