@@ -200,3 +200,22 @@ def test_the_tts_request_carries_the_persona_tone_as_the_style_prompt(tmp_path, 
     assert "Green. Then blue." in said
     requested = seen[0]["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
     assert requested == VOICE_NAME
+
+
+def test_the_cli_forwards_the_tone_flag_to_synth(tmp_path, monkeypatch):
+    """Criterion (4): the hub calls the script with --tone, and main hands that value to synth, which sends it to Gemini.
+    A hub cache key that tells two tones apart is then a real difference in the request, not only in the file name."""
+    tts = voice_module("tts.py")
+    seen = []
+
+    def fake_synth(key, text, voice, out, tone=""):
+        seen.append({"key": key, "text": text, "voice": voice, "tone": tone})
+        Path(out).write_bytes(b"RIFF....WAVEfake")
+        return str(out), None
+
+    monkeypatch.setattr(tts, "gemini_key", lambda *a, **k: "a-key")
+    monkeypatch.setattr(tts, "synth", fake_synth)
+    out = tmp_path / "clip.wav"
+    rc = tts.main(["Green. Then blue.", "--voice", VOICE_NAME, "--tone", TONE, "--out", str(out)])
+    assert rc == 0, rc
+    assert seen == [{"key": "a-key", "text": "Green. Then blue.", "voice": VOICE_NAME, "tone": TONE}], seen

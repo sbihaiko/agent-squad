@@ -506,6 +506,13 @@ def _effective_language(committed, local, workspace, channel):
     return DEFAULT_LANGUAGE
 
 
+def mark(persona):
+    """The authorship mark that opens every text sent from the owner's account: `*<name>'s Msg*`, alone and bold. A
+    persona with no name, and a missing persona, carry no mark, so a channel never wears another persona's name."""
+    name = getattr(persona, "name", "") if persona is not None else ""
+    return f"*{name}'s Msg*" if name else ""
+
+
 def effective_persona(committed, local, workspace, channel):
     """The persona of a channel, resolved in the same order as the language. A channel, a workspace and the project name
     an id; the `Persona` row comes from the committed file, then the local file. The announcement writer reads it too."""

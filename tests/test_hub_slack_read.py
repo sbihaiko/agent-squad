@@ -250,15 +250,21 @@ def test_the_theme_writes_one_status_text_to_the_chip_and_the_nav_line(hub, tmp_
 
 
 def test_the_read_view_draws_the_four_sections_and_wears_no_control(hub, tmp_path):
-    """The Now block and the four sections of the mockup, in their order, and every field read-only: the read view
-    constructs and binds, and a control belongs to the tickets that add editing (#2696 to #2699)."""
+    """The Now block and the four sections of the mockup, in their order. The read view constructs and binds; only the
+    Personas section carries controls, because the persona editor (#2697) edits it in place. Roles, Slack workspaces
+    and Project events stay text-only until their own edit tickets land."""
     out = overview(hub, tmp_path)
     html = read_block(render(hub, out))
     heads = re.findall(r"<h4[^>]*>(.*?)</h4>", html)
     assert [re.sub(r"<[^>]+>", "", h).split(" slack")[0] for h in heads] == \
         ["Personas", "Roles", "Slack workspaces", "Project events"], heads
-    for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in html, f"the read view carries {ctl}"
+    sections = re.split(r"(?=<section class=slsec>)", html)
+    by_name = {re.sub(r"<[^>]+>", "", s[s.index("<h4"):s.index("</h4>")]).split(" slack")[0].strip(): s
+               for s in sections if "<h4" in s}
+    for name in ("Roles", "Slack workspaces", "Project events"):
+        for ctl in ("<input", "<select", "<textarea", "<button"):
+            assert ctl not in by_name[name], f"the {name} section carries {ctl}"
+    assert "<button" in by_name["Personas"], "the persona editor carries its controls"
     for text in ("HAL9K", "Kore", "team/#proj-agent-squad", "manager", "status, logs, request_work",
                  "client-a", "guest", "support", "stg_release", "Deployed to STG: {items}."):
         assert text in html, text

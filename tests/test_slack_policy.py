@@ -347,3 +347,12 @@ def test_the_adr_names_the_one_home_of_the_rules():
     text = adr[0].read_text()
     assert "squad/slackpolicy.py" in text
     assert "ADR-0154" in text
+
+
+def test_the_mark_is_the_persona_names_one_bold_line():
+    """The mark of a reply from the owner's account is the policy rule: `*<name>'s Msg*`, alone and bold. A persona
+    with no name has no mark, so a channel with no persona never wears another's name."""
+    persona = S.Persona("hal", "HAL9K", "Kore", "Calm and direct.")
+    assert S.mark(persona) == "*HAL9K's Msg*"
+    assert S.mark(S.Persona("x", "", "Kore", "")) == ""
+    assert S.mark(None) == ""
