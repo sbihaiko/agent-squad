@@ -3,7 +3,8 @@
 The claude.ai Slack connector is called from inside a Claude session, so the model runs the reads. The model never
 computes the cursor. A `PreToolUse` hook answers every tool call of the poller session and lets through the connector's
 read tools only. A `PostToolUse` hook reads the newest `ts` of each returned page and writes it to the channel's
-checkpoint. The checkpoint lives in the guest state folder (#2710), and it is one file for the machine.
+checkpoint. The checkpoint lives in the guest state folder (#2710), at `gueststate.CHECKPOINT_NAME`, and it is one file
+for the machine.
 
 A read moves forward with Slack's `oldest`: the next read of a channel passes the checkpoint, and the code drops every
 message at or before it, so a resumed session gets the next page with no gap and no repeat. A post result never moves
@@ -27,7 +28,6 @@ READ_VERBS = frozenset(("read", "search", "list"))
 WRITE_VERBS = frozenset(("send", "post", "write", "upload", "schedule", "react", "complete", "create", "update",
                          "delete", "remove", "set", "add", "invite", "archive", "draft"))
 DEFAULT_SERVER = "slack"
-CHECKPOINT_NAME = "guest-checkpoint.json"
 
 
 def _tool_word(name, server):
