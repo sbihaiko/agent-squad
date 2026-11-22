@@ -13,6 +13,11 @@ still delivered by the next read. The polling schedule is not here (#2709), and 
 The policy decision comes from `squad/slackpolicy.py` (#2684), and the caller passes the clock value. This module reads
 no clock of its own and calls no network: the connector is a callable that the caller supplies.
 
+Shadow mode (#2711) is the pilot beside the existing cron. A shadow poll reads a page and records the decision it would
+take for each message in `guest-shadow.json`, beside the checkpoint in the same private state folder. It hands no
+decision to a caller and makes no write call, so nothing leaves the owner's account. The record holds the decision and
+never the message text (story 42).
+
 Guards: `tests/test_slack_poller.py`.
 """
 import json
@@ -28,6 +33,7 @@ WRITE_VERBS = frozenset(("send", "post", "write", "upload", "schedule", "react",
                          "delete", "remove", "set", "add", "invite", "archive", "draft"))
 DEFAULT_SERVER = "slack"
 CHECKPOINT_NAME = "guest-checkpoint.json"
+SHADOW_NAME = "guest-shadow.json"     # the shadow record, beside the checkpoint in the private state folder
 
 
 def _tool_word(name, server):
@@ -147,6 +153,57 @@ class Checkpoint:
         return self.get(channel)
 
 
+def shadow_entry(ts, decision):
+    """The decision a shadow poll would take for one message, as a JSON-ready row. It records the decision fields only:
+    the message text and its author never enter the record (story 42)."""
+    persona = decision.persona
+    return {
+        "ts": str(ts),
+        "kind": decision.kind,
+        "role": decision.role,
+        "actions": list(decision.actions),
+        "language": decision.language,
+        "persona": persona.id if persona is not None else None,
+        "reply": decision.reply,
+        "mark": decision.mark,
+        "next_poll": decision.next_poll.isoformat() if decision.next_poll is not None else None,
+    }
+
+
+class ShadowLog:
+    """The decisions a shadow poll would take, one JSON file keyed by channel id, beside the checkpoint in the private
+    state folder. Only code writes it, every write is atomic (ADR-0030), and an unreadable file reads as an empty
+    record, so a broken file never stops a poll. The record holds the decision and never the message text (story 42)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def load(self):
+        try:
+            doc = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return doc if isinstance(doc, dict) else {}
+
+    def entries(self, channel=None):
+        """Every recorded decision, by channel then oldest first, or the decisions of one channel."""
+        doc = self.load()
+        if channel is not None:
+            rows = doc.get(str(channel))
+            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        return [row for rows in doc.values() if isinstance(rows, list) for row in rows if isinstance(row, dict)]
+
+    def record(self, channel, ts, decision):
+        """Append one decision for one message of a channel, as one atomic write."""
+        doc = self.load()
+        rows = doc.get(str(channel))
+        rows = list(rows) if isinstance(rows, list) else []
+        rows.append(shadow_entry(ts, decision))
+        doc[str(channel)] = rows
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
+
+
 def checkpoint_hook(checkpoint, server=DEFAULT_SERVER, own=()):
     """The `PostToolUse` hook: it writes the checkpoint from the result of a read tool. The model never computes it, and
     the result of any other tool leaves the checkpoint alone. `own` is the list of `ts` of the session's own posts, so a
@@ -183,12 +240,18 @@ class Poller:
 
     `connect(channel=..., oldest=..., limit=...)` is the connector's read call. `now()` is the caller's clock value.
     `own` is the list of `ts` of the session's own posts (#2708 supplies it). The caller polls one page at a time: the
-    cursor advances after each page, so a later poll of the same channel resumes from the next page."""
+    cursor advances after each page, so a later poll of the same channel resumes from the next page.
 
-    def __init__(self, connect, checkpoint, committed, local, now, own=(), limit=100):
+    `shadow` runs the poll in shadow mode (#2711): `poll` records each decision in `self.shadow` and hands nothing out,
+    so the caller has no decision to act on and makes no write call."""
+
+    def __init__(self, connect, checkpoint, committed, local, now, own=(), limit=100, shadow=False):
         self.connect, self.checkpoint = connect, checkpoint
         self.committed, self.local, self.now = committed, local, now
         self.own, self.limit = tuple(own), limit
+        # The record lives in the folder the caller chose for the checkpoint, so the private state folder keeps the
+        # cursor and the record together and no second path is invented.
+        self.shadow = ShadowLog(self.checkpoint.path.with_name(SHADOW_NAME)) if shadow else None
 
     def read_request(self, workspace, channel):
         """The arguments of the next read of a channel: the channel, the stored cursor as `oldest`, and the page limit.
@@ -202,7 +265,19 @@ class Poller:
     def poll(self, workspace, channel):
         """Read one page, store the cursor at its newest `ts` that is not an own post, and return `(message, decision)`
         for each new message. A message at or before the cursor, and an own post, never returns. A page with no new
-        message ends the walk of the channel for this tick."""
+        message ends the walk of the channel for this tick.
+
+        In shadow mode each decision is recorded in the private state folder, and the poller returns no pair, so no
+        caller can act on a decision and no write call is made (#2711)."""
+        pairs = self._deliveries(workspace, channel)
+        if self.shadow is None:
+            return pairs
+        for message, decision in pairs:
+            self.shadow.record(channel, message.get("ts"), decision)
+        return []
+
+    def _deliveries(self, workspace, channel):
+        """One page read, the cursor stored, and the `(message, decision)` of each new message of the channel."""
         oldest = self.checkpoint.get(channel)
         page = messages_of(self.connect(**self.read_request(workspace, channel)))
         self.checkpoint.record_page(channel, page, self.own)
