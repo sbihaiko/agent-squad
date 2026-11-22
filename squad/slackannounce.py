@@ -115,12 +115,18 @@ def post_for(committed, local, channel, record):
 
 def announcements(committed, local, record):
     """Every post a project's `owned` channels get for one release record, one per channel id, in the file's order.
-    A channel id that two workspace rows repeat takes the first row's persona and override; later rows add nothing."""
+    A channel id that two workspace rows repeat takes the first row's persona and override; later rows add nothing.
+    A channel whose local row gives it `class: guest` gets no post, though the bot of its workspace is a member (#2770).
+    The committed file owns the announce list, so a channel that only the local file names announces nothing here."""
     out, seen = [], set()
     for workspace in _rows((committed or {}).get("workspaces")):
         if str(workspace.get("class") or "owned") != "owned":
             continue
+        workspace_id = str(workspace.get("id") or "")
         for channel in _rows(workspace.get("channels")):
+            override = slackpolicy.channel_row(local, workspace_id, str(channel.get("id") or ""))
+            if slackpolicy.channel_class(workspace, {**channel, **override} if override else channel) != "owned":
+                continue
             post = post_for(committed, local, channel, record)
             if post is not None and post.channel not in seen:
                 seen.add(post.channel)

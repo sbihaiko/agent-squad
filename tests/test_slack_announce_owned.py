@@ -43,15 +43,16 @@ def channel(channel_id, mode="listen+speak", announce=("stg_release", "prod_rele
     return row
 
 
-def daemon_with(tmp_path, client, channels, events=("stg_release",), doc=None, stage=None):
+def daemon_with(tmp_path, client, channels, events=("stg_release",), doc=None, stage=None, local=None):
     """A daemon whose one project has an active revision naming `channels`, and one emitted release event.
 
-    `stage` tags the record with the delivery stage that emitted it; None keeps the emitter's own default of S1."""
+    `stage` tags the record with the delivery stage that emitted it; None keeps the emitter's own default of S1.
+    `local` is the project's local Slack file; None keeps it empty."""
     mod = voiced()
     state = mod.State(str(tmp_path))
     state.save_channels({REPO: {"name": "proj-acme-app", "id": PROJECT}})
     state.save_active_revision(REPO, {"repo": REPO, "sha": SHA, "revision": doc or committed(channels),
-                                      "local": {}})
+                                      "local": local or {}})
     for event in events:
         mod.releases.emit(event, ["a1b2c3 Fix the door"], key=f"{event}:a1b2c3", state_dir=str(tmp_path),
                           stage=stage)

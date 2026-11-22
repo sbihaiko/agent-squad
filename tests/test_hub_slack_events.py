@@ -350,13 +350,12 @@ def test_the_override_box_shows_the_text_the_channel_holds(hub, tmp_path):
     assert re.search(r'data-sl="ov:c:0:0:0"[^>]*value=""', html), html
 
 
-def test_the_roles_keep_no_control_beside_the_two_editors(hub, tmp_path):
-    """The Personas section (#2697), the workspaces section (#2696) and the Project events section (#2698) each carry
-    an editor of their own. Roles stays read-only, so no control appears in it."""
+def test_every_section_that_names_an_editor_carries_its_control(hub, tmp_path):
+    """The Personas section (#2697), the Roles section (#2699), the workspaces section (#2696) and the Project events
+    section (#2698) each carry an editor of their own, so each one draws a control."""
     html = render(hub, overview(hub, tmp_path))
     roles = html[html.index("<h4>Roles"):html.index("Slack workspaces")]
-    for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in roles, f"the Roles section carries {ctl}"
+    assert "data-sle=" in roles and "data-sladdrole" in roles, roles
     section = html[html.index("Slack workspaces"):html.index("Project events")]
     assert "data-slopen=" in section and "<input" in section, section
 

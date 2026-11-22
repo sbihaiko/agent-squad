@@ -99,6 +99,15 @@ def worktree(tmp_path, committed=None):
     return wt, origin
 
 
+def clone(tmp_path, origin, name="loop-checkout"):
+    """A clone of the fixture origin: the loop checkout the hub hangs its own worktree from."""
+    loop = tmp_path / name
+    subprocess.run(["git", "clone", "-q", str(origin), str(loop)], check=True, timeout=60)
+    git(loop, "config", "user.name", "fixture")
+    git(loop, "config", "user.email", "fixture@localhost")
+    return loop
+
+
 def saved(hub, tmp_path, **kw):
     c, loc = files(tmp_path, kw.get("committed"), kw.get("local"))
     body = {"committed": kw.get("new_committed", COMMITTED), "local": kw.get("new_local", LOCAL)}
@@ -233,20 +242,204 @@ def test_a_moved_worktree_refuses_the_save_before_any_write(hub, tmp_path, monke
     assert git(wt, "status", "--porcelain") == ""
 
 
+def test_a_save_with_no_variable_derives_the_hub_worktree(hub, tmp_path, monkeypatch):
+    """A hub that names no worktree derives one per profile under its state directory, outside the loop checkout, and the
+    committed save lands from it. The owner sets no variable by hand (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    assert hub.slack_worktree()[0] == derived, hub.slack_worktree()
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    sha = out["sha"]
+    assert git(origin, "rev-parse", "dev") == sha
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text())["project"]["language"] == "pt-BR"
+    assert git(loop, "status", "--porcelain") == ""
+
+
+def test_a_save_after_a_later_landing_advances_the_worktree(hub, tmp_path, monkeypatch):
+    """A landing in dev after the first save leaves the hub's worktree behind. The next save brings the clean worktree to
+    origin/dev before its check, so it lands instead of refusing (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    later = clone(tmp_path, origin, "other-checkout")
+    (later / "notes.txt").write_text("x\n")
+    git(later, "add", "--", "notes.txt")
+    git(later, "commit", "-q", "-m", "a later landing")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    landed = git(origin, "rev-parse", "dev")
+    assert git(derived, "rev-parse", "HEAD") != landed
+    newer = copy.deepcopy(new_c)
+    newer["project"]["language"] = "es-ES"
+    out, c, loc = saved(hub, tmp_path, new_committed=newer, confirm=True)
+    assert "err" not in out, out
+    assert git(origin, "rev-parse", "dev") == out["sha"]
+    assert git(derived, "rev-parse", "HEAD") == out["sha"]
+    assert subprocess.run(["git", "-C", str(origin), "merge-base", "--is-ancestor", landed, out["sha"]],
+                          timeout=60).returncode == 0, "the later landing is lost"
+
+
 def test_a_local_only_save_records_the_save_in_the_registry(hub, tmp_path, monkeypatch):
-    """A save that changes only the local file still records its save: the registry names the file, the time, and that
-    no commit landed, so a reader of the registry never sees an old save as the last one."""
+    """A save that changes only the local file still records its save: the registry names the worktree file the save
+    would have used, the time, and that no commit landed, so a reader of the registry never sees an old save as the
+    last one."""
     monkeypatch.setattr(hub, "STATE", tmp_path / "state")
     (tmp_path / "state").mkdir()
-    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
-    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "checkout"))
+    wt, origin = worktree(tmp_path)
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
     new_l = copy.deepcopy(LOCAL)
     new_l["workspaces"][0]["label"] = "client-b"
     out, c, loc = saved(hub, tmp_path, new_local=new_l, confirm=True)
     assert "err" not in out, out
     data = json.loads(hub.slack_registry_path().read_text())
-    entry = data[str(c)]
+    entry = data[str(wt / "docs" / "squad" / "slack.yaml")]   # the worktree the save used
     assert entry["committed"] is False and entry["at"], data
+
+
+def test_a_local_only_save_with_no_variable_keys_the_registry_by_the_derived_path(hub, tmp_path, monkeypatch):
+    """A hub that names no worktree derives one per profile and keys the registry by that file, so a reader of the
+    registry finds the save without a variable set by hand (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    (tmp_path / "state").mkdir()
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_local=new_l, confirm=True)
+    assert "err" not in out, out
+    entry = json.loads(hub.slack_registry_path().read_text())[str(derived / "docs" / "squad" / "slack.yaml")]
+    assert entry["committed"] is False and entry["at"], entry
+
+
+def test_a_save_reads_the_committed_diff_from_the_synced_worktree(hub, tmp_path, monkeypatch):
+    """A landing in dev changes `slack.yaml` after the last save. The next save advances the clean derived worktree and
+    reads the committed diff from the file that worktree now holds, so a document that matches the stale worktree but
+    not the branch still lands its save instead of a silent local-only write (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    later = clone(tmp_path, origin, "other-checkout")
+    landed_doc = copy.deepcopy(new_c)
+    landed_doc["events"][0]["template"] = "Shipped to STG: {items}."
+    (later / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(landed_doc, sort_keys=False))
+    git(later, "add", "--", "docs/squad/slack.yaml")
+    git(later, "commit", "-q", "-m", "a later landing that touches the Slack file")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    assert out["sha"], out
+    assert git(origin, "rev-parse", "dev") == out["sha"]
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == new_c
+    assert yaml.safe_load((later / "docs" / "squad" / "slack.yaml").read_text())["events"][0]["template"] \
+        == "Shipped to STG: {items}."   # the landing stays in dev until the owner's save replaces it
+
+
+def test_a_save_after_a_later_landing_lands_the_owners_committed_file(hub, tmp_path, monkeypatch):
+    """A landing in dev changes `slack.yaml` after the last save, and the owner then saves the document the hub's
+    worktree still holds. The save must land the owner's document: a diff read from the file as it stood before the
+    sync would call the save unchanged and leave the later landing in place (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    mine = copy.deepcopy(COMMITTED)
+    mine["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, confirm=True)
+    assert "err" not in out, out
+    later = clone(tmp_path, origin, "other-checkout")
+    theirs = copy.deepcopy(mine)
+    theirs["events"][0]["template"] = "Shipped to STG: {items}."
+    (later / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(theirs, sort_keys=False))
+    git(later, "add", "--", "docs/squad/slack.yaml")
+    git(later, "commit", "-q", "-m", "a later landing that changes the Slack file")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, new_local=new_l, confirm=True)
+    assert "err" not in out, out
+    assert out.get("sha"), out   # a diff read before the sync calls this save local-only and drops the owner's document
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == mine
+    entry = json.loads(hub.slack_registry_path().read_text())[str(derived / "docs" / "squad" / "slack.yaml")]
+    assert entry["sha"] == out["sha"] and entry["committed"] is True, entry
+    assert git(origin, "rev-parse", "dev") == out["sha"]
+
+
+def test_a_dirty_derived_worktree_refuses_the_save_with_no_file_changed(hub, tmp_path, monkeypatch):
+    """A derived worktree that carries uncommitted work cannot land a save. The save refuses before it writes either
+    file, so a refused save never leaves the local file rewritten and the committed change unlanded (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    mine = copy.deepcopy(COMMITTED)
+    mine["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, confirm=True)
+    assert "err" not in out, out
+    edited = copy.deepcopy(mine)
+    edited["events"][0]["template"] = "Hand edit: {items}."
+    (derived / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(edited, sort_keys=False))
+    assert git(derived, "status", "--porcelain") != ""
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=edited, new_local=new_l, confirm=True)
+    assert "err" in out and "uncommitted work" in out["err"], out
+    assert yaml.safe_load(loc.read_text())["workspaces"][0]["label"] == "client-a"
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == edited
+    assert git(origin, "rev-parse", "dev") == git(derived, "rev-parse", "HEAD")   # no new land
+
+
+def test_a_named_worktree_the_hub_did_not_create_is_never_advanced(hub, tmp_path, monkeypatch):
+    """The hub advances only the worktree it derives for itself. A worktree the owner names by hand keeps its HEAD: the
+    save refuses a worktree that stands behind origin/dev rather than resetting it (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = tmp_path / "loop-checkout"
+    loop.mkdir()
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(wt))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    head = git(wt, "rev-parse", "HEAD")
+    later = clone(tmp_path, origin, "other-checkout")
+    (later / "notes.txt").write_text("x\n")
+    git(later, "add", "--", "notes.txt")
+    git(later, "commit", "-q", "-m", "a later landing")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" in out and "origin/dev" in out["err"], out
+    assert git(wt, "rev-parse", "HEAD") == head, "the hub moved a worktree it did not create"
+    assert yaml.safe_load(loc.read_text())["workspaces"][0]["label"] == "client-a"
+    assert git(wt, "status", "--porcelain") == ""
 
 
 def test_a_local_only_save_keeps_the_last_landed_sha(hub, tmp_path, monkeypatch):

@@ -246,6 +246,7 @@ WRAP = """#!/bin/sh
 {
   printf 'profile=%s\\n' "$SQUAD_SIGNAL_PROFILE"
   printf 'proxy=%s\\n' "${HTTPS_PROXY-unset}"
+  printf 'sandboxed=%s\\n' "${CLAUDE_CODE_SANDBOXED-unset}"
   printf 'argv1=%s\\n' "$1"
 } >> "$FAKE_WRAP_LOG"
 exec "$SQUAD_CLAUDE_CLI" "$@"
@@ -287,6 +288,14 @@ def test_a_session_starts_through_the_sandbox_wrapper_under_the_operator_profile
     profile = (tmp_path / "state" / "operators" / "profiles" / "dm.sb").read_text()
     assert entry["profile"]["path"].endswith("profiles/dm.sb")
     assert entry["profile"]["sha256"] == hashlib.sha256(profile.encode()).hexdigest()
+
+
+def test_the_session_tells_the_cli_it_already_runs_under_a_sandbox(tmp_path, monkeypatch):
+    """#2768: the session runs under the kernel wall already, so the CLI must not ask for folder trust or wrap its own
+    child processes in a second sandbox, which the kernel refuses as a nested apply."""
+    op = wrapped(tmp_path, monkeypatch)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert "sandboxed=1" in wrap_log(tmp_path)
 
 
 def test_a_loopback_endpoint_starts_its_session_with_no_proxy(tmp_path, monkeypatch):

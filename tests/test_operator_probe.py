@@ -103,6 +103,89 @@ def test_the_profile_allows_network_out_to_loopback_only():
     assert "*:443" not in text
 
 
+def test_the_profile_grants_the_cli_background_service_its_runtime():
+    """#2768: `claude --bg` reaches or starts the background service, so the profile grants the service's own runtime:
+    the `/dev/null` device of an ignored stdio, the run dir under /tmp/cc-daemon-<uid> and that dir's unix socket."""
+    operators = load("operators")
+    text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
+                                  "/work/state/inboxes/dm.jsonl")
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    # The unmonkeypatched device: the kernel opens the resolved spelling of `/dev/null`, so the grant must name it, the
+    # way `daemon_root()` names the resolved `/tmp`. A host where `/dev/null` resolves to itself keeps the one literal.
+    resolved_null = os.path.realpath("/dev/null")
+    assert f'(literal "{resolved_null}")' in write, write
+    assert f'(literal "{os.path.realpath(os.devnull)}")' in write
+    assert f'(subpath "{operators.daemon_root()}")' in write
+    # `/tmp` is a link on macOS and a plain folder on Linux, so the expected path is the resolved one (#2773).
+    assert operators.daemon_root() == os.path.realpath(f"/tmp/cc-daemon-{os.getuid()}")
+    assert f'(allow network-outbound (remote unix-socket (subpath "{operators.daemon_root()}")))' in text.splitlines()
+
+
+def test_the_profile_writes_the_resolved_device_path(tmp_path, monkeypatch):
+    """#2768: the write grant must name the device path the kernel resolves, never a symlink spelling that never
+    appears at open time. `os.devnull` is resolved the way `daemon_root()` resolves `/tmp`."""
+    operators = load("operators")
+    # The link and its target carry different names, so the two literals the grant emits are distinct strings: the
+    # symlink spelling the CLI names and the resolved target the kernel opens. `tmp_path` is already resolved, so a
+    # truthful grant must list both, never the resolved form alone.
+    target = tmp_path / "real-dev-null"
+    target.write_text("")
+    link = tmp_path / "dev-null-link"
+    link.symlink_to(target)
+    assert os.path.realpath(str(link)) == str(target) and str(link) != str(target)
+    monkeypatch.setattr(operators.os, "devnull", str(link))
+    text = operators.profile_text("/w/state/outboxes/dm.jsonl", "/w/state/inboxes", "/w/state/inboxes/dm.jsonl")
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(literal "{link}")' in write, write
+    assert f'(literal "{target}")' in write, write
+
+
+def test_a_bg_session_that_cannot_start_fails_the_probe(tmp_path, monkeypatch):
+    """#2768 expected (2): a `--bg` session the sandbox refuses must fail the probe, never pass it silently."""
+    probe = load("operator_probe")
+    stderr = ("Couldn't reach the background service (spawn background service: EPERM: operation not permitted, "
+              "posix_spawn '/home/u/.local/bin/claude')")
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, "", stderr)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    with pytest.raises(probe.ProbeFailed, match="--bg session did not start"):
+        probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+
+
+def test_a_bg_session_that_starts_is_listed_and_stopped(tmp_path, monkeypatch):
+    """#2768 expected (1): the `--bg` session the CLI prints is live, and the probe stops it when the check ends."""
+    probe = load("operator_probe")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == "claude" and argv[1] == "agents":
+            return subprocess.CompletedProcess(argv, 0, '[{"sessionId": "ba6e7d2e", "cwd": "/w"}]', "")
+        if argv[0] == "claude" and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+    assert ["claude", "stop", "ba6e7d2e"] in calls
+
+
+def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
+    """A `--bg` call that prints an id the CLI does not list never started a service: the probe fails."""
+    probe = load("operator_probe")
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and argv[1] == "agents":
+            return subprocess.CompletedProcess(argv, 0, "[]", "")
+        return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    with pytest.raises(probe.ProbeFailed, match="does not list it"):
+        probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+
+
 def test_a_loopback_refusal_fails_the_probe():
     probe = load("operator_probe")
     refused = subprocess.CompletedProcess([], 1, "", "ConnectionRefusedError: [Errno 61] Connection refused")
@@ -200,10 +283,14 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
+    def fake_bg(work, profile, cli, proxy_url=None):
+        seen["bg"] = proxy_url
+
     monkeypatch.setattr(probe, "session", fake_session)
+    monkeypatch.setattr(probe, "bg_session", fake_bg)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     probe.run_probe(tmp_path, "/bin/true")
-    assert seen == {"proxy_url": None, "poller": None, "writer": None}
+    assert seen == {"proxy_url": None, "bg": None, "poller": None, "writer": None}
 
 
 def test_the_session_reaches_the_model_only_through_the_proxy(tmp_path, monkeypatch):
@@ -244,11 +331,17 @@ def test_one_command_repeats_the_probe(tmp_path):
     assert "no claude CLI on the path" in done.stderr
 
 
-def test_the_profile_opens_no_write_root_beyond_the_outbox_and_the_claude_home():
-    text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes", "/work/state/inboxes/dm.jsonl")
+def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_daemon():
+    """#2768 keeps every write grant a literal or a named subpath: the outbox file, the Claude home and its settings
+    file, `/dev/null`, and the CLI's own daemon runtime. No grant names a whole root."""
+    operators = load("operators")
+    text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
+                                  "/work/state/inboxes/dm.jsonl")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
-    for root in ("/private/tmp", "/private/var/folders", '"/dev"', '"/tmp"'):
-        assert root not in write
+    for root in ("/dev", "/tmp", "/private/tmp", "/private/var/folders"):
+        assert f'(literal "{root}")' not in write and f'(subpath "{root}")' not in write
+    assert write.count("(subpath") == 2, write
+    assert f'(subpath "{operators.daemon_root()}")' in write
 
 
 @pytest.mark.sandbox_bound
@@ -423,6 +516,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
     monkeypatch.setattr(probe, "guest_session", fake_guest)
+    monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     probe.run_probe(tmp_path, "/bin/true")
     assert roles == ["poller", "writer"]
 
