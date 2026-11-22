@@ -99,6 +99,15 @@ def worktree(tmp_path, committed=None):
     return wt, origin
 
 
+def clone(tmp_path, origin, name="loop-checkout"):
+    """A clone of the fixture origin: the loop checkout the hub hangs its own worktree from."""
+    loop = tmp_path / name
+    subprocess.run(["git", "clone", "-q", str(origin), str(loop)], check=True, timeout=60)
+    git(loop, "config", "user.name", "fixture")
+    git(loop, "config", "user.email", "fixture@localhost")
+    return loop
+
+
 def saved(hub, tmp_path, **kw):
     c, loc = files(tmp_path, kw.get("committed"), kw.get("local"))
     body = {"committed": kw.get("new_committed", COMMITTED), "local": kw.get("new_local", LOCAL)}
@@ -233,6 +242,56 @@ def test_a_moved_worktree_refuses_the_save_before_any_write(hub, tmp_path, monke
     assert git(wt, "status", "--porcelain") == ""
 
 
+def test_a_save_with_no_variable_derives_the_hub_worktree(hub, tmp_path, monkeypatch):
+    """A hub that names no worktree derives one per profile under its state directory, outside the loop checkout, and the
+    committed save lands from it. The owner sets no variable by hand (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    assert hub.slack_worktree()[0] == derived, hub.slack_worktree()
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    sha = out["sha"]
+    assert git(origin, "rev-parse", "dev") == sha
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text())["project"]["language"] == "pt-BR"
+    assert git(loop, "status", "--porcelain") == ""
+
+
+def test_a_save_after_a_later_landing_advances_the_worktree(hub, tmp_path, monkeypatch):
+    """A landing in dev after the first save leaves the hub's worktree behind. The next save brings the clean worktree to
+    origin/dev before its check, so it lands instead of refusing (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    new_c = copy.deepcopy(COMMITTED)
+    new_c["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=new_c, confirm=True)
+    assert "err" not in out, out
+    later = clone(tmp_path, origin, "other-checkout")
+    (later / "notes.txt").write_text("x\n")
+    git(later, "add", "--", "notes.txt")
+    git(later, "commit", "-q", "-m", "a later landing")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    landed = git(origin, "rev-parse", "dev")
+    assert git(derived, "rev-parse", "HEAD") != landed
+    newer = copy.deepcopy(new_c)
+    newer["project"]["language"] = "es-ES"
+    out, c, loc = saved(hub, tmp_path, new_committed=newer, confirm=True)
+    assert "err" not in out, out
+    assert git(origin, "rev-parse", "dev") == out["sha"]
+    assert git(derived, "rev-parse", "HEAD") == out["sha"]
+    assert subprocess.run(["git", "-C", str(origin), "merge-base", "--is-ancestor", landed, out["sha"]],
+                          timeout=60).returncode == 0, "the later landing is lost"
+
+
 def test_a_local_only_save_records_the_save_in_the_registry(hub, tmp_path, monkeypatch):
     """A save that changes only the local file still records its save: the registry names the file, the time, and that
     no commit landed, so a reader of the registry never sees an old save as the last one."""
@@ -245,7 +304,7 @@ def test_a_local_only_save_records_the_save_in_the_registry(hub, tmp_path, monke
     out, c, loc = saved(hub, tmp_path, new_local=new_l, confirm=True)
     assert "err" not in out, out
     data = json.loads(hub.slack_registry_path().read_text())
-    entry = data[str(c)]
+    entry = data[str(hub.slack_worktree()[0] / "docs" / "squad" / "slack.yaml")]   # the hub's own worktree, no variable
     assert entry["committed"] is False and entry["at"], data
 
 

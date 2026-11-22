@@ -2107,6 +2107,7 @@ def slack_overview(committed=None, local=None):
 # goes to one local registry outside every repository. The rules stay in the policy module (ADR-0177): the hub validates,
 # diffs, writes and lands, and holds no copy of a rule (ADR-0137).
 SLACK_WT_ENV = "SG_SLACK_WORKTREE"   # the worktree the hub owns for the committed file: never the loop checkout
+SLACK_WT_DIR = "slack-worktree"      # under the profile's state directory when the environment names no worktree (#2763)
 SLACK_REGISTRY = "slack-saved.json"  # in the loop state directory, outside every repository
 
 def slack_registry_path():
@@ -2114,11 +2115,12 @@ def slack_registry_path():
     return pathlib.Path(STATE) / SLACK_REGISTRY
 
 def slack_worktree(loop=None):
-    """(worktree, error): the hub's own worktree for the committed Slack file. A hub with none refuses the write, and a
-    worktree that is the loop checkout, or sits inside it, is refused too."""
+    """(worktree, error): the hub's own worktree for the committed Slack file. `SG_SLACK_WORKTREE` names it, else the hub
+    derives one per profile under its state directory, outside every checkout, so no owner sets a variable by hand and
+    hubmux's one process keeps one worktree per profile (#2763). A worktree that is the loop checkout, or sits inside
+    it, is refused."""
     raw = os.environ.get(SLACK_WT_ENV) or ""
-    if not raw: return None, f"the committed file needs the hub's own worktree: set {SLACK_WT_ENV}"
-    wt = pathlib.Path(raw)
+    wt = pathlib.Path(raw) if raw else pathlib.Path(STATE) / SLACK_WT_DIR
     loop = loop or os.environ.get("SG_CHECKOUT") or CHECKOUT or ""
     if loop:
         try:
@@ -2131,6 +2133,61 @@ def slack_worktree(loop=None):
 
 def _slack_git(wt, *args):
     return subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True, timeout=120)
+
+def _slack_repo():
+    """The repository the hub hangs its worktree from: the loop checkout, named by the environment or read at import."""
+    return os.environ.get("SG_CHECKOUT") or CHECKOUT or ""
+
+def _slack_is_worktree(wt):
+    r = _slack_git(wt, "rev-parse", "--is-inside-work-tree")
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+def _slack_make_worktree(wt):
+    """Hang the hub's worktree from the loop checkout at origin/<land>, detached, so the hub owns its own tree and never
+    writes the checkout's. Returns an error, or None."""
+    repo = _slack_repo()
+    if not repo:
+        return f"the hub's Slack worktree is absent and no checkout names the repository, so {wt} cannot be created"
+    r = _slack_git(repo, "fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
+    if r.returncode:
+        return f"the hub's Slack worktree could not be created at {wt}: git fetch failed: {(r.stderr or r.stdout).strip()}"
+    if _slack_git(repo, "rev-parse", "--verify", "--quiet", f"origin/{LAND}").returncode:
+        return f"the hub's Slack worktree could not be created at {wt}: the checkout has no origin/{LAND}"
+    p = pathlib.Path(wt)
+    if p.exists():
+        if not p.is_dir() or any(p.iterdir()):
+            return f"the hub's Slack worktree at {wt} is not a git worktree and holds files; move it aside"
+        p.rmdir()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    r = _slack_git(repo, "worktree", "add", "--detach", str(p), f"origin/{LAND}")
+    if r.returncode:
+        return f"the hub's Slack worktree could not be created at {wt}: {(r.stderr or r.stdout).strip()}"
+    return None
+
+def _slack_sync(wt):
+    """Bring the hub's worktree to origin/<land> when it stands clean and behind, so a later landing in the branch never
+    strands the next save (#2763). A worktree that carries uncommitted work, or a commit of its own, is left as it stands
+    and `_slack_land_check` refuses it by name. Returns an error, or None."""
+    g = lambda *a: _slack_git(wt, *a)   # noqa: E731
+    r = g("fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
+    if r.returncode: return f"git fetch failed: {(r.stderr or r.stdout).strip()}"
+    base = g("rev-parse", f"origin/{LAND}")
+    if base.returncode: return f"the worktree has no origin/{LAND} to land on"
+    head = g("rev-parse", "HEAD")
+    if not head.returncode and head.stdout.strip() == base.stdout.strip(): return None
+    if g("status", "--porcelain").stdout.strip(): return None
+    if g("merge-base", "--is-ancestor", "HEAD", f"origin/{LAND}").returncode: return None
+    r = g("reset", "--hard", "-q", f"origin/{LAND}")
+    if r.returncode: return f"the worktree could not advance to origin/{LAND}: {(r.stderr or r.stdout).strip()}"
+    return None
+
+def _slack_provision(wt):
+    """The hub's worktree ready for a land: created from the loop checkout when it is absent, and advanced to
+    origin/<land> when it stands clean and behind. Returns an error, or None."""
+    if not _slack_is_worktree(wt):
+        err = _slack_make_worktree(wt)
+        if err: return err
+    return _slack_sync(wt)
 
 def _slack_yaml_text(doc):
     try: return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
@@ -2265,10 +2322,16 @@ def slack_files_set(body, committed=None, local=None):
     needs_commit = bool(diff["committed"])
     base = None
     if needs_commit:
-        # No half save: the worktree the land needs is checked, and the land refused, before any file is written.
+        # No half save: the worktree the land needs is prepared and checked, and the land refused, before any file is
+        # written. Provisioning derives and syncs it (#2763), so the diff the owner approves is the file dev now holds.
         if why: return {"err": why, "diff": diff, "files": files}
-        base, err = _slack_land_check(wt)
-        if err: return {"err": err, "diff": diff, "files": files}
+        perr = _slack_provision(wt)
+        if perr: return {"err": perr, "diff": diff, "files": files}
+        diff["committed"] = _slack_yaml_lines(target, new_c)
+        needs_commit = bool(diff["committed"])
+        if needs_commit:
+            base, err = _slack_land_check(wt)
+            if err: return {"err": err, "diff": diff, "files": files}
     err = _slack_atomic(local, _slack_yaml_text(new_l))
     if err: return {"err": err}
     if needs_commit:
