@@ -25,7 +25,9 @@ SKILL = ROOT / "contrib" / "squad-goal" / "SKILL.md"
 BUDGET = SCRIPTS / "gh-direct-calls.txt"
 
 # The page (the owner reads it) and the door with its checkers (their vocabulary is routes and gh verbs). Not loop work.
-PAGE = {"hub.py", "board_columns.py", "hubmux.py", "hubctl.sh"}
+# The page is one program: hub.py compiles its hub_theme_*.py modules into its own namespace (#2742), so the page set is
+# hub.py and every theme module it loads.
+PAGE = ({"hub.py"} | {p.name for p in SCRIPTS.glob("hub_theme_*.py")}) | {"board_columns.py", "hubmux.py", "hubctl.sh"}
 DOOR = {"ghcall.sh", "ghread.py", "ghthrottle.py", "check-gh-interface.py", "check-gh-interface.sh", "check-suite-env-hermetic.py"}
 
 # A pull-request operation. `gh pr <verb>` counts only in command position, so prose that names a verb is not a call.

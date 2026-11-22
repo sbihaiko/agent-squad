@@ -130,9 +130,13 @@ out=$(guard bash "$d/cqflush.sh" --once); [ ! -s "$T/ghcalls" ] && [ -e "$B/nope
   && ok "guard: cqflush.sh sets aside a queue no profile owns, before gh" || ko "guard: cqflush.sh with an unowned queue (gh: $(cat "$T/ghcalls")): $out"
 # --- The readers: the loop, the hub and the flusher read this seam, and no second copy of the rule exists.
 [ ! -e "$d/repoctx.sh" ] && ok "readers: no second resolver beside the seam" || ko "readers: repoctx.sh still holds a second copy of the rule"
-for r in env.sh hubctl.sh cqflush.sh hub.py hubmux.py; do
+for r in env.sh hubctl.sh cqflush.sh hubmux.py; do
   /usr/bin/grep -q 'address\.sh' "$d/$r" && ! /usr/bin/grep -q 'repoctx\.sh' "$d/$r" && ok "readers: $r reads the seam" || ko "readers: $r does not read address.sh alone"; done
-! /usr/bin/grep -q 'getcwd' "$d/hub.py" && ok "readers: hub.py never takes its checkout from its own working directory" || ko "readers: hub.py falls back to os.getcwd()"
+# The hub is one program: hub.py compiles its hub_theme_*.py modules into its own namespace (#2742), so the hub's
+# readers are the entry point and every theme module.
+/usr/bin/grep -q 'address\.sh' "$d"/hub.py "$d"/hub_theme_*.py && ! /usr/bin/grep -q 'repoctx\.sh' "$d"/hub.py "$d"/hub_theme_*.py \
+  && ok "readers: hub.py reads the seam" || ko "readers: hub.py does not read address.sh alone"
+! /usr/bin/grep -q 'getcwd' "$d"/hub.py "$d"/hub_theme_*.py && ok "readers: hub.py never takes its checkout from its own working directory" || ko "readers: hub.py falls back to os.getcwd()"
 # --- The scripts run on the loop's macOS and on the CI's Linux: a file's mtime is read portably, BSD stat with a GNU fallback.
 bad=""; for s in "$d"/*.sh; do
   /usr/bin/grep -q 'stat -f' "$s" && ! /usr/bin/grep -q 'stat -c' "$s" && bad="$bad $(basename "$s")"; done

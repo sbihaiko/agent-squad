@@ -28,6 +28,10 @@ SEAM = {"squad/modelreg.py", "contrib/squad-goal/scripts/modelreg.py"}
 # Shipped callers that predate the seam and keep their own parsing until their own landing (ADR-0147,
 # Consequences). Keyed by repo-relative path; a name is never added, and an entry leaves the set when its
 # landing moves it to the resolver.
+# The hub is one program: hub.py compiles its hub_theme_*.py modules into its own namespace (#2742), so the one legacy
+# entry that names the hub covers the theme files its code moved into.
+HUB_THEMES = {str(p.relative_to(ROOT)) for p in (ROOT / "contrib/squad-goal/scripts").glob("hub_theme_*.py")}
+
 LEGACY = {
     "contrib/squad-goal/scripts/hub.py": "the panel spells review models and validates the add-box shape",
     "contrib/squad-goal/scripts/launch.py": "the launch gate reads the off switch and the spent providers",
@@ -79,7 +83,7 @@ def unpermitted(paths, root=ROOT):
             rel = str(p.relative_to(root))
         except ValueError:
             rel = str(p)
-        if rel in SEAM or rel in LEGACY:
+        if rel in SEAM or rel in LEGACY or rel in HUB_THEMES:
             continue
         out += [f"{rel}:{n}: {why}: {line}" for n, line, why in scan_file(p)]
     return out

@@ -14,6 +14,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 pytest_plugins = ["tests.slowcap", "tests.real_app_guard_plugin"]
 
 
+def _serve_the_whole_hub():
+    """A read of contrib/squad-goal/scripts/hub.py serves the whole hub: hub.py and the theme files it loads (#2742).
+
+    The hub is one module namespace over hub.py and its theme files, so a test that asserts about the hub's code must see
+    all of it, exactly as it saw one file before the split. The patch answers that one path only; every other read is the
+    untouched read_text. It is installed when this file loads, before any test module is imported, so a module-level
+    source read (a constant built at import) reads the composed text too.
+    """
+    from pathlib import Path as _Path
+
+    from tests.hub_source import hub_source
+    real = _Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self.name == "hub.py" and self.parent.name == "scripts" and self.parent.parent.name == "squad-goal":
+            return hub_source()
+        return real(self, *args, **kwargs)
+
+    _Path.read_text = read_text
+    atexit.register(lambda: setattr(_Path, "read_text", real))
+
+
+_serve_the_whole_hub()
+
+
 def drop_live_paths():
     """The loop exports SG_BOARD_CACHE, and a gate it runs inherits it; hub.py reads it before its own SG_HUB_DIR, so a hub
     test module would read and write the live board (#521). Without it, each module's board cache is under its SG_HUB_DIR."""
