@@ -64,7 +64,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mkdir -p "$T/caps/gates"; printf '{"holder":"gate-x","pid":%s,"since":%s}' "$$" "$(date +%s)" > "$T/caps/gates/gate-x.json"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); case "$r" in *"4 cluster(s)"*"[1228 1233]"*"[1301 1302]"*) ok "autobug: one child per cluster";; *) ko "autobug: '$r'";; esac
 rm -rf "$T/caps/gates"
-printf 'SG_REPO=x/y; SG_STATE=%s; SG_BASE=main; SG_CHECKOUT=%s; SG_FRONTIER_LABEL=ready-for-agent; SG_BUG_LABEL=nobug\n' "$T/st" "$T/co" > "$T/s/env.sh"
+printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=nobug\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: the pass's issue_ledger.py call reads SG_STATE (#2756)
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"[1301 1302]"*) case "$r" in *"[1228 1233]"*) ko "frontier: area rule applied: '$r'";; *) ok "frontier: shared-file issues share one child, area ignored";; esac;; *) ko "frontier: '$r'";; esac
 # One fork-only slice that shares a file with another fork-only pick is ONE child / ONE branch, exactly as the base-branch
 # picks above (#1521): gui/1497, gui/1498 and gui/1502 each landed their own branch on contrib/squad-goal/scripts/hub.py,

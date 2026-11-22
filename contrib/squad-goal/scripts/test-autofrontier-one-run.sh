@@ -940,8 +940,8 @@ r=$(run)
 [ "$(marked 1760)" = 1 ] && ok "B2: an older Todo write on the same card cannot resurrect over the read either" || ko "B2: #1760 not dispatched: '$r'"
 
 # L (#2416): an issue whose landing is in the base and whose publish is pending is no work. A hand landing (`ffland.sh`)
-# puts the commits in dev and leaves the issue open: the publish closes it. The frontier reads the base's own commits -- the
-# `Refs #N` line every landing carries -- and dispatches no run for an issue the base already carries.
+# puts the commits in dev, records the issue's landing fact in the ledger, and leaves the issue open: the publish closes it.
+# The frontier reads that landing fact (`issue_ledger.py standing`, #2756) and dispatches no run for an issue that landed.
 scene landed
 issues '[{"number":771,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":772,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 git init -q "$d/wk"
