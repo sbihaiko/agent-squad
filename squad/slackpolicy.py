@@ -398,6 +398,27 @@ def _effective_persona(committed, local, workspace, channel):
     return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
 
 
+def identity(committed, local, channel_id):
+    """The language and persona one channel answers with, from its id alone: the same chain `decide` uses.
+
+    The daemon reads them for a channel that no event names, such as the channel of an outbox line. The committed file
+    comes first, then the local file, and a channel neither file names falls back to the project default, as an event of
+    an unknown channel does. The persona is None when no file names one."""
+    committed = committed or {}
+    local = local or {}
+    channel_id = str(channel_id or "")
+    workspace = channel = None
+    for document in (committed, local):
+        for ws in _rows(document.get("workspaces")):
+            row = _row_at(ws.get("channels"), "id", channel_id)
+            if row is not None:
+                workspace, channel = ws, row
+                break
+        if channel is not None:
+            break
+    return _effective_language(committed, local, workspace, channel), _effective_persona(committed, local, workspace, channel)
+
+
 def _member_role(local, workspace_id, channel_id, user, accepted):
     """The role the local file gives this user in this channel, or None. A membership in a role the channel does not
     accept grants nothing, so a stranger's message stays data. `accepted` is None for an unknown channel: no action is

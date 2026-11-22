@@ -925,7 +925,7 @@ class FakeVoice:
         self.dir = Path(tmp_path) / "clips"
         self.dir.mkdir(exist_ok=True)
 
-    def synth(self, script):
+    def synth(self, script, voice=None, tone=None):
         self.scripts.append((script, time.monotonic()))
         if self.started is not None:
             self.started.set()
@@ -1253,7 +1253,7 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
     state = mod.State(str(tmp_path))
     state.save_channels(channels)
 
-    def synth(script):
+    def synth(script, **kwargs):
         raise RuntimeError(f"400 refused key {secret}")
 
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",

@@ -41,9 +41,18 @@ def wav_from_pcm(pcm, path, rate=24000, width=2, channels=1):
         w.writeframes(pcm)
 
 
-def synth(key, text, voice, out):
+def style_prompt(text, tone=""):
+    """The text one TTS request carries: the persona tone as the speaking style, then the script.
+
+    Gemini TTS reads a style instruction at the start of the text part, so the tone goes first and the script follows.
+    An empty tone leaves the script alone."""
+    tone = (tone or "").strip()
+    return f"{tone}\n\n{text}" if tone else text
+
+
+def synth(key, text, voice, out, tone=""):
     body = {
-        "contents": [{"parts": [{"text": text}]}],
+        "contents": [{"parts": [{"text": style_prompt(text, tone)}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}},

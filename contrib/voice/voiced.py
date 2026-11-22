@@ -37,10 +37,13 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 `speech`, and for the DM an optional `channel`) to its own outbox (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and the daemon answers it with no call from the session:
 
-- the text is posted as the bot at once, threaded under `thread_ts` (else under nothing);
+- the text is posted as the bot at once under the channel persona's `username` (the `chat:write.customize` scope), and
+  threaded under `thread_ts` (else under nothing);
 - the spoken script (the `speech` field, else the text) is split into sentences, and the first sentence is synthesized
   in parallel with the text post and posted as one clip, so a slow Slack write never holds the voice;
-- the rest is synthesized only once the first clip is out, and posted as one clip.
+- the rest is synthesized only once the first clip is out, and posted as one clip;
+- every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
+  app name until #2726 records what an upload does with a `username`.
 
 A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
 posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
@@ -411,6 +414,44 @@ def read_schema(directory):
     return version
 
 
+def slack_record_path(state_dir, repo):
+    """The file one project's active Slack revision lives in, named by the repository it belongs to.
+
+    The name is a digest of the full repository name, so two distinct repositories never share one record. A name
+    built from the repository's own characters would collide (`a/b` and `a-b`) and hand one project another's revision.
+    """
+    digest = hashlib.sha256((repo or "").strip().encode("utf-8")).hexdigest()[:16]
+    return os.path.join(state_dir, "slack", digest + ".json")
+
+
+def scope_identity(state_dir, scope):
+    """The language and persona one scope answers with, from the active revision of the project that owns it.
+
+    The registry names the repository of each channel id, and the active revision sits in the digest-named file beside
+    it. A scope no project owns (the DM), a project with no active revision and a registry that cannot be read keep the
+    default language and no persona, so the operator session has an instruction before the first revision loads.
+    """
+    try:
+        with open(os.path.join(state_dir, "channels.json"), encoding="utf-8") as f:
+            channels = json.load(f)
+    except (OSError, ValueError):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    if not isinstance(channels, dict):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    repo = next((name for name, entry in channels.items()
+                 if isinstance(entry, dict) and str(entry.get("id")) == str(scope)), None)
+    if not repo:
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    try:
+        with open(slack_record_path(state_dir, repo), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    if not isinstance(record, dict) or not record.get("revision"):
+        return slackpolicy.DEFAULT_LANGUAGE, None
+    return slackpolicy.identity(record["revision"], record.get("local") or {}, scope)
+
+
 class State:
     """The daemon's state in one directory: the inbox, the record of other users, the seen ids and the owner id."""
 
@@ -449,14 +490,8 @@ class State:
         return self.outbox_for(DM)
 
     def slack_path(self, repo):
-        """The file one project's active Slack revision lives in, named by the repository it belongs to.
-
-        The name is a digest of the full repository name, so two distinct repositories never share one record. A name
-        built from the repository's own characters would collide (`a/b` and `a-b`) and hand one project another's
-        revision.
-        """
-        digest = hashlib.sha256((repo or "").strip().encode("utf-8")).hexdigest()[:16]
-        return os.path.join(self.slack_dir, digest + ".json")
+        """The file one project's active Slack revision lives in, named by the repository it belongs to."""
+        return slack_record_path(self.dir, repo)
 
     def refusal_path(self, repo):
         """The file that records the last refused revision of one project, beside its active revision."""
@@ -822,12 +857,14 @@ def outbox_digest(record):
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def spoken_clip(key, script, voice=VOICE):
-    """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it."""
+def spoken_clip(key, script, voice=VOICE, tone=""):
+    """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it.
+
+    The voice and the tone are the persona's, so one answer sounds like the channel it answers in."""
     import tts  # the vendored TTS beside this file, so the daemon keeps no second copy of it
     fd, path = tempfile.mkstemp(prefix="voiced-", suffix=".wav")
     os.close(fd)
-    got, err = tts.synth(key, script, voice, path)
+    got, err = tts.synth(key, script, voice, path, tone=tone)
     if not got:
         try:
             os.unlink(path)
@@ -1064,6 +1101,17 @@ class Daemon:
             return self.bot_tokens[app]
         return next(iter(self.bot_tokens.values()), None)
 
+    def identity_for(self, channel):
+        """The language and persona of one channel: from the active revision of its project, by the decision's chain.
+
+        An outbox line names no event, so the daemon reads the identity from the channel id alone. A channel with no
+        active revision keeps the default language and no persona, so no post carries a name the file never declared."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if not active or not active.get("revision"):
+            return slackpolicy.DEFAULT_LANGUAGE, None
+        return slackpolicy.identity(active["revision"], active.get("local") or {}, channel)
+
     def download_clip(self, channel, url):
         """One clip's bytes, fetched with the token of the app that serves its channel."""
         app = self.app_of(channel)
@@ -1289,6 +1337,9 @@ class Daemon:
         if client is None:
             return False
         payload = {"channel": question["channel"], "text": text}
+        persona = self.identity_for(question.get("channel"))[1]
+        if persona is not None and persona.name:
+            payload["username"] = persona.name     # the scope `chat:write.customize` is what lets Slack accept it
         if question.get("ts"):
             payload["thread_ts"] = question["ts"]
         got = client.api("chat.postMessage", payload, post=True)
@@ -1330,11 +1381,17 @@ class Daemon:
         return sources
 
     def post_text(self, channel, thread_ts, text):
-        """Post the readable answer in its channel; True and its ts when Slack accepts it, so the clips answer it."""
+        """Post the readable answer in its channel under the persona name; True and its ts when Slack accepts it.
+
+        The `username` is the channel persona's, so each channel sees the right identity. A channel with no persona
+        sends no name and the bot posts as the app, as it did before the persona existed."""
         client = self.client_for(channel)
         if client is None:
             return False, None
         payload = {"channel": channel, "text": text}
+        persona = self.identity_for(channel)[1]
+        if persona is not None and persona.name:
+            payload["username"] = persona.name     # the scope `chat:write.customize` is what lets Slack accept it
         if thread_ts:
             payload["thread_ts"] = thread_ts
         got = client.api("chat.postMessage", payload, post=True)
@@ -1343,10 +1400,13 @@ class Daemon:
             return False, None
         return True, got.get("ts")
 
-    def synth_clip(self, script):
-        """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer."""
+    def synth_clip(self, script, voice=None, tone=None):
+        """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer.
+
+        `voice` and `tone` are the persona's, so the clip sounds like the channel; a caller that names neither keeps
+        the daemon's default voice."""
         try:
-            return self.synthesizer(script) or None
+            return self.synthesizer(script, voice=voice, tone=tone) or None
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
             # The error type only: a provider message can carry request material, and this log is never redacted.
             self.log(f"voiced: speech skipped: {type(x).__name__}")
@@ -1394,10 +1454,13 @@ class Daemon:
             return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
+        persona = self.identity_for(cid)[1]
+        voice = persona.voice if persona is not None and persona.voice else None
+        tone = persona.tone if persona is not None and persona.tone else None
         posted = self.state.posted().get(digest) if digest else None
         done = set(posted.get("clips_done") or []) if posted else set()
         # The first sentence is synthesized beside the text post when there is one, so the voice never waits for Slack.
-        speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first)) \
+        speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first, voice, tone)) \
             if (first and self.synthesizer and "first" not in done) else None
         if posted is None:
             ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
@@ -1419,7 +1482,7 @@ class Daemon:
                 if digest:
                     self.state.remember_clip(digest, "first")
         if rest and self.synthesizer and "rest" not in done:
-            path = await asyncio.to_thread(self.synth_clip, rest)
+            path = await asyncio.to_thread(self.synth_clip, rest, voice, tone)
             if path:
                 if not await asyncio.to_thread(self.post_clip, path, cid, anchor, "the answer"):
                     return True, False
@@ -1873,7 +1936,8 @@ def main(argv):
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    synthesizer=lambda script: spoken_clip(key, script),
+                    synthesizer=lambda script, voice=None, tone=None:
+                        spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
                     clients={app_id: SlackClient(entry) for app_id, entry in bots.items()},
                     bot_tokens=bots,

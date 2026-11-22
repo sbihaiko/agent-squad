@@ -44,6 +44,18 @@ For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
 The daemon posts the text at once, speaks the first sentence while the text goes out, and speaks the rest as one clip.
 It reads every outbox on its own. The session makes no Slack call and waits for no reply.
 
+## Persona and language
+
+Each channel answers with a persona: a name, a Gemini voice, and a tone. The daemon reads the persona and the language
+from the active `slack.yaml` revision of the project that owns the channel.
+
+- The daemon posts the text with the persona `username`. The app manifest carries the scope `chat:write.customize`, and
+  the owner reinstalls the app in each `owned` workspace before Slack accepts the name.
+- The daemon speaks with the persona `voice`, and the persona `tone` is the TTS style prompt.
+- A clip carries no name, so it leaves under the app name until #2726 records what an upload does with a `username`.
+- The brief of the session carries the channel language and the persona tone. The session answers in the channel
+  language, even when the sender writes in another language.
+
 ## No poll
 
 The one-minute poll is retired. No cron entry, no launchd agent and no `watch.py` run is scheduled for the session: the

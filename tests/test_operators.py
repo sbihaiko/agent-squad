@@ -332,3 +332,37 @@ def test_the_session_is_told_the_repository_is_read_only_under_its_profile(tmp_p
     text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
     assert "Read /repo" in text
     assert "Work in /repo" not in text
+
+
+def test_the_brief_carries_the_channel_language_and_the_persona_tone(tmp_path, monkeypatch):
+    """#2688 criteria (5) and (6): the instruction for the text reply carries the channel language and the persona
+    tone, read from the active revision of the project that owns the scope."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "channels.json").write_text(json.dumps({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}}))
+    revision = {
+        "project": {"language": "en-US", "persona": "iara"},
+        "personas": [{"id": "iara", "name": "Iara", "voice": "Sulafat",
+                      "tone": "Warm and patient. Confirms what was asked."}],
+        "workspaces": [{"id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+                        "channels": [{"id": "C0PROJ0001", "name": "proj-acme-app", "mode": "listen+speak",
+                                      "language": "pt-BR", "persona": "iara"}]}],
+    }
+    (state / "slack").mkdir()
+    digest = hashlib.sha256(b"acme/app").hexdigest()[:16]
+    (state / "slack" / f"{digest}.json").write_text(json.dumps(
+        {"repo": "acme/app", "sha": "a" * 40, "revision": revision, "local": {}}))
+
+    text = op.prompt_for("C0PROJ0001", str(state), "/repo")
+
+    assert "pt-BR" in text, text
+    assert "Warm and patient. Confirms what was asked." in text, text
+    assert "even when the sender writes in another language" in text, text
+
+
+def test_the_dm_brief_keeps_its_language_when_no_revision_names_a_persona(tmp_path, monkeypatch):
+    """#2688: the DM has no channel persona, so the brief keeps the prototype's Portuguese answer and no tone."""
+    op = operators(tmp_path, monkeypatch)
+    text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
+    assert "Brazilian Portuguese" in text, text
