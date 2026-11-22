@@ -6246,6 +6246,7 @@ def _x_ticks(days):
     return [{"i": i, "day": days[i]} for i in sorted({round(k * (len(days) - 1) / 4) for k in range(5)})] if days else []
 
 FLOW_MOVED = "moved"   # the label a card carries once it left for another board: no band of this board counts it (#1663)
+FLOW_EXCLUDED = _leadtime.CHART_EXCLUDE   # the owner's label: a card it marks stays out of every flow chart (#2743)
 CFD_RANGES = [("7", 7), ("30", 30), ("90", 90), ("all", None)]   # the cumulative flow's range views, in days (#901)
 LEAD_TIMEFRAMES = [("12h", 0.5), ("1", 1), ("2", 2), ("3", 3), ("7", 7), ("14", 14), ("30", 30), ("all", None)]   # the control chart presets (#900); the four short ones count hours on the page (owner, 2026-11-01); 12h is the default (#2029)
 LEAD_START = COLUMN["issue_todo"]   # the Lead Time view opens measured from Todo (#1247): the payload the page reads carries it
@@ -6269,31 +6270,36 @@ def lead_rows(a=None, b=None, now=None):
     card's first time on the board; an empty `a` is that same selection, never a column named empty. Each read card
     carries its observation `obs` for the survival reading: an open card is observed to `now`, censored (#1250). A
     delivered row also carries `columns`, the hours it spent in each column, and `gate`, its Testing hours, for the
-    chart's stack (#1256). The row's bar keys filter it (#904)."""
+    chart's stack (#1256). The row's bar keys filter it (#904). A card carrying the owner's `chart:exclude` label, in
+    its board read or in its history, is no dot and no observation: the chart excludes it under that reason (#2743)."""
     a, b = a or None, b or None   # a selection cleared to empty is the default, Created or closed, never a column name
     store = _hist.load_store(_hist.history_path(BOARD, REPO))
     now = now or dt.datetime.now(dt.UTC)
     rows = []
     for i in board_cache["items"]:
         closed = str(i["s"]).lower() == "closed"
+        excluded = FLOW_EXCLUDED in (i.get("l") or [])   # #2743: the owner's label keeps the card out of every chart
         read = store.get(i["n"])
+        if not excluded and read:   # the history half mirrors the cumulative flow's moved filter (#1663)
+            excluded = FLOW_EXCLUDED in _hist.labels_now(read["events"])
         runs = _hist.intervals(read["events"]) if read else []
-        obs = _hist.lead_observation(runs, start=a, end=b, complete=read["complete"], now=None if closed else now) if read else None
+        obs = None if excluded else (_hist.lead_observation(runs, start=a, end=b, complete=read["complete"], now=None if closed else now) if read else None)
         span = obs if closed and obs and not obs["censored"] else None
         entered = None
-        if closed and read and span is None:   # the only rows whose reason and fallback read it: lazily, never per card
+        if not excluded and closed and read and span is None:   # the only rows whose reason and fallback read it: lazily, never per card
             entered = any((r["on_board"] if a is None else r["column"] == a) for r in runs)
         # #1354: the default view measures from Todo, but a card can close without ever entering it. Measure such a card
         # from its first time on the board, the Backlog wait included, and say so. The end column is the reader's, so the
         # card must have entered it: never measure a span the chart does not ask for. A user-chosen start keeps its
         # exclusion, and a chosen span is never silently replaced.
         fallback = False
-        if closed and read and obs is None and not entered and a in (None, LEAD_START):
+        if not excluded and closed and read and obs is None and not entered and a in (None, LEAD_START):
             end = b or COLUMN["issue_closed"]
             if any(r["column"] == end for r in runs):
                 on_board = _hist.board_time(runs, end=b, complete=read["complete"])
                 if on_board is not None: obs, span, fallback = on_board, on_board, True
-        if _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
+        if excluded: reason = FLOW_EXCLUDED
+        elif _columns_module.not_planned(i.get("cr")): reason = _leadtime.NOT_DELIVERED
         elif closed and read is None: reason = _leadtime.NOT_READ
         elif closed and span is None: reason = _leadtime.NO_TRANSITION if entered else _leadtime.NO_START
         else: reason = None
@@ -6406,7 +6412,7 @@ def _cfd_payload(fw=(), fs=(), fk=(), ty=_flow.DEFAULT_TYPE):
     columns_key = _file_key(pathlib.Path(__file__).resolve().parent / "board_columns.py")   # the column rules each fold reads
     cards = [_hist.intervals(rec.get("events") or [], (rec.get("n"), rec.get("t"), columns_key)) for rec in store.values()
              if (rec.get("keys") is None or _in_bar(rec["keys"], fw, fs, fk, ty))
-             and FLOW_MOVED not in _hist.labels_now(rec.get("events") or [])]   # a moved card is another board's work (#1663)
+             and not (_hist.labels_now(rec.get("events") or []) & {FLOW_MOVED, FLOW_EXCLUDED})]   # a moved card is another board's work (#1663); the owner's label is no band either (#2743)
     zone = day_zone()
     cfd = _cfd.cfd(cards, ORDER, zone=zone, now=dt.datetime.now(dt.UTC))
     extents = {p["day"]: _band_extents(p["bands"]) for p in cfd["points"]}
