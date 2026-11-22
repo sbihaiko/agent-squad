@@ -162,6 +162,8 @@ def check(request, decision, line, project, listed=None):
         return Refusal("arguments", f"the {request.action} action takes {takes}, and the request names {', '.join(extra)}")
     missing = [name for name in _REQUIRED_ARGUMENTS.get(request.action, ())
                if not str(request.arguments.get(name) or "").strip()]
+    if len(missing) == 1:
+        return Refusal("arguments", f"the {request.action} action needs one non-empty {missing[0]}")
     if missing:
         return Refusal("arguments", f"the {request.action} action needs {', '.join(missing)}")
     if not getattr(decision, "reply", None):
@@ -213,8 +215,14 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
         text = work(project, str(request.arguments["title"]))
     elif request.action == REQUEST_INVESTIGATION:
         text = investigate(project, str(request.arguments["question"]))
-    else:
+    elif request.action == APPROVE_AND_MOVE:
         text, why = slackboard.approve_and_move(board, request.arguments["card"], request.arguments["to"])
         if why is not None:
             return Outcome(False, None, data_record(line, Refusal("board", why)))
+    else:
+        # The action check in `check` refuses a name outside `ACTIONS` before this dispatch, so this branch keeps the
+        # dispatch total: an action the set does not list runs nothing and writes nothing.
+        return Outcome(False, None, data_record(line, Refusal(
+            "action", f"the {request.action!r} action exists for no role: a role grants only "
+                      f"{', '.join(sorted(ACTIONS))}, so an owner-only action stays with the owner")))
     return Outcome(True, {"path": decision.reply, "channel": str((line or {}).get("channel") or ""), "text": text}, None)
