@@ -224,9 +224,9 @@ def _slices(page):
     return "\n".join([stub, esc, sett, sl])
 
 
-def render(hub, out, sls=None):
-    view = hub.SLACK_DEFAULT if sls is None else sls
-    body = (_slices(hub.PAGE) + f"\nslS={json.dumps(view)};slDraft=slClone(slS);slR={json.dumps(out)};slRender();"
+def render(hub, out):
+    """The theme drawn from one read view: the page holds no state of its own before the read answers."""
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slRender();"
             "console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
 
@@ -236,6 +236,17 @@ def read_block(html):
     i = html.index("data-blk=read")
     j = html.find("data-blk=settings", i)
     return html[i:j if j >= 0 else len(html)]
+
+
+def test_the_theme_writes_one_status_text_to_the_chip_and_the_nav_line(hub, tmp_path):
+    """One read view, one summary (#1284): the chip and the nav line carry the same text from the one render, so a
+    changed workspace or channel count can never leave the two disagreeing."""
+    out = overview(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slRender();"
+            "console.log(JSON.stringify({chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
+    got = json.loads(_node(body))
+    assert got["chip"] == "2 workspaces · 4 channels", got
+    assert got["nav"] == got["chip"], got
 
 
 def test_the_read_view_draws_the_four_sections_and_wears_no_control(hub, tmp_path):

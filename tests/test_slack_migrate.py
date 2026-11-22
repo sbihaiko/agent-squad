@@ -3,20 +3,14 @@
 The old file is `<profile>.slack.json`, written by Settings > Communication and read by no process. The migration
 follows the spec's field table: the language becomes `project.language`, `tick` and `max` become the `two_state` poll
 of each migrated channel, a channel that is not watched is dropped, and a channel with no Slack id stays pending until
-the owner gives the id in the channel editor. The seams under test are the policy module's pure `migrate` and the hub's
-`slack_migrate`, which reads the old file and returns the report. Every id is a placeholder and every file is a
-temporary fixture.
+the owner gives the id in the channel editor. The seam under test is the policy module's pure `migrate`: the hub's own
+reader of the old file retired with the file (#2701). Every id is a placeholder.
 
-Guards: `squad/slackpolicy.py` (`migrate`), `contrib/squad-goal/scripts/hub.py` (`slack_migrate`).
+Guard: `squad/slackpolicy.py` (`migrate`).
 """
 import copy
-import importlib.util
 import json
 import pathlib
-import re
-import subprocess
-
-import pytest
 
 from squad import slackpolicy
 
@@ -183,120 +177,3 @@ def test_the_migrated_documents_pass_the_slack_validator():
     """Criterion 1 end to end: the pair the migration builds is a valid `slack.yaml` and `slack.local.yaml`."""
     m = mig()
     assert slackpolicy.validate(m.committed, m.local) == []
-
-
-# ---------------------------------------------------------------- the hub's report
-
-@pytest.fixture(scope="module")
-def hub(tmp_path_factory):
-    """The hub module under a pinned environment, so the policy module comes from this tree."""
-    root = tmp_path_factory.mktemp("slack-migrate")
-    prof, state, co = root / "profiles", root / "state", root / "checkout"
-    for d in (prof, state, co):
-        d.mkdir()
-    mp = pytest.MonkeyPatch()
-    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_PROFILE", "t"),
-                 ("SG_PROFILES_DIR", str(prof)), ("SG_STATE", str(state)), ("SG_CHECKOUT", str(co)),
-                 ("SG_HUB_DIR", str(root / "hub")), ("SG_SQUAD", str(ROOT))):
-        mp.setenv(k, v)
-    spec = importlib.util.spec_from_file_location("hub_slack_migrate", HUB_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    yield mod
-    mp.undo()
-
-
-@pytest.fixture
-def old_file(hub):
-    path = hub.slack_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(OLD) + "\n")
-    yield path
-    path.unlink()
-
-
-def test_the_hub_reads_the_old_file_and_returns_the_report(hub, old_file):
-    """Criterion 8: the owner asks the hub and gets one report of what it carried over and what it dropped."""
-    out = hub.slack_migrate(workspace=WORKSPACE, ids=IDS)
-    assert out["err"] is None, out
-    assert out["defects"] == [], out["defects"]
-    assert out["pending"] == []
-    assert any(line.startswith("dropped: prefix") for line in out["report"]), out["report"]
-    assert out["committed"]["project"]["language"] == "pt-BR"
-
-
-def test_a_pending_channel_reaches_neither_document(hub, old_file):
-    """Criterion 5 at the hub: a channel with no id stays out of the documents until the owner gives the id."""
-    out = hub.slack_migrate(workspace=WORKSPACE, ids={})
-    assert [p["name"] for p in out["pending"]] == ["proj-agent", "alerts"]
-    docs = json.dumps({"committed": out["committed"], "local": out["local"]})
-    assert "proj-agent" not in docs and "alerts" not in docs, docs
-
-
-def test_the_hub_names_the_missing_team_id(hub, old_file, monkeypatch):
-    """The workspace id is the one field the old file never held: without it the hub says so and writes no workspace.
-    The connection answers nothing here, so no network call runs."""
-    monkeypatch.setattr(hub, "slack_team", lambda profile=None: (None, "no connection"))
-    out = hub.slack_migrate(workspace=None, ids=IDS)
-    assert out["local"]["workspaces"] == [], out
-    assert any(line.startswith("pending: the Slack workspace has no team id") for line in out["report"]), out["report"]
-
-
-def test_with_no_old_file_the_hub_says_so(hub):
-    assert "no old Slack file" in hub.slack_migrate(workspace=WORKSPACE)["err"]
-
-
-# ---------------------------------------------------------------- the renderer
-
-def _node(body):
-    p = subprocess.run(["node", "-"], input=body, capture_output=True, text=True, timeout=60)
-    assert p.returncode == 0, p.stderr
-    return p.stdout
-
-
-def _slices(page):
-    esc = re.search(r"^const esc=.*$", page, re.M).group(0)
-    sett = page[page.index("// SETT{"):page.index("// }SETT")]
-    sl = page[page.index("let slS=null"):page.index("async function slLoad()")]
-    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
-    return "\n".join([stub, esc, sett, sl])
-
-
-def test_the_page_shows_what_the_migration_carried_and_dropped(hub):
-    """Criterion 8 on the page: the report lines reach the owner in the Communication theme."""
-    report = ["carried: language pt-br becomes project.language pt-BR", "dropped: prefix (the persona mark replaces it)",
-              "pending: channel proj-agent (no Slack id; the hub asks for the id before it writes)"]
-    body = _slices(hub.PAGE) + f"\nconsole.log(slMigHtml({json.dumps({'report': report, 'pending': []})}))"
-    html = _node(body)
-    for line in report:
-        assert line in html, (line, html)
-
-
-def test_the_load_fetches_the_migration_and_the_button_loads_its_pair(hub):
-    """Criterion 8 on the wire: the page load asks `/api/slack/migrate` into `slM`, and a click on the load button puts
-    the migration's pair in the editor's `slDocs`. A dropped fetch or a dropped click handler fails this test."""
-    page = hub.PAGE
-    esc = re.search(r"^const esc=.*$", page, re.M).group(0)
-    s_line = re.search(r"^let slS=.*$", page, re.M).group(0)
-    r_line = re.search(r"^let slR=null;$", page, re.M).group(0)
-    m_line = re.search(r"^let slM=null;.*$", page, re.M).group(0)
-    clone = re.search(r"^const slClone=.*$", page, re.M).group(0)
-    load = page[page.index("async function slLoad()"):page.index("async function slPost")]
-    cstart = page.index('$("#sbody").addEventListener("click"')
-    click = page[cstart:page.index("\n });", cstart) + len("\n });")]
-    scenario = """
-const MIG={"err":null,"report":["dropped: prefix"],"pending":[],"committed":{"version":1,"project":{"language":"pt-BR"}},"local":{"version":1,"workspaces":[]}};
-const ANSWERS={"/api/slack":{"connection":"connected"},"/api/slack/files":{"docs":{"committed":{"version":9},"local":{"version":9}}},"/api/slack/migrate":MIG};
-globalThis.fetch=async u=>({json:async()=>ANSWERS[u]});
-(async()=>{
-  await slLoad();
-  const asked=JSON.stringify(slM)===JSON.stringify(MIG)&&JSON.stringify(slDocs)===JSON.stringify(ANSWERS["/api/slack/files"].docs);
-  STORE["#sbody:click"]({target:{closest:()=>({id:"slmigload"})}});
-  console.log(JSON.stringify({asked,loaded:JSON.stringify(slDocs)===JSON.stringify({committed:MIG.committed,local:MIG.local})}));
-})();
-"""
-    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",'
-            'addEventListener:(ev,fn)=>{STORE[s+":"+ev]=fn}});')
-    body = "\n".join([stub, esc, s_line, r_line, m_line, clone, "function slRender(){}", load, click, scenario])
-    out = json.loads(_node(body))
-    assert out == {"asked": True, "loaded": True}, out

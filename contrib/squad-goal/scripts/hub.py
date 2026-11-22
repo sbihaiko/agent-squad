@@ -1803,232 +1803,16 @@ def limits_set(body):
         limits_record(diff)
     return {"diff": diff, "state": limits_read()}
 
-# --- Settings > Communication (#924). How the agent reads and writes Slack for this profile: the prefix, the cadence, the
-# channels and the people it answers. The page renders; reading, validating, diffing and writing live here (ADR-0137). The
-# file is per profile, gitignored and written through a temp file and a rename (ADR-0030). The hub holds no token: posting
-# goes through the owner's Slack account by the Claude Slack connector, and nothing reads this file until a bridge does.
-SLACK_LANGS = ("pt-br", "en-US", "es")
-SLACK_ROLES = ("Manager", "Colleague")
-SLACK_EVENTS = ("stg", "prod", "dev", "bug", "fix")
-SLACK_DEFAULT = {"connection": "not connected", "prefix": "[agent]", "lang": "en-US", "tick": 5, "max": 30, "quiet": "",
-                 "other": "ignore", "dm": False, "audio": False, "channels": [], "people": [],
-                 "templates": {"stg": "<prefix>\nDeployed to STG and the e2e run is green. PR <pr>: <title> (<issue>). Please test on stg.",
-                               "prod": "<prefix>\nDeployed to PROD. PR <pr>: <title> (<issue>).",
-                               "dev": "<prefix>\nLanded in dev. PR <pr>: <title> (<issue>). Next: promotion to stg.",
-                               "bug": "<prefix>\nI confirmed this is a bug: <mechanism>. Filed as <issue>, in Todo. I will post here when the fix reaches stg.",
-                               "fix": "<prefix>\n<real state, with dates and links>. Next step: <who>."}}
-SLACK_NEW_CHANNEL = {"watch": True, "thread": True, "mention": False,
-                     "events": {"stg": True, "prod": True, "dev": False, "bug": True, "fix": True}}
-SLACK_LABEL = {"prefix": "prefix", "lang": "default language", "tick": "read every", "max": "up to",
-               "quiet": "quiet hours", "other": "anyone not listed", "dm": "owner self-DM", "audio": "audio"}
-SLACK_DIFF = "Communication · Slack · "
-_SLACK_HHMM = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
-_SLACK_CHANNEL = re.compile(r"^#?[^\s#]{1,80}$")
-
-def slack_file():
-    """The per-profile Slack settings beside the profile, or None when no profile is in force."""
-    slug, d = PROFILE_NAME, profiles_dir()
-    return d / f"{slug}.slack.json" if slug and d is not None else None
-
-def slack_read(path):
-    """The saved settings over the defaults; the defaults alone when the file is absent, unreadable or not an object."""
-    cfg = json.loads(json.dumps(SLACK_DEFAULT))
-    try: saved = json.loads(path.read_text()) if path else {}
-    except (OSError, ValueError): saved = {}
-    if isinstance(saved, dict): cfg.update({k: v for k, v in saved.items() if k in SLACK_DEFAULT})
-    return cfg
-
-def slack_view(path):
-    """What the page draws: the saved settings, the defaults a new channel starts from, and the file a Save writes
-    (#1278: the Save dialog names each path it would touch)."""
-    return {**slack_read(path), "new_channel": SLACK_NEW_CHANNEL, "file": str(path)}
-
-def _slack_int(v, lo, hi):
-    if isinstance(v, bool): return None
-    try: n = int(str(v).strip())
-    except (TypeError, ValueError): return None
-    return n if lo <= n <= hi and str(v).strip() == str(n) else None
-
-def _slack_rows(items, check):
-    """The rows of one list from the form, each checked; a name that appears twice is refused."""
-    if not isinstance(items, list): return None, "the list is not a list"
-    out = []
-    for it in items:
-        if not isinstance(it, dict): return None, "a row is not an object"
-        row, msg = check(it)
-        if msg: return None, msg
-        out.append(row)
-    if len({r["name"] for r in out}) != len(out): return None, "a name appears more than once"
-    return out, None
-
-def _slack_channel(it):
-    name = str(it.get("name", "")).strip()
-    if not _SLACK_CHANNEL.match(name): return None, "a channel is a name or id with no space"
-    if it.get("lang") not in SLACK_LANGS: return None, "a channel language is one of " + ", ".join(SLACK_LANGS)
-    flags = {k: it.get(k) for k in ("watch", "thread", "mention")}
-    if not all(isinstance(v, bool) for v in flags.values()): return None, "a channel switch is on or off"
-    ev = it.get("events") if isinstance(it.get("events"), dict) else None
-    if ev is None or set(ev) - set(SLACK_EVENTS) or not all(isinstance(v, bool) for v in ev.values()):
-        return None, "a channel announces only the release events, on or off"
-    return {"name": name, "lang": it["lang"], **flags, "events": {k: bool(ev.get(k, False)) for k in SLACK_EVENTS}}, None
-
-def _slack_person(it):
-    name = str(it.get("name", "")).strip()
-    if not name or len(name) > 80: return None, "a person has a name of 1 to 80 characters"
-    if it.get("role") not in SLACK_ROLES: return None, "role is Manager or Colleague"
-    return {"name": name, "role": it["role"]}, None
-
-def _slack_templates(items):
-    if not isinstance(items, dict) or set(items) != set(SLACK_EVENTS): return None, "a template is kept for each release event"
-    if not all(isinstance(t, str) and 1 <= len(t) <= 600 for t in items.values()): return None, "a template is text of 1 to 600 characters"
-    return {k: items[k] for k in SLACK_EVENTS}, None
-
-def _slack_untracked(path):
-    """True when the folder is in a git work tree and git would not ignore the file there."""
-    r = subprocess.run(["git", "-C", str(path.parent), "check-ignore", "-q", str(path)], capture_output=True, timeout=20)
-    return r.returncode == 1
-
-def slack_policy():
-    """The one home of the Slack file rules (ADR-0177): the hub holds no copy of a rule."""
-    (SP,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("slackpolicy",))
-    return SP
-
-def slack_clean(body, cur):
-    """The typed settings, checked: (settings, None), or (None, the message for the first value that breaks its rule)."""
-    try:
-        policy = slack_policy()
-        hit = policy.first_token(body)
-    except Exception as e:
-        return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
-    if hit: return None, f"{hit[0]}: a value in token format ({hit[1]}) is refused; this file names a Keychain entry, never a token"
-    # The hub edits the project's Slack use, so the file rules hold here too: a role that lists prod is refused and the
-    # message names its key, exactly as `squad slack check` refuses the committed file (ADR-0177 decision 8). A validator
-    # that raises answers a named error, so a settings save never degrades into a traceback.
-    try:
-        defects = policy.validate(committed=body)
-    except Exception as e:
-        return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
-    if defects: return None, str(defects[0])
-    prefix = str(body.get("prefix", cur["prefix"])).strip()
-    if not prefix or "\n" in prefix or len(prefix) > 40: return None, "prefix is one line of 1 to 40 characters"
-    lang = body.get("lang", cur["lang"])
-    if lang not in SLACK_LANGS: return None, "default language is one of " + ", ".join(SLACK_LANGS)
-    tick = _slack_int(body.get("tick", cur["tick"]), 1, 30)
-    if tick is None: return None, "read every is a whole number of minutes from 1 to 30"
-    mx = _slack_int(body.get("max", cur["max"]), 2, 120)
-    if mx is None or mx < tick: return None, "up to is a whole number of minutes from 2 to 120, not less than read every"
-    quiet = str(body.get("quiet", cur["quiet"])).strip()
-    if quiet and not _SLACK_HHMM.match(quiet): return None, "quiet hours are HH-HH local time, or empty"
-    other = body.get("other", cur["other"])
-    if other not in ("ignore", "reply"): return None, "anyone not listed is ignored or gets a fixed reply"
-    dm = body.get("dm", cur["dm"])
-    audio = body.get("audio", cur["audio"])
-    if not isinstance(dm, bool) or not isinstance(audio, bool): return None, "owner self-DM and audio are on or off"
-    channels, msg = _slack_rows(body.get("channels", cur["channels"]), _slack_channel)
-    if msg: return None, msg
-    people, msg = _slack_rows(body.get("people", cur["people"]), _slack_person)
-    if msg: return None, msg
-    templates, msg = _slack_templates(body.get("templates", cur["templates"]))
-    if msg: return None, msg
-    return {"connection": cur["connection"], "prefix": prefix, "lang": lang, "tick": tick, "max": mx, "quiet": quiet,
-            "other": other, "dm": dm, "audio": audio and dm, "channels": channels, "people": people,
-            "templates": templates}, None
-
-def _slack_show(v):
-    if v is True: return "on"
-    if v is False: return "off"
-    return str(v) if str(v) else "always on"
-
-def _slack_rowdiff(kind, name, old, new):
-    """The diff lines for one channel or person kept in both lists, by name."""
-    if kind == "person":
-        return [f"{SLACK_DIFF}person {name} · role: {old['role']} -> {new['role']}"] if old["role"] != new["role"] else []
-    out = [f"{SLACK_DIFF}channel {name} · {f}: {_slack_show(old[f])} -> {_slack_show(new[f])}"
-           for f in ("lang", "watch", "thread", "mention") if old[f] != new[f]]
-    out += [f"{SLACK_DIFF}channel {name} · {ev} posts: {_slack_show(old['events'][ev])} -> {_slack_show(new['events'][ev])}"
-            for ev in SLACK_EVENTS if old["events"][ev] != new["events"][ev]]
-    return out
-
-def slack_diff(old, new):
-    """The diff a Save shows before it writes: one line per changed setting, row or switch, each prefixed for this theme."""
-    out = []
-    for key, label in SLACK_LABEL.items():
-        if new[key] != old[key]: out.append(f"{SLACK_DIFF}{label}: {_slack_show(old[key])} -> {_slack_show(new[key])}")
-    for kind, key in (("channel", "channels"), ("person", "people")):
-        before = {r["name"]: r for r in old[key]}
-        after = {r["name"]: r for r in new[key]}
-        for name in after.keys() - before.keys():
-            out.append(f"{SLACK_DIFF}{kind} {name} added")
-        for name in before.keys() - after.keys():
-            out.append(f"{SLACK_DIFF}{kind} {name} removed")
-        for name in after.keys() & before.keys():
-            out += _slack_rowdiff(kind, name, before[name], after[name])
-    out += [f"{SLACK_DIFF}template {ev}: changed" for ev in SLACK_EVENTS if new["templates"][ev] != old["templates"][ev]]
-    return out
-
-def slack_write(path, cfg):
-    """The settings file, whole or not at all: a temp file, then a rename. Returns an error, or None."""
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
-        os.replace(tmp, path)
-    except OSError as e:
-        return f"the settings could not be written: {e.strerror or e}"
-    finally:
-        try: tmp.unlink()
-        except OSError: pass
-    return None
-
-def slack_set(body):
-    """POST /api/slack: validate, diff, then write. With `confirm` false it answers the diff and writes nothing.
-    A body that carries both files is the Communication theme's file save (#2694)."""
-    if isinstance(body, dict) and "committed" in body and "local" in body: return slack_files_set(body)
-    if not isinstance(body, dict): return {"err": "bad request"}
-    path = slack_file()
-    if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
-    cur = slack_read(path)
-    new, err = slack_clean(body, cur)
-    if err: return {"err": err}
-    diff = slack_diff(cur, new)
-    if body.get("confirm") is not True: return {"diff": diff}
-    if diff:
-        if _slack_untracked(path):
-            return {"err": "the settings file would be tracked: its folder is in a git work tree and git does not ignore it"}
-        err = slack_write(path, new)
-        if err: return {"err": err}
-    return {"diff": diff, "state": slack_view(path)}
-
-def slack_migrate(legacy=None, workspace=None, ids=None):
-    """GET /api/slack/migrate: the one-time report of the old per-profile Slack file (SPEC 2682 #2700).
-
-    It reads the file, builds the two new documents and their report, and writes nothing: the owner approves the pair on
-    the usual save path, and the hub keeps the documents in its draft. `workspace` names the team id the old file never
-    held. A channel with no Slack id stays pending and the channel editor asks for the id before a write; a channel
-    whose id is given but whose team id is missing stays unplaced, apart from the id-ask list."""
-    if legacy is None: legacy = slack_file()
-    if legacy is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none",
-                               "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
-    path = pathlib.Path(legacy)
-    if not path.is_file(): return {"err": f"no old Slack file in this profile: {path}",
-                                   "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
-    if workspace is None:
-        team, _ = slack_team()
-        if team: workspace = {"id": team}
-    try:
-        P = slack_policy()
-        mig = P.migrate(slack_read(path), workspace=workspace, ids=ids)
-        defects = [str(d) for d in P.validate(mig.committed, mig.local)]
-    except Exception as e:
-        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}",
-                "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
-    return {"err": None, "old": str(path), "report": mig.report, "pending": mig.pending, "unplaced": mig.unplaced,
-            "committed": mig.committed, "local": mig.local, "defects": defects}
-
 # --- Settings > Communication, the read view (SPEC 2682 #2693). The theme reads the committed `slack.yaml` at the checkout
 # root and the profile's `slack.local.yaml`, and draws the Now tiles and the sections Personas, Roles, Slack workspaces and
 # Project events. Every resolved value comes from the policy module (#2684), and every field names the file it comes from;
 # the hub holds no copy of a rule (ADR-0177). The view constructs and binds: it reads no file and opens no client (ADR-0137).
 SLACK_YAML_REL = pathlib.Path("docs") / "squad" / "slack.yaml"
+
+def slack_policy():
+    """The one home of the Slack file rules (ADR-0177): the hub holds no copy of a rule."""
+    (SP,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("slackpolicy",))
+    return SP
 
 def slack_yaml_paths():
     """The committed `slack.yaml` at the checkout root and this profile's local file (SPEC 2682). A profile that names no
@@ -2265,7 +2049,7 @@ def _slack_base(paths):
     return out
 
 def slack_files_set(body, committed=None, local=None):
-    """POST /api/slack for the Communication theme: validate, diff, then write. With `confirm` false it answers the diff
+    """POST /api/slack/files for the Communication theme: validate, diff, then write. With `confirm` false it answers the diff
     of both files and writes nothing. On confirm it writes the local file atomically in the profile folder, and writes,
     commits and lands the committed file in the hub's own worktree. Returns the diff, the landed sha, and both files
     read back, so the change applies at once."""
@@ -2324,6 +2108,12 @@ def slack_files_set(body, committed=None, local=None):
     except (OSError, yaml.YAMLError):
         out["documents"] = {"committed": {}, "local": new_l}
     return out
+
+def slack_files_post(body):
+    """POST /api/slack/files: the theme's one write route. A body that carries an `op` is the editor's one operation
+    (#2696); any other body is the save path's pair of documents (#2694). The old per-profile route is retired (#2701)."""
+    if isinstance(body, dict) and "op" in body: return slack_docs_edit(body)
+    return slack_files_set(body)
 
 # --- Settings > Communication, the editor of workspaces and channels (SPEC 2682 #2696). The theme hands one operation
 # over the two raw documents, and the hub applies it: it places a workspace in the file its class names, refuses a guest
@@ -2638,18 +2428,6 @@ def slack_workspace(profile=None):
     m = SLACK_WORKSPACE.match(str(d.get("url") or ""))
     if not m: return None, "no workspace domain"
     return m.group(1), None
-
-def slack_team(profile=None):
-    """(team id, error): the Slack workspace id of the connection, from `auth.test`, never a constant in this repository.
-    The migration needs it: the old per-profile file never held the team id, and a new workspace is placed by its id."""
-    if not KEYCHAIN: return None, "no keychain on this host"
-    token = slack_token(profile)
-    if not token: return None, "no connection"
-    try: d = slack_api(token, "auth.test")
-    except Exception: return None, "the connection did not answer"
-    if not isinstance(d, dict) or not d.get("ok"): return None, "the connection refused"
-    team = str(d.get("team_id") or "")
-    return (team, None) if team else (None, "no team id")
 
 def slack_channel(repo=None, profile=None):
     """(channel, error): the project's channel from the daemon's map, a read that never joins a channel.
@@ -8860,30 +8638,17 @@ $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dat
  clearTimeout(limTmr[key]);
  delete limTmr[key];
  limWrite(key).catch(()=>{})});
-/* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
-   validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
-let slS=null,slDraft=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="";   // slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696)
-const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
-const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
+/* Settings > Communication (SPEC 2682): the theme reads the committed `slack.yaml` and the profile's `slack.local.yaml`
+   and saves both over one route. The view constructs and binds; the hub validates, diffs and writes (ADR-0137,
+   ADR-0177). The hub holds no token. The old per-profile settings file and its route are retired (#2701). */
+let slS=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="";   // slS: the read view; slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696)
 const SL_MODE=["listen","listen+speak"],SL_SPEAK=["draft","send"],SL_TR=["off","local","gemini"],SL_PMOD=["two_state","exponential"];
 const SL_INHERIT="inherit";
 const slA=t=>esc(t).replace(/"/g,"&quot;");
 const slClone=o=>JSON.parse(JSON.stringify(o));
-const slDirty=()=>(!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS))||(!!slDocs&&JSON.stringify(slDocs)!==JSON.stringify(slSavedDocs));
+const slDirty=()=>!!slDocs&&JSON.stringify(slDocs)!==JSON.stringify(slSavedDocs);
 const slOpts=(list,cur)=>list.map(x=>`<option${x===cur?" selected":""}>${slA(x)}</option>`).join("");
-const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
- return `<div class="slc${c.watch?"":" off"}" role=row><span class=c1 role=cell><b>${esc(c.name)}</b>${c.watch?"":"<small>do not watch</small>"}</span>`
- +`<span role=cell data-l="language"><select data-sl="ch:${i}:lang" aria-label="${n}: language"${on}>${slOpts(SL_LANG,c.lang)}</select></span>`
- +`<span class=swc role=cell data-l="watch"><label class=swt><input type=checkbox data-sl="ch:${i}:watch"${c.watch?" checked":""} aria-label="${n}: watch"> watch</label></span>`
- +`<span class=swc role=cell data-l="thread only"><label class=swt><input type=checkbox data-sl="ch:${i}:thread"${c.thread?" checked":""}${on} aria-label="${n}: thread only"> thread only</label></span>`
- +`<span class=swc role=cell data-l="mention only"><label class=swt><input type=checkbox data-sl="ch:${i}:mention"${c.mention?" checked":""}${on} aria-label="${n}: mention only"> mention only</label></span>`
- +`<span role=cell data-l="announce">${Object.keys(SL_EV).map(k=>`<label class=sev title="${SL_EV[k]} posted here"><input type=checkbox data-sl="ch:${i}:ev:${k}"${c.events[k]?" checked":""}${on} aria-label="${n}: ${k} posts"> ${k}</label>`).join("")}</span>`
- +`<span class=swc role=cell><button data-slrm="ch:${i}" aria-label="remove ${n}">Remove</button></span></div>`};
-const slPerson=(p,i)=>`<div class=slc role=row><span class=c1 role=cell><b>${esc(p.name)}</b></span>`
- +`<span role=cell data-l="role"><select data-sl="pp:${i}:role" aria-label="${slA(p.name)}: role">${slOpts(Object.keys(SL_ROLE),p.role)}</select></span>`
- +`<span class=swc role=cell><button data-slrm="pp:${i}" aria-label="remove ${slA(p.name)}">Remove</button></span></div>`;
-const slLegend=()=>`<dl>${Object.keys(SL_ROLE).map(k=>`<dt>${esc(k)}</dt><dd>${esc(SL_ROLE[k])}</dd>`).join("")}</dl>`;   // each role stated once, never per row
-const slStatusText=s=>`${s.connection} · ${s.people.length} ${s.people.length===1?"person":"people"}`;   // one text for the chip and the nav line (#1284)
+const slStatusText=r=>!r?"":`${(r.workspaces||[]).length} workspace${r.workspaces.length===1?"":"s"} · ${(r.workspaces||[]).reduce((n,w)=>n+((w.channels||[]).length),0)} channels`;   // one text for the chip and the nav line (#1284)
 /* The read view over the two Slack files (SPEC 2682 #2693): the Now tiles and the sections Personas, Roles, Slack
    workspaces and Project events. The view constructs and binds: it holds no rule of resolution and reads no file
    (ADR-0137); the hub hands every resolved value in, and each row names the file it comes from. */
@@ -8969,42 +8734,17 @@ function slWsReadHtml(r,join){return (r.workspaces.length?"":`<p class=m>${esc("
   +(w.channels.length?`<table class=slt2><thead><tr>${slChHeads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`
    +w.channels.map(c=>`<tr><td data-l="Channel">#${esc(c.name)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode)}</span></td><td data-l="Language"><span class=nw>${esc(c.language)}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"none")}</span></td><td data-l="Roles">${join(c.roles,"owner only")}</td><td data-l="Announce">${join(c.announce,"never posts")}</td></tr>`).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")}
-let slM=null;   // the migration report of the old per-profile Slack file (#2700): what it carried over and what it dropped
-function slMigHtml(m){if(!m||!Array.isArray(m.report)||!m.report.length)return "";   // the migration report: one line per field
- return `<h4>Migration of the old Slack file</h4><div class=mx role=status>`+m.report.map(l=>`<div>${esc(l)}</div>`).join("")+`</div>`
-  +`<div class=slad><button id=slmigload>Load the migrated files into the editor</button></div>`}
-function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
- const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
- let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
- +slReadHtml(slR)+slMigHtml(slM)
- +(slR===null?setSettings("slk",[   // the legacy profile file's surface stays only when the read view could not answer
- setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
- setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
- setRow("read every",`<span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span>`),
- setRow("up to, when quiet",`<span><input data-sl=max type=number min=2 max=120 value="${slA(d.max)}" aria-label="up to, minutes"> min</span>`),
- setRow("quiet hours",`<input data-sl=quiet value="${slA(d.quiet)}" placeholder="always on" aria-label="quiet hours, HH-HH">`),
- setRow("anyone not listed",`<select data-sl=other aria-label="anyone not listed"><option value=ignore${d.other==="ignore"?" selected":""}>is ignored</option><option value=reply${d.other==="reply"?" selected":""}>gets a fixed reply</option></select>`),
- `<h4>Channels</h4><div class=slt role=table><div class="slc slh" role=row><span>Channel</span><span>Language</span><span>Watch</span><span>Thread only</span><span>Mention only</span><span>Announce</span><span></span></div>`
- +(d.channels.map(slChan).join("")||`<p class=m>No channel: the agent reads and posts nowhere.</p>`)+`</div>`,
- `<div class=slad><input id=slch placeholder="#channel or id" aria-label="channel to add"><button id=slcha>Add channel</button></div>`,
- `<div class="sllegend" role=group aria-label="Roles"><span class=blkh>Roles</span>${slLegend()}</div><h4>People</h4><div class=slt role=table><div class="slc slh" role=row><span>Person</span><span>Role</span><span></span></div>`
- +(d.people.map(slPerson).join("")||`<p class=m>No person: the agent answers nobody by name.</p>`)+`</div>`,
- `<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`,
- `<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join(""),
- `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="Owner inbox: self-DM"> Owner inbox: self-DM</label></div>`,
- `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="Owner inbox: audio in and out"> Owner inbox: audio in and out</label></div>`]):"");
+function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
+ const st=slStatusText(slR);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
+ let h=setNow("slk",slReadTiles(slR),`Posts through your own account by the Claude Slack connector. No token is stored here.`)
+ +slReadHtml(slR);
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
- if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
- else if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
+ if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}
  else if(p[0]==="an")slAnnSet(p[1],+p[2],+p[3],+p[4],v);
- else if(p[0]==="ov")slAnnOverride(p[1],+p[2],+p[3],+p[4],v);
- else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
- else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
- else if(k==="tick"||k==="max")slDraft[k]=Number(v);
- else slDraft[k]=v}
+ else if(p[0]==="ov")slAnnOverride(p[1],+p[2],+p[3],+p[4],v)}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens in place, and every change is one operation the
    hub applies to the two raw documents. The view draws the fields and binds them; the class, the file and every refusal
    are the hub's (ADR-0137). A `guest` workspace and its channels live in the local file alone (ADR-0177). Its constants
@@ -9089,11 +8829,11 @@ const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
    the diff of each file and, on confirm, writes the local file and lands the committed one in dev. */
 const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((d.diff||{}).committed)||[]).map(l=>themeLine("Communication",l))},
  {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Communication",l))}];
-const slAsk=async()=>{try{const r=await(await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm:false})})).json();
+const slAsk=async()=>{try{const r=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm:false})})).json();
  return r.err?[{file:(slR&&slR.files&&slR.files.committed)||"slack.yaml",lines:["! Communication · "+r.err]}]:slGroups(r)}catch(x){return[{file:"slack.yaml",lines:["! Communication · the diff could not be read"]}]}};
-async function slLoad(){try{const[a,b,c]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files"),fetch("/api/slack/migrate")]);slS=await a.json();slR=await b.json();slM=await c.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
+async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
-async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
+async function slPost(confirm){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
   try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)
@@ -9101,21 +8841,17 @@ async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POS
  slRender()}
 $("#sbody").addEventListener("change",e=>{const s=e.target.dataset.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
- const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
+ const k=e.target.dataset.sl;if(!k)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
- if(b&&b.id==="slmigload"&&slM){slDocs=slClone({committed:slM.committed||{},local:slM.local||{}});slMsg="";slRender();return}   // the migration's pair reaches the editor, and the save path writes it (#2700)
  if(b&&(slDocs||slSavedDocs)){const o=b.dataset.slopen;
   if(o!==undefined){slOpen=slOpen===o?"":o;slRender();return}
   if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
   if(b.dataset.sladdws!==undefined){slAddWsOp();return}
   if(b.dataset.slrmch){const[d,i,j]=b.dataset.slrmch.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i,"channels",+j]});return}
   if(b.dataset.slrmws){const[d,i]=b.dataset.slrmws.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i]});return}}
- if(!b||!slDraft)return;
+ if(!b)return;
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
  else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
- else if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
- else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
- else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  });
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
@@ -9166,7 +8902,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDocs=slClone(slSavedDocs);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
@@ -11396,8 +11132,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
         elif self.path.startswith("/api/slots"): body, ct = json.dumps(slots_read()).encode(), "application/json"   # Settings > Spend & limits · Machine slots (#2435)
         elif self.path.split("?", 1)[0] == "/api/slack/files": body, ct = json.dumps(slack_overview()).encode(), "application/json"   # Settings > Communication · the read view (SPEC 2682 #2693)
-        elif self.path.split("?", 1)[0] == "/api/slack/migrate": body, ct = json.dumps(slack_migrate()).encode(), "application/json"   # the old profile file's one-time report (SPEC 2682 #2700)
-        elif self.path.startswith("/api/slack"): body, ct = json.dumps(slack_view(slack_file())).encode(), "application/json"   # Settings > Communication (#924)
+        elif self.path.split("?", 1)[0] == "/api/slack": return self.not_found()   # the old per-profile settings route is retired (#2701)
+        elif self.path.split("?", 1)[0] == "/api/slack/migrate": return self.not_found()   # its reader left with the file (#2701)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
         elif self.path.startswith("/api/status"): body, ct = json.dumps(status_payload()).encode(), "application/json"
@@ -11468,6 +11204,9 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
         a = access(self, route_action("POST", self.path))
+        if self.path.split("?", 1)[0] in ("/api/slack", "/api/slack/migrate"):
+            self.close_connection = True   # the retired route takes no body: the connection ends with this answer
+            return self.not_found()
         if request_target(self).startswith(DASH_PREFIXES):   # the body is read before any refusal, as below
             length = self.headers.get("Content-Length") or "0"
             raw = self.rfile.read(min(int(length), 1 << 20)) if length.isdigit() else b""
@@ -11479,7 +11218,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/slack/files", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack/files", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -11492,8 +11231,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
                 elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
-                elif self.path == "/api/slack/files": out = slack_docs_edit(body)   # Settings > Communication · one edit of a workspace or a channel (#2696)
-                elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
+                elif self.path == "/api/slack/files": out = slack_files_post(body)   # Settings > Communication · the save (#2694) or one edit (#2696)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)
