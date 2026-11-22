@@ -117,9 +117,9 @@ def _named(args, channel, thread_ts):
 def pre_write_tool_use(draft, server=DEFAULT_SERVER):
     """The `PreToolUse` hook of the writer session. It passes only the decided tool with the decided channel and
     `thread_ts`, and one denial answer for every other call: a different tool, a different channel or thread, or a
-    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel, `thread_ts` and
-    text, so the exact text reaches Slack whatever the model wrote. An empty `thread_ts` names a channel post, and the
-    comparison refuses any other thread there."""
+    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel and text, and
+    the decided `thread_ts` when the draft names one, so the exact text reaches Slack whatever the model wrote. An
+    empty `thread_ts` names a channel post, so the payload omits the key and the comparison refuses any other thread."""
     async def hook(input_data, tool_use_id, context):
         name = input_data.get("tool_name")
         tool = tool_word(str(name or ""), server)
@@ -132,7 +132,9 @@ def pre_write_tool_use(draft, server=DEFAULT_SERVER):
         reason = write_denial(draft.text, (mark(draft.name),))
         if reason is not None:
             return _deny(reason)
-        updated = {"channel": draft.channel, "thread_ts": draft.thread_ts, "text": draft.text}
+        updated = {"channel": draft.channel, "text": draft.text}
+        if draft.thread_ts:
+            updated["thread_ts"] = draft.thread_ts
         return _allow(updated)
     return hook
 

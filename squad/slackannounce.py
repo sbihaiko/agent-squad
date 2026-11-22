@@ -87,15 +87,28 @@ def draft_for(committed, local, workspace, channel, record):
     return W.Draft(W.DRAFT_WORD, channel_id, "", W.compose(name, body), str(name))
 
 
+def _over(base, row):
+    """One row over another: a nested `templates` map merges key by key, so a local row that adds one event keeps the
+    others; every other key, list and scalar alike, replaces the committed value."""
+    merged = dict(base)
+    for key, value in row.items():
+        if key == "templates" and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 def _merge_by_id(rows):
     """Rows of both documents as one list, one row per id: the committed row first, then the local row's own keys over
-    it, so a local override wins and a key the local row omits stays as committed. A row with no id never merges, and
-    the first appearance of an id fixes its place in the list."""
+    it, so a local override wins and a key the local row omits stays as committed. The `templates` map merges per event
+    key, so a local row that adds one event template keeps the committed templates for the other events. A row with no
+    id never merges, and the first appearance of an id fixes its place in the list."""
     out, index = [], {}
     for row in rows:
         row_id = str(row.get("id") or "")
         if row_id and row_id in index:
-            out[index[row_id]].update(row)
+            out[index[row_id]] = _over(out[index[row_id]], row)
         else:
             out.append(dict(row))
             if row_id:
@@ -105,9 +118,10 @@ def _merge_by_id(rows):
 
 def _guest_workspaces(committed, local):
     """One merged row per workspace id from both documents, with each workspace's channels merged in turn, so a local
-    file overrides a committed field and adds a channel the committed file omits. The committed workspace fixes a
-    scalar field the local file also names only where the merge order says so: the local value wins here, and the
-    persona row a channel names still comes from the committed file first (`slackpolicy.effective_persona`)."""
+    file overrides a committed field and adds a channel the committed file omits. The committed file fixes the
+    workspace `class`: a local row cannot demote a `guest` workspace, because the committed file decides what the
+    workspace is. The persona row a channel names still comes from the committed file first
+    (`slackpolicy.effective_persona`)."""
     groups, index = [], {}
     for doc in (committed or {}, local or {}):
         for row in _rows(doc.get("workspaces")):
@@ -116,7 +130,10 @@ def _guest_workspaces(committed, local):
             channels = _rows(row.get("channels"))
             if workspace_id and workspace_id in index:
                 group = groups[index[workspace_id]]
+                fixed = group["workspace"].get("class")
                 group["workspace"].update(scalars)
+                if fixed is not None:
+                    group["workspace"]["class"] = fixed
                 group["channels"].extend(channels)
             else:
                 groups.append({"workspace": scalars, "channels": list(channels)})
