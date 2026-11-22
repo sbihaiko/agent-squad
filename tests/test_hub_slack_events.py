@@ -350,12 +350,14 @@ def test_the_override_box_shows_the_text_the_channel_holds(hub, tmp_path):
 
 
 def test_the_other_sections_keep_no_control(hub, tmp_path):
-    """The editor belongs to the Project events section: Personas, Roles and Slack workspaces stay read-only for the
-    tickets that add their own editing."""
+    """The editor belongs to the Project events section: Personas edits in its own section (#2697), and Roles and
+    Slack workspaces stay read-only for the tickets that add their own editing."""
     html = render(hub, overview(hub, tmp_path))
-    before = html[:html.index("Project events")]
+    roles = html[html.index("<h4>Roles"):html.index("<h4>Slack workspaces")]
+    ws = html[html.index("<h4>Slack workspaces"):html.index("<h4>Project events")]
     for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in before, f"the read view carries {ctl} before the events editor"
+        assert ctl not in roles, f"the Roles section carries {ctl}"
+        assert ctl not in ws, f"the Slack workspaces section carries {ctl}"
 
 
 def test_checking_announce_writes_the_channel_list(hub, tmp_path):
