@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.75
+# seconds: 0.86
 # The commit guard (commit-guard.sh, ADR-0177): a file whose name ends in `slack.local.yaml` never enters a commit.
 # One case per rule: a staged local file is refused and a staged ordinary file passes; the bare name and a project-prefixed
 # name are both refused; --install writes an executable pre-commit hook, and a real `git commit` of the local file is
@@ -33,6 +33,11 @@ out=$(cd "$R" && bash "$src" 2>&1); rc=$?
 R=$T/near; repo "$R"; echo x > "$R/slack.local.yaml.example"; $G -C "$R" add slack.local.yaml.example
 out=$(cd "$R" && bash "$src" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "a name that does not end in the suffix passes" || ko "the near name exited $rc: $out"
+
+# 5. an upper-case suffix is refused: a case-insensitive filesystem names the same file either way
+R=$T/upper; repo "$R"; echo x > "$R/slack.local.YAML"; $G -C "$R" add slack.local.YAML
+out=$(cd "$R" && bash "$src" 2>&1); rc=$?
+[ "$rc" = 1 ] && ok "an upper-case suffix is refused" || ko "the upper-case name exited $rc: $out"
 
 # 5. --install writes an executable hook, and the hook refuses a real commit of the local file
 R=$T/hook; repo "$R"; echo x > "$R/slack.local.yaml"; echo y > "$R/notes.yaml"; $G -C "$R" add notes.yaml

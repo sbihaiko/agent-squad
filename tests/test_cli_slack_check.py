@@ -85,3 +85,15 @@ def test_a_flag_names_the_project_file_in_the_profile(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "zesty.slack.local.yaml" in out
+
+
+def test_a_run_from_a_subdirectory_reads_the_project_root(tmp_path, capsys):
+    bad = {**COMMITTED, "roles": [{"id": "manager", "deploy": ["prod"]}]}
+    target, profile = project(tmp_path, bad, LOCAL)
+    (target / ".git").mkdir()
+    sub = target / "src" / "deep"
+    sub.mkdir(parents=True)
+    rc = cli.main(["slack", "check", "--target", str(sub), "--profile", str(profile), "--project", "proj"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "roles[0].deploy" in out

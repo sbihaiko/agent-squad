@@ -30,7 +30,7 @@ GEMINI_VOICES = frozenset((
     "Sadachbia", "Sadaltager", "Sulafat",
 ))
 LANGUAGES = ("pt-BR", "en-US", "es-ES")
-NAME = re.compile(r"^[\w .\-]{1,32}$")     # letters, digits, space, period, hyphen, underscore; at most 32
+NAME = re.compile(r"^[A-Za-z0-9 _.\-]{1,32}\Z")     # ASCII letters, digits, space, period, hyphen, underscore; at most 32
 TONE_MAX = 300
 SECRET_KEY = "secret"
 
@@ -76,18 +76,23 @@ def first_token(data):
     return None
 
 
-def strings(node, path=""):
-    """Every (key path, string) of a document, nested lists and mappings included; a mapping key counts as a string."""
+def strings(node, path="", seen=None):
+    """Every (key path, string) of a document, nested lists and mappings included; a mapping key counts as a string.
+    A key that equals its scalar value is yielded once: one string is one defect."""
+    seen = set() if seen is None else seen
     if isinstance(node, str):
-        yield path or "(root)", node
+        pair = (path or "(root)", node)
+        if pair not in seen:
+            seen.add(pair)
+            yield pair
     elif isinstance(node, dict):
         for key, value in node.items():
             here = f"{path}.{key}" if path else str(key)
-            yield here, str(key)
-            yield from strings(value, here)
+            yield from strings(str(key), here, seen)
+            yield from strings(value, here, seen)
     elif isinstance(node, list):
         for i, value in enumerate(node):
-            yield from strings(value, f"{path}[{i}]" if path else f"[{i}]")
+            yield from strings(value, f"{path}[{i}]" if path else f"[{i}]", seen)
 
 
 def _defect(file, key, reason):
@@ -101,27 +106,27 @@ def _language(file, key, value, out):
         out.append(_defect(file, key, f"language {value!r} is not one of {', '.join(LANGUAGES)}"))
 
 
-def _personas(committed, out):
-    for i, persona in enumerate(_rows(committed.get("personas"))):
+def _personas(file, doc, out):
+    for i, persona in enumerate(_rows(doc.get("personas"))):
         base = f"personas[{i}]"
         if persona.get("name") is not None and not NAME.match(str(persona["name"])):
-            out.append(_defect("slack.yaml", f"{base}.name", "a name holds letters, digits, space, period, hyphen and underscore, and at most 32 characters"))
+            out.append(_defect(file, f"{base}.name", "a name holds letters, digits, space, period, hyphen and underscore, and at most 32 characters"))
         voice = persona.get("voice")
         if voice is not None and voice not in GEMINI_VOICES:
-            out.append(_defect("slack.yaml", f"{base}.voice", f"voice {voice!r} is not a Gemini voice"))
+            out.append(_defect(file, f"{base}.voice", f"voice {voice!r} is not a Gemini voice"))
         tone = persona.get("tone")
         if tone is not None and len(str(tone)) > TONE_MAX:
-            out.append(_defect("slack.yaml", f"{base}.tone", f"a tone holds at most {TONE_MAX} characters ({len(str(tone))} given)"))
+            out.append(_defect(file, f"{base}.tone", f"a tone holds at most {TONE_MAX} characters ({len(str(tone))} given)"))
 
 
-def _roles(committed, out):
-    for i, role in enumerate(_rows(committed.get("roles"))):
+def _roles(file, doc, out):
+    for i, role in enumerate(_rows(doc.get("roles"))):
         deploy = role.get("deploy")
         items = deploy.get("environments") if isinstance(deploy, dict) else deploy
         if isinstance(items, (list, tuple)):
             for env in items:
                 if str(env).strip().lower() == "prod":
-                    out.append(_defect("slack.yaml", f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
+                    out.append(_defect(file, f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
 
 
 def _secret_keys(file, node, path, out):
@@ -154,31 +159,34 @@ def _guest_ids(local):
 
 
 def validate(committed=None, local=None, others=(), local_name="slack.local.yaml"):
-    """Every defect of the committed file and the local file, one per failing key. `others` are the local files of the
-    other projects on the machine: the connector reaches one guest workspace at a time, summed over all of them.
-    `local_name` is the local file's own name, so a message names the file a person edits in the profile folder."""
+    """Every defect of the committed file and the local file, one per failing key. `others` are `(file name, document)`
+    pairs of the other projects' local files on the machine: the connector reaches one guest workspace at a time, summed
+    over all of them, and their token and `secret` rules hold too. `local_name` is the local file's own name, so a
+    message names the file a person edits in the profile folder."""
     out = []
     committed = committed or {}
     local = local or {}
-    for file, doc in (("slack.yaml", committed), (local_name, local)):
+    ours = (("slack.yaml", committed), (local_name, local))
+    for file, doc in ours:
         hit = first_token(doc)
         if hit:
             out.append(_defect(file, hit[0], f"a value in token format ({hit[1]}) is refused; the file names a Keychain entry"))
-    _secret_keys("slack.yaml", committed, "", out)
-    _secret_keys(local_name, local, "", out)
-    _personas(committed, out)
-    _roles(committed, out)
+        _secret_keys(file, doc, "", out)
+    for name, doc in others:
+        hit = first_token(doc)
+        if hit:
+            out.append(_defect(name, hit[0], f"a value in token format ({hit[1]}) is refused; the file names a Keychain entry"))
+        _secret_keys(name, doc, "", out)
+    for file, doc in ours:
+        _personas(file, doc, out)
+        _roles(file, doc, out)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
-    for i, ws in enumerate(_rows(committed.get("workspaces"))):
-        base = f"workspaces[{i}]"
-        _language("slack.yaml", f"{base}.language", ws.get("language"), out)
-        for j, ch in enumerate(_rows(ws.get("channels"))):
-            _language("slack.yaml", f"{base}.channels[{j}].language", ch.get("language"), out)
-    for i, ws in enumerate(_rows(local.get("workspaces"))):
-        base = f"workspaces[{i}]"
-        _language(local_name, f"{base}.language", ws.get("language"), out)
-        for j, ch in enumerate(_rows(ws.get("channels"))):
-            _language(local_name, f"{base}.channels[{j}].language", ch.get("language"), out)
+    for file, doc in ours:
+        for i, ws in enumerate(_rows(doc.get("workspaces"))):
+            base = f"workspaces[{i}]"
+            _language(file, f"{base}.language", ws.get("language"), out)
+            for j, ch in enumerate(_rows(ws.get("channels"))):
+                _language(file, f"{base}.channels[{j}].language", ch.get("language"), out)
     teams, channels = _guest_ids(local)
     for i, ws in enumerate(_rows(committed.get("workspaces"))):
         if str(ws.get("id")) in teams:
@@ -186,20 +194,30 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
         for j, ch in enumerate(_rows(ws.get("channels"))):
             if str(ch.get("id")) in channels:
                 out.append(_defect("slack.yaml", f"workspaces[{i}].channels[{j}].id", "a guest channel id stays in the local file"))
-    mine = [i for i, ws in enumerate(_rows(local.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
-    foreign = any(str(ws.get("class", "")) == "guest" for other in others for ws in _rows(other.get("workspaces")))
-    refused = mine if (mine and foreign) else mine[1:]
-    for i in refused:
-        out.append(_defect(local_name, f"workspaces[{i}].id",
+    for file, i in _second_guests(local_name, local, others):
+        out.append(_defect(file, f"workspaces[{i}].id",
                            "the machine serves one guest workspace at a time; a second guest workspace is refused"))
     return out
 
 
+def _second_guests(local_name, local, others):
+    """Every guest workspace after the first on the machine, as `(file, index)`. The current project's file comes first,
+    then the other projects' files by name, so each defect names the file that holds the refused workspace."""
+    guests = [(local_name, i) for i, ws in enumerate(_rows(local.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
+    for name, doc in sorted(others, key=lambda pair: str(pair[0])):
+        guests += [(name, i) for i, ws in enumerate(_rows(doc.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
+    return guests[1:]
+
+
 def _load(path, file, out):
-    """The document a YAML file holds, or None with one defect that names the file."""
+    """The document a YAML file holds, or None with one defect that names the file. An absent file is no defect; a file
+    the reader cannot open is one, so a broken permission never hides a broken key."""
     try:
         text = Path(path).read_text()
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        out.append(_defect(file, "(root)", f"cannot read the file: {e.strerror or e}"))
         return None
     try:
         doc = yaml.safe_load(text)
@@ -222,12 +240,24 @@ def local_path(profile, project):
     return named if named.is_file() else (Path(profile) / LOCAL_SUFFIX if (Path(profile) / LOCAL_SUFFIX).is_file() else None)
 
 
+def project_root(target="."):
+    """The project root of a target: the first folder with a `.git` between it and the filesystem root, else the target.
+    A command run from a subdirectory still reads the one committed file at the root."""
+    start = Path(target).resolve()
+    if start.is_file():
+        start = start.parent
+    for folder in (start, *start.parents):
+        if (folder / ".git").exists():
+            return folder
+    return start
+
+
 def check(target=".", profile=None, project=None):
     """Every defect of a project's committed file and its local file, read from disk. A file that is absent is no defect."""
     out = []
-    root = Path(target)
+    root = project_root(target)
     committed = _load(root / COMMITTED, "slack.yaml", out)
-    project = project or os.environ.get("SG_PROJECT") or root.resolve().name
+    project = project or os.environ.get("SG_PROJECT") or root.name
     profile = profile or os.environ.get("SG_PROFILES_DIR") or None
     path = local_path(profile, project)
     local = _load(path, Path(path).name, out) if path else None
@@ -236,8 +266,8 @@ def check(target=".", profile=None, project=None):
         for other in sorted(Path(profile).glob(f"*{LOCAL_SUFFIX}")):
             if path and other.resolve() == Path(path).resolve():
                 continue
-            doc = _load(other, other.name, [])
+            doc = _load(other, other.name, out)
             if doc:
-                others.append(doc)
+                others.append((other.name, doc))
     found = validate(committed, local, others, local_name=Path(path).name if path else "slack.local.yaml")
     return out + found

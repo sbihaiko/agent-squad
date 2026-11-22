@@ -159,11 +159,56 @@ def test_a_deploy_list_without_prod_passes():
     assert S.validate(committed, local) == []
 
 
-def test_a_second_guest_workspace_on_the_machine_is_refused():
+def test_a_second_guest_workspace_on_the_machine_names_the_file_that_holds_it():
     committed, local = files()
     other = copy.deepcopy(LOCAL)
     other["workspaces"][0]["id"] = "T0CLIENT02"
-    assert "workspaces[0].id" in keys(S.validate(committed, local, others=[other]))
+    defects = S.validate(committed, local, others=[("other.slack.local.yaml", other)])
+    assert keys(defects) == ["workspaces[0].id"]
+    assert defects[0].file == "other.slack.local.yaml"
+    assert defects[0].file != "slack.local.yaml"
+
+
+def test_a_secret_key_in_another_local_file_names_that_file():
+    committed, local = files()
+    other = {"keychain": {"secret": "agent-squad-slack-bot"}}
+    defects = S.validate(committed, local, others=[("b.slack.local.yaml", other)])
+    assert keys(defects) == ["keychain.secret"]
+    assert defects[0].file == "b.slack.local.yaml"
+
+
+def test_a_token_in_another_local_file_names_that_file():
+    committed, local = files()
+    other = {"apps": [{"keychain": {"bot": "xoxb-1234567890"}}]}
+    defects = S.validate(committed, local, others=[("b.slack.local.yaml", other)])
+    assert defects[0].file == "b.slack.local.yaml"
+    assert "apps[0].keychain.bot" in keys(defects)
+
+
+def test_a_persona_name_holds_ascii_letters_and_digits_only():
+    for name in ("OláOláOláOlá", "名前", "HAL9K\n", "HAL9K\t"):
+        committed, local = files(committed__personas__0__name=name)
+        assert "personas[0].name" in keys(S.validate(committed, local)), name
+
+
+def test_a_local_persona_voice_is_checked_too():
+    local = {"version": 1, "personas": [{"id": "iara", "name": "Iara", "voice": "Nobody", "tone": "Warm."}]}
+    committed, _ = files()
+    defects = S.validate(committed, local)
+    assert "personas[0].voice" in keys(defects)
+    assert defects[0].file == "slack.local.yaml"
+
+
+def test_a_local_role_deploy_of_prod_is_refused():
+    local = {"version": 1, "roles": [{"id": "manager", "deploy": ["prod"]}]}
+    committed, _ = files()
+    defects = S.validate(committed, local)
+    assert "roles[0].deploy" in keys(defects)
+    assert defects[0].file == "slack.local.yaml"
+
+
+def test_a_key_that_equals_its_value_is_one_string():
+    assert list(S.strings({"tone": "tone"})) == [("tone", "tone")]
 
 
 def test_two_guest_workspaces_in_one_local_file_are_refused():
@@ -188,6 +233,32 @@ def test_a_key_named_secret_is_refused():
 def test_the_word_secret_in_a_tone_is_data_not_a_key():
     committed, local = files(committed__personas__0__tone="Never say the word secret in an answer.")
     assert S.validate(committed, local) == []
+
+
+def test_an_unreadable_committed_file_is_a_named_defect(tmp_path):
+    import yaml
+    root = tmp_path / "proj"
+    (root / "docs" / "squad").mkdir(parents=True)
+    path = root / "docs" / "squad" / "slack.yaml"
+    path.write_text(yaml.safe_dump(COMMITTED))
+    path.chmod(0o000)
+    defects = S.check(root, profile=None, project="proj")
+    path.chmod(0o644)
+    assert [d.key for d in defects] == ["(root)"]
+    assert defects[0].file == "slack.yaml"
+    assert "read" in defects[0].reason
+
+
+def test_a_broken_file_of_another_project_is_named(tmp_path):
+    root = tmp_path / "proj"
+    (root / "docs" / "squad").mkdir(parents=True)
+    (root / "docs" / "squad" / "slack.yaml").write_text("version: 1\n")
+    profile = tmp_path / "profiles"
+    profile.mkdir()
+    (profile / "proj.slack.local.yaml").write_text("version: 1\n")
+    (profile / "other.slack.local.yaml").write_text("personas: [\n")
+    defects = S.check(root, profile=str(profile), project="proj")
+    assert [(d.file, d.key) for d in defects] == [("other.slack.local.yaml", "(root)")]
 
 
 def test_the_adr_names_the_one_home_of_the_rules():

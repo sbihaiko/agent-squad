@@ -23,26 +23,31 @@ of the project, where a person reviews its commit.
    `guest` installs no bot, and a scheduled session reads the channel through the claude.ai connector. The class decides the
    transport, and the file never repeats that information.
 3. **The policy module has one home.** The rules of both files and the decision for one event live in
-   `squad/slackpolicy.py`. A process that reads or writes a Slack file imports it: the hub for the settings it writes,
-   `squad` for `squad slack check`, and `voiced` for the revision it serves. No other file holds a copy of a rule. The
-   module is pure: the caller passes the clock and the network answer, and the module reads neither.
-4. **A defect names its key.** The validator returns one message per failing key, and the message names the file and the
-   key path. `squad slack check` reads both files, prints each message, and exits non-zero when a key fails. A person
-   repairs the key that the message names.
+   `squad/slackpolicy.py`. A process that reads or writes a Slack file imports it: `squad` for `squad slack check`, and
+   the hub for the settings it writes. `voiced` names the same module for the voice and the language it serves; it reads
+   no Slack file today, so it imports the module when it does. No other file holds a copy of a rule. The module is pure:
+   the caller passes the clock and the network answer, and the module reads neither.
+4. **A defect names its key.** The validator returns one message per failing key, and the message names the file that
+   holds the key and the key path. `squad slack check` reads both files at the project root, also from a subdirectory,
+   reads each other project's local file on the machine, prints each message, and exits non-zero when a key fails. A file
+   the reader cannot open is one defect, never a silent skip. A person repairs the key that the message names.
 5. **A token never enters a file.** The validator refuses a value in token format (`xoxb-`, `xapp-`, `xoxp-`, `tskey-`) in
-   every string of both files, the `tone` included. An app names the Keychain entries of its two tokens, and no key is
-   named `secret`. The keyword refusal of the settings rule holds for a key name, never for the free text of a `tone`.
-6. **A persona has a safe name, a Gemini voice and a bounded tone.** The `name` holds only letters, digits, space, period,
-   hyphen and underscore, with at most 32 characters, so no name breaks the mark line or injects Slack formatting. The
-   `voice` is one of the Gemini TTS voices, and the `tone` has at most 300 characters.
+   every string of both files, the `tone` included, and in every other project's local file on the machine. An app names
+   the Keychain entries of its two tokens, and no key is named `secret`, in any of those files. The keyword refusal of the
+   settings rule holds for a key name, never for the free text of a `tone`.
+6. **A persona has a safe name, a Gemini voice and a bounded tone.** The `name` holds only ASCII letters, digits, space,
+   period, hyphen and underscore, with at most 32 characters, so no name breaks the mark line or injects Slack formatting.
+   The `voice` is one of the Gemini TTS voices, and the `tone` has at most 300 characters. Both files of the project hold
+   their personas, roles and languages to these rules.
 7. **A language is one of three tags.** The value is a BCP 47 tag among `pt-BR`, `en-US` and `es-ES` after normalization:
    the reader maps `pt_br` and `pt-br` to `pt-BR`, and `es` to `es-ES`. The validator refuses any other tag.
 8. **`prod` stays with the owner.** A role declares its deploy environments, and the validator refuses `prod` in any role.
    A deploy to production is never a role's standing grant.
 9. **A client id stays out of the committed file.** The validator refuses a team id or a channel id in `slack.yaml` when the
    local file declares it as `guest`. The connector reaches one guest Slack workspace at a time, summed over every project
-   on the machine, so the validator refuses a second guest workspace. A commit guard refuses any file whose name ends in
-   `slack.local.yaml` inside a repository: the name decides, so the file never enters a tree at all.
+   on the machine, so the validator refuses every guest workspace after the first and names the file that holds it. A commit
+   guard refuses any file whose basename ends in `slack.local.yaml` inside a repository, in either case of the suffix: the
+   name decides, so the file never enters a tree at all.
 10. **Slack is the wake path in an `owned` workspace.** The session never asks Slack for a message of an `owned` workspace:
     a Monitor on the inbox wakes it. Polling exists only in a `guest` workspace, where the connector is the only transport.
 11. **A role is the owner's written grant.** A role in the committed file grants the actions it lists, in an `owned` channel,
