@@ -9,6 +9,9 @@ ABANDONED = "Abandoned"
 # vocabulary: board_columns reads the carrier's `state_reason` and hands this row its word, so the chart holds no copy
 # of the reasons GitHub answers.
 NOT_DELIVERED = "not_planned"
+# The owner's label for a card that stays out of every flow chart (#2743). The hub reads it off the card, the way the
+# cumulative flow reads `moved` (#1663), and hands the row this reason: the chart names the label, never a copy of it.
+CHART_EXCLUDE = "chart:exclude"
 
 
 NO_TRANSITION = "no_transition"
@@ -28,6 +31,7 @@ def utc(text):
 # the payload carries the same words, so neither a reader of the hub alone nor the page sees a bare number.
 EXCLUSION_WORDS = {
     NOT_DELIVERED: "closed as not planned",
+    CHART_EXCLUDE: "labelled chart:exclude",
     "abandoned": "closed as abandoned",
     OPEN: "still open",
     "no_opened": "no opened date",
@@ -54,7 +58,7 @@ def exclusion_words(excluded):
 
 
 def _exclusion(row):
-    if row.get("reason") in (NO_TRANSITION, NO_START, NOT_READ):
+    if row.get("reason") in (NO_TRANSITION, NO_START, NOT_READ, CHART_EXCLUDE):
         return row["reason"]
     if row.get("reason") == NOT_DELIVERED:
         return "not_planned"

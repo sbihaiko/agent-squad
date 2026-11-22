@@ -5,7 +5,7 @@ project, the channel and the id of the source message. `squad/slackpolicy.decide
 this module checks the request against that decision before it runs the action. It checks the requester identity (the
 source message of the inbox line, and the role the decision gives its caller), the project, the channel, the action (one
 this build runs, so a role never grants another owner-only action), the grant (the action the caller's role lists), the
-arguments (the ones the action takes, and no other, with the one the action needs), and the revision (a `slack.yaml` sha
+arguments (the ones the action takes, and no other, with the ones the action needs), and the revision (a `slack.yaml` sha
 the hub registry lists, when the caller passes that set). It runs the action only after every check passes.
 
 A refused request is data: `execute` returns a record with the line's own fields and one `error` that names the check,
@@ -13,23 +13,26 @@ so the caller appends it beside the messages of people with no role. A success r
 names (`bot`, `draft` or `send`) and the answer text; a decision with no reply path, like a `listen` channel, runs
 nothing.
 
-The four actions are the whole set. `status` and `logs` answer with the project the channel owns; `logs` masks every
+The five actions are the whole set. `status` and `logs` answer with the project the channel owns; `logs` masks every
 secret and drops every guest line, so a client's text never reaches the reply (story 42). `request_work` starts an
 issue or a run, and `request_investigation` starts an investigation or a spike: both pass the caller's text as one
 argument to the source the caller supplies, so the text is a request inside the role's actions and never an instruction
-of the agent.
+of the agent. `approve_and_move` approves the review of one card and moves it between columns after Todo (stories 26
+and 67): `squad/slackboard.py` holds its rules, and the action writes the board only when each passes.
 
 A request in a `guest` channel never reaches an action: the policy gives it the kind `proposal`, and the executor refuses
 it there, so `squad/slackproposal.py` can offer it to the owner before any work starts (story 61).
 
-The module reads no clock and calls no network: the caller supplies the status, log, work and investigation sources,
-because those answers come from the repository, the board, the project's own log, and the project's own work path.
+The module reads no clock and calls no network: the caller supplies the status, log, work, investigation and board
+sources, because those answers come from the repository, the board, the project's own log, and the project's own work
+path.
 
-Guards: `tests/test_slack_executor.py`.
+Guards: `tests/test_slack_executor.py`, `tests/test_approve_and_move.py`.
 """
 import json
 from typing import NamedTuple
 
+from . import slackboard
 from . import slackpolicy as S
 from .redact import redact
 
@@ -37,16 +40,20 @@ STATUS = "status"
 LOGS = "logs"
 REQUEST_WORK = "request_work"
 REQUEST_INVESTIGATION = "request_investigation"
-ACTIONS = frozenset((STATUS, LOGS, REQUEST_WORK, REQUEST_INVESTIGATION))
+APPROVE_AND_MOVE = "approve_and_move"
+ACTIONS = frozenset((STATUS, LOGS, REQUEST_WORK, REQUEST_INVESTIGATION, APPROVE_AND_MOVE))
 REQUEST_FIELDS = ("action", "arguments", "project", "channel", "source")
 # The arguments each action takes. `status` and `logs` take none: they answer for the project the caller already named.
 # Each request action takes the one text it acts on, and no other key, so a request never carries a grant or a setting.
+# `approve_and_move` takes the card and the column, and no other key, so a request never names a spec or a breakdown.
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     STATUS: frozenset(), LOGS: frozenset(),
     REQUEST_WORK: frozenset(("title",)), REQUEST_INVESTIGATION: frozenset(("question",)),
+    APPROVE_AND_MOVE: frozenset(("card", "to")),
 }
-# The one argument an action needs, so a request with nothing to act on starts nothing.
-_ACTION_ARGUMENT = {REQUEST_WORK: "title", REQUEST_INVESTIGATION: "question"}
+# The arguments an action cannot act without, so a request with nothing to act on starts nothing.
+_ACTION_ARGUMENT = {REQUEST_WORK: ("title",), REQUEST_INVESTIGATION: ("question",),
+                    APPROVE_AND_MOVE: ("card", "to")}
 
 
 class Request(NamedTuple):
@@ -149,9 +156,10 @@ def check(request, decision, line, project, listed=None):
     if extra:
         takes = f"takes only {', '.join(sorted(allowed))}" if allowed else "takes no argument"
         return Refusal("arguments", f"the {request.action} action {takes}, and the request names {', '.join(extra)}")
-    needed = _ACTION_ARGUMENT.get(request.action)
-    if needed and not str(request.arguments.get(needed) or "").strip():
-        return Refusal("arguments", f"the {request.action} action needs one non-empty {needed}")
+    missing = [name for name in _ACTION_ARGUMENT.get(request.action, ())
+               if not str(request.arguments.get(name) or "").strip()]
+    if missing:
+        return Refusal("arguments", f"the {request.action} action needs one non-empty {', '.join(missing)}")
     if not getattr(decision, "reply", None):
         return Refusal("reply", "the decision names no reply path, so no action runs in this channel")
     return None
@@ -176,17 +184,18 @@ def scrub(text, guest=()):
 
 
 def execute(request, decision, line, project, status=None, logs=None, guest=(), work=None, investigate=None,
-            listed=None):
+            listed=None, board=None):
     """One request through every check, then its action. The action runs only when `check` returns None and its source
     is there; a refusal returns its data record and no reply. The reply carries the path the decision names, the
     channel of the line, and the answer text.
 
     `status` answers for the project, `logs` answers with the project's log after `scrub`, and both receive the one
     project the check proved. `work` starts an issue or a run from `(project, title)` and `investigate` answers
-    `(project, question)`: each receives the caller's text as one argument, so it acts only as a request."""
+    `(project, question)`: each receives the caller's text as one argument, so it acts only as a request. `board`
+    answers the card and takes the approval and the move of `approve_and_move`; its rules live in `slackboard`."""
     refusal = check(request, decision, line, project, listed)
     sources = ((STATUS, status, "status"), (LOGS, logs, "logs"), (REQUEST_WORK, work, "work"),
-               (REQUEST_INVESTIGATION, investigate, "investigation"))
+               (REQUEST_INVESTIGATION, investigate, "investigation"), (APPROVE_AND_MOVE, board, "board"))
     for action, source, name in sources:
         if refusal is None and request.action == action and source is None:
             refusal = Refusal("source", f"the {action} action needs a {name} source")
@@ -198,6 +207,10 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
         text = scrub(logs(project), guest)
     elif request.action == REQUEST_WORK:
         text = work(project, str(request.arguments["title"]))
-    else:
+    elif request.action == REQUEST_INVESTIGATION:
         text = investigate(project, str(request.arguments["question"]))
+    else:
+        text, why = slackboard.approve_and_move(board, request.arguments["card"], request.arguments["to"])
+        if why is not None:
+            return Outcome(False, None, data_record(line, Refusal("board", why)))
     return Outcome(True, {"path": decision.reply, "channel": str((line or {}).get("channel") or ""), "text": text}, None)

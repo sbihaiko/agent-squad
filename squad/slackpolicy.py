@@ -20,10 +20,6 @@ from typing import NamedTuple
 
 import yaml
 
-from .slackexecutor import ACTIONS as EXECUTOR_ACTIONS
-
-# The actions a role may list are the ones the executor runs: one vocabulary, never a copy (issue #2699).
-ROLE_ACTIONS = tuple(sorted(EXECUTOR_ACTIONS))
 COMMITTED = Path("docs") / "squad" / "slack.yaml"
 LOCAL_SUFFIX = "slack.local.yaml"       # a file whose name ends in this suffix is refused by the commit guard
 ADR_DIR = Path(__file__).resolve().parent.parent / "docs" / "adr"
@@ -42,6 +38,10 @@ NAME = re.compile(r"^[A-Za-z0-9 _.\-]{1,32}\Z")     # ASCII letters, digits, spa
 TONE_MAX = 300
 SECRET_KEY = "secret"
 USER_ID = re.compile(r"^[UW][A-Z0-9]{2,}\Z")   # a Slack user id: `U` or `W`, then uppercase letters and digits
+# The two refusals the hub editor shows beside the field: the text lives here so the editor and the validator never
+# state a rule twice (ADR-0177 decision 3).
+GUEST_TEAM_REASON = "a guest team id stays in the local file"
+SECOND_GUEST_REASON = "the machine serves one guest workspace at a time; a second guest workspace is refused"
 
 
 class Defect(NamedTuple):
@@ -137,10 +137,11 @@ def _roles(file, doc, out):
                 if str(env).strip().lower() == "prod":
                     out.append(_defect(file, f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
         if isinstance(role.get("actions"), (list, tuple)):
+            actions = role_actions()
             for j, action in enumerate(role["actions"]):
-                if str(action) not in ROLE_ACTIONS:
+                if str(action) not in actions:
                     out.append(_defect(file, f"roles[{i}].actions[{j}]",
-                                       f"action {action!r} is not one of {', '.join(ROLE_ACTIONS)}"))
+                                       f"action {action!r} is not one of {', '.join(actions)}"))
 
 
 def _members(file, doc, out, local):
@@ -277,13 +278,12 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     teams, channels = _guest_ids(local)
     for i, ws in enumerate(_rows(committed.get("workspaces"))):
         if str(ws.get("id")) in teams:
-            out.append(_defect("slack.yaml", f"workspaces[{i}].id", "a guest team id stays in the local file"))
+            out.append(_defect("slack.yaml", f"workspaces[{i}].id", GUEST_TEAM_REASON))
         for j, ch in enumerate(_rows(ws.get("channels"))):
             if str(ch.get("id")) in channels:
                 out.append(_defect("slack.yaml", f"workspaces[{i}].channels[{j}].id", "a guest channel id stays in the local file"))
     for file, i in _second_guests(local_name, local, others):
-        out.append(_defect(file, f"workspaces[{i}].id",
-                           "the machine serves one guest workspace at a time; a second guest workspace is refused"))
+        out.append(_defect(file, f"workspaces[{i}].id", SECOND_GUEST_REASON))
     return out
 
 
@@ -294,6 +294,75 @@ def _second_guests(local_name, local, others):
     for name, doc in sorted(others, key=lambda pair: str(pair[0])):
         guests += [(name, i) for i, ws in enumerate(_rows(doc.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
     return guests[1:]
+
+
+FIELD_CLASSES = ("owned", "guest")
+FIELD_MODES = ("listen", "listen+speak")
+FIELD_SPEAK = ("draft", "send")
+FIELD_TRANSCRIBE = ("off", "local", "gemini")
+FIELD_POLL_MODES = ("two_state", "exponential")
+
+
+def _key(path):
+    """A key path as the validator names it: `workspaces[0].channels[0].speak`."""
+    out = ""
+    for step in path:
+        out += f"[{step}]" if isinstance(step, int) else (f".{step}" if out else str(step))
+    return out
+
+
+def _ids(doc, name):
+    return {str(row.get("id")) for row in _rows((doc or {}).get(name)) if isinstance(row, dict) and row.get("id") is not None}
+
+
+def validate_field(documents, doc, path, field, value):
+    """The one failing key of one editor value, as `(key, reason)`, or None when the value keeps its rule. `documents`
+    holds both files, `doc` names the file the edit writes, and `path` is the key path of the edited field. The hub
+    editor asks this function, so a refusal it shows lives here (ADR-0177 decision 3), never in the view or the hub."""
+    documents = documents or {}
+    committed = documents.get("committed") or {}
+    key = _key(path)
+
+    def bad(reason):
+        return key, reason
+
+    if field == "class" and str(value) not in FIELD_CLASSES:
+        return bad(f"the class is one of {', '.join(FIELD_CLASSES)}")
+    if field == "mode" and str(value) not in FIELD_MODES:
+        return bad(f"the mode is one of {', '.join(FIELD_MODES)}")
+    if field == "language" and str(value) != "" and normalize_language(value) is None:
+        return bad(f"language {value!r} is not one of {', '.join(LANGUAGES)}")
+    if field == "persona" and str(value) != "":
+        known = _ids(committed, "personas")
+        if known and str(value) not in known:
+            return bad(f"persona {value!r} is not one of the project's personas")
+    if field == "roles":
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            return bad("the roles are a list of role ids")
+        known = _ids(committed, "roles")
+        unknown = [x for x in value if known and x not in known]
+        if unknown:
+            return bad(f"role {unknown[0]!r} is not one of the project's roles")
+    if field == "announce":
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            return bad("the announce list is a list of event ids")
+        known = _ids(committed, "events")
+        unknown = [x for x in value if known and x not in known]
+        if unknown:
+            return bad(f"event {unknown[0]!r} is not one of the project's events")
+    if field == "speak" and str(value) not in FIELD_SPEAK:
+        return bad(f"the answer is one of {', '.join(FIELD_SPEAK)}")
+    if field == "transcribe" and str(value) not in FIELD_TRANSCRIBE:
+        return bad(f"the transcription is one of {', '.join(FIELD_TRANSCRIBE)}")
+    if field == "voice_reply" and not isinstance(value, bool):
+        return bad("the voice reply is true or false")
+    if field == "poll" and not isinstance(value, dict):
+        return bad("the poll is a mapping")
+    if field == "poll.mode" and str(value) not in FIELD_POLL_MODES:
+        return bad(f"the poll mode is one of {', '.join(FIELD_POLL_MODES)}")
+    if field == "draft_for" and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+        return bad("draft for is a list of user ids")
+    return None
 
 
 def read_document(text, file, out=None):
@@ -568,8 +637,11 @@ def poll_interval(now, channel, thread_state):
 
 
 def role_actions():
-    """The actions a role may list, in name order: the executor runs them, and the editor offers them (issue #2699)."""
-    return ROLE_ACTIONS
+    """The actions a role may list, in name order: the executor runs them, and the editor offers them (issue #2699).
+    The import runs here, not at module import, so `squad.slackexecutor` imports this module first without a cycle
+    (#2747). One vocabulary, never a copy."""
+    from .slackexecutor import ACTIONS
+    return tuple(sorted(ACTIONS))
 
 
 def rows(value):
