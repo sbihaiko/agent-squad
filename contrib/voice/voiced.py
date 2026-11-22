@@ -1108,9 +1108,11 @@ def check_channel_names(mapping, client):
     """The `proj-` rule read from Slack's own list, so a rename on the Slack side is caught and never only assumed.
 
     The client is the one source of live channel names, handed in by the caller; no token is read here. A listing Slack
-    refuses yields one line naming the error, never an empty pass over a list the check never read.
+    refuses yields one line naming the error, never an empty pass over a list the check never read. The listing asks
+    for public channels only, the type the shipped manifest covers: it grants `channels:read` and no `groups:read`, and
+    a project channel is always created public (#2767).
     """
-    listing = client.api("conversations.list?types=public_channel,private_channel&limit=1000")
+    listing = client.api("conversations.list?types=public_channel&limit=1000")
     if not listing.get("ok"):
         return [f"voiced: cannot list channels to check their names: {listing.get('error')}"]
     return channel_name_violations(mapping, listing.get("channels") or [])
@@ -1125,7 +1127,7 @@ def _ensure_channel(client, name, channels, log):
     if got.get("ok"):
         channel = got.get("channel") or {}
     elif got.get("error") == "name_taken":
-        listing = client.api("conversations.list?types=public_channel,private_channel&limit=1000")
+        listing = client.api("conversations.list?types=public_channel&limit=1000")
         channel = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
         if not channel:
             log(f"voiced: Slack holds the name {name} and lists no channel for it")
