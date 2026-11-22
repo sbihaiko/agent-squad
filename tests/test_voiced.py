@@ -1368,14 +1368,33 @@ def commit(repo, text):
     return sha
 
 
-def revision_daemon(tmp_path, client=None, log=None):
-    """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives."""
+def revision_daemon(tmp_path, client=None, log=None, registry=None):
+    """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives.
+
+    A `registry` path puts the hub's saved-sha check in force (#2695); none leaves the daemon as one whose machine
+    names no registry, so the older cases read the revision load alone.
+    """
     mod = voiced()
     lines = log if log is not None else []
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
                         transcriber=FakeTranscriber(), downloader=lambda url: b"",
-                        log=lines.append if isinstance(lines, list) else lines, client=client)
+                        log=lines.append if isinstance(lines, list) else lines, client=client,
+                        registry=(lambda: str(registry)) if registry is not None else None)
     return mod, daemon, lines
+
+
+def saved_registry(tmp_path, *shas):
+    """The hub's saved-sha registry as #2694 writes it: one file outside every repository, keyed by the saved file.
+
+    Each listed sha is the landed commit of one committed save. The path is deliberately away from the project's
+    checkout, like the loop state directory the hub writes.
+    """
+    path = tmp_path / "loop-state" / "slack-saved.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {f"/hub/worktrees/{sha}/docs/squad/slack.yaml":
+            {"sha": sha, "at": "2026-11-22T00:00:00-03:00", "committed": True} for sha in shas}
+    path.write_text(json.dumps(data))
+    return path
 
 
 def project(repo, local=None):
@@ -2011,3 +2030,134 @@ def test_a_conflict_notice_is_retried_and_a_returning_conflict_is_announced_agai
                                                      "revision": SLACK_SHARED})
     assert len(daemon.refuse_channel_claims(projects)) == 1
     assert len(client.posts()) == 3, "a conflict that returned after being resolved was not announced again"
+
+
+# --- the hub registry is the only authority for a Slack revision (#2695, SPEC 2682 story 66)
+
+
+def test_a_revision_the_hub_registry_lists_becomes_the_active_one(tmp_path):
+    """Criterion 1: a listed revision is accepted, and its sha becomes the active revision."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, _ = revision_daemon(tmp_path, registry=saved_registry(tmp_path, sha))
+
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == sha
+    assert active["revision"]["project"]["language"] == "en-US"
+
+
+def test_the_hub_registry_lives_outside_every_repository(tmp_path):
+    """Criterion 2: the registry is the hub's file in the loop state directory, never one the project it lists holds."""
+    mod = voiced()
+    repo = git_project(tmp_path, SLACK_VALID)
+    path = Path(mod.slack_registry_path({"SG_STATE": str(tmp_path / "loop-state")}))
+
+    assert path == tmp_path / "loop-state" / "slack-saved.json", path
+    assert not path.resolve().is_relative_to(repo.resolve()), path
+    # An explicit name wins, so a machine can point the daemon at the file the hub writes.
+    assert mod.slack_registry_path({"SG_SLACK_REGISTRY": "/x/reg.json", "SG_STATE": "/y"}) == "/x/reg.json"
+
+
+def test_a_revision_no_hub_save_lists_is_refused(tmp_path):
+    """Criterion 3: a commit the hub never saved is refused, so an ordinary code change creates no authority."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, logged = revision_daemon(tmp_path, registry=saved_registry(tmp_path))
+
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app") is None
+    assert any("not listed" in line and sha[:12] in line for line in logged), logged
+
+
+def test_an_unlisted_revision_keeps_the_previous_one_active(tmp_path):
+    """Criterion 4: a listed revision stays active when the next commit names no hub save."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    first = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, _ = revision_daemon(tmp_path, registry=saved_registry(tmp_path, first))
+    daemon.refresh_slack(projects=[project(repo)])
+
+    commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == first
+    assert active["revision"]["project"]["language"] == "en-US"
+
+
+def test_an_unlisted_revision_notices_the_owner(tmp_path):
+    """Criterion 5: the refusal is one DM to the owner, and it names the project and the missing hub save."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client, registry=saved_registry(tmp_path))
+
+    daemon.refresh_slack(projects=[project(repo)])
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == OWNER
+    assert "acme/app" in posts[0]["text"] and "not listed" in posts[0]["text"]
+
+
+def test_the_same_revision_is_accepted_after_the_hub_lists_it(tmp_path):
+    """Criterion 6: the same commit is accepted once the hub lists it, and the refusal record is cleared."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    first = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    registry = saved_registry(tmp_path, first)
+    _, daemon, _ = revision_daemon(tmp_path, registry=registry)
+    daemon.refresh_slack(projects=[project(repo)])
+    assert daemon.state.active_revision("acme/app")["sha"] == first
+    moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+
+    registry.write_text(json.dumps({"/hub/worktrees/x/docs/squad/slack.yaml":
+                                    {"sha": moved, "at": "2026-11-22T00:05:00-03:00", "committed": True}}))
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == moved
+    assert active["revision"]["project"]["language"] == "es-ES"
+
+
+def unlisted_project_daemon(tmp_path, mod, client):
+    """A daemon over a state that already holds one channel for `acme/app`, with a registry that lists no revision."""
+    _, got = configure(tmp_path, mod, client, ["acme/app"])
+    cid = got["channels"]["acme/app"]["id"]
+    registry = saved_registry(tmp_path)
+    daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=client,
+                        projects=lambda: ["acme/app"], registry=lambda: str(registry))
+    daemon.refuse_channel_claims([{"repo": "acme/app", "checkout": "", "local": ""}])
+    return daemon, cid
+
+
+def test_a_project_no_hub_save_lists_serves_no_channel(tmp_path):
+    """Criterion 7: its events reach no inbox and its answers never leave, because the hub approved no revision."""
+    mod = voiced()
+    client = FakeClient()
+    daemon, cid = unlisted_project_daemon(tmp_path, mod, client)
+
+    outcome = daemon.handle(message_event(text="hello", channel=cid, channel_type="channel"))
+    outbox = Path(daemon.state.outbox_for(cid))
+    outbox.parent.mkdir(parents=True, exist_ok=True)
+    outbox.write_text(json.dumps({"text": "an answer", "channel": cid}) + "\n")
+    asyncio.run(daemon.drain_outboxes())
+
+    assert outcome == "other"
+    assert lines(daemon.state.inbox_for(cid)) == []
+    assert any("not served" in (row.get("error") or "") for row in lines(daemon.state.other_path))
+    assert [p for p in client.posts() if p["channel"] == cid] == [], "an answer left for an unapproved project"
+
+
+def test_a_project_no_hub_save_lists_notices_the_owner(tmp_path):
+    """Criterion 8: the owner gets one DM naming the project whose revision the hub lists no save for."""
+    mod = voiced()
+    client = FakeClient()
+
+    _, cid = unlisted_project_daemon(tmp_path, mod, client)
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == OWNER
+    assert "acme/app" in posts[0]["text"] and cid in posts[0]["text"]

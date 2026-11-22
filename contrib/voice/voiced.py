@@ -112,6 +112,8 @@ SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
 DM = "dm"                            # the DM is one scope beside the channels, so its queues carry a key too
+SLACK_REGISTRY = "slack-saved.json"  # the hub's saved-sha registry, in the loop state directory (#2694)
+SLACK_REGISTRY_ENV = "SG_SLACK_REGISTRY"   # an explicit registry path, for a machine that moves it
 
 
 class SchemaRefused(Exception):
@@ -218,13 +220,66 @@ def hub_projects(script=None):
             generic = os.path.join(profiles, slackpolicy.LOCAL_SUFFIX)
             if os.path.isfile(generic):
                 local = generic
-        found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(), "local": local})
+        entry = {"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(), "local": local}
+        state = (ctx.get("SG_STATE") or "").strip()
+        if state:      # the loop state directory holds the hub's saved-sha registry (#2695)
+            entry["state"] = state
+        found.append(entry)
     return found
 
 
 def hub_repos(script=None):
     """Every repository the hub lists: the `SG_REPO` of each project `hub_projects` names."""
     return [entry["repo"] for entry in hub_projects(script)]
+
+
+def slack_registry_path(env=None):
+    """The hub's saved-sha registry: one file in the loop state directory, outside every repository (#2694).
+
+    Saving in the hub is the owner's approval (SPEC 2682 story 66). The registry stays off every checkout, so no
+    commit under review can list its own sha: an ordinary code change creates no authority. `SG_SLACK_REGISTRY` names
+    the file outright, else the loop state directory does; `''` means no registry path is known.
+    """
+    env = os.environ if env is None else env
+    named = (env.get(SLACK_REGISTRY_ENV) or "").strip()
+    if named:
+        return named
+    state = (env.get("SG_STATE") or "").strip()
+    return os.path.join(state, SLACK_REGISTRY) if state else ""
+
+
+def hub_registry(projects=None):
+    """The registry path a daemon on this machine reads: the loop state directory the hub seam names (#2694).
+
+    The explicit env var wins, then the `SG_STATE` of the first project the seam lists. `''` leaves the saved-sha
+    check out of force, so a machine that names no loop state keeps the older behaviour.
+    """
+    named = slack_registry_path({"SG_SLACK_REGISTRY": os.environ.get(SLACK_REGISTRY_ENV) or ""})
+    if named:
+        return named
+    for entry in (hub_projects() if projects is None else projects):
+        state = str((entry or {}).get("state") or "").strip()
+        if state:
+            return os.path.join(state, SLACK_REGISTRY)
+    return ""
+
+
+def listed_revisions(path):
+    """The `slack.yaml` shas the hub registry lists, or an empty set when the file is missing or malformed.
+
+    One key per saved file, each value the landed sha of that save. A file this build cannot read lists nothing, so a
+    project with no approved revision serves no channel, and a refusal never widens what the daemon serves.
+    """
+    if not path:
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    return {str(entry["sha"]) for entry in data.values() if isinstance(entry, dict) and entry.get("sha")}
 
 
 class TipUnreadable(Exception):
@@ -263,11 +318,12 @@ def _rows(value):
     return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
 
 
-def project_documents_at_start(projects):
+def project_documents_at_start(projects, listed=None):
     """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
 
     A tip that cannot be read, or a revision that breaks a rule, contributes nothing: the refresh that follows reports
-    it, and this start opens only the sockets it can justify.
+    it, and this start opens only the sockets it can justify. With `listed` given, a tip the hub registry does not list
+    contributes nothing either, so no socket opens for a project the owner approved no revision of (#2695).
     """
     docs = {}
     for entry in projects or ():
@@ -275,8 +331,10 @@ def project_documents_at_start(projects):
         if not repo:
             continue
         try:
-            _, text = dev_tip((entry.get("checkout") or "").strip())
+            sha, text = dev_tip((entry.get("checkout") or "").strip())
         except TipUnreadable:
+            continue
+        if listed is not None and sha not in listed:
             continue
         out = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
@@ -285,32 +343,42 @@ def project_documents_at_start(projects):
     return docs
 
 
-def project_documents(state, projects):
-    """The active revision of each project: repository -> document; a project with no active revision contributes none."""
+def project_documents(state, projects, listed=None):
+    """The active revision of each project: repository -> document; a project with no active revision contributes none.
+
+    With `listed` given, an active record whose sha the hub registry does not list contributes none: a revision no save
+    approved is no authority, whatever wrote the record (#2695).
+    """
     docs = {}
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if not repo:
             continue
-        revision = (state.active_revision(repo) or {}).get("revision")
+        record = state.active_revision(repo) or {}
+        if listed is not None and record.get("sha") not in listed:
+            continue
+        revision = record.get("revision")
         if isinstance(revision, dict):
             docs[repo] = revision
     return docs
 
 
-def effective_documents(state, projects, read_start=None):
+def effective_documents(state, projects, read_start=None, listed=None):
     """Each project's active revision, or its dev-tip document while it has none: repository -> document.
 
     The dev tip answers on a fresh start, before the first revision is promoted, so a channel claim is refused from
     the first poll. A tip is read only for a project with no active revision, so a steady daemon reads no extra tip.
+    With `listed` given, a document no hub save lists contributes none, so a project the owner approved nothing for
+    serves no channel (#2695).
     """
-    active = project_documents(state, projects)
+    active = project_documents(state, projects, listed=listed)
     missing = []
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if repo and repo not in active:
             missing.append(entry)
-    docs = dict((read_start or project_documents_at_start)(missing))
+    read = read_start or (lambda entries: project_documents_at_start(entries, listed=listed))
+    docs = dict(read(missing))
     docs.update(active)
     return docs
 
@@ -1080,7 +1148,7 @@ class Daemon:
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
-                 clients=None, bot_tokens=None, downloaders=None, uploaders=None):
+                 clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
@@ -1098,6 +1166,9 @@ class Daemon:
         self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
         self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
+        # The callable that names the hub's saved-sha registry. None leaves the saved-sha check out of force, for a
+        # machine that names no registry; a callable puts it in force, and a file it cannot read lists nothing.
+        self.registry = registry
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
@@ -1140,12 +1211,23 @@ class Daemon:
             return self.downloaders[app](url)
         return self.downloader(url)
 
+    def listed(self):
+        """The shas the hub registry lists, read fresh on every pass, or None when this daemon names no registry.
+
+        Saving in the hub is the owner's approval, and a commit author is forgeable, so only a listed sha is an
+        authority (#2695). None means the check is out of force on a machine that names no registry.
+        """
+        if self.registry is None:
+            return None
+        return listed_revisions(self.registry())
+
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
 
         A tip that did not move is not read again. A valid revision replaces the active one. A revision that breaks a
-        rule, or a tip that cannot be read, keeps the previous revision active, so an invalid edit never changes a live
-        channel. The owner gets one DM naming the failing key, and every write is atomic (ADR-0030).
+        rule, a tip that cannot be read, or a revision the hub registry does not list keeps the previous revision
+        active, so an invalid edit or an unapproved commit never changes a live channel. The owner gets one DM naming
+        the failing key, and every write is atomic (ADR-0030).
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
@@ -1170,11 +1252,14 @@ class Daemon:
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
-        documents = effective_documents(self.state, projects)
+        listed = self.listed()
+        documents = effective_documents(self.state, projects, listed=listed)
+        unserved = self.unlisted_channel_lines(documents)
         claims = channel_claims(documents)
-        lines = channel_claim_refusals(documents)
+        lines = channel_claim_refusals(documents) + [line for _, line in unserved]
         self.refused_channels = {cid: f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused"
                                  for cid, repos in claims.items() if len(repos) > 1}
+        self.refused_channels.update(dict(unserved))
         if not self.refused_channels:
             self._held.clear()
         self.channel_apps = channel_apps(documents)
@@ -1190,6 +1275,26 @@ class Daemon:
             if self.notice_channel_conflict(line):
                 self._channel_conflicts.add(line)
         return lines
+
+    @staticmethod
+    def _unlisted_line(repo, cid):
+        """One line for a channel whose project the hub lists no approved revision of (#2695)."""
+        return (f"voiced: {repo} has no approved Slack revision in the hub registry; its channel {cid} is not served")
+
+    def unlisted_channel_lines(self, documents):
+        """`(channel id, line)` of each project channel whose project holds no listed document (#2695, criteria 7, 8).
+
+        With no registry this daemon serves as before. With one, a project channel and no listed document means the
+        hub saved no revision for it, so no event of that channel reaches an inbox and no answer leaves for it.
+        """
+        if self.registry is None:
+            return []
+        out = []
+        for repo, entry in (self.state.channels() or {}).items():
+            cid = str((entry or {}).get("id") or "")
+            if cid and repo not in documents:
+                out.append((cid, self._unlisted_line(repo, cid)))
+        return out
 
     def notice_channel_conflict(self, line):
         """One DM to the owner about a channel id two projects claim; a refused DM is a log line, never a lost refusal."""
@@ -1241,6 +1346,11 @@ class Daemon:
             return self.refuse_revision(repo, active, [str(x)], sha=None, tip_failed=True)
         if active is not None and active.get("sha") == sha:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
+        listed = self.listed()
+        if listed is not None and sha not in listed:
+            return self.refuse_revision(
+                repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
+                sha=sha)
         tip_defects = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), tip_defects)
         name, local = local_docs.get(repo, (None, None))
@@ -2015,7 +2125,10 @@ def main(argv):
         lock.close()
         return 1
     projects = hub_projects()
-    specs = app_keychains(project_documents_at_start(projects))
+    # The hub's saved-sha registry is the only authority for a Slack revision (#2695): the app set this start opens
+    # sockets for comes from listed revisions alone, and no listed revision means no channel of that project.
+    registry = hub_registry(projects)
+    specs = app_keychains(project_documents_at_start(projects, listed=listed_revisions(registry) if registry else None))
     if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
         specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
@@ -2031,6 +2144,7 @@ def main(argv):
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
+                    registry=(lambda: registry) if registry else None,
                     synthesizer=lambda script, voice=None, tone=None:
                         spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),

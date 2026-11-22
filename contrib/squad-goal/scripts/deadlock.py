@@ -50,6 +50,21 @@ def _component(edges, seeds):
     return comp
 
 
+def _closure(edges, seed):
+    """Every key `seed` waits on, directly or through other keys, along directed (blocked, blocker) edges; `seed` included."""
+    out = {}
+    for a, b in edges:
+        out.setdefault(a, set()).add(b)
+    seen, todo = set(), [seed]
+    while todo:
+        k = todo.pop()
+        if k in seen:
+            continue
+        seen.add(k)
+        todo.extend(out.get(k, ()))
+    return seen
+
+
 def _cycle(waits):
     done = set()
 
@@ -78,7 +93,8 @@ def _finding(status, cause, reason, witness=(), actor=None):
     return {"status": status, "cause": cause, "reason": reason, "witness": list(witness), "actor": actor}
 
 
-def _findings(graph, explicit, comp):
+def _findings(graph, explicit, comp, held_from=None):
+    """Every finding of one component; with `held_from`, a held finding only for an edge whose blocked card is in it."""
     out = []
     for k in sorted(comp):
         nd = graph.get(k)
@@ -105,7 +121,7 @@ def _findings(graph, explicit, comp):
             out.append(_finding("invalid", f"invalid:{a} > {b}", f"loop-bug {a} waits on {b}, work only dispatch can run", [a, b]))
     for a, b in explicit:
         nb = graph.get(b)
-        if nb is None:
+        if nb is None or (held_from is not None and a not in held_from):
             continue
         if not nb["open"]:
             if not nb["delivered"]:
@@ -169,11 +185,17 @@ def audit(issues):
 
 
 def verdict_of(issues, repo, number):
-    """The verdict for the component that holds one issue, read from the pass's own issue list."""
+    """The verdict for the component that holds one issue, read from the pass's own issue list.
+
+    An invalid or unknown finding holds the whole component (#1984). An owner hold holds the issue only when the held
+    card is in its transitive blocker closure over the explicit edges (#2737): a parent-to-child edge joins the tickets of
+    one spec in one component, but no ticket waits on a sibling through it.
+    """
     graph = graph_of(issues, repo)
     explicit = _explicit(graph)
-    comp = _component(explicit + _implicit(graph), {key(repo, number)})
-    return _verdict(_findings(graph, [e for e in explicit if e[0] in comp], comp))
+    k = key(repo, number)
+    comp = _component(explicit + _implicit(graph), {k})
+    return _verdict(_findings(graph, [e for e in explicit if e[0] in comp], comp, held_from=_closure(explicit, k)))
 
 
 def new_causes(causes, seen):
