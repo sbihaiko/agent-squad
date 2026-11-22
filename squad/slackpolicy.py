@@ -42,6 +42,10 @@ NAME = re.compile(r"^[A-Za-z0-9 _.\-]{1,32}\Z")     # ASCII letters, digits, spa
 TONE_MAX = 300
 SECRET_KEY = "secret"
 USER_ID = re.compile(r"^[UW][A-Z0-9]{2,}\Z")   # a Slack user id: `U` or `W`, then uppercase letters and digits
+# The two refusals the hub editor shows beside the field: the text lives here so the editor and the validator never
+# state a rule twice (ADR-0177 decision 3).
+GUEST_TEAM_REASON = "a guest team id stays in the local file"
+SECOND_GUEST_REASON = "the machine serves one guest workspace at a time; a second guest workspace is refused"
 
 
 class Defect(NamedTuple):
@@ -277,13 +281,12 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     teams, channels = _guest_ids(local)
     for i, ws in enumerate(_rows(committed.get("workspaces"))):
         if str(ws.get("id")) in teams:
-            out.append(_defect("slack.yaml", f"workspaces[{i}].id", "a guest team id stays in the local file"))
+            out.append(_defect("slack.yaml", f"workspaces[{i}].id", GUEST_TEAM_REASON))
         for j, ch in enumerate(_rows(ws.get("channels"))):
             if str(ch.get("id")) in channels:
                 out.append(_defect("slack.yaml", f"workspaces[{i}].channels[{j}].id", "a guest channel id stays in the local file"))
     for file, i in _second_guests(local_name, local, others):
-        out.append(_defect(file, f"workspaces[{i}].id",
-                           "the machine serves one guest workspace at a time; a second guest workspace is refused"))
+        out.append(_defect(file, f"workspaces[{i}].id", SECOND_GUEST_REASON))
     return out
 
 
