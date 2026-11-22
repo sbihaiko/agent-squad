@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
+import datetime as dt, difflib, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
+import yaml   # the Slack files are YAML: the hub shows their diff and writes them whole (#2694)
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, issue_ledger, modelreg, models_chains, priority_backfill, procscan, provkey, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc   # noqa: F401  the board tests read KINDS through the hub
@@ -1979,7 +1980,9 @@ def slack_write(path, cfg):
     return None
 
 def slack_set(body):
-    """POST /api/slack: validate, diff, then write. With `confirm` false it answers the diff and writes nothing."""
+    """POST /api/slack: validate, diff, then write. With `confirm` false it answers the diff and writes nothing.
+    A body that carries both files is the Communication theme's file save (#2694)."""
+    if isinstance(body, dict) and "committed" in body and "local" in body: return slack_files_set(body)
     if not isinstance(body, dict): return {"err": "bad request"}
     path = slack_file()
     if path is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
@@ -2047,7 +2050,8 @@ def _slack_overview_empty(err, committed=None, local=None):
     """The read view of a theme that can read nothing: the same Now tiles and four empty sections, with the reason in
     the defects banner. `err` carries the message, and it is a message: it never replaces the page."""
     project = {"language": "en-US", "persona": None, "persona_name": None}
-    return dict(_slack_overview_shape(project, [], [], [], [], [err] if err else [], committed, local), err=err)
+    return dict(_slack_overview_shape(project, [], [], [], [], [err] if err else [], committed, local), err=err,
+                docs={"committed": {}, "local": {}})
 
 def slack_overview(committed=None, local=None):
     """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
@@ -2094,7 +2098,150 @@ def slack_overview(committed=None, local=None):
             workspaces.append({"id": _slack_text(row.get("id")), "label": label,
                                "class": _slack_text(row.get("class") or "owned"), "language": language,
                                "persona": persona.id if persona else None, "file": file, "channels": channels})
-    return _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
+    out = _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
+    # The raw documents the view hand back on Save (#2694); the resolved rows above are what it draws.
+    out["docs"] = {"committed": committed_doc, "local": local_doc}
+    return out
+
+# --- Settings > Communication, the save path (SPEC 2682 #2694). The theme saves the two files it reads: the profile's
+# local file, written at once beside the profile, and the committed `slack.yaml`, written only in the hub's own worktree,
+# committed alone and landed in the landing branch by fast-forward; the hub never writes the loop checkout. The saved sha
+# goes to one local registry outside every repository. The rules stay in the policy module (ADR-0177): the hub validates,
+# diffs, writes and lands, and holds no copy of a rule (ADR-0137).
+SLACK_WT_ENV = "SG_SLACK_WORKTREE"   # the worktree the hub owns for the committed file: never the loop checkout
+SLACK_REGISTRY = "slack-saved.json"  # in the loop state directory, outside every repository
+
+def slack_registry_path():
+    """The saved-sha registry: one local file in the loop state directory, outside every repository."""
+    return pathlib.Path(STATE) / SLACK_REGISTRY
+
+def slack_worktree(loop=None):
+    """(worktree, error): the hub's own worktree for the committed Slack file. A hub with none refuses the write, and a
+    worktree that is the loop checkout, or sits inside it, is refused too."""
+    raw = os.environ.get(SLACK_WT_ENV) or ""
+    if not raw: return None, f"the committed file needs the hub's own worktree: set {SLACK_WT_ENV}"
+    wt = pathlib.Path(raw)
+    loop = loop or os.environ.get("SG_CHECKOUT") or CHECKOUT or ""
+    if loop:
+        try:
+            root, here = pathlib.Path(loop).resolve(), wt.resolve()
+            if here == root or here.is_relative_to(root):
+                return None, "the committed file may not be written in the loop checkout"
+        except (OSError, ValueError):
+            pass
+    return wt, None
+
+def _slack_git(wt, *args):
+    return subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True, timeout=120)
+
+def _slack_yaml_text(doc):
+    try: return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+    except yaml.YAMLError: return ""
+
+def _slack_yaml_lines(path, doc):
+    """The changed lines from the YAML file at `path` to `doc`. Both sides pass through the YAML dumper first, so a
+    reformat that changes no value is no change."""
+    try: old_text = pathlib.Path(path).read_text()
+    except OSError: old_text = ""
+    try:
+        old = yaml.safe_load(old_text)
+        before = _slack_yaml_text(old if isinstance(old, dict) else {})
+    except yaml.YAMLError:
+        before = old_text
+    after = _slack_yaml_text(doc)
+    return [line for line in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
+            if line[:1] in "+-" and line[:3] not in ("+++", "---")]
+
+def _slack_atomic(path, text):
+    """Whole or not at all: a temp file beside the target, then a rename (ADR-0030). Returns an error, or None."""
+    p = pathlib.Path(path)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError as e:
+        return f"{p.name} could not be written: {e.strerror or e}"
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return None
+
+def _slack_land(wt, rel, message):
+    """Commit one file in the hub's worktree and push that commit to the landing branch by fast-forward: (sha, error).
+    The worktree must stand one commit above origin/<land>, so the landing carries the saved file and no other work."""
+    g = lambda *a: _slack_git(wt, *a)   # noqa: E731
+    r = g("fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
+    if r.returncode: return None, f"git fetch failed: {(r.stderr or r.stdout).strip()}"
+    base, head = g("rev-parse", f"origin/{LAND}"), g("rev-parse", "HEAD")
+    if base.returncode or head.returncode: return None, f"the worktree has no origin/{LAND} to land on"
+    if head.stdout.strip() != base.stdout.strip():
+        return None, f"the hub's worktree is not one commit above origin/{LAND}: the save would carry other work"
+    r = g("add", "--", rel)
+    if r.returncode: return None, f"git add failed: {(r.stderr or r.stdout).strip()}"
+    r = g("commit", "-q", "-m", message, "--", rel)
+    if r.returncode: return None, f"git commit failed: {(r.stderr or r.stdout).strip()}"
+    sha = g("rev-parse", "HEAD").stdout.strip()
+    r = g("push", "-q", "origin", f"HEAD:refs/heads/{LAND}")
+    if r.returncode: return None, f"the push to {LAND} failed: {(r.stderr or r.stdout).strip()}"
+    return sha, None
+
+def _slack_record(path, sha):
+    """Record the landed sha in the local registry, keyed by the file it saved. Returns an error, or None."""
+    p = slack_registry_path()
+    try: data = json.loads(p.read_text())
+    except (OSError, ValueError): data = {}
+    if not isinstance(data, dict): data = {}
+    data[str(path)] = {"sha": sha, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds")}
+    return _slack_atomic(p, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+def slack_files_set(body, committed=None, local=None):
+    """POST /api/slack for the Communication theme: validate, diff, then write. With `confirm` false it answers the diff
+    of both files and writes nothing. On confirm it writes the local file atomically in the profile folder, and writes,
+    commits and lands the committed file in the hub's own worktree. Returns the diff, the landed sha, and both files
+    read back, so the change applies at once."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    if committed is None and local is None: committed, local = slack_yaml_paths()
+    if local is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
+    new_c, new_l = body.get("committed"), body.get("local")
+    if not isinstance(new_c, dict) or not isinstance(new_l, dict):
+        return {"err": "committed and local: each one mapping"}
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    others = []
+    for other in sorted(pathlib.Path(local).parent.glob("*slack.local.yaml")):
+        if other.resolve() == pathlib.Path(local).resolve(): continue
+        try: doc = yaml.safe_load(other.read_text())
+        except (OSError, yaml.YAMLError): continue
+        if isinstance(doc, dict): others.append((other.name, doc))
+    try: defects = P.validate(committed=new_c, local=new_l, others=others, local_name=pathlib.Path(local).name)
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    if defects: return {"err": str(defects[0]), "defects": [str(d) for d in defects]}
+    wt, why = slack_worktree()
+    target = wt / SLACK_YAML_REL if wt else pathlib.Path(committed)
+    files = {"committed": str(target), "local": str(local)}
+    diff = {"committed": _slack_yaml_lines(target if target.exists() else committed, new_c) if target else [],
+            "local": _slack_yaml_lines(local, new_l)}
+    if body.get("confirm") is not True: return {"diff": diff, "files": files}
+    if diff["committed"] and why: return {"err": why, "diff": diff, "files": files}   # no half save: refuse before the local write
+    err = _slack_atomic(local, _slack_yaml_text(new_l))
+    if err: return {"err": err}
+    out = {"diff": diff, "files": files}
+    if diff["committed"]:
+        err = _slack_atomic(target, _slack_yaml_text(new_c))
+        if err: return {"err": err, "files": files}
+        sha, err = _slack_land(wt, SLACK_YAML_REL, "Save the Communication Slack file")
+        if err: return {"err": err, "files": files}
+        out["sha"] = sha
+        _slack_record(target, sha)
+    try:
+        out["documents"] = {"committed": yaml.safe_load(target.read_text()) if target.exists() else {},
+                            "local": yaml.safe_load(pathlib.Path(local).read_text())}
+    except (OSError, yaml.YAMLError):
+        out["documents"] = {"committed": {}, "local": new_l}
+    return out
 
 # --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
 # alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
@@ -8347,12 +8494,12 @@ $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dat
  limWrite(key).catch(()=>{})});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
-let slS=null,slDraft=null,slD=null,slMsg="";
+let slS=null,slDraft=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null;   // slDocs: the two raw files the save hands back (#2694)
 const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
 const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
 const slA=t=>esc(t).replace(/"/g,"&quot;");
 const slClone=o=>JSON.parse(JSON.stringify(o));
-const slDirty=()=>!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS);
+const slDirty=()=>(!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS))||(!!slDocs&&JSON.stringify(slDocs)!==JSON.stringify(slSavedDocs));
 const slOpts=(list,cur)=>list.map(x=>`<option${x===cur?" selected":""}>${slA(x)}</option>`).join("");
 const slChan=(c,i)=>{const on=c.watch?"":" disabled",n=slA(c.name);
  return `<div class="slc${c.watch?"":" off"}" role=row><span class=c1 role=cell><b>${esc(c.name)}</b>${c.watch?"":"<small>do not watch</small>"}</span>`
@@ -8426,13 +8573,18 @@ function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.valu
  else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
  else if(k==="tick"||k==="max")slDraft[k]=Number(v);
  else slDraft[k]=v}
-async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slD=null;slMsg="";slRender()}
+/* The save path over the two Slack files (#2694): the view hands both raw documents back, the hub validates them, shows
+   the diff of each file and, on confirm, writes the local file and lands the committed one in dev. */
+const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((d.diff||{}).committed)||[]).map(l=>themeLine("Communication",l))},
+ {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Communication",l))}];
+const slAsk=async()=>{try{const r=await(await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},confirm:false})})).json();
+ return r.err?[{file:(slR&&slR.files&&slR.files.committed)||"slack.yaml",lines:["! Communication · "+r.err]}]:slGroups(r)}catch(x){return[{file:"slack.yaml",lines:["! Communication · the diff could not be read"]}]}};
+async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
-async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...slDraft,confirm})}),d=await r.json();
+async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},confirm})}),d=await r.json();
  if(d.err){slD=null;slMsg="!"+d.err}
- else if(confirm){slS=d.state;slDraft=slClone(slS);slD=null;slMsg="saved"}
- else if((d.diff||[]).length){slD=d.diff;slMsg=""}
- else{slD=null;slMsg="nothing changed"}}catch(x){slMsg="!save failed"}
+ else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved"}
+ else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
@@ -8473,7 +8625,7 @@ const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,
 /* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */
 $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
- if(d.includes("slk"))groups.push(await setAskOne("/api/slack",slDraft,"Communication",(slS&&slS.file)||"(the settings file)"));
+ if(d.includes("slk"))groups.push(...await slAsk());   // the two Slack files, each under its own path (#2694)
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
@@ -8489,7 +8641,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
