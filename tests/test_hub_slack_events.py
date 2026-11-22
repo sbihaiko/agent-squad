@@ -350,16 +350,17 @@ def test_the_override_box_shows_the_text_the_channel_holds(hub, tmp_path):
     assert re.search(r'data-sl="ov:c:0:0:0"[^>]*value=""', html), html
 
 
-def test_the_personas_and_roles_keep_no_control(hub, tmp_path):
-    """The workspaces section (#2696) and the Project events section (#2698) each carry an editor of their own.
-    Personas and Roles stay read-only, so no control appears before the workspaces section."""
+def test_the_persona_roles_and_workspaces_sections_carry_their_own_controls(hub, tmp_path):
+    """Personas edits in its own section (#2697) and Slack workspaces carries the workspace editor (#2696); Roles stays
+    read-only."""
     html = render(hub, overview(hub, tmp_path))
-    workspaces = html.index("Slack workspaces")
-    before = html[:workspaces]
+    personas = html[html.index("<h4>Personas"):html.index("<h4>Roles")]
+    roles = html[html.index("<h4>Roles"):html.index("<h4>Slack workspaces")]
+    ws = html[html.index("<h4>Slack workspaces"):html.index("<h4>Project events")]
     for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in before, f"the read view carries {ctl} before the workspaces editor"
-    section = html[workspaces:html.index("Project events")]
-    assert "data-slopen=" in section and "<input" in section, section
+        assert ctl not in roles, f"the Roles section carries {ctl}"
+    assert "data-slsample=" in personas and "data-slpadd" in personas, personas
+    assert "data-slopen=" in ws and "<input" in ws, ws
 
 
 def test_checking_announce_writes_the_channel_list(hub, tmp_path):

@@ -9140,7 +9140,7 @@ function slReadHtml(r,d){if(!r)return "";
 /* The persona editor (SPEC 2682 #2697): the owner edits a persona name, voice and tone, hears a voice sample and checks
    the reply of each channel before saving. A persona carries no language and no permission, so the editor draws neither.
    The editor writes the two raw files the Save reads (#2694), so the hub validates, diffs and lands them on confirm. */
-let slOpen=null,slPv=null,slPvMsg="";
+let slPv=null,slPvMsg="";
 const slDoc=(d,k)=>((d&&d[k])||{});
 const slPersonaLists=d=>slDoc(d,"committed").personas||[];
 const slPersonaAt=(d,id)=>slPersonaLists(d).find(p=>String(p.id)===String(id))||null;
