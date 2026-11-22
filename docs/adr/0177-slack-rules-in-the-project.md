@@ -19,9 +19,12 @@ of the project, where a person reviews its commit.
    profile folder holds `<project>.slack.local.yaml`, where the hub keeps the project's Slack use today, and that file never
    enters a repository. The local file adds a `guest` workspace, a `guest` channel, and the members of a role; the merge of
    the two files never lets it widen the actions of a role, change a persona, or remove the authorship mark.
-2. **A workspace has a class.** `owned` installs the agent-squad app, and `voiced` opens one Socket Mode connection per app.
-   `guest` installs no bot, and a scheduled session reads the channel through the claude.ai connector. The class decides the
-   transport, and the file never repeats that information.
+2. **A workspace has a class, and a channel may take one.** `owned` installs the agent-squad app, and `voiced` opens one
+   Socket Mode connection per app. `guest` installs no bot, and a scheduled session reads the channel through the
+   claude.ai connector. A channel row in the local file may carry `class: guest`, and the channel's class wins over its
+   workspace's class, so the owner tests the guest path in an owned test workspace. That channel takes no bot transport:
+   `voiced` posts nothing in it, though the bot of its workspace is a member, and the guest poller reads it through the
+   connector. The class decides the transport, and the committed file names no channel class.
 3. **The policy module has one home.** The rules of both files and the decision for one event live in
    `squad/slackpolicy.py`. A process that reads or writes a Slack file imports it: `squad` for `squad slack check`, and
    the hub for the settings it writes. `voiced` (`contrib/voice/voiced.py`) takes the voice and the language from the
@@ -47,7 +50,8 @@ of the project, where a person reviews its commit.
    A deploy to production is never a role's standing grant.
 9. **A client id stays out of the committed file.** The validator refuses a team id or a channel id in `slack.yaml` when the
    local file declares it as `guest`. The connector reaches one guest Slack workspace at a time, summed over every project
-   on the machine, so the validator refuses every guest workspace after the first and names the file that holds it. A commit
+   on the machine, so the validator refuses every guest workspace after the first and names the file that holds it. A
+   workspace that holds a guest channel counts as a guest workspace for this bound. A commit
    guard refuses any file whose basename ends in `slack.local.yaml` inside a repository, in either case of the suffix: the
    name decides, so the file never enters a tree at all. The guard is armed by a tracked step, never by hand alone:
    `squad setup --apply` runs `contrib/squad-goal/scripts/install-hooks.sh` in the repository it prepares, and that script

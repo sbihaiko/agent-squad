@@ -62,6 +62,18 @@ def test_a_local_defect_names_the_file_and_the_key(tmp_path, capsys):
     assert "slack.local.yaml" in out and "workspaces[0].label" in out
 
 
+def test_a_guest_channel_in_an_owned_workspace_exits_zero(tmp_path, capsys):
+    """A local channel row carries `class: guest` under an owned workspace id, and the check reports no defect (#2770)."""
+    committed = {**COMMITTED, "workspaces": [{**COMMITTED["workspaces"][0],
+                                              "channels": [{"id": "C0PROJ0001", "name": "proj", "mode": "listen"}]}]}
+    local = {"version": 1, "workspaces": [{"id": "T0TEAM0001", "label": "team",
+                                           "channels": [{"id": "C0PROJ0001", "class": "guest"}]}]}
+    target, profile = project(tmp_path, committed, local)
+    rc, out = check(target, profile, capsys)
+    assert rc == 0
+    assert "ok" in out
+
+
 def test_no_file_is_not_a_defect(tmp_path, capsys):
     target, profile = project(tmp_path)
     rc, out = check(target, profile, capsys)

@@ -7,10 +7,12 @@ sits in the profile folder and never enters a repository. This module loads both
 `squad slack check` imports it, and the hub imports it before it writes a Slack setting. No other file holds a copy of
 these rules. `decide` maps one event of one channel to one decision; the caller passes the clock value, and the module
 reads neither a clock nor the network. A `send_grant` lives in the local file, where only the hub writes it, and it
-holds the date of the grant (story 38).
+holds the date of the grant (story 38). A channel row carries `class: guest` in the local file only, and the channel's
+class wins over its workspace's class (#2770).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
-`tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `tests/test_slack_channel_class.py`,
+`contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
@@ -229,6 +231,33 @@ def _announce(file, doc, events, out):
                                                             f"declares {declared}"))
 
 
+def channel_class(workspace, channel):
+    """The class one channel takes: the channel's own `class`, then its workspace's class, else `owned`. A channel row
+    carries `class: guest` in the local file only, so the owner tests the guest path in an owned workspace (#2770)."""
+    return str((channel or {}).get("class") or (workspace or {}).get("class") or "owned")
+
+
+def channel_row(local, workspace_id, channel_id):
+    """The local file's row of one channel, or None when it names none. A caller merges it over the committed row, so
+    the channel's class and its other keys read from the file that declares the guest channel."""
+    workspace = _row_at((local or {}).get("workspaces"), "id", workspace_id)
+    return _row_at(workspace.get("channels"), "id", channel_id) if workspace is not None else None
+
+
+def _channel_classes(file, doc, out, local):
+    """A channel class lives in the local file (ADR-0177). The committed file never names one, and a local class is one
+    of the classes the file declares."""
+    for i, ws in enumerate(_rows(doc.get("workspaces"))):
+        for j, ch in enumerate(_rows(ws.get("channels"))):
+            if ch.get("class") is None:
+                continue
+            key = f"workspaces[{i}].channels[{j}].class"
+            if not local:
+                out.append(_defect(file, key, "a channel class lives in the local file"))
+            elif str(ch["class"]) not in FIELD_CLASSES:
+                out.append(_defect(file, key, f"the class is one of {', '.join(FIELD_CLASSES)}"))
+
+
 def _guest_ids(local):
     """The team ids and channel ids a local file declares as guest."""
     teams, channels = set(), set()
@@ -264,6 +293,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
         _personas(file, doc, out)
         _roles(file, doc, out)
         _members(file, doc, out, local=(file == local_name))
+        _channel_classes(file, doc, out, local=(file == local_name))
     _send_grants("slack.yaml", committed, out, local=False)
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
@@ -287,12 +317,20 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     return out
 
 
+def _guest_workspace(ws):
+    """True when the connector reaches this workspace, so it takes the machine's one guest slot: the workspace is
+    `guest`, or one of its channels carries the guest class (#2770)."""
+    if str(ws.get("class", "")) == "guest":
+        return True
+    return any(str(ch.get("class") or "") == "guest" for ch in _rows(ws.get("channels")))
+
+
 def _second_guests(local_name, local, others):
     """Every guest workspace after the first on the machine, as `(file, index)`. The current project's file comes first,
     then the other projects' files by name, so each defect names the file that holds the refused workspace."""
-    guests = [(local_name, i) for i, ws in enumerate(_rows(local.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
+    guests = [(local_name, i) for i, ws in enumerate(_rows(local.get("workspaces"))) if _guest_workspace(ws)]
     for name, doc in sorted(others, key=lambda pair: str(pair[0])):
-        guests += [(name, i) for i, ws in enumerate(_rows(doc.get("workspaces"))) if str(ws.get("class", "")) == "guest"]
+        guests += [(name, i) for i, ws in enumerate(_rows(doc.get("workspaces"))) if _guest_workspace(ws)]
     return guests[1:]
 
 
@@ -699,13 +737,18 @@ def decide(committed, local, event, now, thread_state=None):
     user = str(event.get("user") or "")
     workspace = _row_at(committed.get("workspaces"), "id", workspace_id) or _row_at(local.get("workspaces"), "id", workspace_id)
     channel = _row_at(workspace.get("channels"), "id", channel_id) if workspace else None
+    local_channel = channel_row(local, workspace_id, channel_id)
+    if channel is None:
+        channel = local_channel
+    elif local_channel is not None:
+        channel = {**channel, **local_channel}
     language = _effective_language(committed, local, workspace, channel)
     persona = effective_persona(committed, local, workspace, channel)
     if channel is None:
         # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
         role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
         return Decision(IGNORE, role, (), language, persona, None, False, None)
-    class_ = str(workspace.get("class") or "owned")
+    class_ = channel_class(workspace, channel)
     next_poll = now + timedelta(seconds=poll_interval(now, channel, thread_state)) if class_ == "guest" else None
     # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
     voice = class_ == "guest" and bool(channel.get("voice_reply"))
