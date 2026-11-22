@@ -6,9 +6,21 @@ is born only from the exact text the owner approved.
 
 Guards: `tests/test_slack_proposal.py`.
 """
+import re
 from typing import NamedTuple
 
 from . import slackpolicy as S
+from . import slackwriter as W
+
+# The personal data a summary never carries: a mention (and the name in it), a Slack user id, an email address and a
+# phone number. The request itself stays, because the owner decides on that text.
+_MENTION = re.compile(r"<@[^>]*>")
+_USER_ID = re.compile(r"\bU[A-Z0-9]{6,}\b")
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+_PHONE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
+# The action in words the owner reads. A raw action id holds an underscore, and an underscore inside the one italic body
+# breaks the writer's persona mark rule, so the summary never prints one.
+_ASK = {"request_work": "work", "request_investigation": "an investigation"}
 
 
 class Proposal(NamedTuple):
@@ -33,4 +45,30 @@ def of(request, decision, line, project):
                     str(project), str(request.channel), str((line or {}).get("user") or ""))
 
 
-__all__ = ["Proposal", "of"]
+def clean(text):
+    """The text with the personal data removed: a mention, a Slack user id, an email address and a phone number each
+    become one placeholder. The requester's id never reaches the summary, whatever the client writes around it."""
+    text = _MENTION.sub("[a person]", str(text or ""))
+    text = _USER_ID.sub("[a person]", text)
+    text = _EMAIL.sub("[email]", text)
+    text = _PHONE.sub("[phone]", text)
+    # `*` and `_` are the two characters the persona mark rule reads, so the body never carries them.
+    return text.replace("*", "").replace("_", " ")
+
+
+def summary(proposal):
+    """The one-line summary of a proposal the owner reads: the action in words, and the request with its personal data
+    removed. It never carries the requester's id or the guest channel id."""
+    ask = _ASK.get(proposal.action, str(proposal.action).replace("_", " "))
+    return f"A role holder in a guest channel asks for {ask}: {clean(proposal.text)}"
+
+
+def dm(proposal, owner_dm, name):
+    """The proposal prepared for the owner's direct message, in the shape every guest text carries, or None when no
+    persona names the mark. It is a draft: the owner decides whether it leaves."""
+    if not name:
+        return None
+    return W.Draft(W.DRAFT_WORD, str(owner_dm), "", W.compose(name, summary(proposal)), str(name))
+
+
+__all__ = ["Proposal", "clean", "dm", "of", "summary"]

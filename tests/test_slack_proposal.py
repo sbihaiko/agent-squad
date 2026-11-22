@@ -7,6 +7,7 @@ refuses it, and an issue is born only from the exact text the owner approved, in
 Every decision here comes from the real policy module over a real pair of files, so the expected answer never repeats
 the proposal module's own rule. Every id and every text is a placeholder.
 """
+import asyncio
 import copy
 import json
 from datetime import datetime
@@ -16,6 +17,7 @@ import pytest
 from squad import slackexecutor as X
 from squad import slackpolicy as S
 from squad import slackproposal as P
+from squad import slackwriter as W
 
 REPO = "acme/app"
 GUEST_TEAM = "T0CLIENT01"
@@ -61,6 +63,13 @@ def line(user=CLIENT, text=CLIENT_TITLE, role="colleague"):
             "persona": SUMMARY_MARK, "role": role, "text": text}
 
 
+def proposal(text=CLIENT_TITLE):
+    """One proposal from the real policy decision and the real request parse, so every case asks the same path."""
+    request, why = X.parse(request_text(arguments={"title": text}))
+    assert request is not None, why
+    return P.of(request, decision(), line(text=text), REPO)
+
+
 def request_text(action="request_work", arguments=None, project=REPO):
     body = {"action": action, "arguments": arguments if arguments is not None else {"title": CLIENT_TITLE},
             "project": project, "channel": GUEST_CHANNEL, "source": MID}
@@ -95,3 +104,24 @@ def test_a_request_from_a_role_holder_in_a_guest_channel_gets_decision_proposal(
     out = X.execute(request, dec, line(), REPO, work=work)
     assert out.ran is False
     assert work.calls == []
+
+
+# --- criterion 2: the proposal reaches the owner DM with a summary that holds no personal data ----------------------
+
+def test_the_proposal_reaches_the_owner_dm_with_a_summary_that_holds_no_personal_data():
+    """Criterion (2): the summary keeps the request and drops the caller's id, mention, email and phone; the owner DM
+    carries it through the writer's hook with the persona mark."""
+    text = f"{CLIENT_TITLE} for {CLIENT_EMAIL}, call {CLIENT_PHONE}, from <@{CLIENT}>."
+    summary = P.summary(proposal(text))
+    assert CLIENT not in summary
+    assert CLIENT_EMAIL not in summary
+    assert "98765" not in summary
+    assert CLIENT_TITLE in summary
+    draft = P.dm(proposal(text), OWNER_DM, SUMMARY_MARK)
+    assert draft.channel == OWNER_DM and draft.tool == W.DRAFT_WORD
+    answer = asyncio.run(W.pre_write_tool_use(draft)({
+        "tool_name": "mcp__slack__slack_send_message_draft", "tool_input": {}}, "t1", None))
+    output = answer["hookSpecificOutput"]
+    assert output["permissionDecision"] == "allow"
+    assert output["updatedInput"]["channel"] == OWNER_DM
+    assert output["updatedInput"]["text"] == draft.text
