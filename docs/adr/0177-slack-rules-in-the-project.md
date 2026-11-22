@@ -24,9 +24,11 @@ of the project, where a person reviews its commit.
    transport, and the file never repeats that information.
 3. **The policy module has one home.** The rules of both files and the decision for one event live in
    `squad/slackpolicy.py`. A process that reads or writes a Slack file imports it: `squad` for `squad slack check`, and
-   the hub for the settings it writes. `voiced` names the same module for the voice and the language it serves; it reads
-   no Slack file today, so it imports the module when it does. No other file holds a copy of a rule. The module is pure:
-   the caller passes the clock and the network answer, and the module reads neither.
+   the hub for the settings it writes. `voiced` (`contrib/voice/voiced.py`) takes the voice and the language from the
+   same module when it reads a Slack file. That file reads no Slack file today: it holds every Slack call in the
+   `channels` module it imports, and it names no policy module. It imports this module on the day it reads a file, so the
+   voice and the language never disagree with the hub. No other file holds a copy of a rule. The module is pure: the caller passes the
+   clock and the network answer, and the module reads neither.
 4. **A defect names its key.** The validator returns one message per failing key, and the message names the file that
    holds the key and the key path. `squad slack check` reads both files at the project root, also from a subdirectory,
    reads each other project's local file on the machine, prints each message, and exits non-zero when a key fails. A file
@@ -47,7 +49,9 @@ of the project, where a person reviews its commit.
    local file declares it as `guest`. The connector reaches one guest Slack workspace at a time, summed over every project
    on the machine, so the validator refuses every guest workspace after the first and names the file that holds it. A commit
    guard refuses any file whose basename ends in `slack.local.yaml` inside a repository, in either case of the suffix: the
-   name decides, so the file never enters a tree at all.
+   name decides, so the file never enters a tree at all. The guard is armed by a tracked step, never by hand alone:
+   `squad setup --apply` runs `contrib/squad-goal/scripts/install-hooks.sh` in the repository it prepares, and that script
+   installs the guard's `pre-commit` hook. After a clone, that one command makes a commit of a local file fail.
 10. **Slack is the wake path in an `owned` workspace.** The session never asks Slack for a message of an `owned` workspace:
     a Monitor on the inbox wakes it. Polling exists only in a `guest` workspace, where the connector is the only transport.
 11. **A role is the owner's written grant.** A role in the committed file grants the actions it lists, in an `owned` channel,
@@ -64,4 +68,5 @@ gets them from the same module, so a second copy of a rule never disagrees with 
 
 ## Guard
 
-`tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `tests/test_setup.py` (the tracked step that arms the
+guard), `contrib/squad-goal/scripts/test-commit-guard.sh`.

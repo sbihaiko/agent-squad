@@ -288,7 +288,7 @@ def _setup(a):
         if action in ("keep", "report"):
             print(f"{action}: {rel}" + (f": {text}" if action == "report" else ""))
         else:
-            verb = {"append": "append to", "link": "link", "propose": "propose"}.get(action, "create")
+            verb = {"append": "append to", "link": "link", "propose": "propose", "arm": "arm"}.get(action, "create")
             done = a.apply and (action != "propose" or a.approve_memory)
             print(f"{verb if done else 'would ' + verb}: {rel}")
     if a.apply:
