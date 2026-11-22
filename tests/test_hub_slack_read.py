@@ -9,7 +9,6 @@ runs here. Every id is a placeholder.
 """
 import importlib.util
 import json
-import os
 import pathlib
 import re
 import subprocess
@@ -63,14 +62,19 @@ LOCAL = {
 
 @pytest.fixture(scope="module")
 def hub():
-    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4")):
-        os.environ.setdefault(k, v)
+    """The hub module under a pinned environment. The hub loads the policy module from SG_SQUAD first, then SG_CHECKOUT
+    (`squad_roots`), so a caller's own SG_CHECKOUT, such as the loop checkout a gate exports, would answer with another
+    tree's `slackpolicy`. SG_SQUAD names this tree, and every value is undone when the module ends."""
+    mp = pytest.MonkeyPatch()
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("SG_SQUAD", str(ROOT))):
+        mp.setenv(k, v)
     for k in ("SG_HUB_DIR", "SG_STATE", "SG_CHECKOUT", "SG_SHARED", "SG_PROFILES_DIR"):
-        os.environ.setdefault(k, tempfile.mkdtemp())
+        mp.setenv(k, tempfile.mkdtemp())
     spec = importlib.util.spec_from_file_location("hub_slack_read", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    yield mod
+    mp.undo()
 
 
 def files(tmp_path, committed=None, local=None):
