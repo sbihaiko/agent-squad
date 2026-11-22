@@ -1,0 +1,177 @@
+<!doctype html>
+<!-- PROTOTYPE, throwaway (spec #2682). Question: what should Settings > Communication look like once Slack is per project,
+     with owned and guest Slack workspaces, channels, roles and personas? Three variants on one page, switched by ?variant=.
+     State lives in memory; nothing is saved. Run: python3 -m http.server -d contrib/squad-goal/scripts 8765, then open
+     http://localhost:8765/prototype-slack-settings.html?variant=A -->
+<html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>PROTOTYPE · Communication</title>
+<link rel=stylesheet href="web-tokens.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-body)/1.45 system-ui,-apple-system,sans-serif;padding-bottom:90px}
+header.top{display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+header.top b{font-size:var(--fs-heading)}header.top .m{color:var(--mute);font-size:var(--fs-caption)}
+.proto{background:var(--tint-warn);border:1px solid var(--tint-warn-line);color:var(--warn);border-radius:var(--radius-full);padding:2px 10px;font-size:var(--fs-caption)}
+main{padding:16px 18px;max-width:1320px;margin:0 auto}
+h2{font-size:var(--fs-heading);margin:0 0 8px}h3{font-size:var(--fs-body);margin:14px 0 6px;color:var(--ink-soft)}
+.m{color:var(--mute);font-size:var(--fs-caption)}
+input,select,textarea{background:var(--input);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:14px;padding:5px 7px;min-width:0;max-width:100%}
+textarea{width:100%;min-height:64px;resize:vertical}
+input[type=number]{width:78px}
+button{background:var(--raise);color:var(--fg);border:1px solid var(--line-strong);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption);padding:5px 10px;cursor:pointer}
+button:hover{background:var(--hover)}button.pri{background:var(--acc);color:var(--bg);border-color:var(--acc);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);padding:12px 14px;margin-bottom:12px}
+.row{display:grid;grid-template-columns:170px minmax(0,1fr);gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--well-line)}
+.row:last-child{border-bottom:0}.row>label{color:var(--ink-soft);font-size:var(--fs-caption)}
+.chip{display:inline-flex;align-items:center;gap:4px;border-radius:var(--radius-full);padding:1px 8px;font-size:12px;border:1px solid var(--line-strong);color:var(--ink-soft);white-space:nowrap}
+.chip.owned{border-color:var(--tint-ok-line);background:var(--tint-ok);color:var(--ok)}
+.chip.guest{border-color:var(--tint-warn-line);background:var(--tint-warn);color:var(--warn)}
+.chip.commit{color:var(--acc);border-color:var(--acc)}.chip.local{color:var(--none);border-color:var(--none)}
+.acts{display:flex;flex-wrap:wrap;gap:4px 10px}.acts label{font-size:var(--fs-caption);display:inline-flex;gap:4px;align-items:center}
+.marker{font-style:italic;color:var(--ink-strong)}
+.bubble{background:var(--bubble);border:1px solid var(--bubble-line);border-radius:var(--radius-md);padding:8px 10px;font-size:14px}
+.sched{font-family:ui-monospace,monospace;font-size:12px;color:var(--run)}
+.warnline{color:var(--warn);font-size:var(--fs-caption)}
+pre{background:var(--well);border:1px solid var(--well-line);border-radius:var(--radius-md);padding:10px;font-size:12px;overflow:auto;margin:0;color:var(--ink-body)}
+details.state{margin-top:14px}details.state summary{cursor:pointer;color:var(--mute);font-size:var(--fs-caption)}
+/* switcher */
+#sw{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:var(--highlight);color:#111;border-radius:var(--radius-full);padding:6px 10px;box-shadow:0 6px 24px var(--shadow-float);z-index:9;font-size:14px}
+#sw button{background:#111;color:#fff;border:0;border-radius:var(--radius-full);width:30px;height:30px;font-size:16px;padding:0}
+/* A: tree + inspector */
+.A{display:grid;grid-template-columns:280px minmax(0,1fr);gap:14px}
+.tree{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-lg);padding:8px;align-self:start;position:sticky;top:10px}
+.tree .g{color:var(--mute);font-size:12px;text-transform:uppercase;letter-spacing:.05em;margin:10px 6px 4px}
+.tree a{display:flex;justify-content:space-between;gap:6px;align-items:center;padding:5px 8px;border-radius:var(--radius-sm);color:var(--fg);text-decoration:none;font-size:14px;cursor:pointer}
+.tree a.ch{padding-left:22px;font-size:13px}.tree a:hover{background:var(--hover)}.tree a.sel{background:var(--raise-2)}
+/* B: tables */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.tabs button{border-radius:var(--radius-sm) var(--radius-sm) 0 0;border-bottom:0;background:transparent}.tabs button.on{background:var(--card);border-color:var(--line)}
+table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:var(--mute);font-weight:600;padding:6px;border-bottom:1px solid var(--line)}
+td{padding:6px;border-bottom:1px solid var(--well-line);vertical-align:top}tr.exp td{background:var(--inset)}
+/* C: files side by side */
+.C{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.C .files{position:sticky;top:10px;align-self:start;display:grid;gap:10px;min-width:0}.C .files pre{max-height:42vh;white-space:pre-wrap;overflow-wrap:anywhere}.C .fh{gap:8px;flex-wrap:wrap}
+.C .fh{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:var(--fs-caption)}
+.C details>summary{cursor:pointer;font-weight:600;padding:4px 0}
+@media (max-width:820px){.A,.C{grid-template-columns:1fr}.tree,.C .files{position:static}.row{grid-template-columns:1fr}}
+</style></head><body>
+<header class=top><b>Settings</b><span class=m>agent-squad · Communication</span><span class=proto>PROTOTYPE · nothing is saved</span></header>
+<main id=app></main>
+<div id=sw><button id=prev aria-label="previous variant">‹</button><span id=swl></span><button id=next aria-label="next variant">›</button></div>
+<script>
+// ---------- data: every id and name is a placeholder ----------
+const VOICES={Kore:"firm",Charon:"informative",Puck:"upbeat",Zephyr:"bright",Aoede:"breezy",Leda:"youthful",Orus:"firm",Fenrir:"excitable",Sulafat:"warm",Achird:"friendly"};
+const LANGS=["pt-BR","en-US","es-ES"];
+const ACTIONS={status:"ask status",logs:"read logs",request_work:"request work",request_investigation:"investigation / spike",loop_control:"pause, resume, drain",approve_and_move:"approve, move cards",deploy:"deploy"};
+const ENVS=["dev","stg","prod"];
+const S={
+ project:{language:"en-US",persona:"hal"},
+ personas:[
+  {id:"hal",name:"HAL9K",voice:"Kore",tone:"Calm and direct. Starts with the result, then the next step. Short sentences, no filler."},
+  {id:"iara",name:"Iara",voice:"Sulafat",tone:"Warm and patient. Confirms what was asked before answering. Never technical jargon with a client."}],
+ roles:[
+  {id:"manager",actions:["status","logs","request_work","request_investigation","loop_control","approve_and_move","deploy"],deploy:["dev","stg"]},
+  {id:"colleague",actions:["status","request_work","request_investigation"],deploy:[]}],
+ workspaces:[
+  {id:"T0TEAM0001",label:"team",cls:"owned",secret:"agent-squad-slack-bot",language:"",persona:"",channels:[
+    {id:"C0PROJ0001",name:"proj-agent-squad",mode:"listen+speak",language:"pt-BR",persona:"",members:{manager:["U0OWNER001"],colleague:["U0PEER0001"]}},
+    {id:"C0ALERT001",name:"squad-alerts",mode:"listen",language:"",persona:"",members:{}}]},
+  {id:"T0CLIENT01",label:"client-a",cls:"guest",language:"en-US",persona:"iara",channels:[
+    {id:"C0CLISUP01",name:"support",mode:"listen+speak",language:"",persona:"",speak:"draft",poll:{floor:60,ceiling:1800,factor:2,idle:600,thread_open:1800},members:{colleague:["U0CLIENT01"]}},
+    {id:"C0CLIGEN01",name:"general",mode:"listen",language:"",persona:"",poll:{floor:300,ceiling:3600,factor:2,idle:900,thread_open:1800},members:{}}]}]
+};
+// ---------- resolution (what the policy module would answer) ----------
+const persona=id=>S.personas.find(p=>p.id===id);
+const effLang=(w,c)=>c.language||w.language||S.project.language;
+const effPersona=(w,c)=>persona(c.persona||w.persona||S.project.persona);
+const fmt=s=>s<60?s+"s":s<3600?Math.round(s/60)+"m":(s/3600).toFixed(1).replace(/\.0$/,"")+"h";
+function schedule(p){const out=[];let t=p.floor;for(let i=0;i<8&&out[out.length-1]!==p.ceiling;i++){out.push(Math.min(t,p.ceiling));t*=p.factor}return out.map(fmt).join(" → ")}
+function replyPath(w,c){if(c.mode==="listen")return "never posts";if(w.cls==="owned")return "posts as the bot";return c.speak==="send"?"sends as you (needs a grant)":"drafts as you"}
+// ---------- yaml: committed vs local split ----------
+const q=v=>/^[\w.+@-]+$/.test(String(v))?v:JSON.stringify(v);
+function y(o,ind=0){const p=" ".repeat(ind);if(Array.isArray(o))return o.length?o.map(v=>typeof v==="object"?p+"- "+y(v,ind+2).trimStart():p+"- "+q(v)).join("\n"):p+"[]";
+ return Object.entries(o).filter(([,v])=>v!==""&&v!==undefined&&!(Array.isArray(v)&&!v.length&&false)).map(([k,v])=>typeof v==="object"&&v!==null?(Array.isArray(v)&&!v.length?`${p}${k}: []`:`${p}${k}:\n${y(v,ind+2)}`):`${p}${k}: ${q(v)}`).join("\n")}
+function chYaml(w,c,withMembers){const o={id:c.id,name:c.name,mode:c.mode};if(c.language)o.language=c.language;if(c.persona)o.persona=c.persona;
+ if(w.cls==="guest"){o.speak=c.speak||"draft";o.poll={floor:fmt(c.poll.floor),ceiling:fmt(c.poll.ceiling),factor:c.poll.factor,idle_window:fmt(c.poll.idle),thread_open:fmt(c.poll.thread_open)}}
+ const r=Object.keys(c.members);if(withMembers&&r.length)o.roles=Object.fromEntries(r.map(k=>[k,c.members[k]]));else if(r.length)o.roles=r;return o}
+function wsYaml(w,withMembers){const o={id:w.id,label:w.label,class:w.cls,transport:w.cls==="owned"?"socket":"poll"};if(w.secret)o.secret=w.secret;if(w.language)o.language=w.language;if(w.persona)o.persona=w.persona;o.channels=w.channels.map(c=>chYaml(w,c,withMembers));return o}
+function committed(){return "# docs/squad/slack.yaml · committed\nversion: 1\n"+y({project:{language:S.project.language,persona:S.project.persona},
+ personas:S.personas.map(p=>({id:p.id,name:p.name,voice:p.voice,tone:p.tone})),
+ roles:S.roles.map(r=>{const o={id:r.id,actions:r.actions};if(r.actions.includes("deploy"))o.deploy=r.deploy;return o}),
+ workspaces:S.workspaces.filter(w=>w.cls==="owned").map(w=>wsYaml(w,false))})}
+function local(){const mem=[];S.workspaces.filter(w=>w.cls==="owned").forEach(w=>w.channels.forEach(c=>{if(Object.keys(c.members).length)mem.push({workspace:w.id,channel:c.id,members:c.members})}));
+ return "# docs/squad/slack.local.yaml · gitignored\nversion: 1\n"+y({members:mem,workspaces:S.workspaces.filter(w=>w.cls==="guest").map(w=>wsYaml(w,true))})}
+// ---------- shared widgets (forms are shared, layouts are not) ----------
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const opts=(list,cur,blank)=>(blank?`<option value=""${cur?"":" selected"}>${blank}</option>`:"")+list.map(x=>{const [v,l]=Array.isArray(x)?x:[x,x];return `<option value="${esc(v)}"${v===cur?" selected":""}>${esc(l)}</option>`}).join("");
+const pOpts=()=>S.personas.map(p=>[p.id,p.name]);
+const bind=(path,ev="change")=>`data-b="${path}" data-ev="${ev}"`;
+function get(path){return path.split(".").reduce((o,k)=>o[k],S)}
+function set(path,v){const ks=path.split(".");const last=ks.pop();const o=ks.reduce((o,k)=>o[k],S);o[last]=typeof o[last]==="number"?Number(v):v;draw()}
+function personaForm(i){const p=S.personas[i];return `<div class=row><label>name</label><input ${bind(`personas.${i}.name`,"input")} value="${esc(p.name)}"></div>
+<div class=row><label>voice (Gemini)</label><span><select ${bind(`personas.${i}.voice`)}>${opts(Object.keys(VOICES).map(v=>[v,v+" · "+VOICES[v]]),p.voice)}</select> <button onclick="alert('PROTOTYPE: would speak a sample with '+${JSON.stringify(p.voice)})">▶ sample</button></span></div>
+<div class=row><label>tone</label><textarea ${bind(`personas.${i}.tone`,"input")}>${esc(p.tone)}</textarea></div>
+<div class=row><label>marker</label><span><span class=marker>_${esc(p.name)}'s Msg_</span> <span class=m>· first line of every text sent through your account; cannot be turned off</span></span></div>
+<div class=row><label>used by</label><span class=m>${usedBy(p.id)||"no channel"}</span></div>`}
+function usedBy(id){const l=[];S.workspaces.forEach(w=>w.channels.forEach(c=>{if(effPersona(w,c).id===id)l.push(w.label+"/#"+c.name)}));return l.join(", ")}
+function roleForm(i){const r=S.roles[i];return `<div class=row><label>actions</label><span class=acts>${Object.keys(ACTIONS).map(a=>`<label><input type=checkbox data-role="${i}" data-act="${a}"${r.actions.includes(a)?" checked":""}> ${ACTIONS[a]}</label>`).join("")}</span></div>
+${r.actions.includes("deploy")?`<div class=row><label>deploy to</label><span class=acts>${ENVS.map(e=>`<label><input type=checkbox data-role="${i}" data-env="${e}"${r.deploy.includes(e)?" checked":""}> ${e}</label>`).join("")}<span class=m>· a listed environment is the standing grant (ADR-0024)</span></span></div>`:""}
+<div class=row><label>never</label><span class=m>spend money · credentials · access changes · external publication · any owner-only action</span></div>`}
+function wsForm(wi){const w=S.workspaces[wi];return `<div class=row><label>class</label><span><span class="chip ${w.cls}">${w.cls}</span> <span class=m>${w.cls==="owned"?"app installed · Socket Mode · bot speaks text and audio":"no bot · claude.ai connector in your account · polling · text only"}</span></span></div>
+<div class=row><label>label</label><input ${bind(`workspaces.${wi}.label`,"input")} value="${esc(w.label)}"></div>
+${w.cls==="owned"?`<div class=row><label>Keychain entry</label><span><input ${bind(`workspaces.${wi}.secret`,"input")} value="${esc(w.secret)}"> <span class=m>a name, never a token</span></span></div>`:""}
+<div class=row><label>default language</label><select ${bind(`workspaces.${wi}.language`)}>${opts(LANGS,w.language,"inherit · "+S.project.language)}</select></div>
+<div class=row><label>default persona</label><select ${bind(`workspaces.${wi}.persona`)}>${opts(pOpts(),w.persona,"inherit · "+persona(S.project.persona).name)}</select></div>
+<div class=row><label>file</label><span>${w.cls==="guest"?`<span class="chip local">slack.local.yaml</span> <span class=m>a client Slack workspace never reaches the committed file</span>`:`<span class="chip commit">slack.yaml</span>`}</span></div>`}
+function chForm(wi,ci){const w=S.workspaces[wi],c=w.channels[ci],P=`workspaces.${wi}.channels.${ci}`,per=effPersona(w,c);
+ let h=`<div class=row><label>mode</label><select ${bind(P+".mode")}>${opts(["listen","listen+speak"],c.mode)}</select></div>
+<div class=row><label>language</label><select ${bind(P+".language")}>${opts(LANGS,c.language,"inherit · "+(w.language||S.project.language))}</select></div>
+<div class=row><label>persona</label><select ${bind(P+".persona")}>${opts(pOpts(),c.persona,"inherit · "+effPersona(w,{persona:""}).name)}</select></div>`;
+ if(w.cls==="guest"&&c.mode==="listen+speak")h+=`<div class=row><label>answer as</label><span><select ${bind(P+".speak")}>${opts([["draft","draft for your review"],["send","send directly"]],c.speak)}</select>${c.speak==="send"?` <span class=warnline>needs a grant for this channel</span>`:""}</span></div>`;
+ if(w.cls==="guest")h+=`<div class=row><label>polling</label><span>floor <input type=number ${bind(P+".poll.floor")} value=${c.poll.floor}>s · ceiling <input type=number ${bind(P+".poll.ceiling")} value=${c.poll.ceiling}>s · ×<input type=number step=0.5 ${bind(P+".poll.factor")} value=${c.poll.factor}> every <input type=number ${bind(P+".poll.idle")} value=${c.poll.idle}>s idle<br><span class=sched>${schedule(c.poll)}</span> <span class=m>· held at the floor for ${fmt(c.poll.thread_open)} after the agent's last message</span></span></div>`;
+ h+=`<div class=row><label>roles</label><span>${S.roles.map(r=>`<div><b style="font-size:13px">${r.id}</b> <input data-mem="${wi}.${ci}.${r.id}" value="${esc((c.members[r.id]||[]).join(", "))}" placeholder="user ids, comma separated" style="width:70%"> <span class="chip local">local</span></div>`).join("")}<span class=m>anyone else: data, never a command</span></span></div>
+<div class=row><label>preview</label><div class=bubble>${c.mode==="listen"?`<span class=m>listen only: the agent reads, never posts here</span>`:(w.cls==="guest"?`<div class=marker>_${esc(per.name)}'s Msg_</div>`:`<b>${esc(per.name)}</b> <span class=chip>APP</span><br>`)+`<span class=m>[${effLang(w,c)} · ${esc(per.tone.split(".")[0])}]</span> ${w.cls==="owned"?`<br><span class=m>voice: ${per.voice} clip follows the text</span>`:`<br><span class=m>text only; no voice through your account</span>`}`}</div></div>`;
+ return h}
+function stateBox(){return `<details class=state><summary>state · the resolved channels (what the policy module answers)</summary><pre>${esc(JSON.stringify(S.workspaces.flatMap(w=>w.channels.map(c=>({channel:w.label+"/#"+c.name,class:w.cls,mode:c.mode,language:effLang(w,c),persona:effPersona(w,c).name,reply:replyPath(w,c),poll:w.cls==="guest"?schedule(c.poll):"socket"}))),null,1))}</pre></details>`}
+// ---------- variant A: tree + inspector ----------
+let selA="ch:0:0";
+function VariantA(){const items=[["g","Project"],["project","Defaults"],["g","Personas"],...S.personas.map((p,i)=>["p:"+i,p.name,p.voice]),["g","Roles"],...S.roles.map((r,i)=>["r:"+i,r.id,r.actions.length+" actions"]),["g","Slack workspaces"]];
+ S.workspaces.forEach((w,wi)=>{items.push(["w:"+wi,w.label,`<span class="chip ${w.cls}">${w.cls}</span>`]);w.channels.forEach((c,ci)=>items.push(["ch:"+wi+":"+ci,"#"+c.name,`<span class=m>${c.mode==="listen"?"listen":"speak"} · ${effLang(w,c)}</span>`]))});
+ const tree=items.map(([k,l,r])=>k==="g"?`<div class=g>${l}</div>`:`<a class="${k.startsWith("ch:")?"ch ":""}${k===selA?"sel":""}" data-sel="${k}"><span>${esc(l)}</span><span>${r||""}</span></a>`).join("")+`<div style="padding:8px"><button>+ persona</button> <button>+ role</button> <button>+ Slack workspace</button></div>`;
+ const [t,a,b]=selA.split(":");let body;
+ if(t==="project")body=`<h2>Project defaults</h2><div class=card><div class=row><label>language</label><select ${bind("project.language")}>${opts(LANGS,S.project.language)}</select></div><div class=row><label>persona</label><select ${bind("project.persona")}>${opts(pOpts(),S.project.persona)}</select></div></div>`;
+ else if(t==="p")body=`<h2>Persona · ${esc(S.personas[a].name)}</h2><div class=card>${personaForm(+a)}</div>`;
+ else if(t==="r")body=`<h2>Role · ${S.roles[a].id}</h2><div class=card>${roleForm(+a)}</div>`;
+ else if(t==="w")body=`<h2>Slack workspace · ${esc(S.workspaces[a].label)}</h2><div class=card>${wsForm(+a)}</div>`;
+ else body=`<h2>#${esc(S.workspaces[a].channels[b].name)} <span class="chip ${S.workspaces[a].cls}">${S.workspaces[a].label}</span></h2><div class=card>${chForm(+a,+b)}</div>`;
+ return `<div class=A><nav class=tree>${tree}</nav><section>${body}${stateBox()}</section></div>`}
+// ---------- variant B: tabs and tables ----------
+let tabB="channels",expB="";
+function VariantB(){const tabs=[["channels","Channels"],["personas","Personas"],["roles","Roles"],["files","Files"]].map(([k,l])=>`<button class="${k===tabB?"on":""}" data-tab="${k}">${l}</button>`).join("");let h="";
+ if(tabB==="channels")h=S.workspaces.map((w,wi)=>`<div class=card><h3 style="margin-top:0">${esc(w.label)} <span class="chip ${w.cls}">${w.cls}</span> <span class=m>${w.cls==="owned"?"socket · bot":"polling · your account"}</span></h3><table><tr><th>channel</th><th>mode</th><th>language</th><th>persona</th><th>answers</th><th>${w.cls==="guest"?"polling":"transport"}</th><th>roles</th><th></th></tr>
+ ${w.channels.map((c,ci)=>{const k=wi+":"+ci,P=`workspaces.${wi}.channels.${ci}`;return `<tr><td><b>#${esc(c.name)}</b></td><td><select ${bind(P+".mode")}>${opts(["listen","listen+speak"],c.mode)}</select></td><td><select ${bind(P+".language")}>${opts(LANGS,c.language,"↑ "+(w.language||S.project.language))}</select></td><td><select ${bind(P+".persona")}>${opts(pOpts(),c.persona,"↑ "+effPersona(w,{persona:""}).name)}</select></td><td class=m>${replyPath(w,c)}</td><td class=sched>${w.cls==="guest"?schedule(c.poll):"socket"}</td><td class=m>${Object.entries(c.members).map(([r,u])=>r+" ×"+u.length).join(", ")||"owner only"}</td><td><button data-exp="${k}">${expB===k?"close":"edit"}</button></td></tr>${expB===k?`<tr class=exp><td colspan=8>${chForm(wi,ci)}</td></tr>`:""}`}).join("")}</table></div>`).join("")+`<button>+ Slack workspace</button>`;
+ if(tabB==="personas")h=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px">${S.personas.map((p,i)=>`<div class=card><h3 style="margin-top:0">${esc(p.name)}</h3>${personaForm(i)}</div>`).join("")}</div><button>+ persona</button>`;
+ if(tabB==="roles")h=`<div class=card><table><tr><th>action</th>${S.roles.map(r=>`<th>${r.id}</th>`).join("")}</tr>${Object.keys(ACTIONS).map(a=>`<tr><td>${ACTIONS[a]}</td>${S.roles.map((r,i)=>`<td><input type=checkbox data-role="${i}" data-act="${a}"${r.actions.includes(a)?" checked":""}>${a==="deploy"&&r.actions.includes("deploy")?" "+ENVS.map(e=>`<label class=m><input type=checkbox data-role="${i}" data-env="${e}"${r.deploy.includes(e)?" checked":""}>${e}</label>`).join(" "):""}</td>`).join("")}</tr>`).join("")}</table><p class=m>No role grants an owner-only action. Members are set per channel and stay in slack.local.yaml.</p></div><button>+ role</button>`;
+ if(tabB==="files")h=`<div class=card><h3 style="margin-top:0"><span class="chip commit">committed</span> docs/squad/slack.yaml</h3><pre>${esc(committed())}</pre></div><div class=card><h3 style="margin-top:0"><span class="chip local">gitignored</span> docs/squad/slack.local.yaml</h3><pre>${esc(local())}</pre></div>`;
+ return `<div class=tabs>${tabs}</div>${h}${stateBox()}`}
+// ---------- variant C: form left, live files right ----------
+function VariantC(){const f=`<details open><summary>Project & personas <span class="chip commit">slack.yaml</span></summary><div class=card><div class=row><label>default language</label><select ${bind("project.language")}>${opts(LANGS,S.project.language)}</select></div><div class=row><label>default persona</label><select ${bind("project.persona")}>${opts(pOpts(),S.project.persona)}</select></div></div>${S.personas.map((p,i)=>`<div class=card><h3 style="margin-top:0">${esc(p.name)}</h3>${personaForm(i)}</div>`).join("")}</details>
+<details><summary>Roles <span class="chip commit">slack.yaml</span></summary>${S.roles.map((r,i)=>`<div class=card><h3 style="margin-top:0">${r.id}</h3>${roleForm(i)}</div>`).join("")}</details>
+${S.workspaces.map((w,wi)=>`<details ${wi===1?"open":""}><summary>${esc(w.label)} <span class="chip ${w.cls}">${w.cls}</span> <span class="chip ${w.cls==="owned"?"commit":"local"}">${w.cls==="owned"?"slack.yaml":"slack.local.yaml"}</span></summary><div class=card>${wsForm(wi)}</div>${w.channels.map((c,ci)=>`<div class=card><h3 style="margin-top:0">#${esc(c.name)}</h3>${chForm(wi,ci)}</div>`).join("")}</details>`).join("")}`;
+ return `<div class=C><section>${f}${stateBox()}</section><aside class=files><div><div class=fh><span><span class="chip commit">committed</span> docs/squad/slack.yaml</span><span class=m>changes only by commit</span></div><pre>${esc(committed())}</pre></div><div><div class=fh><span><span class="chip local">gitignored</span> docs/squad/slack.local.yaml</span><button class=pri onclick="alert('PROTOTYPE: would show the diff, then write slack.local.yaml')">Review diff</button></div><pre>${esc(local())}</pre></div></aside></div>`}
+// ---------- switcher and events ----------
+const V={A:["Tree + inspector",VariantA],B:["Tabs and tables",VariantB],C:["Form beside the files",VariantC]};const K=Object.keys(V);
+let cur=new URLSearchParams(location.search).get("variant");if(!V[cur])cur="A";
+function go(d){cur=K[(K.indexOf(cur)+d+K.length)%K.length];history.replaceState(null,"","?variant="+cur);draw()}
+function draw(){const fo=document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.b;const app=document.getElementById("app");app.innerHTML=V[cur][1]();document.getElementById("swl").textContent=cur+" ("+V[cur][0]+")";
+ if(fo){const el=app.querySelector(`[data-b="${fo}"]`);if(el){el.focus();if(el.setSelectionRange&&el.value!==undefined&&el.type!=="number")try{el.setSelectionRange(el.value.length,el.value.length)}catch(e){}}}}
+document.getElementById("prev").onclick=()=>go(-1);document.getElementById("next").onclick=()=>go(1);
+addEventListener("keydown",e=>{if(e.target.closest("input,textarea,select,[contenteditable]"))return;if(e.key==="ArrowLeft")go(-1);if(e.key==="ArrowRight")go(1)});
+const app=document.getElementById("app");
+const onEdit=e=>{const t=e.target;if(t.dataset.b&&t.dataset.ev===e.type)set(t.dataset.b,t.value);
+ if(t.dataset.mem&&e.type==="change"){const [wi,ci,r]=t.dataset.mem.split(".");const ids=t.value.split(/[ ,]+/).filter(Boolean);const m=S.workspaces[wi].channels[ci].members;if(ids.length)m[r]=ids;else delete m[r];draw()}
+ if(t.dataset.role!==undefined&&e.type==="change"){const r=S.roles[t.dataset.role];if(t.dataset.act){const a=t.dataset.act;r.actions=t.checked?[...r.actions,a]:r.actions.filter(x=>x!==a)}if(t.dataset.env){const v=t.dataset.env;r.deploy=t.checked?[...r.deploy,v]:r.deploy.filter(x=>x!==v)}draw()}};
+app.addEventListener("input",onEdit);app.addEventListener("change",onEdit);
+app.addEventListener("click",e=>{const s=e.target.closest("[data-sel]");if(s){selA=s.dataset.sel;draw()}const tb=e.target.closest("[data-tab]");if(tb){tabB=tb.dataset.tab;draw()}const x=e.target.closest("[data-exp]");if(x){expB=expB===x.dataset.exp?"":x.dataset.exp;draw()}});
+draw();
+</script></body></html>
