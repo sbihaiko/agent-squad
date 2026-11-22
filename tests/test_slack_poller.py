@@ -192,6 +192,14 @@ def test_each_delivered_message_reaches_the_policy(tmp_path):
     assert decision_ts(got) == [("100.000100", S.PROPOSAL), ("100.000200", S.DATA)]
 
 
+def test_a_delivered_message_is_fast_for_the_next_poll(tmp_path):
+    # The message the poller just read is the channel's last activity, so the decision it carries plans the next poll
+    # one fast interval away and never at the slow interval of an empty channel.
+    conn = FakeConnector([message("100.000100")])
+    (_, decision), = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
+    assert decision.next_poll == NOW + timedelta(minutes=1)
+
+
 def test_an_own_message_is_not_delivered_and_never_moves_the_checkpoint(tmp_path):
     path = tmp_path / "checkpoint.json"
     conn = FakeConnector([message("100.000100", user=OWNER)])

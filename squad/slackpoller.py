@@ -415,7 +415,8 @@ class PollSchedule:
 
     A tick fires every minute and asks `due(now)`; the answer holds each channel whose `next_due` has passed, so a tick
     does nothing before it. In `two_state` mode the interval is `fast` after a message from another person and `slow`
-    after `quiet_after` of silence. In `exponential` mode it starts at `floor`, multiplies by `factor` at each idle
+    after `quiet_after` of silence, and a channel with no message yet is silent. In `exponential` mode it starts at
+    `floor`, multiplies by `factor` at each idle
     window and stops at `ceiling`. A new message (`note_message`) and an announced event (`note_event`) return it to
     fast, and an open agent thread newer than `thread_open` keeps it fast. Every interval comes from
     `slackpolicy.poll_interval`, so the schedule and the decision read one set of keys.
@@ -468,11 +469,25 @@ class PollSchedule:
 
     def interval(self, workspace, channel, now):
         """The seconds to the next poll of the channel at `now`, from its `poll` block and its last activity. An open
-        agent thread newer than `thread_open` keeps the interval fast."""
-        thread_last = self.threads.last_at(channel) if self.threads is not None else None
+        agent thread newer than `thread_open` keeps the interval fast; an older one is out of the window, so the channel
+        falls back on its own silence."""
         row = _channel_row(self.committed, self.local, workspace, channel)
         return slackpolicy.poll_interval(now, row, {"last_message_at": self.last_at(workspace, channel),
-                                                    "thread_last_at": thread_last})
+                                                    "thread_last_at": self._thread_last(channel, row, now)})
+
+    def _thread_last(self, channel, row, now):
+        """The newest activity of the channel's open threads, or None when the store is absent or that activity is
+        older than `thread_open`, so a thread that went quiet hours ago never keeps the channel fast. `RepliedThreads`
+        keys by channel id alone: a Slack channel id is unique across workspaces, and the connector reaches one guest
+        workspace at a time (ADR-0177), so its answer covers the channel whatever workspace the caller names."""
+        if self.threads is None:
+            return None
+        thread = self.threads.last_at(channel)
+        if thread is None:
+            return None
+        poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
+        open_ = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
+        return thread if (now - thread).total_seconds() <= open_ else None
 
     def due(self, now):
         """The guest channels whose `next_due` has passed at `now`, as `(workspace, channel)` in file order. A channel
@@ -556,7 +571,10 @@ class Poller:
         own = _own_ts(self.own)
         self.checkpoint.record_page(channel, page, own)
         now = self.now()
-        pairs = [(m, slackpolicy.decide(self.committed, self.local, event_of(m, workspace, channel, own), now))
+        # The message this read delivers is the channel's last activity, so the decision plans the next poll from it and
+        # never from the silence of a channel the schedule has not seen yet.
+        state = {"last_message_at": now, "thread_last_at": now}
+        pairs = [(m, slackpolicy.decide(self.committed, self.local, event_of(m, workspace, channel, own), now, state))
                  for m in page if _newer(m.get("ts"), oldest) and not self.is_own(m)]
         return pairs + self._reread_threads(workspace, channel, now)
 
@@ -586,6 +604,7 @@ class Poller:
                 self.threads.close(channel, thread_ts)
             if new:
                 pairs += [(m, slackpolicy.decide(self.committed, self.local,
-                                                 event_of(m, workspace, channel, _own_ts(self.own)), now))
+                                                 event_of(m, workspace, channel, _own_ts(self.own)), now,
+                                                 {"last_message_at": now, "thread_last_at": now}))
                           for m in new]
         return pairs
