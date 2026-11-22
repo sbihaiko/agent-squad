@@ -246,9 +246,9 @@ def _upload_answer(tool, args, upload):
 def pre_write_tool_use(draft, upload=None, server=DEFAULT_SERVER):
     """The `PreToolUse` hook of the writer session. It passes only the decided tool with the decided channel and
     `thread_ts`, and one denial answer for every other call: a different tool, a different channel or thread, or a
-    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel, `thread_ts` and
-    text, so the exact text reaches Slack whatever the model wrote. An empty `thread_ts` names a channel post, and the
-    comparison refuses any other thread there.
+    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel and text, and
+    the decided `thread_ts` when the draft names one, so the exact text reaches Slack whatever the model wrote. An
+    empty `thread_ts` names a channel post, so the payload omits the key and the comparison refuses any other thread.
 
     `upload` is the decided `Upload` of a voice reply. When it is there, the hook also passes the connector's two upload
     calls with the decided clip, channel, `thread_ts` and comment, and denies every other upload argument; when it is
@@ -267,7 +267,9 @@ def pre_write_tool_use(draft, upload=None, server=DEFAULT_SERVER):
         reason = write_denial(draft.text, (mark(draft.name),))
         if reason is not None:
             return _deny(reason)
-        updated = {"channel": draft.channel, "thread_ts": draft.thread_ts, "text": draft.text}
+        updated = {"channel": draft.channel, "text": draft.text}
+        if draft.thread_ts:
+            updated["thread_ts"] = draft.thread_ts
         return _allow(updated)
     return hook
 
