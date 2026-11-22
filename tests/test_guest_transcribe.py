@@ -59,6 +59,19 @@ class FakeTranscriber:
         return self.text
 
 
+class FakeGemini:
+    """A fake Gemini client: it answers one candidate text and records each (audio, mime, prompt) call."""
+
+    def __init__(self, text=SENTINEL, fail=False):
+        self.text, self.fail, self.calls = text, fail, []
+
+    def __call__(self, audio, mime, prompt):
+        self.calls.append((audio, mime, prompt))
+        if self.fail:
+            raise RuntimeError("gemini failed")
+        return {"candidates": [{"content": {"parts": [{"text": self.text}]}}]}
+
+
 def state(tmp_path):
     return G.GuestState(tmp_path / "guest-state", lambda: 1_800_000_000.0)
 
@@ -160,3 +173,52 @@ def test_the_transcript_lives_in_the_private_state_folder(tmp_path):
     assert stored.is_file()
     assert G.is_inside(stored, g.root)
     assert g.get("transcripts", got[0].name) == SENTINEL
+
+
+# --- the gemini path -----------------------------------------------------------------------------------------------
+
+def test_the_field_reads_gemini_and_defaults_to_off():
+    assert T.transcribe_mode({"transcribe": "gemini"}) == "gemini"
+    assert T.transcribe_mode({}) == "off", "the default stays off"
+
+
+def test_a_gemini_channel_sends_the_clip_to_gemini(tmp_path):
+    reader, client = FakeReader(), FakeGemini()
+    got = T.transcribe_message(read_result()["messages"][0], channel(transcribe="gemini"), state(tmp_path), reader,
+                               FakeTranscriber(), "en-US", gemini=T.gemini_transcriber(client))
+    assert reader.calls == ["F0CLIP001"], "the clip came through the connector's read-file tool"
+    assert len(client.calls) == 1, "the gemini channel sent the clip once"
+    audio, mime, _prompt = client.calls[0]
+    assert audio == CLIP
+    assert mime == "audio/mp4", "the clip keeps the container Slack reports"
+    assert state(tmp_path).get("transcripts", got[0].name) == SENTINEL
+
+
+def test_an_off_or_local_channel_sends_no_clip_to_gemini(tmp_path):
+    for mode in ("off", "local"):
+        client = FakeGemini()
+        got = T.transcribe_message(read_result()["messages"][0], channel(transcribe=mode), state(tmp_path),
+                                   FakeReader(), FakeTranscriber(), "en-US", gemini=T.gemini_transcriber(client))
+        assert client.calls == [], f"a {mode} channel sent no clip to gemini"
+        if mode == "off":
+            assert got == []
+
+
+def test_the_channel_language_guides_the_gemini_transcription(tmp_path):
+    client = FakeGemini()
+    T.transcribe_message(read_result()["messages"][0], channel(transcribe="gemini"), state(tmp_path), FakeReader(),
+                         FakeTranscriber(), "pt-BR", gemini=T.gemini_transcriber(client))
+    _audio, _mime, prompt = client.calls[0]
+    assert "pt" in prompt, "the channel language reached the gemini request"
+
+
+def test_the_gemini_transcript_follows_the_ten_day_purge(tmp_path):
+    now = [1_800_000_000.0]
+    g = G.GuestState(tmp_path / "guest-state", lambda: now[0])
+    got = T.transcribe_message(read_result()["messages"][0], channel(transcribe="gemini"), g, FakeReader(),
+                               FakeTranscriber(), "en-US", gemini=T.gemini_transcriber(FakeGemini()))
+    name = got[0].name
+    assert g.get("transcripts", name) == SENTINEL
+    now[0] += G.RETENTION_SECONDS + 1
+    g.purge()
+    assert g.get("transcripts", name) is None, "a transcript older than 10 days is purged"

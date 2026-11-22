@@ -1,20 +1,25 @@
-"""Local transcription in a `guest` channel (SPEC 2682, stories 17 and 33; #2714).
+"""Transcription in a `guest` channel (SPEC 2682, stories 33 and 63; #2714 and #2720).
 
 The `transcribe` field of a `guest` channel is `off` by default, and an `off` channel transcribes no clip. With
 `transcribe: local`, the poller extracts each audio file of a read message, reads the clip's bytes through the
 connector's read-file tool, and the machine runs faster-whisper on it, in the channel's language. The local path calls
-no network: the model loads from a local folder only, and the clip reaches no host. The transcript lands in the private
-state folder at `gueststate.GuestState`, kind `transcripts`, so the 10-day purge and the 0600 file mode cover it.
+no network: the model loads from a local folder only, and the clip reaches no host.
 
-`transcribe: gemini` belongs to a later stage, so it transcribes nothing here. A caller passes the clock through
-`GuestState`, and this module reads no clock of its own. A test supplies a fake read-file answer and a fake transcriber,
-so the suite downloads no model and calls no network.
+With `transcribe: gemini`, the same clip goes to Gemini through one injected client, in the channel's language, and the
+answer's text is the transcript. The client is a callable, so a test supplies a fake and never calls the real service.
+
+Every transcript lands in the private state folder at `gueststate.GuestState`, kind `transcripts`, so the 10-day purge
+and the 0600 file mode cover it. A caller passes the clock through `GuestState`, and this module reads no clock of its
+own. A test supplies a fake read-file answer, a fake transcriber and a fake Gemini client, so the suite downloads no
+model and calls no network.
 
 Guards: `tests/test_guest_transcribe.py`.
 """
 import base64
 import io
+import json
 import re
+import urllib.request
 from typing import NamedTuple
 
 # The audio file types the connector returns. A file is a clip when its mimetype starts with `audio/` or its filetype is
@@ -23,6 +28,10 @@ AUDIO_TYPES = frozenset(("m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac
 TRANSCRIBE_MODES = ("off", "local", "gemini")
 DEFAULT_MODE = "off"
 TRANSCRIPT_KIND = "transcripts"
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
+GEMINI_TIMEOUT = 60.0
+GEMINI_PROMPT = "Transcribe this audio exactly in its own language. Reply with the transcript only."
 _BAD_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _LANGUAGE = re.compile(r"^[A-Za-z]+")
 
@@ -105,20 +114,70 @@ def local_transcriber(model="small"):
     return transcribe
 
 
-def transcribe_message(message, channel, state, read_file, transcriber, language):
+def gemini_prompt(language):
+    """The prompt of one Gemini transcription. A language code, when given, names the language so the model holds the
+    channel's language; with no code the model detects the language itself."""
+    return f"{GEMINI_PROMPT} The language is {language}." if language else GEMINI_PROMPT
+
+
+def gemini_text(answer):
+    """The transcript of one Gemini answer: the text of its candidate parts, joined. An answer with no text is refused,
+    so a failed call never stores an empty transcript."""
+    parts = ((answer.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    text = " ".join(part.get("text") or "" for part in parts).strip()
+    if not text:
+        raise RuntimeError("gemini returned no transcript")
+    return text
+
+
+def gemini_client(key, model=GEMINI_MODEL, timeout=GEMINI_TIMEOUT):
+    """A Gemini client that sends one clip to `model` and answers the parsed response. The key travels in a header,
+    never in the URL or in output. `client(audio, mime, prompt)` is the callable shape `gemini_transcriber` takes."""
+    def client(audio, mime, prompt):
+        body = {"contents": [{"parts": [
+            {"text": prompt},
+            {"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode()}},
+        ]}]}
+        request = urllib.request.Request(
+            GEMINI_URL % model,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "x-goog-api-key": key},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read() or b"{}")
+    return client
+
+
+def gemini_transcriber(client):
+    """A transcriber that sends one clip to Gemini through `client(audio, mime, prompt)` and answers its text in the
+    channel's language. `transcribe(audio, language, mime)` is the shape `transcribe_message` calls."""
+    def transcribe(audio, language=None, mime="audio/mp4"):
+        return gemini_text(client(audio, mime, gemini_prompt(language)))
+    return transcribe
+
+
+def transcribe_message(message, channel, state, read_file, transcriber, language, gemini=None):
     """Transcribe each audio clip of one read message and store each transcript in the private state folder. An `off`
-    channel, and a mode other than `local`, transcribes nothing and reads no clip. `read_file(file_id)` is the
-    connector's read-file tool, `transcriber(audio, language)` the local model, and `state` the `GuestState` of the
-    folder. Returns the stored `gueststate.Entry` rows."""
-    if transcribe_mode(channel) != "local":
+    channel transcribes nothing and reads no clip. A `local` channel transcribes through `transcriber(audio, language)`.
+    A `gemini` channel sends the clip through `gemini(audio, language, mime)`; with no `gemini` callable it transcribes
+    nothing. `read_file(file_id)` is the connector's read-file tool and `state` the `GuestState` of the folder. Returns
+    the stored `gueststate.Entry` rows."""
+    mode = transcribe_mode(channel)
+    if mode not in ("local", "gemini") or (mode == "gemini" and gemini is None):
         return []
     code = whisper_language(language)
     stored = []
     for clip in audio_clips(message):
-        text = transcriber(clip_bytes(read_file(clip.id)), code)
+        audio = clip_bytes(read_file(clip.id))
+        if mode == "local":
+            text = transcriber(audio, code)
+        else:
+            text = gemini(audio, code, clip.mimetype or "audio/mp4")
         stored.append(state.put(TRANSCRIPT_KIND, transcript_name(message.get("ts"), clip), str(text or "")))
     return stored
 
 
-__all__ = ["AUDIO_TYPES", "Clip", "TRANSCRIBE_MODES", "audio_clips", "clip_bytes", "local_transcriber",
-           "transcribe_message", "transcribe_mode", "transcript_name", "whisper_language"]
+__all__ = ["AUDIO_TYPES", "Clip", "TRANSCRIBE_MODES", "audio_clips", "clip_bytes", "gemini_client", "gemini_prompt",
+           "gemini_text", "gemini_transcriber", "local_transcriber", "transcribe_message", "transcribe_mode",
+           "transcript_name", "whisper_language"]
