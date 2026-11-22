@@ -741,17 +741,18 @@ class State:
         self.posted()[digest] = record
 
     def announced(self):
-        """Every `(event key, channel)` pair already announced, so a restart posts no release notice a second time."""
+        """Every `(event key, event id, channel)` notice already posted, so a restart posts no release notice a second
+        time, and one key that two events share is two notices, because the event id is part of the mark."""
         if self._announced is None:
-            self._announced = {f"{r['key']}|{r['channel']}" for r in read_lines(self.announced_path)
-                               if r.get("key") and r.get("channel")}
+            self._announced = {f"{r['key']}|{r['id']}|{r['channel']}" for r in read_lines(self.announced_path)
+                               if r.get("key") and r.get("id") and r.get("channel")}
         return self._announced
 
-    def remember_announced(self, key, channel):
+    def remember_announced(self, key, event_id, channel):
         """One durable mark of a release notice already posted, written at once: the ledger is the one place a restart
-        reads the pair from."""
-        self._append(self.announced_path, {"key": key, "channel": channel})
-        self.announced().add(f"{key}|{channel}")
+        reads the mark from. The event id is part of it, so a later event that reuses a key is a second notice."""
+        self._append(self.announced_path, {"key": key, "id": event_id, "channel": channel})
+        self.announced().add(f"{key}|{event_id}|{channel}")
 
     def remember_clip(self, digest, stage):
         """One durable mark of a clip already out, written at once: a later stage's refusal repeats that stage alone,
@@ -1103,6 +1104,7 @@ class Daemon:
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
+        self._unowned_logged = set()      # each release channel no app owns, whose skip is already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
 
     def app_of(self, channel):
@@ -1425,7 +1427,8 @@ class Daemon:
         The record is one line of `$VOICE_STATE/release-events.jsonl` (#2702). A channel gets the template of its
         project's event, or its own override, with the record's fields filled. The post carries the channel persona's
         `username` and no mark, because an `owned` bot speaks as itself. A `listen` channel, a channel that does not
-        subscribe and an event with no template get nothing. The pair is durable, so a restart posts no second notice.
+        subscribe and an event with no template get nothing. Only the record of stage S1 is announced: a record another
+        stage emitted waits for its own path. The mark is durable, so a restart posts no second notice.
         """
         announced = self.state.announced()
         records = self.state.release_events()
@@ -1436,25 +1439,32 @@ class Daemon:
                 continue
             committed, local = active["revision"], active.get("local") or {}
             for record in records:
-                key = str(record.get("key") or "")
-                if not key:
+                key, event_id = str(record.get("key") or ""), str(record.get("id") or "")
+                if not key or not event_id or slackannounce.stage_of(record) != slackannounce.STAGE:
                     continue
                 try:
                     for post in slackannounce.announcements(committed, local, record):
-                        if f"{key}|{post.channel}" in announced:
+                        mark = f"{key}|{event_id}|{post.channel}"
+                        if mark in announced:
                             continue
                         if self.post_announcement(post):
-                            self.state.remember_announced(key, post.channel)
-                            announced.add(f"{key}|{post.channel}")
+                            self.state.remember_announced(key, event_id, post.channel)
+                            announced.add(mark)
                             posted += 1
                 except Exception as x:      # noqa: BLE001 - one bad record is a log line, the other records still run
                     self.log(f"voiced: release notice for {repo} {key} failed: {type(x).__name__}")
         return posted
 
     def post_announcement(self, post):
-        """One notice through the client of the app that owns its channel; True when Slack accepts it."""
+        """One notice through the client of the app that owns its channel; True when Slack accepts it.
+
+        A channel no app owns is one log line, said once, so a misconfigured channel reaches the operator instead of a
+        silent retry on every poll."""
         client = self.client_for(post.channel)
         if client is None:
+            if post.channel not in self._unowned_logged:
+                self._unowned_logged.add(post.channel)
+                self.log(f"voiced: release notice skipped: no app owns channel {post.channel}")
             return False
         payload = {"channel": post.channel, "text": post.text}
         if post.persona:

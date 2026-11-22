@@ -7,6 +7,8 @@ itself.
 The seam is the daemon: the event record `release_events.py emit` writes (#2702), one active Slack revision, and the
 fake `SlackClient` that `tests/test_voiced.py` already drives, so no case reaches Slack.
 """
+import json
+
 from tests.test_voiced import OWNER, FakeClient, voiced
 
 REPO = "acme/app"
@@ -41,15 +43,18 @@ def channel(channel_id, mode="listen+speak", announce=("stg_release", "prod_rele
     return row
 
 
-def daemon_with(tmp_path, client, channels, events=("stg_release",), doc=None):
-    """A daemon whose one project has an active revision naming `channels`, and one emitted release event."""
+def daemon_with(tmp_path, client, channels, events=("stg_release",), doc=None, stage=None):
+    """A daemon whose one project has an active revision naming `channels`, and one emitted release event.
+
+    `stage` tags the record with the delivery stage that emitted it; None keeps the emitter's own default of S1."""
     mod = voiced()
     state = mod.State(str(tmp_path))
     state.save_channels({REPO: {"name": "proj-acme-app", "id": PROJECT}})
     state.save_active_revision(REPO, {"repo": REPO, "sha": SHA, "revision": doc or committed(channels),
                                       "local": {}})
     for event in events:
-        mod.releases.emit(event, ["a1b2c3 Fix the door"], key=f"{event}:a1b2c3", state_dir=str(tmp_path))
+        mod.releases.emit(event, ["a1b2c3 Fix the door"], key=f"{event}:a1b2c3", state_dir=str(tmp_path),
+                          stage=stage)
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=lambda audio, mime: "", downloader=lambda url: b"",
                         log=lambda line: None, client=client)
     return mod, daemon
@@ -186,3 +191,66 @@ def test_an_event_with_no_template_posts_nothing(tmp_path):
     daemon.announce_releases()
 
     assert client.posts() == []
+
+
+def test_a_record_of_another_stage_gets_no_post(tmp_path):
+    """Stage gate: release announcements belong to stage S1, so a record a later stage emitted reaches no channel."""
+    client = FakeClient()
+    _, daemon = daemon_with(tmp_path, client, [channel(PROJECT)], stage="S4")
+
+    daemon.announce_releases()
+
+    assert client.posts() == []
+
+
+def test_a_record_tagged_s1_gets_its_post(tmp_path):
+    """The gate's other side: a record the promotion pass tags S1 is announced to its subscribed channel."""
+    client = FakeClient()
+    _, daemon = daemon_with(tmp_path, client, [channel(PROJECT)], stage="S1")
+
+    daemon.announce_releases()
+
+    posts = client.posts()
+    assert len(posts) == 1
+    assert posts[0]["text"] == "Moved to STG: a1b2c3 Fix the door."
+
+
+def test_a_channel_no_client_serves_is_logged_once(tmp_path):
+    """A channel no app owns is one log line at the failure, said once, so an operator sees it and no pass repeats it."""
+    logs = []
+    _, daemon = daemon_with(tmp_path, None, [channel(PROJECT)])
+    daemon.log = logs.append
+
+    daemon.announce_releases()
+    daemon.announce_releases()
+
+    said = [line for line in logs if PROJECT in line]
+    assert len(said) == 1, f"expected one line naming {PROJECT}, got {logs}"
+
+
+def test_two_events_that_share_a_key_each_get_their_notice(tmp_path):
+    """The ledger names the event as well as the key and the channel, so a second event under one key still posts."""
+    client = FakeClient()
+    mod, daemon = daemon_with(tmp_path, client, [channel(PROJECT)])
+    shared = {"id": "prod_release", "key": "stg_release:a1b2c3", "items": ["a1b2c3 Fix the door"],
+              "ts": "2026-01-01T00:00:00Z"}
+    with open(mod.releases.path(str(tmp_path)), "a", encoding="utf-8") as f:
+        f.write(json.dumps(shared, sort_keys=True) + "\n")
+
+    daemon.announce_releases()
+
+    assert [p["text"] for p in client.posts()] == ["Moved to STG: a1b2c3 Fix the door.",
+                                                   "Released to PROD: a1b2c3 Fix the door."]
+
+
+def test_a_none_override_uses_the_project_template(tmp_path):
+    """An override whose value is None names no text, so the project row answers: the documented meaning of None."""
+    client = FakeClient()
+    chips = channel(PROJECT, templates={"stg_release": None})
+    _, daemon = daemon_with(tmp_path, client, [chips])
+
+    daemon.announce_releases()
+
+    posts = client.posts()
+    assert len(posts) == 1
+    assert posts[0]["text"] == "Moved to STG: a1b2c3 Fix the door."

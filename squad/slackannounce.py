@@ -14,6 +14,10 @@ A channel gets nothing when it does not subscribe, when it is `listen` (a read c
 event has no template, or when the channel has no id. A channel that resolves no persona posts as the app it is. A
 `guest` channel is not this module's work: its notice is a draft through the write hook (#2715).
 
+This module announces the record of stage S1 alone, the stage that delivers the `owned` announcement (story 71). A
+record another stage emitted waits for its own path, so a later delivery never posts through this one. A record an older
+pass wrote names no stage, and it is read as S1, so a record already on disk keeps its notice.
+
 The module reads no clock and calls no network. Guards: `tests/test_slack_announce_owned.py`.
 """
 import re
@@ -21,6 +25,7 @@ from typing import NamedTuple
 
 from . import slackpolicy
 
+STAGE = "S1"      # the stage that delivers the `owned` release announcement; this module announces its records alone
 _FIELD = re.compile(r"\{(\w+)\}")
 
 
@@ -36,6 +41,12 @@ def _rows(value):
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def stage_of(record):
+    """The delivery stage that emitted one record: the record's own `stage`, else S1, so a record an older pass wrote
+    keeps its notice."""
+    return str(record.get("stage") or STAGE)
+
+
 def subscribed(channel, event_id):
     """True when the channel's `announce` list names the event."""
     announce = channel.get("announce")
@@ -44,8 +55,9 @@ def subscribed(channel, event_id):
 
 def template(committed, channel, event_id):
     """The text template of one event for one channel: the channel's own override, else the project's row for the event.
-    None when neither names a template. An override key is compared as text, so a YAML or JSON map that keys the event
-    by a number still matches the event's id."""
+    None when neither names a template. An override whose value is None names no text, so the project row answers: a
+    channel that wants no post removes the event from its `announce` list instead. An override key is compared as text,
+    so a YAML or JSON map that keys the event by a number still matches the event's id."""
     override = channel.get("templates")
     if isinstance(override, dict):
         keyed = {str(key): value for key, value in override.items()}
@@ -71,11 +83,11 @@ def render(template_text, record):
 
 
 def post_for(committed, local, channel, record):
-    """The one post a channel gets for one record, or None when the channel gets nothing: it does not subscribe, the
-    channel is `listen` (or names no mode), the event has no template, the rendered body is empty, or the row has no id.
-    Every other mode is writable, so a `speak` channel that subscribes gets its notice."""
+    """The one post a channel gets for one record, or None when the channel gets nothing: the record is not stage S1, it
+    does not subscribe, the channel is `listen` (or names no mode), the event has no template, the rendered body is
+    empty, or the row has no id. Every other mode is writable, so a `speak` channel that subscribes gets its notice."""
     event_id = str(record.get("id") or "")
-    if not event_id or not subscribed(channel, event_id):
+    if stage_of(record) != STAGE or not event_id or not subscribed(channel, event_id):
         return None
     if str(channel.get("mode") or "listen") == "listen":
         return None
