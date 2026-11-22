@@ -7,9 +7,19 @@ and recorded as data.
 
 Every id here is a placeholder. The decision of each case comes from the real policy module and a real pair of files,
 so the expected answer never repeats the executor's own rule.
+
+The `loop_control` action (#2705) runs no file write of its own: it calls the hub loop switch the caller supplies, so
+pause, resume and drain each pass the hub's one write path and the hub's audit. The last case loads the hub's own
+`/api/loop` switch and proves the change reaches it and its audit line.
 """
 import copy
+import importlib.util
 import json
+import os
+import pathlib
+from typing import NamedTuple
+
+import pytest
 
 from squad import slackexecutor as X
 from squad import slackpolicy as S
@@ -22,6 +32,9 @@ OTHER_CHANNEL = "C0ALERT001"
 OWNER = "U0OWNER001"
 PEER = "U0PEER0001"
 STRANGER = "U0STRANGER"
+OPERATOR = "U0OPERATOR1"   # the role that lists loop_control, so it may pause, resume and drain the loop
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 MID = "C0PROJ0001:1762500100.000100"
 STATUS_TEXT = "3 open, 1 in review, 12 done"
 GUEST_TEAM = "T0CLIENT01"
@@ -43,12 +56,13 @@ COMMITTED = {
     "roles": [
         {"id": "manager", "actions": ["status", "logs"]},
         {"id": "colleague", "actions": ["status"]},
+        {"id": "operator", "actions": ["loop_control"]},
     ],
     "workspaces": [
         {"id": WORKSPACE, "label": "team", "class": "owned", "app": "hal9k",
          "channels": [
              {"id": CHANNEL, "name": "proj", "mode": "listen+speak", "persona": "hal",
-              "roles": ["manager", "colleague"]},
+              "roles": ["manager", "colleague", "operator"]},
              {"id": OTHER_CHANNEL, "name": "alerts", "mode": "listen", "roles": ["manager"]},
          ]},
     ],
@@ -59,6 +73,7 @@ LOCAL = {
     "members": [
         {"workspace": WORKSPACE, "channel": CHANNEL, "role": "manager", "users": [OWNER]},
         {"workspace": WORKSPACE, "channel": CHANNEL, "role": "colleague", "users": [PEER]},
+        {"workspace": WORKSPACE, "channel": CHANNEL, "role": "operator", "users": [OPERATOR]},
         {"workspace": WORKSPACE, "channel": OTHER_CHANNEL, "role": "manager", "users": [OWNER]},
     ],
 }
@@ -104,15 +119,32 @@ class Logs(Source):
         super().__init__(text)
 
 
+class Hub:
+    """The hub loop switch the executor calls, standing in for the hub's one write path: it records each `(action, who)`
+    and answers the hub's `(code, body)` shape, so a refused state answers as the hub answers it."""
+
+    def __init__(self, code=200, err=None):
+        self.calls = []
+        self.code = code
+        self.err = err
+
+    def __call__(self, action, who):
+        self.calls.append((action, who))
+        if self.code != 200:
+            return self.code, {"err": self.err or "the loop is not running"}
+        return 200, {"ok": True, "action": action}
+
+
 def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source=None, logs=None, guest=(),
-        project=REPO):
-    """One request through the executor, with its decision, line and status source. The line carries the role the
-    decision named, as #2687 writes it, and the request names the channel of the case unless the test overrides it."""
+        project=REPO, loop=None):
+    """One request through the executor, with its decision, line, status source and loop switch. The line carries the role
+    the decision named, as #2687 writes it, and the request names the channel of the case unless the test overrides it."""
     request, why = X.parse(text if text is not None else request_text(channel=channel))
     assert request is not None, why
     dec = decision(decision_user, channel)
     src = source if source is not None else Source()
-    out = X.execute(request, dec, line(line_user, channel, role=dec.role), project, status=src, logs=logs, guest=guest)
+    out = X.execute(request, dec, line(line_user, channel, role=dec.role), project, status=src, logs=logs, guest=guest,
+                    loop=loop)
     return out, src
 
 
@@ -318,3 +350,129 @@ def test_the_logs_action_refuses_a_request_with_no_log_source():
     assert out.reply is None
     assert out.record["error"].startswith("source:")
     assert "logs" in out.record["error"]
+
+
+# --- loop_control from a role (#2705, SPEC 2682): pause, resume and drain through the hub loop switch
+
+def loop_request(state, **over):
+    """One `loop_control` request, naming the loop state the role holder asked for."""
+    return request_text(action="loop_control", arguments={"state": state}, **over)
+
+
+def test_a_role_holder_with_loop_control_pauses_the_loop_through_the_hub_switch():
+    """Criteria (1), (4) and (7): the operator's role lists `loop_control`; a pause reaches the hub switch with its one
+    drain action, named for the person who asked, and the reply confirms the state the hub applied."""
+    hub = Hub()
+    out, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is True
+    assert hub.calls == [("drain", OPERATOR)]
+    assert out.reply == {"path": "bot", "channel": CHANNEL, "text": out.reply["text"]}
+    assert "drain" in out.reply["text"].lower()
+
+
+def test_a_role_holder_with_loop_control_resumes_the_loop_through_the_hub_switch():
+    """Criterion (2): a resume reaches the hub switch as its start action, and the reply confirms the new state."""
+    hub = Hub()
+    out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is True
+    assert hub.calls == [("start", OPERATOR)]
+    assert "start" in out.reply["text"].lower()
+
+
+def test_a_role_holder_with_loop_control_drains_the_loop_through_the_hub_switch():
+    """Criterion (3): a drain reaches the hub switch as its drain action, and the reply confirms the new state."""
+    hub = Hub()
+    out, _ = run(text=loop_request("drain"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is True
+    assert hub.calls == [("drain", OPERATOR)]
+    assert "drain" in out.reply["text"].lower()
+
+
+def test_a_role_that_does_not_list_loop_control_is_refused():
+    """Criterion (6): the manager's role lists no `loop_control`, so the request is refused at the grant and the hub
+    switch is never called."""
+    hub = Hub()
+    out, _ = run(text=loop_request("pause"), loop=hub)
+    assert out.ran is False
+    assert hub.calls == []
+    assert out.record["error"].startswith("grant:")
+
+
+def test_a_loop_control_request_with_no_loop_switch_is_refused():
+    """Criterion (4): the executor runs no loop action without the hub switch, so a missing switch is a refusal, not a
+    silent answer."""
+    out, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR)
+    assert out.ran is False
+    assert out.reply is None
+    assert out.record["error"].startswith("source:")
+    assert "loop" in out.record["error"]
+
+
+def test_a_loop_control_request_for_a_state_it_does_not_take_is_refused():
+    """Criterion (6): `loop_control` takes pause, resume or drain; any other state is refused at the arguments, and the
+    hub switch is never called."""
+    hub = Hub()
+    out, _ = run(text=loop_request("restart"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is False
+    assert hub.calls == []
+    assert out.record["error"].startswith("arguments:")
+
+
+def test_a_hub_refusal_of_a_loop_action_is_recorded_as_data_naming_the_reason():
+    """Criterion (4): the hub refuses an action the loop state does not allow, and its reason becomes the data record."""
+    hub = Hub(code=409, err="the loop is not running")
+    out, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is False
+    assert out.reply is None
+    assert out.record["error"].startswith("hub:")
+    assert "the loop is not running" in out.record["error"]
+
+
+@pytest.fixture
+def real_hub(monkeypatch, tmp_path):
+    """The hub's own module, loaded with the loop switch's files in a temp state directory; its supervisor call is a stub
+    that brings the loop up on a start, so the switch runs its real state rule and its real audit."""
+    for k, v in (("SG_REPO", "x/y"), ("SG_OWNER", "x"), ("SG_PROJECT", "4"), ("HOME", str(tmp_path)),
+                 ("SG_CHECKOUT", str(tmp_path)), ("SG_HUB_DIR", str(tmp_path)), ("SG_STATE", str(tmp_path / "st"))):
+        monkeypatch.setenv(k, v)
+    for k in ("SG_STATE_BASE", "SG_SHARED", "SG_PROFILE"):
+        monkeypatch.delenv(k, raising=False)
+    spec = importlib.util.spec_from_file_location("hub_slack_loop", HUB_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    (mod.STATE / "auto").mkdir(parents=True, exist_ok=True)
+    mod.watchd_calls = []
+
+    def watchd(*a, state=None, checkout=None, profile=None):   # a start brings the supervisor up: this process stands for it
+        mod.watchd_calls.append(list(a))
+        if a == ("start",):
+            (mod.STATE / "watchd.pid").write_text(f"{os.getpid()}\n")
+        return 0
+    mod.loop_watchd = watchd
+    mod.tailnet_block = lambda checkout=None: {}
+    return mod
+
+
+class Access(NamedTuple):
+    """The access answer the hub route hands its loop switch: a loopback write with the asker's name."""
+    allowed: bool = True
+    tailnet: bool = False
+    login: str = ""
+    reason: str = ""
+
+
+def test_each_loop_action_reaches_the_hub_loop_switch_and_the_hub_audits_it(real_hub):
+    """Criteria (1), (2), (3), (4) and (5): the executor's loop switch is the hub's own, so a resume starts the loop and
+    a pause drains it, each through the hub route's state rule, and the hub writes one audit line per change."""
+    def loop(action, who):
+        return real_hub.loop_switch(Access(login=who), {"action": action}, True)
+
+    start, _ = run(text=loop_request("resume"), decision_user=OPERATOR, line_user=OPERATOR, loop=loop)
+    assert start.ran is True
+    assert real_hub.watchd_calls == [["start"]]
+    pause, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR, loop=loop)
+    assert pause.ran is True
+    assert real_hub.watchd_calls == [["start"], ["drain"]]
+    lines = [json.loads(line) for line in real_hub.LOOP_AUDIT.read_text().splitlines() if line.strip()]
+    assert [e["action"] for e in lines] == ["start", "drain"]
+    assert [e["who"] for e in lines] == [OPERATOR, OPERATOR]
