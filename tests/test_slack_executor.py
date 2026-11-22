@@ -405,6 +405,14 @@ def test_a_request_work_with_no_title_is_refused():
     assert "title" in out.record["error"]
 
 
+def test_a_missing_single_argument_names_one_non_empty_value():
+    """Finding (d): when exactly one argument is missing, the refusal keeps the text `needs one non-empty <name>`."""
+    out, _ = run(text=request_text(action="request_work", arguments={}), work=Work())
+    assert out.record["error"] == "arguments: the request_work action needs one non-empty title"
+    out, _ = run(text=request_text(action="request_investigation", arguments={}), investigate=Investigate())
+    assert out.record["error"] == "arguments: the request_investigation action needs one non-empty question"
+
+
 def test_a_role_holder_with_request_investigation_starts_an_investigation():
     """Criterion (2): the manager's role lists `request_investigation`, so the question reaches the investigation source,
     and its researched answer is the reply."""
