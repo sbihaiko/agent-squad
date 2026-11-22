@@ -195,9 +195,15 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         seen["proxy_url"] = proxy_url
         return ({"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False})
 
+    def fake_guest(work, profile, cli, role, proxy_url=None):
+        seen[role] = proxy_url
+        init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
+        return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
+
     monkeypatch.setattr(probe, "session", fake_session)
+    monkeypatch.setattr(probe, "guest_session", fake_guest)
     probe.run_probe(tmp_path, "/bin/true")
-    assert seen["proxy_url"] is None
+    assert seen == {"proxy_url": None, "poller": None, "writer": None}
 
 
 def test_the_session_reaches_the_model_only_through_the_proxy(tmp_path, monkeypatch):
@@ -427,6 +433,7 @@ def run_hook(role_args, tool_input):
                           capture_output=True, text=True, check=False, timeout=20)
 
 
+@pytest.mark.heavy     # four Python starts that each import squad: load can push them over the 1 s line
 def test_the_hook_shim_answers_with_the_real_guest_hooks():
     import json
     probe = load("operator_probe")

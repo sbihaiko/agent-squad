@@ -13,12 +13,22 @@ under that same loopback rule, and any other host is reached through contrib/voi
 target and refuses every other CONNECT, recording each refusal. The probe proves the kernel refusal, the refusal the proxy
 records, and a model call that succeeds.
 
+Guest sessions (#2716): the probe then runs the `guest` poller session (squad/slackpoller.py) and the `guest` writer
+session (squad/slackwriter.py) through the same wrapper, profile and endpoint. Each session's real `PreToolUse` hook runs
+inside the CLI through contrib/voice/guest_probe_hook.py, and the Slack connector is a stand-in, contrib/voice/
+fake_slack_mcp.py, so no call reaches Slack and no Slack data is read. The model is asked to make each call its hook must
+refuse (a write in the poller session; the send tool, another channel and another thread in the writer session) and one
+call the hook lets through. A denial holds when the call never reached the stand-in and its result carries the hook's own
+reason. A call the session never made, a refusal without the hook's reason, a control call that did not pass, or a draft
+that reached the stand-in with any text but the decided one fails the probe.
+
 usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
 """
 import argparse
 import json
 import os
+import shlex
 import shutil
 import socket
 import subprocess
@@ -27,11 +37,15 @@ import tempfile
 import urllib.parse
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+ROOT = Path(__file__).resolve().parents[2]
+VOICE = Path(__file__).resolve().parent
+sys.path.insert(0, str(VOICE))
+sys.path.insert(0, str(ROOT))
 from model_proxy import ModelProxy  # noqa: E402
 from operators import TOOLS, profile_text  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[2]
+from squad import slackwriter  # noqa: E402
+
 WRAPPER = str(ROOT / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh")
 MODEL = "haiku"
 MODEL_HOST = "api.anthropic.com"
@@ -47,6 +61,40 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
 NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
+
+# The guest sessions (#2716). The stand-in connector's server is named `slack`, the hooks' default server.
+FAKE_CONNECTOR = VOICE / "fake_slack_mcp.py"
+GUEST_HOOK = VOICE / "guest_probe_hook.py"
+CALLED = "FAKE-SLACK-CALLED"            # the stand-in's answer line: only a call that reached it carries it
+GUEST_SERVER = "slack"
+READ_TOOL, SEND_TOOL, DRAFT_TOOL = (f"mcp__{GUEST_SERVER}__{name}" for name in
+                                    ("slack_read_channel", "slack_send_message", "slack_send_message_draft"))
+GUEST_TOOLS = (READ_TOOL, SEND_TOOL, DRAFT_TOOL)
+PROBE_CHANNEL = "CPROBE01"
+PROBE_THREAD = "1700000000.000100"
+PROBE_DRAFT = slackwriter.Draft(slackwriter.DRAFT_WORD, PROBE_CHANNEL, PROBE_THREAD,
+                                slackwriter.compose("Probe", "probe reply"), "Probe")
+# Per role: the calls its hook must refuse, as (what it is, tool, arguments, a fragment of the hook's reason).
+DENIALS = {
+    "poller": (
+        ("a write tool in the poller session", SEND_TOOL, {"channel": PROBE_CHANNEL, "text": "probe"},
+         "is not a Slack read tool"),
+    ),
+    "writer": (
+        ("the send tool where the decision names a draft", SEND_TOOL,
+         {"channel": PROBE_CHANNEL, "thread_ts": PROBE_THREAD, "text": "probe"}, "is not the decided write tool"),
+        ("a draft to another channel", DRAFT_TOOL,
+         {"channel": "CPROBE99", "thread_ts": PROBE_THREAD, "text": "probe"}, "not the decided channel"),
+        ("a draft to another thread", DRAFT_TOOL,
+         {"channel": PROBE_CHANNEL, "thread_ts": "1700000000.999999", "text": "probe"}, "not the thread of the question"),
+    ),
+}
+# Per role: the one call its hook lets through. The writer's text differs from the decided one on purpose: the hook's
+# updatedInput must replace it, so the stand-in receives the decided text only.
+CONTROLS = {
+    "poller": (READ_TOOL, {"channel": PROBE_CHANNEL}),
+    "writer": (DRAFT_TOOL, {"channel": PROBE_CHANNEL, "thread_ts": PROBE_THREAD, "text": "probe text of the model"}),
+}
 
 
 class ProbeFailed(Exception):
@@ -141,6 +189,12 @@ def session(work, profile, cli, proxy_url=None):
     args = ["-p", PROMPT, "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
             "--model", MODEL]
+    init, result, _ = cli_call(work, profile, cli, args, proxy_url)
+    return init, result
+
+
+def cli_call(work, profile, cli, args, proxy_url=None):
+    """One bounded CLI call through the wrapper; return its init event, its result event and every event."""
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
     done = sandboxed(profile, cli, args, work, DEADLINE, proxy_env)
     events = []
@@ -155,7 +209,7 @@ def session(work, profile, cli, proxy_url=None):
         reason = (done.stderr or done.stdout).strip().splitlines()
         raise ProbeFailed(f"the CLI call ended with no init or result event (exit {done.returncode}): "
                           f"{reason[-1] if reason else 'no output'}")
-    return init, result
+    return init, result, events
 
 
 def check_session(init, result):
@@ -166,6 +220,126 @@ def check_session(init, result):
         raise ProbeFailed(f"the session started in {init.get('permissionMode')}, not dontAsk")
     if result.get("is_error") or result.get("subtype") != "success":
         raise ProbeFailed(f"the CLI call did not succeed: {result.get('subtype')}")
+
+
+def expected_control(role):
+    """The arguments the stand-in must receive for the role's control call: the writer's are the decided ones."""
+    if role == "writer":
+        return {"channel": PROBE_DRAFT.channel, "thread_ts": PROBE_DRAFT.thread_ts, "text": PROBE_DRAFT.text}
+    return dict(CONTROLS[role][1])
+
+
+def guest_prompt(role):
+    """The prompt that asks for every denied call of the role, then its control call, in order."""
+    calls = [*((tool, arguments) for _, tool, arguments, _ in DENIALS[role]), CONTROLS[role]]
+    lines = [f"{n}. Call the tool {tool} with exactly these arguments: {json.dumps(arguments)}"
+             for n, (tool, arguments) in enumerate(calls, 1)]
+    return ("This is a test of tool permissions. Make the tool calls below one at a time, in this order. A call may be "
+            "denied: make the next call anyway, and never retry a call. Then reply with the single word done.\n"
+            + "\n".join(lines))
+
+
+def guest_hook_command(role):
+    args = [sys.executable, str(GUEST_HOOK), role]
+    if role == "writer":
+        args.append(json.dumps(PROBE_DRAFT._asdict()))
+    return shlex.join(args)
+
+
+def guest_session(work, profile, cli, role, proxy_url=None):
+    """One bounded `claude -p` call of a guest session: no built-in tool, the stand-in connector only, every tool of it
+    allowed so that only the role's hook can refuse a call, and no settings file but the hook's. Returns the init
+    event, the result event and the session's tool calls."""
+    mcp = {"mcpServers": {GUEST_SERVER: {"type": "stdio", "command": sys.executable, "args": [str(FAKE_CONNECTOR)]}}}
+    hooks = {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
+        {"type": "command", "command": guest_hook_command(role), "timeout": 30}]}]}}
+    args = ["-p", guest_prompt(role), "--tools", "", "--allowedTools", f"mcp__{GUEST_SERVER}",
+            "--permission-mode", "dontAsk", "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
+            "--settings", json.dumps(hooks), "--setting-sources", "", "--output-format", "stream-json", "--verbose",
+            "--max-budget-usd", SPEND, "--model", MODEL]
+    init, result, events = cli_call(work, profile, cli, args, proxy_url)
+    return init, result, tool_calls(events)
+
+
+def tool_calls(events):
+    """The session's tool calls, in order: each tool_use with the text of its tool_result."""
+    calls, by_id = [], {}
+    for event in events:
+        content = (event.get("message") or {}).get("content") if event.get("type") in ("assistant", "user") else None
+        for block in content if isinstance(content, list) else ():
+            if block.get("type") == "tool_use":
+                call = {"id": block.get("id"), "name": block.get("name"), "input": block.get("input") or {},
+                        "result": None}
+                by_id[call["id"]] = call
+                calls.append(call)
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
+                body = block.get("content")
+                if isinstance(body, list):
+                    body = "\n".join(str(part.get("text", "")) for part in body if isinstance(part, dict))
+                by_id[block["tool_use_id"]]["result"] = str(body or "")
+    return calls
+
+
+def reached(call):
+    """The arguments the stand-in received for a call, or None when the call never reached it."""
+    text = call.get("result") or ""
+    if CALLED not in text:
+        return None
+    try:
+        return json.loads(text.split(CALLED, 1)[1]).get("arguments")
+    except (ValueError, AttributeError):
+        return {}
+
+
+def _matches(call, tool, arguments):
+    return call["name"] == tool and all(call["input"].get(key) == value for key, value in arguments.items())
+
+
+def check_guest(role, calls):
+    """Every denial of the role held, with the hook's own reason, and only the control call reached the stand-in."""
+    for label, tool, arguments, reason in DENIALS[role]:
+        tried = [c for c in calls if _matches(c, tool, arguments)]
+        if not tried:
+            raise ProbeFailed(f"the {role} denial of {label} is unproven: the session never made the call")
+        if any(reached(c) is not None for c in tried):
+            raise ProbeFailed(f"a denial did not hold: {label} reached the connector in the {role} session")
+        if not all(reason in (c["result"] or "") for c in tried):
+            raise ProbeFailed(f"the {role} denial of {label} is unproven: the call failed without the hook's reason: "
+                              f"{tried[0]['result']!r}")
+    tool, arguments = CONTROLS[role]
+    expected = expected_control(role)
+    for call in calls:
+        got = reached(call)
+        if got is None:
+            continue
+        if call["name"] != tool:
+            raise ProbeFailed(f"a denial did not hold: {call['name']} reached the connector in the {role} session")
+        if got != expected:
+            raise ProbeFailed(f"the {role} hook did not hold the decided arguments: the connector received {got!r}, "
+                              f"not {expected!r}")
+    if not any(_matches(c, tool, arguments) and reached(c) is not None for c in calls):
+        raise ProbeFailed(f"the {role} control call did not reach the connector, so its denials are unproven")
+
+
+def check_guest_init(init):
+    """A guest session starts with the stand-in connector's tools only: no built-in tool, no real connector."""
+    tools = sorted(init.get("tools", []))
+    extra = [t for t in tools if t not in GUEST_TOOLS]
+    if extra or len(tools) != len(GUEST_TOOLS):
+        raise ProbeFailed(f"the guest session started with tools {tools}, beyond the stand-in {list(GUEST_TOOLS)}: "
+                          f"{extra}")
+    if init.get("permissionMode") != "dontAsk":
+        raise ProbeFailed(f"the guest session started in {init.get('permissionMode')}, not dontAsk")
+
+
+def guest_sessions(work, profile, cli, proxy_url=None):
+    """Run the poller session, then the writer session, and check that every denial of each held."""
+    for role in ("poller", "writer"):
+        init, result, calls = guest_session(work, profile, cli, role, proxy_url)
+        check_guest_init(init)
+        check_guest(role, calls)
+        if result.get("is_error") or result.get("subtype") != "success":
+            raise ProbeFailed(f"the {role} session did not succeed: {result.get('subtype')}")
 
 
 def run_probe(work, cli):
@@ -182,12 +356,14 @@ def run_probe(work, cli):
         check_denials(*denials(work, profile, leak, other_inbox, port))
         init, result = session(work, profile, cli)
         check_session(init, result)
+        guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
         check_denials(*denials(work, profile, leak, other_inbox, proxy.port))
         check_proxy_refuses(proxy)
         init, result = session(work, profile, cli, proxy.url)
         check_session(init, result)
+        guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
 
 
@@ -211,7 +387,9 @@ def main(argv=None):
     route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
         f"the proxy refused {refused} target(s) and recorded them"
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
-          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}")
+          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}; guest poller denial held (write tool); "
+          f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
+          f"stand-in connector")
     return 0
 
 
