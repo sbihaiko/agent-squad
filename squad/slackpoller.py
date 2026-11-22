@@ -37,9 +37,10 @@ WRITE_VERBS = frozenset(("send", "post", "write", "upload", "schedule", "react",
 DEFAULT_SERVER = "slack"
 
 
-def _tool_word(name, server):
-    """The connector's own name of a tool, or None when the tool belongs to another server. `mcp__slack__slack_read_channel`
-    and a plain `slack_read_channel` both give `slack_read_channel`."""
+def tool_word(name, server=DEFAULT_SERVER):
+    """The connector's own name of a tool, without its server: `mcp__slack__slack_read_channel` and a plain
+    `slack_read_channel` both give `read_channel`. None when the tool belongs to another server, so a writer or a poller
+    never acts on a tool of a different server (the writer uses it too, #2712)."""
     prefix = f"mcp__{server}__"
     if name.startswith(prefix):
         tool = name[len(prefix):]
@@ -52,7 +53,7 @@ def _tool_word(name, server):
 
 def read_denial(name, server=DEFAULT_SERVER):
     """None when the tool is one of the connector's read tools, else the reason the hook denies it."""
-    tool = _tool_word(str(name or ""), server)
+    tool = tool_word(str(name or ""), server)
     if tool is not None:
         words = tool.split("_")
         if words and words[0] in READ_VERBS and not WRITE_VERBS.intersection(words):
