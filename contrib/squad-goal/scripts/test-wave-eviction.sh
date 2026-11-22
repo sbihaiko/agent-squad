@@ -97,6 +97,19 @@ r=$(SG_WAVE_TIP_GATES="$TIP2216G" SG_WAVE_CHILD_GATES="$G215" land2 run-215 2>&1
 [ "$(/usr/bin/grep -c '^o 3 Todo 22105$' "$T/board.log")" = 2 ] && ok "W2216: the eviction of the re-entered child moves its card to Todo" || ko "W2216: Todo rows: '$(cat "$T/board.log")' ($r)"
 case "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#22105" 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("requeued") or {}).get("run-215", {}).get("head", ""))')" in
   "$B2") ok "W2216: the eviction writes its requeue on the re-entered commit";; *) ko "W2216: the requeue head is not the re-entered commit $B2: '$r'";; esac
+
+# W2757 (#2757): a child of two commits, where only the newer one is red. The eviction drops every commit of that child, so
+# no unreviewed part of it reaches dev. Before, only the red commit left, and the older one landed.
+W216=wave/run-216; start2 run-216 >/dev/null
+child 27571 g27571 "origin/$W216"
+(cd "$T/c27571" && echo bad > bad2757 && $G add bad2757 && $G -c user.email=a@b -c user.name=t commit -q -m "more work 27571 (Refs #27571)")
+en2 run-216 27571 >/dev/null
+printf 'run-216\n' > "$T/st/auto/disp-27571"; : > "$T/board.log"
+TIP2757="[ ! -e bad2757 ] || exit 1; exit 0"
+C2757='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2757 && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2757" SG_WAVE_CHILD_GATES="$C2757" land2 run-216 2>&1); rc=$?
+$O cat-file -e dev:bad2757 2>/dev/null && ko "W2757: the red commit of the evicted child landed: '$r'" || ok "W2757: the red commit of the evicted child is not in dev"
+$O cat-file -e dev:g27571 2>/dev/null && ko "W2757: the older commit of the evicted child landed: '$r'" || ok "W2757: the older commit of the evicted child is not in dev"
 # N (#2217): a run that ends owner-only freezes its issue once, and a run that ends does-not-reproduce freezes it at this build.
 # A failed run with no class (a gate reason) is counted as before and freezes nothing. The stub keeps the labels and the
 # comments written, so the freeze reads back what stands.
