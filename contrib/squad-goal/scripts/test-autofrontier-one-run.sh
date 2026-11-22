@@ -959,6 +959,19 @@ r=$(run)
 [ "$(marked 772)" = 1 ] && ok "L1: the issue beside it still dispatches" || ko "L1: #772 not dispatched: '$r'"
 case "$r" in *"landed, publish pending"*) ok "L1: the frontier names the card as landed, publish pending";; *) ko "L1: no landed line: '$r'";; esac
 
+# L2 (#2756): a `Refs #N` line proves a commit, not a delivery. A partial landing put a commit that names #781 in dev while
+#   its wave dropped the child, and no landing pass wrote the ledger's landing fact. The frontier dispatches #781 again.
+scene refsonly
+issues '[{"number":781,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+git init -q "$d/wk"
+git -C "$d/wk" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+git -C "$d/wk" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Part of the fix for 781" -m "Refs #781"
+git -C "$d/wk" branch -M dev
+git -C "$d/co" init -q; git -C "$d/co" fetch -q "$d/wk" dev:refs/remotes/origin/dev   # the base names #781, and no ledger holds its landing
+r=$(run)
+[ "$(marked 781)" = 1 ] && ok "L2: a Refs line in the base with no ledger landing does not hold the issue" || ko "L2: #781 marked=$(marked 781): '$r'"
+case "$r" in *"#781: landed"*) ko "L2: the frontier names #781 landed from a Refs line: '$r'";; *) ok "L2: the frontier names no landing the ledger lacks";; esac
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
