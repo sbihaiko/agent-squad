@@ -212,16 +212,11 @@ def _second_guests(local_name, local, others):
     return guests[1:]
 
 
-def _load(path, file, out):
-    """The document a YAML file holds, or None with one defect that names the file. An absent file is no defect; a file
-    the reader cannot open is one, so a broken permission never hides a broken key."""
-    try:
-        text = Path(path).read_text()
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        out.append(_defect(file, "(root)", f"cannot read the file: {e.strerror or e}"))
-        return None
+def read_document(text, file, out=None):
+    """The mapping a Slack file's text holds, or None with one defect that names the file. A caller that holds the text
+    of a file it did not read from disk uses this: `voiced` validates a `slack.yaml` read from a project's dev tip.
+    An empty file is an empty mapping."""
+    out = [] if out is None else out
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as e:
@@ -233,6 +228,19 @@ def _load(path, file, out):
         out.append(_defect(file, "(root)", "a Slack file holds one mapping"))
         return None
     return doc
+
+
+def _load(path, file, out):
+    """The document a YAML file holds, or None with one defect that names the file. An absent file is no defect; a file
+    the reader cannot open is one, so a broken permission never hides a broken key."""
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        out.append(_defect(file, "(root)", f"cannot read the file: {e.strerror or e}"))
+        return None
+    return read_document(text, file, out)
 
 
 def local_path(profile, project):
