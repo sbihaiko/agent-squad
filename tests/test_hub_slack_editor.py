@@ -467,6 +467,71 @@ def test_the_editor_adds_and_removes_a_role_and_a_member(hub, tmp_path):
     assert out["err"] is None and out["local"]["members"] == [], out["local"]
 
 
+def test_a_refused_add_leaves_the_request_value_whole(hub, tmp_path):
+    """A refused Add never rewrites the request it was handed: the hub works on its own copy of the row, so a refusal
+    answers the owner's own value and the next request is not built from a mutated one."""
+    value = {"id": "", "deploy": "stg, stage"}
+    op = {"kind": "add", "doc": "committed", "path": ["roles"], "value": value}
+    out = edit(hub, tmp_path, op, local=with_member())
+    assert out["err"], out
+    assert value == {"id": "", "deploy": "stg, stage"}, value
+
+
+def test_an_added_role_splits_its_deploy_list_and_refuses_prod(hub, tmp_path):
+    """Criterion 6 on the Add path: a typed deploy list is split the way the Set path splits it, and `prod` in the
+    list is refused before the row reaches the file."""
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "committed", "path": ["roles"],
+                               "value": {"id": "deployer", "actions": ["status"], "deploy": "stg, stage"}},
+               local=with_member())
+    assert out["err"] is None, out
+    assert out["committed"]["roles"][-1]["deploy"] == ["stg", "stage"], out["committed"]
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "committed", "path": ["roles"],
+                               "value": {"id": "deployer", "actions": ["status"], "deploy": "stg, prod"}},
+               local=with_member())
+    assert out["err"] and "roles[2].deploy" in out["err"], out
+    assert [r["id"] for r in out["committed"]["roles"]] == ["manager", "colleague"], out["committed"]
+
+
+def test_a_stale_other_member_row_does_not_block_a_member_edit(hub, tmp_path):
+    """The member channel check scopes to the row the operation touches, so an unrelated row that names a workspace the
+    documents no longer hold never blocks an edit of another row."""
+    local = with_member()
+    local["members"].append({"workspace": "T9GONE0001", "channel": "C9GONE001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "local", "path": ["members", 0, "users"],
+                               "value": ["U0OWNER002"]}, local=local)
+    assert out["err"] is None, out
+    assert out["local"]["members"][0]["users"] == ["U0OWNER002"], out["local"]
+
+
+def test_a_member_remove_is_not_blocked_by_a_stale_member_row(hub, tmp_path):
+    """The same scope on the Remove path: removing one row is not refused because an untouched sibling names a
+    workspace the documents no longer hold."""
+    local = with_member()
+    local["members"].append({"workspace": "T9GONE0001", "channel": "C9GONE001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = edit(hub, tmp_path, {"kind": "remove", "doc": "local", "path": ["members", 0]}, local=local)
+    assert out["err"] is None, out
+    assert out["local"]["members"][0]["workspace"] == "T9GONE0001", out["local"]
+
+
+def test_adding_a_role_with_an_existing_id_is_refused(hub, tmp_path):
+    """A role id is the role's key, so the Add refuses a second role of the same id and the list stays unique."""
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "committed", "path": ["roles"],
+                               "value": {"id": "manager", "actions": []}}, local=with_member())
+    assert out["err"] and "manager" in out["err"], out
+    assert [r["id"] for r in out["committed"]["roles"]] == ["manager", "colleague"], out["committed"]
+
+
+def test_renaming_a_role_to_an_existing_id_is_refused(hub, tmp_path):
+    """The same rule on the Set path: two rows never share one id, because the member select and the channel roles
+    read the id as the role's key."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["roles", 0, "id"],
+                               "value": "colleague"}, local=with_member())
+    assert out["err"] and "colleague" in out["err"], out
+    assert out["committed"]["roles"][0]["id"] == "manager", out["committed"]
+
+
 def test_a_refused_role_op_leaves_no_empty_role_list_behind(hub, tmp_path):
     """A Remove on a document that holds no roles is refused and leaves the document as it came: a refused edit never
     writes an empty root key."""

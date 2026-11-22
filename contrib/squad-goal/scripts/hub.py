@@ -2434,73 +2434,97 @@ def _slack_row_value_ok(path, value, field):
     return True, None, value
 
 
-def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id_required=False):
+def _slack_key_taken(rows, row, key, skip=None):
+    """Whether another row of the list carries the same value under `key`; `skip` is the row this operation edits. A
+    blank value is never a duplicate, because a row with no key is refused by its own rule."""
+    want = str(row.get(key) or "").strip()
+    if not want: return False
+    for i, other in enumerate(rows):
+        if i == skip or not isinstance(other, dict): continue
+        if str(other.get(key) or "").strip() == want: return True
+    return False
+
+
+def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id_required=False, unique_key=None):
     """One operation over a plain row list: a role in the committed file, or a member in the local one (#2699). The
     Add control starts `blank`, a field outside `fields` is refused, and an edited value's shape is checked before
-    the policy module judges its content. The list is created by an Add alone, so a refused edit never leaves an empty
-    root key behind. Returns (error, changed)."""
+    the policy module judges its content. The row is built from a fresh mapping, so a refused operation never rewrites
+    the request it was handed. `unique_key` is the row's key, and no two rows share it. The list is created by an Add
+    alone, so a refused edit never leaves an empty root key behind. Returns (error, changed, touched), where `touched`
+    is the index of the row the operation leaves in place, and None for a Remove."""
     rows = doc.get(root)
     if kind == "add":
         if path != [root]:
-            return f"{file_name}: {root}: the operation adds a row of {root}", False
+            return f"{file_name}: {root}: the operation adds a row of {root}", False, None
         if not isinstance(value, dict):
-            return f"{file_name}: {root}: the added row is a mapping", False
+            return f"{file_name}: {root}: the added row is a mapping", False, None
         unknown = [k for k in value if k not in fields]
         if unknown:
-            return f"{file_name}: {root}: {root} has no field {unknown[0]!r}", False
-    elif not isinstance(rows, list):
-        return f"{file_name}: {root}: the {root} are a list", False
-    if kind == "add":
-        if rows is None:
-            doc[root] = rows = []
-        elif not isinstance(rows, list):
-            return f"{file_name}: {root}: the {root} are a list", False
+            return f"{file_name}: {root}: {root} has no field {unknown[0]!r}", False, None
+        if rows is not None and not isinstance(rows, list):
+            return f"{file_name}: {root}: the {root} are a list", False, None
         row = dict(blank)
         for field in fields:
             if field not in value: continue
-            ok, why, value[field] = _slack_row_value_ok([root, len(rows), field], value[field], field)
-            if not ok: return f"{file_name}: {why}", False
-        row.update(value)
+            ok, why, checked = _slack_row_value_ok([root, len(rows or ()), field], value[field], field)
+            if not ok: return f"{file_name}: {why}", False, None
+            row[field] = checked
         if id_required and not str(row.get("id") or "").strip():
-            return f"{file_name}: {root}: the role names its id", False
+            return f"{file_name}: {root}: the role names its id", False, None
+        if unique_key and _slack_key_taken(rows or (), row, unique_key):
+            return (f"{file_name}: {root}: the {unique_key} {str(row.get(unique_key))!r} is already taken",
+                    False, None)
+        if rows is None:
+            doc[root] = rows = []
         rows.append(row)
-        return None, True
+        return None, True, len(rows) - 1
+    if not isinstance(rows, list):
+        return f"{file_name}: {root}: the {root} are a list", False, None
     if kind == "remove":
         if len(path) != 2 or not isinstance(path[1], int) or not 0 <= path[1] < len(rows):
-            return f"{file_name}: the removed row does not exist", False
+            return f"{file_name}: the removed row does not exist", False, None
         rows.pop(path[1])
-        return None, True
+        return None, True, None
     if len(path) != 3 or not isinstance(path[1], int) or not 0 <= path[1] < len(rows):
-        return f"{file_name}: the edited row does not exist", False
+        return f"{file_name}: the edited row does not exist", False, None
     field = str(path[2])
     if field not in fields:
-        return f"{file_name}: {_slack_key(path[:-1])}: {root} has no field {field!r}", False
-    ok, why, value = _slack_row_value_ok(path, value, field)
-    if not ok: return f"{file_name}: {why}", False
-    if id_required and field == "id" and not value.strip():
-        return f"{file_name}: {_slack_key(path)}: the role names its id", False
-    if isinstance(rows[path[1]], dict):
-        rows[path[1]][field] = value
-    return None, True
+        return f"{file_name}: {_slack_key(path[:-1])}: {root} has no field {field!r}", False, None
+    ok, why, checked = _slack_row_value_ok(path, value, field)
+    if not ok: return f"{file_name}: {why}", False, None
+    if id_required and field == "id" and not checked.strip():
+        return f"{file_name}: {_slack_key(path)}: the role names its id", False, None
+    row = rows[path[1]]
+    if not isinstance(row, dict):
+        return f"{file_name}: {_slack_key(path[:-1])}: the row is a mapping", False, None
+    if unique_key and field == unique_key and _slack_key_taken(rows, {field: checked}, unique_key, skip=path[1]):
+        return f"{file_name}: {_slack_key(path)}: the {unique_key} {checked!r} is already taken", False, None
+    row[field] = checked
+    return None, True, path[1]
 
 
-def _slack_member_channel_check(docs, local_name):
+def _slack_member_row_check(docs, index, local_name):
     """A member names the channel of the Slack workspace it names. The two ids are read from both documents, so a row
-    never pairs one workspace with another workspace's channel (issue #2699)."""
+    never pairs one workspace with another workspace's channel. The check reads the one row the operation leaves in
+    place, never every row: a stale sibling never blocks an edit or a removal of another row (issue #2699)."""
+    row = _slack_rows_at(docs["local"], ["members", index])
+    if not isinstance(row, dict): return None
+    wid = str(row.get("workspace") or "").strip()
+    cid = str(row.get("channel") or "").strip()
+    if wid and not cid:
+        return f"{local_name}: members[{index}].channel: a member names its channel"
+    if not wid: return None
     teams = {}
     for doc in (docs["committed"], docs["local"]):
         for _, ws in _slack_dicts(doc.get("workspaces")):
-            wid = str(ws.get("id") or "")
-            if wid:
-                teams.setdefault(wid, set()).update(
-                    str(ch.get("id")) for _, ch in _slack_dicts(ws.get("channels")) if ch.get("id"))
-    for i, (_, row) in enumerate(_slack_dicts(docs["local"].get("members"))):
-        wid, cid = str(row.get("workspace") or ""), str(row.get("channel") or "")
-        if not wid or not cid: continue
-        if wid not in teams:
-            return f"{local_name}: members[{i}].workspace: the workspace does not exist"
-        if cid not in teams[wid]:
-            return f"{local_name}: members[{i}].channel: the channel is not in workspace {wid}"
+            team = str(ws.get("id") or "").strip()
+            if team:
+                teams.setdefault(team, set()).update(
+                    str(ch.get("id")).strip() for _, ch in _slack_dicts(ws.get("channels")) if ch.get("id"))
+    if wid not in teams:
+        return f"{local_name}: members[{index}].workspace: the workspace does not exist"
+    if cid not in teams[wid]:
+        return f"{local_name}: members[{index}].channel: the channel is not in workspace {wid}"
     return None
 
 
@@ -2516,14 +2540,19 @@ def _slack_place(P, op, docs, local_name):
     if path[0] == "roles":
         if doc != "committed":
             return f"slack.yaml: {ROLE_IN_COMMITTED}", False
-        return _slack_place_rows(kind, path, value, docs["committed"], SLACK_ROLE_FIELDS, "slack.yaml", "roles",
-                                 {"id": "", "actions": []}, id_required=True)
+        err, changed, _touched = _slack_place_rows(kind, path, value, docs["committed"], SLACK_ROLE_FIELDS,
+                                                   "slack.yaml", "roles", {"id": "", "actions": []},
+                                                   id_required=True, unique_key="id")
+        return err, changed
     if path[0] == "members":
         if doc != "local":
             return f"{local_name}: {MEMBER_IN_LOCAL}", False
-        err, changed = _slack_place_rows(kind, path, value, docs["local"], SLACK_MEMBER_FIELDS, local_name,
-                                         "members", {"workspace": "", "channel": "", "role": "", "users": []})
-        return (err, changed) if err else (_slack_member_channel_check(docs, local_name), changed)
+        err, changed, touched = _slack_place_rows(kind, path, value, docs["local"], SLACK_MEMBER_FIELDS, local_name,
+                                                  "members",
+                                                  {"workspace": "", "channel": "", "role": "", "users": []})
+        if err: return err, False
+        if touched is None: return None, changed
+        return _slack_member_row_check(docs, touched, local_name), changed
     target = docs[doc]
     if kind == "add":
         if not isinstance(value, dict):
@@ -8098,6 +8127,21 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slf span{font-weight:600}
 #sbody .slf input,#sbody .slf select{width:100%;height:var(--ctl-h);padding:0 8px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}
 #sbody .slchk{display:flex;align-items:center;gap:6px;min-height:var(--ctl-h);font-size:var(--fs-caption);color:var(--fg)}
+/* The roles and members editor (SPEC 2682 #2699): a role and a member are one row of labelled fields. A wide panel keeps
+   the fields on one line, the actions wrap beside each other, and the user ids field keeps its whole value. A narrow
+   panel stacks each field under its own label, so no value is clipped. */
+#sbody .slroledet .slevr{display:grid;grid-template-columns:minmax(140px,16ch) minmax(200px,1fr) minmax(120px,16ch) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(132px,.8fr) minmax(132px,.8fr) minmax(100px,.6fr) minmax(200px,2.4fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
+#sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
+#sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
+#sbody .slad input[data-slroleid],#sbody .slad input[data-slmus]{flex:1 1 220px}
+@media (max-width:1240px){#sbody .slroledet .slevr,#sbody .slmembdet .slevr{grid-template-columns:1fr}
+ #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
+ #sbody .slroledet .slevr [role=cell][data-l]::before,#sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}
+ #sbody .slroledet .slevr .slacts{flex-direction:column;flex-wrap:nowrap;align-items:flex-start;gap:2px}
+ #sbody .slroledet .slevr .slchk{min-width:0;white-space:normal}
+ #sbody .slmembdet .slevr [role=cell][data-l="User ids"]{grid-template-columns:1fr}}
 /* The persona editor (#2697): the detail draws the name, the voice with its sample, and the tone; the default row and the
    override table name the persona a channel inherits, and the reply preview states four facts with no control. */
 #sbody .sldef{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-caption)}
@@ -9153,7 +9197,7 @@ const slDeployList=x=>Array.isArray(x)?x:(x&&typeof x==="object"&&Array.isArray(
 const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],acts=slActionList(),n=i+1;
  return `<div class="sle slroledet" role=group aria-label="role ${n} fields"><div class=slevr role=row>`
  +`<span role=cell data-l="Role"><input data-sle="role:${i}:id" value="${slA((x&&x.id)||"")}" size=16 aria-label="role ${n}: id"></span>`
- +`<span role=cell data-l="Actions">${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span>`
+ +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
  +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
 const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`;
