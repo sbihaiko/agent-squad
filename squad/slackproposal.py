@@ -41,6 +41,8 @@ def of(request, decision, line, project):
         return None
     arguments = dict(getattr(request, "arguments", {}) or {})
     text = str(arguments.get("title") or arguments.get("question") or "")
+    if not text.strip():
+        return None
     return Proposal(str((line or {}).get("id") or (line or {}).get("ts") or ""), str(request.action), text,
                     str(project), str(request.channel), str((line or {}).get("user") or ""))
 
@@ -102,7 +104,9 @@ def parse_owner(reply, destinations):
         return None
     if verb == REFUSE:
         return Answer(REFUSE, "", "")
-    destination = next((str(d) for d in destinations if d and str(d) in rest), "")
+    # The longest match wins, because one destination id can be a prefix of another (`acme/app`, `acme/app2`).
+    destination = next((str(d) for d in sorted(destinations, key=lambda d: len(str(d)), reverse=True)
+                        if d and str(d) in rest), "")
     after = rest.replace(destination, "", 1).lstrip(" :|\t") if destination else ""
     return Answer(verb, destination, after)
 

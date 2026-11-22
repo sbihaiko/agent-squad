@@ -12,8 +12,6 @@ import copy
 import json
 from datetime import datetime
 
-import pytest
-
 from squad import slackexecutor as X
 from squad import slackpolicy as S
 from squad import slackproposal as P
@@ -195,3 +193,16 @@ def test_a_proposal_no_owner_approved_creates_nothing():
     issue = Issue()
     assert P.create(proposal(), issue) is None
     assert issue.calls == []
+
+
+def test_a_request_with_no_text_becomes_no_proposal():
+    """Criterion (1): a proposal carries one request text, so a request with none is not a proposal."""
+    request, why = X.parse(request_text(arguments={"title": "   "}))
+    assert request is not None, why
+    assert P.of(request, decision(), line(text="   "), REPO) is None
+
+
+def test_the_owner_reply_names_the_whole_destination():
+    """Criterion (6): one destination is never a prefix of another, so the reply approves the one it names."""
+    approved = P.approve(proposal(), P.parse_owner("confirm acme/app2", ["acme/app", "acme/app2"]))
+    assert approved == P.Approval(CLIENT_TITLE, "acme/app2")
