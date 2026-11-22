@@ -7925,6 +7925,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slf input,#sbody .slf select{width:100%;height:var(--ctl-h);padding:0 8px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}
 #sbody .slchk{display:flex;align-items:center;gap:6px;min-height:var(--ctl-h);font-size:var(--fs-caption);color:var(--fg)}
 #sbody .slact{grid-column:1/-1;display:flex;gap:6px}#sbody .slact button{height:var(--ctl-h);padding:0 12px}
+#sbody .slsched{grid-column:1/-1;margin:0;color:var(--mute);font-size:var(--fs-caption)}
+@media (max-width:1100px){#sbody .slt2 td.sldet{display:block}}   /* a stacked table keeps the detail on the full row, never in the 112 px label column */
 #sbody .slws{flex-wrap:wrap}#sbody .slws button{height:32px;padding:0 10px;margin-left:auto}
 #sbody .slt2{width:100%;border-collapse:collapse;font-size:var(--fs-caption)}
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
@@ -8892,7 +8894,7 @@ const slList=(d,k)=>(((slDocs||{})[d]||{})[k]||[]).map(x=>x&&x.id).filter(Boolea
 const slLang=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+["pt-BR","en-US","es-ES"].map(x=>`<option value="${x}"${x===cur?" selected":""}>${x}</option>`).join("");
 const slPersona=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+slList("committed","personas").map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(x)}</option>`).join("");
 const slF=(attr,label,ctl)=>`<label class=slf><span>${esc(label)}</span>${ctl.replace("data-sle=",`data-sle="${attr}" aria-label="${slA(label)}"`)}</label>`;
-const slInput=(attr,label,value)=>slF(attr,label,`<input type=text data-sle= value="${slA(value||"")}">`);
+const slInput=(attr,label,value,ph)=>slF(attr,label,`<input type=text data-sle= value="${slA(value||"")}"${ph?` placeholder="${slA(ph)}"`:""}>`);
 const slCheck=(attr,label,on)=>`<label class=slchk><input type=checkbox data-sle="${attr}" aria-label="${slA(label)}"${on?" checked":""}> ${esc(label)}</label>`;
 const slWsFields=(d,i)=>{const w=slWs(d)[i]||{},g=w.class==="guest",at=f=>`${d}:${i}::${f}`;
  return `<div class="sle slwsdet" role=group aria-label="workspace fields">`
@@ -8913,12 +8915,14 @@ const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=
   h+=slF(at("speak"),"Answer as",`<select data-sle=>${slOpts(SL_SPEAK,c.speak||"draft")}</select>`)
   +slF(at("transcribe"),"Transcribe a clip",`<select data-sle=>${slOpts(SL_TR,c.transcribe||"off")}</select>`)
   +slCheck(at("voice_reply"),"Voice reply",!!c.voice_reply)
-  +slF(at("poll.mode"),"Poll mode",`<select data-sle=>${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`)
-  +slInput(at("poll.fast"),"Fast",poll.fast)+slInput(at("poll.slow"),"Slow",poll.slow)
-  +slInput(at("poll.quiet_after"),"Quiet after",poll.quiet_after)+slInput(at("poll.thread_open"),"Thread open",poll.thread_open)
-  +slInput(at("poll.floor"),"Floor",poll.floor)+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling)
-  +slInput(at("poll.factor"),"Factor",poll.factor)+slInput(at("poll.idle_window"),"Idle window",poll.idle_window)
-  +slInput(at("draft_for"),"Draft for",(c.draft_for||[]).join(", "));
+  +slF(at("poll.mode"),"Poll mode",`<select data-sle=>${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`);
+  h+=((poll.mode||"two_state")==="exponential")
+   ?slInput(at("poll.floor"),"Floor",poll.floor,"5m")+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling,"1h")
+    +slInput(at("poll.factor"),"Factor",poll.factor,"2")+slInput(at("poll.idle_window"),"Idle window",poll.idle_window,"15m")
+   :slInput(at("poll.fast"),"Fast",poll.fast,"1m")+slInput(at("poll.slow"),"Slow",poll.slow,"10m")
+    +slInput(at("poll.quiet_after"),"Quiet after",poll.quiet_after,"10m");
+  h+=slInput(at("poll.thread_open"),"Thread open",poll.thread_open,"30m")+slInput(at("draft_for"),"Draft for",(c.draft_for||[]).join(", "))
+   +`<p class="slsched m">${esc(`${poll.fast||"1m"} after a message · ${poll.slow||"10m"} after ${poll.quiet_after||"10m"} quiet`)}</p>`;
  }
  return h+`<span class=slact><button data-slrmch="${d}:${i}:${j}">Remove channel</button></span></div>`};
 const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
@@ -8932,12 +8936,15 @@ function slEditHtml(){const docs=[["committed",slDocs&&slDocs.committed],["local
    how=w.class==="guest"?"claude.ai connector · your account":"app "+esc(w.app||"none");
    let s=`<h5 class=slws>${esc(w.label||w.id||"workspace")} ${tag} <span class=m>${how}</span> ${slTag(slDocName(d))} ${slOpenBtn(key)}</h5>`;
    if(wsopen)s+=slWsFields(d,i);
-   s+=`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th><th></th></tr></thead><tbody>`;
-   s+=chans.map((c,j)=>{const ck=`${key}:${j}`;
-    return `<tr><td>#${esc(c.name||c.id)} <span class=m>${esc(c.id)}</span></td><td><span class=nw>${esc(c.mode||"listen")}</span></td>`
-    +`<td><span class=nw>${esc(c.language||"inherit")}</span></td><td><span class=nw>${esc(c.persona||"inherit")}</span></td>`
-    +`<td>${(c.roles||[]).length?esc((c.roles||[]).join(", ")):"owner only"}</td><td>${(c.announce||[]).length?esc((c.announce||[]).join(", ")):"never posts"}</td>`
-    +`<td>${slOpenBtn(ck)}</td></tr>`+(slOpen===ck?`<tr><td colspan=7>${slChFields(d,i,j)}</td></tr>`:"")}).join("");
+   const guest=w.class==="guest",heads=guest?["Channel","Mode","Language","Persona","Answers","Polling","Roles","Announce",""]:["Channel","Mode","Language","Persona","Roles","Announce",""];
+   s+=`<table class=slt2><thead><tr>${heads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`;
+   s+=chans.map((c,j)=>{const ck=`${key}:${j}`,p=c.poll||{},
+    pollTxt=p.mode==="exponential"?`exp · ${p.floor||"?"} → ${p.ceiling||"?"}`:(p.fast||p.slow)?`${p.fast||"1m"} → ${p.slow||"10m"}`:"two_state";
+    return `<tr><td data-l="Channel">#${esc(c.name||c.id)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode||"listen")}</span></td>`
+    +`<td data-l="Language"><span class=nw>${esc(c.language||"inherit")}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"inherit")}</span></td>`
+    +(guest?`<td data-l="Answers"><span class=nw>${esc(c.speak||"draft")}</span></td><td data-l="Polling"><span class=nw>${esc(pollTxt)}</span></td>`:"")
+    +`<td data-l="Roles">${(c.roles||[]).length?esc((c.roles||[]).join(", ")):"owner only"}</td><td data-l="Announce">${(c.announce||[]).length?esc((c.announce||[]).join(", ")):"never posts"}</td>`
+    +`<td>${slOpenBtn(ck)}</td></tr>`+(slOpen===ck?`<tr><td class=sldet colspan=${heads.length}>${slChFields(d,i,j)}</td></tr>`:"")}).join("");
    s+=`</tbody></table>`+(chans.length?"":`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)+slAddCh(d,i);
    return s}).join("")});
  return h+slAddWs()}
