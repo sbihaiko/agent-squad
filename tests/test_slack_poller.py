@@ -7,6 +7,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 from squad import slackpolicy as S
 from squad import slackpoller as P
 
@@ -371,9 +373,35 @@ def test_a_shadow_poll_advances_the_checkpoint_and_records_no_repeat(tmp_path):
     assert json.loads(path.read_text())[CH] == "100.000100"
 
 
-def test_the_same_connector_in_live_mode_hands_the_decision_out(tmp_path):
+def test_a_guest_channel_decision_writes_no_guest_word_to_the_record(tmp_path):
+    p = shadow_poller(FakeConnector([message("100.000100")]), tmp_path / "checkpoint.json")
+    p.poll(WS, CH)
+    text = (tmp_path / "guest-shadow.json").read_text()
+    assert "guest" not in text.lower()
+    assert p.shadow.entries(CH)[0]["kind"] == S.PROPOSAL
+
+
+def test_record_never_overwrites_a_state_file_it_could_not_read(tmp_path):
+    state = tmp_path / "guest-shadow.json"
+    state.write_text("{ this is not json")
+    log = P.ShadowLog(state)
+    decision = S.decide(COMMITTED, LOCAL, {"workspace": WS, "channel": CH, "user": CLIENT}, NOW)
+    with pytest.raises(P.ShadowLogUnreadable):
+        log.record(CH, "100.000100", decision)
+    assert state.read_text() == "{ this is not json"
+
+
+def test_record_appends_a_decision_with_a_duplicate_ts_once(tmp_path):
+    log = P.ShadowLog(tmp_path / "guest-shadow.json")
+    decision = S.decide(COMMITTED, LOCAL, {"workspace": WS, "channel": CH, "user": CLIENT}, NOW)
+    log.record(CH, "100.000100", decision)
+    log.record(CH, "100.000100", decision)
+    assert [row["ts"] for row in log.entries(CH)] == ["100.000100"]
+
+
+def test_a_live_poll_hands_the_message_and_its_decision_out(tmp_path):
     # The contrast that makes the zero of shadow mode mean something: the live poller returns the decision a caller
-    # acts on, and the shadow poller records it instead.
+    # acts on, and the shadow poller records it instead. On its own, this test asserts the live return only.
     conn = FakeConnector([message("100.000100")])
     live = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
     assert [(m["ts"], d.reply) for m, d in live] == [("100.000100", "draft")]
