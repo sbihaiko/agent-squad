@@ -474,7 +474,7 @@ def _elapsed(now, value):
     return (now - value).total_seconds()
 
 
-def _poll_interval(now, channel, thread_state):
+def poll_interval(now, channel, thread_state):
     """The interval to the next poll of a `guest` channel, in seconds. `two_state` is fast after a message and slow
     after `quiet_after` of silence; `exponential` multiplies the floor by the factor at each idle window up to the
     ceiling. A message in the agent's thread newer than `thread_open` keeps the interval fast in both modes."""
@@ -558,7 +558,7 @@ def decide(committed, local, event, now, thread_state=None):
         role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
         return Decision(IGNORE, role, (), language, persona, None, False, None)
     class_ = str(workspace.get("class") or "owned")
-    next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
+    next_poll = now + timedelta(seconds=poll_interval(now, channel, thread_state)) if class_ == "guest" else None
     # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
     voice = class_ == "guest" and bool(channel.get("voice_reply"))
     role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
