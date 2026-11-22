@@ -269,7 +269,7 @@ def ac_verify(params, inp):
     and every command of a run that is not a fix run, runs only in the target.
     No fallback: a red result is never replaced by another tree's green (ADR-0018).
 
-    A `malformed` command (prose in it, or a program that cannot start) is recorded and answers unproven for that command:
+    A `malformed` command (prose in it, a program that cannot start, or a `-k`/`-m` expression pytest refused, #2765) is recorded and answers unproven for that command:
     nothing ran, so nothing was proved false, and a run whose findings are all malformed is not failed for them (ADR-0164,
     delivery outranks the proof). So does an `unproven` command: a gate that answered its unproven exit with no summary
     line measured nothing (#1825). Both are recorded in `unproven`, so the gate result says `unproven` and never a silent

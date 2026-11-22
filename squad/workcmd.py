@@ -204,7 +204,7 @@ CHILD_SUITE = re.compile(r"child-gate\.sh\s+['\"]?([^\s'\";&|()<>]+)")      # th
 class CmdResult:
     ok: bool
     evidence: str = ""     # empty on success; the output tail on a failure; "timeout after N s" on a timeout
-    malformed: bool = False     # the shell cannot parse the command (prose in it); the command never ran
+    malformed: bool = False     # the shell cannot parse the command, its program cannot start, or pytest refused its -k/-m text; nothing ran
     counts: dict | None = None    # the counts of the output's last pytest summary, or None: how much of the suite passed (#80)
     unproven: bool = False     # the command ended on the gate's unproven exit with no summary line: it measured nothing (ADR-0164)
 
@@ -222,12 +222,25 @@ GATE_UNPROVEN_EXIT = 4
 # exclusive to the gate, because any command may exit 4 for its own reason, so only this line scopes the exit to the gate.
 # A bare exit 4 with no such line measured nothing the gate can vouch for and stays a measured failure (#2337).
 GATE_PROVENANCE = re.compile(r"^fast-gate:", re.MULTILINE)
+# pytest's usage-error exit, and the one usage error that depends on the command text alone (#2765): a `-k` or `-m`
+# expression pytest cannot parse. It is refused before collection, on any tree, so it proves nothing about the code. A
+# missing file or node also exits 4, but that is a test the child never wrote, so it stays a measured red.
+PYTEST_USAGE_EXIT = 4
+PYTEST_BAD_EXPRESSION = re.compile(r"^ERROR: Wrong expression passed to '-[km]'")
 
 
 def _named_a_failure(output):
     """True when the output names a failing test or an error, whatever its exit: a red a check reported is never unproven."""
     text = output.decode("utf-8", "replace") if isinstance(output, bytes) else output
     return any(NAME_SIGNAL.match(line) for line in (text or "").splitlines())
+
+
+def _bad_pytest_expression(output):
+    """True when pytest refused a `-k`/`-m` expression and the output names nothing else (#2765): no `FAILED` line, and
+    every `ERROR` line is that refusal. A compound command whose earlier suite named a failure stays a red."""
+    text = output.decode("utf-8", "replace") if isinstance(output, bytes) else (output or "")
+    named = [line for line in text.splitlines() if NAME_SIGNAL.match(line)]
+    return bool(named) and all(PYTEST_BAD_EXPRESSION.match(line) for line in named)
 
 
 # The shell's report that it never started a program. A shell builtin that starts says nothing of the kind. The suites run
@@ -345,6 +358,8 @@ def run(cmd, cwd, timeout=None):
     A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false.
     So is a command whose leading program cannot start (exit 126 or 127 with no such executable): a path that names no
     program proves nothing about the code. A program that did start is a measured failure at any exit.
+    So is a pytest call that exits 4 because pytest refused its own `-k` or `-m` expression and named nothing else (#2765):
+    the command text is wrong on any tree. A missing test file or node exits 4 too, and stays a measured failure.
     A command that ends on the gate's unproven exit (4), carries the gate's own `fast-gate:` line, printed no pytest
     summary line, and named no failing test is `unproven`: the gate measured nothing, so nothing was proved false
     (ADR-0164, #1825, #2337). The exit code alone is not the gate's, because any command may exit 4 for its own reason, so
@@ -389,6 +404,8 @@ def run(cmd, cwd, timeout=None):
         return CmdResult(False, evidence_of(r.stdout + r.stderr), malformed=True)
     out, counts = evidence_of(r.stdout + r.stderr), counts_of(r.stdout + r.stderr)
     text = r.stdout + r.stderr
+    if r.returncode == PYTEST_USAGE_EXIT and counts is None and _bad_pytest_expression(text):
+        return CmdResult(False, out, malformed=True)    # pytest refused the command's own -k/-m text: nothing ran (#2765)
     if (r.returncode == GATE_UNPROVEN_EXIT and GATE_PROVENANCE.search(text.decode("utf-8", "replace"))
             and counts is None and not _named_a_failure(text)):
         return CmdResult(False, out, unproven=True)     # the gate's exit 4, no summary and no red named: nothing was measured (#2337)
