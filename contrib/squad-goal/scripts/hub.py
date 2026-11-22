@@ -2007,15 +2007,38 @@ def _slack_name(path, fallback):
 def _slack_text(value):
     return "" if value is None else str(value)
 
-def _slack_overview_empty(err, committed=None, local=None):
-    """The read view of a theme that can read nothing: its files named, its sections empty, and the reason stated."""
-    return {"err": err, "files": {"committed": _slack_name(committed, "slack.yaml"),
-                                  "local": _slack_name(local, "slack.local.yaml")},
-            "project": {"language": "en-US", "persona": None, "persona_name": None, "file": "slack.yaml"},
-            "now": [], "personas": [], "roles": [], "workspaces": [], "events": [], "defects": [err] if err else []}
-
 def _slack_counts(n, word):
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+def _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local):
+    """The one shape of the read view: the Now tiles, the project row and the four sections. A read that resolves
+    nothing builds the same shape from empty lists, so a broken rule never costs the reader the Now tiles or the
+    headings. `defects` carries the reasons, and the page states them in a banner above the sections."""
+    cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
+    project = dict(project, file=cf)
+    owned = sum(1 for w in workspaces if w["class"] == "owned")
+    guest = len(workspaces) - owned
+    speak = sum(1 for w in workspaces for c in w["channels"] if c["mode"] == "listen+speak")
+    subscribers = sum(1 for w in workspaces for c in w["channels"] if c["announce"])
+    tone = lambda n: "ok" if n else "warn"   # noqa: E731  a count of zero needs a look
+    now = [{"key": "Workspaces", "value": f"{len(workspaces)} · {owned} owned · {guest} guest", "tone": tone(len(workspaces))},
+           {"key": "Channels", "value": f"{sum(len(w['channels']) for w in workspaces)} · {speak} speak",
+            "tone": tone(speak)},
+           {"key": "Personas", "value": f"{len(personas)} · default {project['persona_name']}"
+                                        if project["persona_name"] else f"{len(personas)} · no default",
+            "tone": tone(len(personas))},
+           {"key": "Events", "value": f"{len(events)} · {_slack_counts(subscribers, 'channel')} subscribe",
+            "tone": tone(len(events))},
+           {"key": "Files", "value": f"{cf} · {lf}", "tone": "neutral"}]
+    return {"err": None, "files": {"committed": cf, "local": lf}, "project": project, "now": now,
+            "personas": personas, "roles": roles, "workspaces": workspaces, "events": events,
+            "defects": [str(d) for d in defects]}
+
+def _slack_overview_empty(err, committed=None, local=None):
+    """The read view of a theme that can read nothing: the same Now tiles and four empty sections, with the reason in
+    the defects banner. `err` carries the message, and it is a message: it never replaces the page."""
+    project = {"language": "en-US", "persona": None, "persona_name": None}
+    return dict(_slack_overview_shape(project, [], [], [], [], [err] if err else [], committed, local), err=err)
 
 def slack_overview(committed=None, local=None):
     """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
@@ -2038,7 +2061,6 @@ def slack_overview(committed=None, local=None):
                 for r in P.rows(committed_doc.get("personas"))]
     by_id = {p["id"]: p for p in personas}
     project["persona_name"] = by_id.get(project["persona"], {}).get("name")
-    project["file"] = cf
     roles = [{"id": _slack_text(r.get("id")), "file": cf,
               "actions": [_slack_text(a) for a in r.get("actions") or ()]}
              for r in P.rows(committed_doc.get("roles"))]
@@ -2063,23 +2085,7 @@ def slack_overview(committed=None, local=None):
             workspaces.append({"id": _slack_text(row.get("id")), "label": label,
                                "class": _slack_text(row.get("class") or "owned"), "language": language,
                                "persona": persona.id if persona else None, "file": file, "channels": channels})
-    owned = sum(1 for w in workspaces if w["class"] == "owned")
-    guest = len(workspaces) - owned
-    speak = sum(1 for w in workspaces for c in w["channels"] if c["mode"] == "listen+speak")
-    subscribers = sum(1 for w in workspaces for c in w["channels"] if c["announce"])
-    tone = lambda n: "ok" if n else "warn"   # noqa: E731  a count of zero needs a look
-    now = [{"key": "Workspaces", "value": f"{len(workspaces)} · {owned} owned · {guest} guest", "tone": tone(len(workspaces))},
-           {"key": "Channels", "value": f"{sum(len(w['channels']) for w in workspaces)} · {speak} speak",
-            "tone": tone(speak)},
-           {"key": "Personas", "value": f"{len(personas)} · default {project['persona_name']}"
-                                        if project["persona_name"] else f"{len(personas)} · no default",
-            "tone": tone(len(personas))},
-           {"key": "Events", "value": f"{len(events)} · {_slack_counts(subscribers, 'channel')} subscribe",
-            "tone": tone(len(events))},
-           {"key": "Files", "value": f"{cf} · {lf}", "tone": "neutral"}]
-    return {"err": None, "files": {"committed": cf, "local": lf}, "project": project, "now": now,
-            "personas": personas, "roles": roles, "workspaces": workspaces, "events": events,
-            "defects": [str(d) for d in defects]}
+    return _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
 
 # --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
 # alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
@@ -7506,7 +7512,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slrow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}#sbody .slrow .slfile{justify-self:start}   /* the file chip keeps its own width in the row's grid, never stretched across it */
 #sbody .slrow .sl{color:var(--fg)}#sbody .slrow .sc{justify-self:end;color:var(--mute)}
 #sbody .slsec{margin:14px 0 0}
-#sbody .slsec>h4{margin:0 0 6px;font-size:var(--fs-body);font-weight:600;color:var(--fg)}
+#sbody .slsec>h4{margin:0 0 6px;font-size:var(--fs-body);font-weight:600;color:var(--fg);flex-wrap:wrap}   /* a narrow panel drops the file chips to a second line rather than clipping them */
+#sbody .slfiles{display:inline-flex;flex-wrap:wrap;gap:6px}#sbody .slfiles .slfile{margin-left:0}
 #sbody .slws{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
 #sbody .sltag{padding:0 6px;border-radius:var(--radius-sm);border:1px solid var(--line);font-weight:400;text-transform:none;letter-spacing:0}
 #sbody .sltag.owned{color:var(--ok)}#sbody .sltag.guest{color:var(--warn);border-color:var(--tint-warn-line)}
@@ -8360,10 +8367,10 @@ const slSec=(name,file,head,rows,empty)=>`<section class=slsec><h4>${esc(name)} 
  ?`<table class=slt2><thead><tr>${head.map(x=>`<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
  :`<p class=m>${esc(empty)}</p>`}</section>`;
 function slReadHtml(r){if(!r)return "";
- if(r.err)return `<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3><p class="mx err" role=status>${esc(r.err)}</p></div>`;
- const cf=r.files.committed,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
- row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or;   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
- let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>`   // the block names the files under its one title, before the four sections
+ const cf=r.files.committed,lf=r.files.local,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
+ row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or,   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
+ ban=(r.defects||[]).length?`<p class="mx err" role=status>${r.defects.map(d=>esc(d)).join(" ")}</p>`:"";   // a defect is a message above the sections, never a page of its own
+ let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>${ban}`   // the block names the files under its one title, before the four sections
  +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
  +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
  h+=slSec("Personas",cf,["Persona","Voice","Tone","Used by"],
@@ -8372,7 +8379,7 @@ function slReadHtml(r){if(!r)return "";
  h+=slSec("Roles",cf,["Role","Actions"],
   r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
   "No role: only the owner can trigger the agent.");
- h+=`<section class=slsec><h4>Slack workspaces</h4>${r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`}`
+ h+=`<section class=slsec><h4>Slack workspaces <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>${r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`}`
  +r.workspaces.map(w=>`<h5 class=slws>${esc(w.label)} <span class="sltag ${slA(w.class)}">${esc(w.class)}</span> ${slTag(w.file)}</h5>`
   +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th></tr></thead><tbody>`
    +w.channels.map(c=>row([["Channel",`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`],["Mode",`<span class=nw>${esc(c.mode)}</span>`],["Language",`<span class=nw>${esc(c.language)}</span>`],["Persona",`<span class=nw>${esc(c.persona||"none")}</span>`],["Roles",join(c.roles,"owner only")],["Announce",join(c.announce,"never posts")]])).join("")
@@ -8381,7 +8388,7 @@ function slReadHtml(r){if(!r)return "";
   r.events.map(x=>row([["Event",`<b>${esc(x.id)}</b>`],["Template",`<code>${esc(x.template)}</code>`]])),
   "No event: the agent announces nothing.");
  return h+`</div>`}
-const slReadTiles=r=>!r?[]:r.err?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
+const slReadTiles=r=>!r?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)

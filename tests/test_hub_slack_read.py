@@ -158,6 +158,52 @@ def test_the_read_view_reports_the_absent_files_and_keeps_its_shape(hub, tmp_pat
     assert {t["key"] for t in out["now"]} >= {"Workspaces", "Channels", "Personas", "Events", "Files"}
 
 
+def test_the_read_view_resolves_the_profile_files_when_called_with_no_path(hub, tmp_path, monkeypatch):
+    """The route calls the read with no path: the profile in force names both files, the checkout's committed one and
+    the profile folder's local one. The read resolves them through the policy module, never a rule of its own."""
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    (prof / "4.slack.local.yaml").write_text(yaml.safe_dump(LOCAL))
+    checkout = tmp_path / "checkout"
+    (checkout / "docs" / "squad").mkdir(parents=True)
+    (checkout / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(COMMITTED))
+    monkeypatch.setattr(hub, "CHECKOUT", str(checkout))
+    monkeypatch.setattr(hub, "PROFILE_NAME", "owner")
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_PROJECT", "4")
+    committed, local = hub.slack_yaml_paths()
+    assert committed == checkout / "docs" / "squad" / "slack.yaml", committed
+    assert local == prof / "4.slack.local.yaml", local
+    out = hub.slack_overview()
+    assert out["files"] == {"committed": "slack.yaml", "local": "4.slack.local.yaml"}
+    assert out["project"]["persona"] == "hal" and out["project"]["persona_name"] == "HAL9K"
+
+
+def test_the_read_view_keeps_its_now_and_its_four_sections_when_the_read_fails(hub, tmp_path, monkeypatch):
+    """A rule that does not resolve is a message, never a page of its own: the reader keeps the Now tiles, the four
+    headings and their empty-state text, and the reason sits in a defects banner above them. The ticket's shape holds
+    on the failure path, so a broken module never costs the reader the page."""
+    class Boom:
+        def __getattr__(self, name):
+            raise RuntimeError("boom")
+    monkeypatch.setattr(hub, "slack_policy", lambda: Boom())
+    out = hub.slack_overview(tmp_path / "c.yaml", tmp_path / "l.yaml")
+    assert {t["key"] for t in out["now"]} == {"Workspaces", "Channels", "Personas", "Events", "Files"}, out["now"]
+    assert out["personas"] == [] and out["roles"] == [] and out["workspaces"] == [] and out["events"] == []
+    assert out["defects"] and "boom" in out["defects"][0], out["defects"]
+    page = render(hub, out)
+    assert "data-blk=now" in page and "Workspaces" in page, page
+    html = read_block(page)
+    heads = [re.sub(r"<[^>]+>", "", re.sub(r"<span class=slfile.*?</span>", "", h)).strip()
+             for h in re.findall(r"<h4[^>]*>(.*?)</h4>", html)]
+    assert heads == ["Personas", "Roles", "Slack workspaces", "Project events"], heads
+    assert "No persona" in html and "No Slack workspace" in html and "No event" in html, html
+    assert "boom" in html, html
+    monkeypatch.setattr(hub, "slack_yaml_paths", lambda: (_ for _ in ()).throw(RuntimeError("no profile")))
+    no_path = hub.slack_overview()
+    assert no_path["now"] and no_path["defects"] and no_path["personas"] == [], no_path
+
+
 # ---------------------------------------------------------------- the renderer
 
 def _node(body):
@@ -204,12 +250,15 @@ def test_the_read_view_draws_the_four_sections_and_wears_no_control(hub, tmp_pat
 
 
 def test_each_drawn_row_names_its_file(hub, tmp_path):
-    """A reader sees where every fact lives before editing it: each section, each workspace and each project row names
-    its file. The owned workspace names the committed file and the guest one names the local file."""
+    """A reader sees where every fact lives before editing it: each section heading, each workspace and each project
+    row names its file. Every heading carries a chip, so no section leaves its field unlabelled."""
     out = overview(hub, tmp_path)
     html = read_block(render(hub, out))
-    assert html.count("class=slfile") >= 6, "each section and field does not name its target file"
+    h4 = re.findall(r"<h4[^>]*>(.*?)</h4>", html)
+    assert len(h4) == 4 and all("class=slfile" in h for h in h4), h4
+    rows = re.findall(r"<div class=slrow>.*?</div>", html)
+    assert len(rows) == 2 and all("class=slfile" in r for r in rows), rows
     h5 = re.findall(r"<h5 class=slws>(.*?)</h5>", html)
-    assert len(h5) == 2, h5
+    assert len(h5) == 2 and all("class=slfile" in h for h in h5), h5
     assert "team" in h5[0] and "slack.yaml" in h5[0], h5[0]
     assert "client-a" in h5[1] and "t.slack.local.yaml" in h5[1], h5[1]

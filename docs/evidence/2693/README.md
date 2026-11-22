@@ -27,6 +27,15 @@ this ticket does not draw:
 The first narrow render had two defects: the tables were clipped at the panel's right edge, and the file chip stretched
 across its row. Both are fixed: a narrow panel stacks each cell under its label, and the chip keeps its own width.
 
+The Slack workspaces heading names both files, so its two chips share one group. The first render split them across the
+heading by the `space-between` rule; grouping them fixed the gap. On a narrow panel the group wraps to a second line
+instead of clipping at the right edge.
+
+## The failure path
+
+A rule that does not resolve draws the same page: the Now tiles, the four headings and their empty-state text, with the
+reason in a defects banner above them. The reason is a message, never a replacement for the page.
+
 ## Limits
 
 The fixtures name placeholder ids and a local file named `probe.slack.local.yaml`. The screenshot was taken on these
