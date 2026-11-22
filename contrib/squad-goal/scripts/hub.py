@@ -1859,7 +1859,7 @@ def _slack_overview_shape(project, roles, events, personas, workspaces, defects,
            {"key": "Files", "value": f"{cf} · {lf}", "tone": "neutral"}]
     return {"err": None, "files": {"committed": cf, "local": lf}, "project": project, "now": now,
             "personas": personas, "roles": roles, "workspaces": workspaces, "events": events,
-            "defects": [str(d) for d in defects], "voices": [], "previews": []}
+            "role_actions": [], "defects": [str(d) for d in defects], "voices": [], "previews": []}
 
 def _slack_overview_empty(err, committed=None, local=None):
     """The read view of a theme that can read nothing: the same Now tiles and four empty sections, with the reason in
@@ -2094,6 +2094,8 @@ def slack_overview(committed=None, local=None):
     out = _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
     # The raw documents the view hand back on Save (#2694); the resolved rows above are what it draws.
     out["docs"] = {"committed": committed_doc, "local": local_doc}
+    # The roles editor (#2699): the actions the executor runs, read from the policy module, never a copy in the view.
+    out["role_actions"] = list(P.role_actions())
     # The persona editor (#2697): the voice list the policy module owns, and the reply of each channel before a save.
     out["voices"] = sorted(str(v) for v in P.GEMINI_VOICES)
     out["previews"] = _slack_reply_previews(P, committed_doc, local_doc)
@@ -2298,6 +2300,14 @@ def slack_files_post(body):
 # The view holds no rule (ADR-0137) and the policy module holds the refusal text (ADR-0177).
 SLACK_WS_FIELDS = ("id", "label", "class", "app", "language", "persona")
 SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announce")
+# The roles and members editor (#2699): a role carries its id, its actions and its deploy list, and it lives in the
+# committed file; a member carries its Slack workspace, channel, role and user ids, and it lives in the local file
+# alone (ADR-0177). The file a row lives in is a placement rule here; the value's own rule stays in the policy module,
+# which validates the edited documents below.
+SLACK_ROLE_FIELDS = ("id", "actions", "deploy")
+SLACK_MEMBER_FIELDS = ("workspace", "channel", "role", "users")
+ROLE_IN_COMMITTED = "the roles of the project live in the committed file"
+MEMBER_IN_LOCAL = "the members of a role live in the local file"
 SLACK_GUEST_FIELDS = ("speak", "transcribe", "voice_reply", "poll", "draft_for", "send_grant")
 SLACK_POLL_FIELDS = ("mode", "fast", "slow", "quiet_after", "thread_open", "floor", "ceiling", "factor", "idle_window")
 SECOND_GUEST_SAY = "second guest workspace is refused"   # the phrase the refusal matches when the module names no reason
@@ -2409,6 +2419,91 @@ def _slack_value(P, documents, doc, path, field, value, committed, local):
         return True, None
     return False, f"{_slack_doc_name(doc, committed, local)}: {hit[0]}: {hit[1]}"
 
+def _slack_row_value_ok(path, value, field):
+    """(ok, message, value): the shape one edited value needs before the policy module sees it. A list field takes a
+    list of names, or the raw field the owner typed, which the hub splits: the format rule stays here, never in the
+    view (ADR-0137). A plain field takes a string."""
+    key = _slack_key(path)
+    if field in ("actions", "deploy", "users"):
+        if isinstance(value, str):
+            value = [x for x in re.split(r"[,\s]+", value) if x]
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            return False, f"{key}: {field} is a list of names", value
+    elif not isinstance(value, str):
+        return False, f"{key}: {field} is a string", value
+    return True, None, value
+
+
+def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id_required=False):
+    """One operation over a plain row list: a role in the committed file, or a member in the local one (#2699). The
+    Add control starts `blank`, a field outside `fields` is refused, and an edited value's shape is checked before
+    the policy module judges its content. The list is created by an Add alone, so a refused edit never leaves an empty
+    root key behind. Returns (error, changed)."""
+    rows = doc.get(root)
+    if kind == "add":
+        if path != [root]:
+            return f"{file_name}: {root}: the operation adds a row of {root}", False
+        if not isinstance(value, dict):
+            return f"{file_name}: {root}: the added row is a mapping", False
+        unknown = [k for k in value if k not in fields]
+        if unknown:
+            return f"{file_name}: {root}: {root} has no field {unknown[0]!r}", False
+    elif not isinstance(rows, list):
+        return f"{file_name}: {root}: the {root} are a list", False
+    if kind == "add":
+        if rows is None:
+            doc[root] = rows = []
+        elif not isinstance(rows, list):
+            return f"{file_name}: {root}: the {root} are a list", False
+        row = dict(blank)
+        for field in fields:
+            if field not in value: continue
+            ok, why, value[field] = _slack_row_value_ok([root, len(rows), field], value[field], field)
+            if not ok: return f"{file_name}: {why}", False
+        row.update(value)
+        if id_required and not str(row.get("id") or "").strip():
+            return f"{file_name}: {root}: the role names its id", False
+        rows.append(row)
+        return None, True
+    if kind == "remove":
+        if len(path) != 2 or not isinstance(path[1], int) or not 0 <= path[1] < len(rows):
+            return f"{file_name}: the removed row does not exist", False
+        rows.pop(path[1])
+        return None, True
+    if len(path) != 3 or not isinstance(path[1], int) or not 0 <= path[1] < len(rows):
+        return f"{file_name}: the edited row does not exist", False
+    field = str(path[2])
+    if field not in fields:
+        return f"{file_name}: {_slack_key(path[:-1])}: {root} has no field {field!r}", False
+    ok, why, value = _slack_row_value_ok(path, value, field)
+    if not ok: return f"{file_name}: {why}", False
+    if id_required and field == "id" and not value.strip():
+        return f"{file_name}: {_slack_key(path)}: the role names its id", False
+    if isinstance(rows[path[1]], dict):
+        rows[path[1]][field] = value
+    return None, True
+
+
+def _slack_member_channel_check(docs, local_name):
+    """A member names the channel of the Slack workspace it names. The two ids are read from both documents, so a row
+    never pairs one workspace with another workspace's channel (issue #2699)."""
+    teams = {}
+    for doc in (docs["committed"], docs["local"]):
+        for _, ws in _slack_dicts(doc.get("workspaces")):
+            wid = str(ws.get("id") or "")
+            if wid:
+                teams.setdefault(wid, set()).update(
+                    str(ch.get("id")) for _, ch in _slack_dicts(ws.get("channels")) if ch.get("id"))
+    for i, (_, row) in enumerate(_slack_dicts(docs["local"].get("members"))):
+        wid, cid = str(row.get("workspace") or ""), str(row.get("channel") or "")
+        if not wid or not cid: continue
+        if wid not in teams:
+            return f"{local_name}: members[{i}].workspace: the workspace does not exist"
+        if cid not in teams[wid]:
+            return f"{local_name}: members[{i}].channel: the channel is not in workspace {wid}"
+    return None
+
+
 def _slack_place(P, op, docs, local_name):
     """Apply one operation to the two documents, and answer an error when the class places the row elsewhere or the
     operation breaks a policy rule. Returns (error, changed)."""
@@ -2416,8 +2511,19 @@ def _slack_place(P, op, docs, local_name):
     path, value = op.get("path"), op.get("value")
     if kind not in ("add", "set", "remove") or doc not in ("committed", "local"):
         return "the operation names add, set or remove and the file it edits", False
-    if not isinstance(path, list) or not path or path[0] != "workspaces":
-        return "the operation names a path from workspaces", False
+    if not isinstance(path, list) or not path or path[0] not in ("workspaces", "roles", "members"):
+        return "the operation names a path from workspaces, roles or members", False
+    if path[0] == "roles":
+        if doc != "committed":
+            return f"slack.yaml: {ROLE_IN_COMMITTED}", False
+        return _slack_place_rows(kind, path, value, docs["committed"], SLACK_ROLE_FIELDS, "slack.yaml", "roles",
+                                 {"id": "", "actions": []}, id_required=True)
+    if path[0] == "members":
+        if doc != "local":
+            return f"{local_name}: {MEMBER_IN_LOCAL}", False
+        err, changed = _slack_place_rows(kind, path, value, docs["local"], SLACK_MEMBER_FIELDS, local_name,
+                                         "members", {"workspace": "", "channel": "", "role": "", "users": []})
+        return (err, changed) if err else (_slack_member_channel_check(docs, local_name), changed)
     target = docs[doc]
     if kind == "add":
         if not isinstance(value, dict):
@@ -8900,9 +9006,10 @@ function slReadHtml(r){if(!r)return "";
  +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
  +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
  h+=slPersonaSection(r);
- h+=slSec("Roles",cf,["Role","Actions"],
-  r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
-  "No role: only the owner can trigger the agent.");
+ h+=(slDocs?`<section class=slsec><h4>Roles <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>${slRolesEditHtml(r)}</section>`
+  :slSec("Roles",cf,["Role","Actions"],
+   r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
+   "No role: only the owner can trigger the agent."));
  h+=`<section class=slsec><h4>Slack workspaces <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>`
  +(slDocs?slEditHtml():slWsReadHtml(r,join))+`</section>`;
  h+=`<section class=slsec><h4>Project events ${slTag(cf)}</h4>${slEvHtml()}</section>`;   // the one editable section (#2698)
@@ -9026,6 +9133,56 @@ const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=
 const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
 const slAddWs=()=>`<div class=slad><select data-slwsclass aria-label="new workspace class"><option value=owned>owned · app installed</option><option value=guest>guest · connector</option></select><input data-slwsid placeholder="team id" aria-label="new workspace id"><input data-slwslabel placeholder="label" aria-label="new workspace label"><input data-slwsapp placeholder="app" aria-label="new workspace app"><button data-sladdws>Add Slack workspace</button></div>`;
 const slOpenBtn=(key,label)=>`<button data-slopen="${key}">${slOpen===key?"Close":"Edit"}</button>`;
+/* The roles and members editor (SPEC 2682 #2699). The owner edits a role's id, its actions and its deploy list, and the
+   members of a role in one format: Slack workspace, channel, role and user ids. The actions come from the hub's read,
+   never a copy in the view, and every rule stays with the hub and the policy module (ADR-0177): the edit posts one
+   operation, and the hub refuses an action outside the list, a member that is not a user id, a channel outside the
+   member's workspace, and `prod` in a deploy list. A role lives in the committed file and a member in the local one, so
+   the operation names the file it edits. The raw user id and deploy fields travel whole; the hub splits them. */
+const slDocRows=(d,root)=>{const doc=slDocsCur()[d]||{},rows=doc[root];return Array.isArray(rows)?rows:[]};
+const slRoleRows=()=>slDocRows("committed","roles");
+const slMemberRows=()=>slDocRows("local","members");
+const slWsIds=()=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(w&&w.id&&out.indexOf(String(w.id))<0)out.push(String(w.id));return out};
+const slChIdsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[])){if(!w||String(w.id)!==String(wsId))continue;
+  for(const c of (Array.isArray(w.channels)?w.channels:[]))if(c&&c.id&&out.indexOf(String(c.id))<0)out.push(String(c.id))}return out};
+const slRoleIds=()=>slRoleRows().map(x=>String((x||{}).id||"")).filter(Boolean);
+const slActionList=()=>Array.isArray(slR&&slR.role_actions)?slR.role_actions:[];
+const slDeployList=x=>Array.isArray(x)?x:(x&&typeof x==="object"&&Array.isArray(x.environments)?x.environments:[]);
+const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],acts=slActionList(),n=i+1;
+ return `<div class="sle slroledet" role=group aria-label="role ${n} fields"><div class=slevr role=row>`
+ +`<span role=cell data-l="Role"><input data-sle="role:${i}:id" value="${slA((x&&x.id)||"")}" size=16 aria-label="role ${n}: id"></span>`
+ +`<span role=cell data-l="Actions">${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span>`
+ +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
+ +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
+const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`;
+ return `<div class="sle slmembdet" role=group aria-label="member ${n} fields"><div class=slevr role=row>`
+ +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOpts(slWsIds(),m.workspace)}</select></span>`
+ +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOpts(slChIdsOf(m.workspace),m.channel)}</select></span>`
+ +`<span role=cell data-l="Role"><select data-sle="${at("role")}" aria-label="member ${n}: role">${slOpts(slRoleIds(),m.role)}</select></span>`
+ +`<span role=cell data-l="User ids"><input data-sle="${at("users")}" value="${slA((Array.isArray(m.users)?m.users:[]).join(", "))}" placeholder="U0..., U0..." aria-label="member ${n}: user ids"></span>`
+ +`<span role=cell><button data-slrmmem="${i}" aria-label="remove member ${n}">Remove</button></span></div></div>`};
+function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.committed,lf=r.files.local;
+ let h=`<h5 class=slws>Roles ${slTag(cf)}</h5>`;
+ h+=rs.length?rs.map(slRoleEditRow).join(""):`<p class=m>${esc("No role: only the owner can trigger the agent.")}</p>`;
+ h+=`<div class=slad><input data-slroleid placeholder="role id" aria-label="new role id"><button data-sladdrole>Add role</button></div>`;
+ h+=`<h5 class=slws>Members ${slTag(lf)}</h5>`;
+ h+=ms.length?ms.map(slMemberEditRow).join(""):`<p class=m>${esc("No member: the roles name no user.")}</p>`;
+ return h+`<div class=slad><select data-slmws aria-label="new member Slack workspace">${slOpts(slWsIds(),"")}</select>`
+ +`<select data-slmch aria-label="new member channel">${slOpts(slChIdsOf(slWsIds()[0]||""),"")}</select>`
+ +`<select data-slmrole aria-label="new member role">${slOpts(slRoleIds(),"")}</select>`
+ +`<input data-slmus placeholder="U0..." aria-label="new member user ids"><button data-sladdmem>Add member</button></div>`}
+function slDocOp(attr,el){const p=attr.split(":"),v=el.type==="checkbox"?!!el.checked:el.value;
+ if(p[0]==="role"||p[0]==="member"){const i=+p[1];   // a role edits the committed file and a member the local one (#2699)
+  if(p[0]==="role"&&p[2]==="act"){const a=p.slice(3).join(":"),row=slRoleRows()[i]||{},cur=Array.isArray(row.actions)?row.actions.slice():[];
+   const next=v?(cur.indexOf(a)>=0?cur:cur.concat([a])):cur.filter(x=>x!==a);
+   return {kind:"set",doc:"committed",path:["roles",i,"actions"],value:next}}
+  return {kind:"set",doc:p[0]==="role"?"committed":"local",path:[p[0]==="role"?"roles":"members",i,p[2]],value:v}}
+ const field=p[3],op={kind:"set",doc:p[0],path:["workspaces",+p[1]]};
+ if(p[2]==="")op.path.push(field);else op.path.push("channels",+p[2],field);
+ if(["roles","announce","draft_for"].includes(field))op.value=String(v).split(",").map(x=>x.trim()).filter(Boolean);else op.value=v;
+ return op}
 function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",slDocsCur().local]];
  let h=slMsg?`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`:"";
  docs.forEach(([d,doc])=>{const list=(doc&&Array.isArray(doc.workspaces))?doc.workspaces:[];
@@ -9046,11 +9203,7 @@ function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",s
    s+=`</tbody></table>`+(chans.length?"":`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)+slAddCh(d,i);
    return s}).join("")});
  return h+slAddWs()}
-function slDocEdit(attr,el){const p=attr.split(":"),field=p[3],v=el.type==="checkbox"?el.checked:el.value,
- op={kind:"set",doc:p[0],path:["workspaces",+p[1]]};
- if(p[2]==="")op.path.push(field);else op.path.push("channels",+p[2],field);
- if(["roles","announce","draft_for"].includes(field))op.value=String(v).split(",").map(x=>x.trim()).filter(Boolean);else op.value=v;
- slOp(op)}
+function slDocEdit(attr,el){const op=slDocOp(attr,el);if(op)slOp(op)}
 async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
  if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};slMsg=""}}
@@ -9109,7 +9262,14 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
   if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
   if(b.dataset.sladdws!==undefined){slAddWsOp();return}
   if(b.dataset.slrmch){const[d,i,j]=b.dataset.slrmch.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i,"channels",+j]});return}
-  if(b.dataset.slrmws){const[d,i]=b.dataset.slrmws.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i]});return}}
+  if(b.dataset.slrmws){const[d,i]=b.dataset.slrmws.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i]});return}
+  if(dt.sladdrole!==undefined){const el=document.querySelector("[data-slroleid]");
+   slOp({kind:"add",doc:"committed",path:["roles"],value:{id:el?String(el.value||""):"",actions:[]}});return}   // #2699
+  if(dt.slrmrole!==undefined){slOp({kind:"remove",doc:"committed",path:["roles",+dt.slrmrole]});return}
+  if(dt.sladdmem!==undefined){const g=s=>{const el=document.querySelector(s);return el?String(el.value||""):""};
+   slOp({kind:"add",doc:"local",path:["members"],value:{workspace:g("[data-slmws]"),channel:g("[data-slmch]"),
+    role:g("[data-slmrole]"),users:g("[data-slmus]")}});return}
+  if(dt.slrmmem!==undefined){slOp({kind:"remove",doc:"local",path:["members",+dt.slrmmem]});return}}
  if(!b)return;
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
  else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
