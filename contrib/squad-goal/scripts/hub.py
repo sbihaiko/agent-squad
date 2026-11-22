@@ -1901,8 +1901,12 @@ def slack_clean(body, cur):
         return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
     if hit: return None, f"{hit[0]}: a value in token format ({hit[1]}) is refused; this file names a Keychain entry, never a token"
     # The hub edits the project's Slack use, so the file rules hold here too: a role that lists prod is refused and the
-    # message names its key, exactly as `squad slack check` refuses the committed file (ADR-0177 decision 8).
-    defects = policy.validate(committed=body)
+    # message names its key, exactly as `squad slack check` refuses the committed file (ADR-0177 decision 8). A validator
+    # that raises answers a named error, so a settings save never degrades into a traceback.
+    try:
+        defects = policy.validate(committed=body)
+    except Exception as e:
+        return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
     if defects: return None, str(defects[0])
     prefix = str(body.get("prefix", cur["prefix"])).strip()
     if not prefix or "\n" in prefix or len(prefix) > 40: return None, "prefix is one line of 1 to 40 characters"
