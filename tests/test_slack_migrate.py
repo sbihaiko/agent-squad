@@ -115,6 +115,19 @@ def test_a_channel_with_no_slack_id_stays_pending_and_the_hub_asks():
     assert done.pending == []
 
 
+def test_pending_names_only_the_channels_with_no_slack_id():
+    """Criterion 5: `pending` is the id-ask list, so a channel that already carries an id never lands in it, even when
+    the workspace team id is missing. A channel with an id but no workspace goes to `unplaced`, and the report says so."""
+    m = mig(workspace=None)
+    assert m.pending == [], m.pending
+    assert [c["name"] for c in m.unplaced] == ["proj-agent", "alerts"], m.unplaced
+    mixed = mig(workspace=None, ids={"#alerts": "C0ALERT001"})
+    assert [p["name"] for p in mixed.pending] == ["proj-agent"], mixed.pending
+    assert [c["name"] for c in mixed.unplaced] == ["alerts"], mixed.unplaced
+    assert any(line.startswith("unplaced: channel alerts") for line in mixed.report), mixed.report
+    assert any(line.startswith("pending: the Slack workspace has no team id") for line in mixed.report), mixed.report
+
+
 def test_manager_and_colleague_become_manager_and_colleague_with_only_status():
     """Criterion 6: both roles exist under the new id, and each lists only `status`."""
     roles = {r["id"]: r for r in mig().committed["roles"]}
@@ -257,3 +270,33 @@ def test_the_page_shows_what_the_migration_carried_and_dropped(hub):
     html = _node(body)
     for line in report:
         assert line in html, (line, html)
+
+
+def test_the_load_fetches_the_migration_and_the_button_loads_its_pair(hub):
+    """Criterion 8 on the wire: the page load asks `/api/slack/migrate` into `slM`, and a click on the load button puts
+    the migration's pair in the editor's `slDocs`. A dropped fetch or a dropped click handler fails this test."""
+    page = hub.PAGE
+    esc = re.search(r"^const esc=.*$", page, re.M).group(0)
+    s_line = re.search(r"^let slS=.*$", page, re.M).group(0)
+    r_line = re.search(r"^let slR=null;$", page, re.M).group(0)
+    m_line = re.search(r"^let slM=null;.*$", page, re.M).group(0)
+    clone = re.search(r"^const slClone=.*$", page, re.M).group(0)
+    load = page[page.index("async function slLoad()"):page.index("async function slPost")]
+    cstart = page.index('$("#sbody").addEventListener("click"')
+    click = page[cstart:page.index("\n });", cstart) + len("\n });")]
+    scenario = """
+const MIG={"err":null,"report":["dropped: prefix"],"pending":[],"committed":{"version":1,"project":{"language":"pt-BR"}},"local":{"version":1,"workspaces":[]}};
+const ANSWERS={"/api/slack":{"connection":"connected"},"/api/slack/files":{"docs":{"committed":{"version":9},"local":{"version":9}}},"/api/slack/migrate":MIG};
+globalThis.fetch=async u=>({json:async()=>ANSWERS[u]});
+(async()=>{
+  await slLoad();
+  const asked=JSON.stringify(slM)===JSON.stringify(MIG)&&JSON.stringify(slDocs)===JSON.stringify(ANSWERS["/api/slack/files"].docs);
+  STORE["#sbody:click"]({target:{closest:()=>({id:"slmigload"})}});
+  console.log(JSON.stringify({asked,loaded:JSON.stringify(slDocs)===JSON.stringify({committed:MIG.committed,local:MIG.local})}));
+})();
+"""
+    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:"",'
+            'addEventListener:(ev,fn)=>{STORE[s+":"+ev]=fn}});')
+    body = "\n".join([stub, esc, s_line, r_line, m_line, clone, "function slRender(){}", load, click, scenario])
+    out = json.loads(_node(body))
+    assert out == {"asked": True, "loaded": True}, out

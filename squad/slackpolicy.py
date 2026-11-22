@@ -721,12 +721,15 @@ MIGRATION_ACTIONS = ("status",)
 
 
 class Migration(NamedTuple):
-    """The migration's answer: the two documents it builds, the channels still waiting for a Slack id, and the report
-    of what it carried over and what it dropped. It reads no file and writes none, so the hub hands the pair to its
-    usual save path and the owner approves it there."""
+    """The migration's answer: the two documents it builds, the channels still waiting for a Slack id, the channels
+    that have an id but no Slack workspace to place them in, and the report of what it carried over and what it
+    dropped. `pending` is the id-ask list and holds only a channel with no id, so no caller asks the owner for an id
+    the channel already carries. It reads no file and writes none, so the hub hands the pair to its usual save path and
+    the owner approves it there."""
     committed: dict
     local: dict
     pending: list
+    unplaced: list
     report: list
 
 
@@ -823,6 +826,7 @@ def migrate(old, workspace=None, ids=None):
             pending.append(channel)
             report.append(f"pending: channel {label} (no Slack id; the hub asks for the id before it writes)")
     team = str(workspace.get("id") or "").strip()
+    unplaced = []
     if team:
         row = {"id": team, "label": str(workspace.get("label") or team), "class": "guest"}
         if written:
@@ -830,7 +834,10 @@ def migrate(old, workspace=None, ids=None):
         local["workspaces"] = [row]
         report.append(f"carried: workspace {team} becomes guest of the local file")
     else:
-        pending = written + pending
+        unplaced = written
+        for channel in written:
+            report.append(f"unplaced: channel {channel['name']} (Slack id {channel['id']} is given, but the "
+                          "workspace has no team id; the hub asks for it before it writes)")
         report.append("pending: the Slack workspace has no team id; the hub asks for it before it writes")
     report += [
         "dropped: prefix (the persona mark replaces it)",
@@ -839,4 +846,4 @@ def migrate(old, workspace=None, ids=None):
         "dropped: quiet, dm, audio (the new file has no quiet hours and no owner inbox)",
         "dropped: other (a message from someone without a role is data)",
     ]
-    return Migration(committed, local, pending, report)
+    return Migration(committed, local, pending, unplaced, report)

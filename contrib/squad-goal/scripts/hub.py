@@ -2003,13 +2003,14 @@ def slack_migrate(legacy=None, workspace=None, ids=None):
 
     It reads the file, builds the two new documents and their report, and writes nothing: the owner approves the pair on
     the usual save path, and the hub keeps the documents in its draft. `workspace` names the team id the old file never
-    held. A channel with no Slack id stays pending, and the channel editor asks for the id before a write."""
+    held. A channel with no Slack id stays pending and the channel editor asks for the id before a write; a channel
+    whose id is given but whose team id is missing stays unplaced, apart from the id-ask list."""
     if legacy is None: legacy = slack_file()
     if legacy is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none",
-                               "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
+                               "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
     path = pathlib.Path(legacy)
     if not path.is_file(): return {"err": f"no old Slack file in this profile: {path}",
-                                   "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
+                                   "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
     if workspace is None:
         team, _ = slack_team()
         if team: workspace = {"id": team}
@@ -2019,8 +2020,8 @@ def slack_migrate(legacy=None, workspace=None, ids=None):
         defects = [str(d) for d in P.validate(mig.committed, mig.local)]
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}",
-                "report": [], "pending": [], "committed": {}, "local": {"workspaces": []}}
-    return {"err": None, "old": str(path), "report": mig.report, "pending": mig.pending,
+                "report": [], "pending": [], "unplaced": [], "committed": {}, "local": {"workspaces": []}}
+    return {"err": None, "old": str(path), "report": mig.report, "pending": mig.pending, "unplaced": mig.unplaced,
             "committed": mig.committed, "local": mig.local, "defects": defects}
 
 # --- Settings > Communication, the read view (SPEC 2682 #2693). The theme reads the committed `slack.yaml` at the checkout
