@@ -37,10 +37,13 @@ def subscribed(channel, event_id):
 
 def template(committed, channel, event_id):
     """The text template of one event for one channel: the channel's own override, else the project's row for the event.
-    None when neither names a template."""
+    None when neither names a template. An override key is compared as text, so a YAML or JSON map that keys the event
+    by a number still matches the event's id."""
     override = channel.get("templates")
-    if isinstance(override, dict) and override.get(event_id) is not None:
-        return str(override[event_id])
+    if isinstance(override, dict):
+        keyed = {str(key): value for key, value in override.items()}
+        if keyed.get(str(event_id)) is not None:
+            return str(keyed[str(event_id)])
     for row in _rows((committed or {}).get("events")):
         if str(row.get("id")) == str(event_id) and row.get("template") is not None:
             return str(row["template"])
@@ -50,8 +53,12 @@ def template(committed, channel, event_id):
 def render(template_text, record):
     """The template with the record's own fields filled. `{items}` joins the items in the record's order; `{id}`, `{key}`
     and `{ts}` carry the record's values. A placeholder the record does not carry stays as written."""
-    values = {"id": record.get("id", ""), "key": record.get("key", ""), "ts": record.get("ts", ""),
-              "items": ", ".join(str(item) for item in record.get("items") or [])}
+    values = {}
+    if "items" in record:
+        values["items"] = ", ".join(str(item) for item in record.get("items") or [])
+    for key in ("id", "key", "ts"):
+        if key in record:
+            values[key] = record[key]
     return _FIELD.sub(lambda hit: str(values[hit.group(1)]) if hit.group(1) in values else hit.group(0),
                       str(template_text))
 
@@ -62,7 +69,7 @@ def draft_for(committed, local, workspace, channel, record):
     event_id = str(record.get("id") or "")
     if not event_id or not subscribed(channel, event_id):
         return None
-    if str(channel.get("mode") or "listen") != "listen+speak":
+    if not slackpolicy.can_speak(channel):
         return None
     text_template = template(committed, channel, event_id)
     if text_template is None:
@@ -80,20 +87,60 @@ def draft_for(committed, local, workspace, channel, record):
     return W.Draft(W.DRAFT_WORD, channel_id, "", W.compose(name, body), str(name))
 
 
+def _merge_by_id(rows):
+    """Rows of both documents as one list, one row per id: the committed row first, then the local row's own keys over
+    it, so a local override wins and a key the local row omits stays as committed. A row with no id never merges, and
+    the first appearance of an id fixes its place in the list."""
+    out, index = [], {}
+    for row in rows:
+        row_id = str(row.get("id") or "")
+        if row_id and row_id in index:
+            out[index[row_id]].update(row)
+        else:
+            out.append(dict(row))
+            if row_id:
+                index[row_id] = len(out) - 1
+    return out
+
+
+def _guest_workspaces(committed, local):
+    """One merged row per workspace id from both documents, with each workspace's channels merged in turn, so a local
+    file overrides a committed field and adds a channel the committed file omits. The committed workspace fixes a
+    scalar field the local file also names only where the merge order says so: the local value wins here, and the
+    persona row a channel names still comes from the committed file first (`slackpolicy.effective_persona`)."""
+    groups, index = [], {}
+    for doc in (committed or {}, local or {}):
+        for row in _rows(doc.get("workspaces")):
+            workspace_id = str(row.get("id") or "")
+            scalars = {key: value for key, value in row.items() if key != "channels"}
+            channels = _rows(row.get("channels"))
+            if workspace_id and workspace_id in index:
+                group = groups[index[workspace_id]]
+                group["workspace"].update(scalars)
+                group["channels"].extend(channels)
+            else:
+                groups.append({"workspace": scalars, "channels": list(channels)})
+                if workspace_id:
+                    index[workspace_id] = len(groups) - 1
+    for group in groups:
+        group["channels"] = _merge_by_id(group["channels"])
+    return groups
+
+
 def announcements(committed, local, record):
     """Every draft a project's `guest` channels get for one release record, one per channel, in the file's order. The
-    committed file is read before the local one, and one channel id yields one draft, whatever both files name."""
+    two documents are merged per workspace id and per channel id, committed first and local over it, so one channel id
+    yields one draft, whatever both files name."""
     out, seen = [], set()
-    for doc in (committed or {}, local or {}):
-        for workspace in _rows(doc.get("workspaces")):
-            if str(workspace.get("class") or "owned") != "guest":
+    for group in _guest_workspaces(committed, local):
+        if str(group["workspace"].get("class") or "owned") != "guest":
+            continue
+        for channel in group["channels"]:
+            channel_id = str(channel.get("id") or "")
+            if not channel_id or channel_id in seen:
                 continue
-            for channel in _rows(workspace.get("channels")):
-                channel_id = str(channel.get("id") or "")
-                if not channel_id or channel_id in seen:
-                    continue
-                draft = draft_for(committed, local, workspace, channel, record)
-                if draft is not None:
-                    seen.add(channel_id)
-                    out.append(draft)
+            seen.add(channel_id)
+            draft = draft_for(committed, local, group["workspace"], channel, record)
+            if draft is not None:
+                out.append(draft)
     return out
