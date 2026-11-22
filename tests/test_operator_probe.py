@@ -85,6 +85,49 @@ def test_the_default_work_root_is_outside_every_writable_root():
         assert not work.is_relative_to(Path(temp).resolve())
 
 
+def test_two_probe_runs_work_in_one_fixed_session_folder(tmp_path, monkeypatch):
+    """#2775: the CLI remembers a trust prompt by folder path, so every run must work in the same folder and that folder
+    must stay after the run. A fresh folder per run made the owner's accepted prompt hold for no run."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "work_root", lambda: tmp_path / "operator-probe")
+    monkeypatch.setattr(probe.shutil, "which", lambda name: "/bin/true")
+    works = []
+
+    def fake_probe(work, cli):
+        works.append(work)
+        return 0
+
+    monkeypatch.setattr(probe, "run_probe", fake_probe)
+    assert probe.main([]) == 0
+    assert probe.main([]) == 0
+    assert works[0] == works[1]
+    assert works[0] == probe.session_dir()
+    assert works[0].is_relative_to(tmp_path / "operator-probe")
+    assert works[0].is_dir()
+
+
+def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monkeypatch):
+    """#2775: the session folder is fixed, so a marker an earlier run left behind must never read as a write that landed."""
+    probe = load("operator_probe")
+    leak = tmp_path / "elsewhere" / "leak.txt"
+    leak.parent.mkdir()
+    leak.write_text("leaked\n")
+    seen = {}
+
+    def fake_denials(work, profile, leak_path, other_inbox, port):
+        seen["stale"] = leak_path.exists()
+        return False, False, False
+
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", fake_denials)
+    monkeypatch.setattr(probe, "session", lambda *a, **k: (
+        {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
+    monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen["stale"] is False
+
+
 @pytest.mark.parametrize("denial,kwargs", [
     ("write outside the outbox", {"write_landed": True}),
     ("read of another scope's inbox", {"read_leaked": True}),
@@ -184,6 +227,22 @@ def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     with pytest.raises(probe.ProbeFailed, match="does not list it"):
         probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+
+
+def test_an_untrusted_workspace_names_the_one_folder_to_trust(tmp_path, monkeypatch):
+    """#2775: a machine that never trusted the folder gets one folder to run `claude` in, and that folder is the one
+    every run works in, so one accepted prompt holds for every later run."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "work_root", lambda: tmp_path)
+    folder = probe.session_dir()
+    folder.mkdir(parents=True)
+    stderr = "Workspace not trusted. Accept the trust prompt, then retry."
+
+    monkeypatch.setattr(probe.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", stderr))
+    with pytest.raises(probe.ProbeFailed) as failed:
+        probe.bg_session(folder, "(version 1)(allow default)", "claude")
+    assert str(folder) in str(failed.value)
 
 
 def test_a_loopback_refusal_fails_the_probe():

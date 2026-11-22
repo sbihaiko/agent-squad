@@ -17,6 +17,10 @@ Background service (#2768): the probe then starts one `--bg` session through the
 reach the service it already runs, or start one, print the new session's id, and list that id; the probe stops the
 session. A service the profile refuses fails the probe, as it would fail a live operator.
 
+One fixed folder (#2775): every run works in `session_dir()`, because the CLI remembers a trust prompt by folder path. A
+fresh folder per run made the owner's accepted prompt hold for no run, and the `--bg` session failed with "Workspace not
+trusted". A machine that never trusted the folder is told the one path to run `claude` in once.
+
 Guest sessions (#2716): the probe then runs the `guest` poller session (squad/slackpoller.py) and the `guest` writer
 session (squad/slackwriter.py) through the same wrapper, profile and endpoint. Each session's real `PreToolUse` hook runs
 inside the CLI through contrib/voice/guest_probe_hook.py, and the Slack connector is a stand-in, contrib/voice/
@@ -37,7 +41,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import urllib.parse
 from pathlib import Path
 
@@ -65,6 +68,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
 NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
+UNTRUSTED = "not trusted"               # the CLI's own words for a folder it never trusted: the probe names the folder
 
 # The guest sessions (#2716). The stand-in connector's server is named `slack`, the hooks' default server.
 FAKE_CONNECTOR = VOICE / "fake_slack_mcp.py"
@@ -111,8 +115,14 @@ class ProbeFailed(Exception):
 
 
 def work_root():
-    """The folder each probe run works in: under the home directory, outside the profile's writable roots."""
+    """The probe's state folder: under the home directory, outside the profile's writable roots."""
     return Path.home() / ".local" / "state" / "agent-squad" / "operator-probe"
+
+
+def session_dir():
+    """The one folder every probe run works in (#2775). The CLI remembers a trust prompt by folder path, so a fresh
+    folder per run would make the owner's accepted prompt hold for no run."""
+    return work_root() / "session"
 
 
 def check_denials(write_landed, read_leaked, network_reached):
@@ -246,6 +256,18 @@ def bg_listed(cli, sid, work):
     return sid in (done.stdout or "")
 
 
+def bg_failure(done, work):
+    """Why a `--bg` session did not start. An untrusted workspace names the one folder to trust: the folder every run
+    works in, so the owner accepts one prompt and every later run holds (#2775)."""
+    output = f"{done.stderr or ''}\n{done.stdout or ''}"
+    reason = (done.stderr or done.stdout).strip().splitlines()
+    message = (f"a --bg session did not start under the sandbox (exit {done.returncode}): "
+               f"{reason[-1] if reason else 'no output'}")
+    if UNTRUSTED in output.lower():
+        message += f"; run `claude` in {work} once, accept the trust prompt, and retry"
+    return message
+
+
 def bg_session(work, profile, cli, proxy_url=None):
     """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
     session id, and lists that id. A service the profile refuses fails here, as it does in the supervisor."""
@@ -253,9 +275,7 @@ def bg_session(work, profile, cli, proxy_url=None):
     done = sandboxed(profile, cli, ["--bg", BG_PROMPT, "--permission-mode", "dontAsk"], work, BG_DEADLINE, proxy_env)
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
-        reason = (done.stderr or done.stdout).strip().splitlines()
-        raise ProbeFailed(f"a --bg session did not start under the sandbox (exit {done.returncode}): "
-                          f"{reason[-1] if reason else 'no output'}")
+        raise ProbeFailed(bg_failure(done, work))
     try:
         if not bg_listed(cli, sid, work):
             raise ProbeFailed(f"the --bg session {sid} did not start: the CLI does not list it")
@@ -389,6 +409,7 @@ def run_probe(work, cli):
     leak = work / "elsewhere" / "leak.txt"
     for folder in (outbox.parent, other_inbox.parent, leak.parent):
         folder.mkdir(parents=True, exist_ok=True)
+    leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
     outbox.write_text("")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text(str(outbox), str(other_inbox.parent), str(other_inbox.parent / "dm.jsonl"))
@@ -417,15 +438,13 @@ def main(argv=None):
     if cli is None:
         print("operator-probe: no claude CLI on the path", file=sys.stderr)
         return 1
-    work_root().mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="run-", dir=work_root())).resolve()
+    work = session_dir()
+    work.mkdir(parents=True, exist_ok=True)   # kept between runs: the CLI's trust prompt is keyed by this path
     try:
         refused = run_probe(work, cli)
     except ProbeFailed as e:
         print(f"operator-probe: fail: {e}", file=sys.stderr)
         return 1
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
     host, port, loopback = model_endpoint()
     route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
         f"the proxy refused {refused} target(s) and recorded them"
