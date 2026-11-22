@@ -2129,14 +2129,14 @@ def _slack_reply_previews(P, committed, local):
             if wid not in groups:
                 order.append(wid)
                 groups[wid] = {"ws": ws, "rows": []}   # the first document's workspace row: the commit when both name it
-            groups[wid]["rows"].extend((ci, ch) for ci, ch in enumerate(P.rows(ws.get("channels"))))
+            groups[wid]["rows"].extend((di, ci, ch) for ci, ch in enumerate(P.rows(ws.get("channels"))))
     out = []
     for wid in order:
         ws = groups[wid]["ws"]
         label = _slack_text(ws.get("label") or ws.get("id"))
         seen = set()
-        for ci, ch in groups[wid]["rows"]:
-            cid = _slack_text(ch.get("id")) or f"\0{ci}"
+        for di, ci, ch in groups[wid]["rows"]:
+            cid = _slack_text(ch.get("id")) or f"\0{di}:{ci}"   # an id-less channel keys on its document and index
             if cid in seen:
                 continue
             seen.add(cid)
@@ -8856,6 +8856,8 @@ const slPersonaDetail=p=>{const id=slA(p.id);
  +`<div class=slf><label for=slpv_${id}>Voice</label><select id=slpv_${id} data-slef="voice:${id}" aria-label="persona voice">${slVoiceOpts((slR&&slR.voices)||[],p.voice)}</select><button type=button data-slsample="${id}">Sample</button><small>a Gemini TTS voice; the sample is generated once per voice and tone, then cached</small></div>`
  +`<div class=slf><label for=slpt_${id}>Tone</label><textarea id=slpt_${id} data-slef="tone:${id}" rows=3 maxlength=300 aria-label="persona tone">${esc(p.tone)}</textarea><small>guides the text and the speaking style; up to 300 characters</small></div>`
  +`</div>`};
+const slAudioCtl=()=>{const u=(typeof window!=="undefined"&&window.__slAudio)||"";   // a refused autoplay leaves a control the press can play
+ return u?`<div class=slf><span class=sl>Voice sample</span><audio controls src="${slA(u)}" aria-label="persona voice sample"></audio></div>`:""};
 function slOverrideSection(d,ids){const rows=[];
  for(const[file,doc,chip] of [["committed",slDoc(d,"committed"),"slack.yaml"],["local",slDoc(d,"local"),"local"]]){(doc.workspaces||[]).forEach((ws,wi)=>{
    const lab=String(ws.label||ws.id||file+" "+wi);
@@ -8877,6 +8879,7 @@ function slPersonaSection(r,d){const cf=r.files.committed,ps=r.personas||[],ids=
  +(use.length?`<table class=slt2><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Used by</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<p class=m>${esc("No persona: the project declares no identity.")}</p>`)
  +`<div class=sldef><span class=sl>Default persona</span><select data-sldefault aria-label="default persona">${slPick(ids,cur,"none")}</select>${slTag(cf)}</div>`
  +(open?slPersonaDetail(open):"")
+ +slAudioCtl()
  +(slPvMsg?`<div class="mx${slPvMsg.startsWith("!")?" err":""}" role=status>${esc(slPvMsg.replace(/^!/,""))}</div>`:"")
  +`<div class=slad><input id=slpnew placeholder="persona name" aria-label="persona to add" maxlength=32><button type=button data-slpadd>Add persona</button></div>`
  +slOverrideSection(d,ids)+slPreviewSection()+`</section>`}
@@ -8931,7 +8934,9 @@ async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
  try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice,tone})})).json();
   if(r.err)slPvMsg="!"+r.err;
   else{slPvMsg=r.cached?"the same voice and tone: the cached sample plays":"a new voice and tone: the sample is made once and cached now";
-   try{new Audio(r.url).play()}catch(x){window.__slAudio=r.url}}}   // a browser that refuses to play keeps the URL for the next press
+   try{const a=new Audio(r.url),pr=a.play();
+    if(pr&&pr.catch)pr.catch(()=>{window.__slAudio=r.url;slPvMsg="the browser refused the sound: press Play";slRender()})   // a refused autoplay keeps the URL and shows a Play control
+   }catch(x){window.__slAudio=r.url}}}
  catch(x){slPvMsg="!the sample could not be fetched"}
  slRender()}
 async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
