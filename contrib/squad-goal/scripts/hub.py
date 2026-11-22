@@ -1925,10 +1925,17 @@ def slack_samples_dir():
     """The sample cache: one folder in the loop state directory, outside every repository."""
     return pathlib.Path(STATE) / SLACK_SAMPLES
 
+def _slack_normal_pair(voice, tone):
+    """One voice and tone pair, normalized: a trailing space and a different case spell the same sound, so equivalent
+    text is one pair, one cache key and one paid call. The voice is stripped; the caller resolves its registered
+    spelling against the policy list."""
+    return str(voice or "").strip(), str(tone or "").strip().casefold()
+
 def slack_sample_key(voice, tone):
-    """The cache key of one voice and tone pair: a hash of the pair and the sample text, so a new script is a new key
-    and the file name is stable and carries no tone text."""
-    return hashlib.sha256(f"{voice}\0{tone}\0{SLACK_SAMPLE_TEXT}".encode()).hexdigest()[:32]
+    """The cache key of one voice and tone pair: a hash of the normalized pair and the sample text, so a new script is
+    a new key and the file name is stable and carries no tone text."""
+    v, t = _slack_normal_pair(voice, tone)
+    return hashlib.sha256(f"{v}\0{t}\0{SLACK_SAMPLE_TEXT}".encode()).hexdigest()[:32]
 
 def _slack_wav_ok(path):
     """A cache hit needs a whole WAV: the RIFF/WAVE header and more than its twelve bytes. A cut file left by a killed
@@ -1973,7 +1980,9 @@ def _slack_tts_cli(voice, tone, out):
     except Exception as e: return None, f"the skill path did not resolve: {type(e).__name__}: {e}"
     script = SKP.voice_script("tts.py")
     if script is None: return None, "the TTS script did not resolve"
-    cmd = [sys.executable, str(script), SLACK_SAMPLE_TEXT, "--voice", voice, "--tone", tone, "--out", str(out)]
+    # One `--tone=<value>` element: a tone that begins with a dash (a bullet is normal typing) is then a value the
+    # script's option loop reads, never a flag it eats or refuses.
+    cmd = [sys.executable, str(script), SLACK_SAMPLE_TEXT, "--voice", voice, f"--tone={tone}", "--out", str(out)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=SLACK_SAMPLE_TIMEOUT)
     except (OSError, subprocess.SubprocessError) as e:
@@ -1988,11 +1997,13 @@ def slack_sample(body, client=None):
     nothing. One lock per pair makes exactly one synthesis under concurrent presses, the WAV lands whole by rename, and
     a cut file is no hit. The answer carries the audio as a data URL and states whether it came from the cache."""
     if not isinstance(body, dict): return {"err": "bad request"}
-    voice, tone = str(body.get("voice") or ""), str(body.get("tone") or "")
+    raw_voice = str(body.get("voice") or "")
+    voice, tone = _slack_normal_pair(raw_voice, body.get("tone"))
     try: P = slack_policy()
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
-    if voice not in P.GEMINI_VOICES: return {"err": f"personas[].voice: voice {voice!r} is not a Gemini voice"}
+    voice = next((v for v in P.GEMINI_VOICES if v.casefold() == voice.casefold()), None)
+    if voice is None: return {"err": f"personas[].voice: voice {raw_voice!r} is not a Gemini voice"}
     if len(tone) > P.TONE_MAX: return {"err": f"personas[].tone: a tone holds at most {P.TONE_MAX} characters ({len(tone)} given)"}
     key = slack_sample_key(voice, tone)
     d = slack_samples_dir()
@@ -9074,6 +9085,7 @@ async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
 async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
+ slPv=null;slPvMsg="";   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
   try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)

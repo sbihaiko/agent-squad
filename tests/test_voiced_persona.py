@@ -219,3 +219,22 @@ def test_the_cli_forwards_the_tone_flag_to_synth(tmp_path, monkeypatch):
     rc = tts.main(["Green. Then blue.", "--voice", VOICE_NAME, "--tone", TONE, "--out", str(out)])
     assert rc == 0, rc
     assert seen == [{"key": "a-key", "text": "Green. Then blue.", "voice": VOICE_NAME, "tone": TONE}], seen
+
+
+def test_the_cli_reads_a_tone_that_begins_with_a_dash(tmp_path, monkeypatch):
+    """Criterion (4): the hub writes the tone as one `--tone=<value>` element, so a tone that starts with a dash (a
+    bullet is normal typing) is the tone and never a flag the option loop reads or refuses."""
+    tts = voice_module("tts.py")
+    seen = []
+
+    def fake_synth(key, text, voice, out, tone=""):
+        seen.append(tone)
+        Path(out).write_bytes(b"RIFF....WAVEfake")
+        return str(out), None
+
+    monkeypatch.setattr(tts, "gemini_key", lambda *a, **k: "a-key")
+    monkeypatch.setattr(tts, "synth", fake_synth)
+    out = tmp_path / "clip.wav"
+    rc = tts.main(["Green. Then blue.", "--voice", VOICE_NAME, "--tone=- Calm.", "--out", str(out)])
+    assert rc == 0, rc
+    assert seen == ["- Calm."], seen

@@ -206,7 +206,7 @@ def test_the_sample_calls_gemini_once_for_a_voice_and_tone_pair(hub, state):
 
     assert first["cached"] is False and second["cached"] is True, (first["cached"], second["cached"])
     assert len(gemini.calls) == 1, gemini.calls
-    assert gemini.calls[0]["voice"] == "Kore" and gemini.calls[0]["tone"] == "Calm and direct."
+    assert gemini.calls[0]["voice"] == "Kore" and gemini.calls[0]["tone"] == "calm and direct."
     assert first["url"] == second["url"] and first["url"].startswith("data:audio/wav;base64,")
     assert base64.b64decode(first["url"].split(",", 1)[1]) == gemini.payload
     assert list((state / "slack-samples").glob("*.wav")), "the WAV is kept in the cache"
@@ -218,6 +218,37 @@ def test_the_sample_makes_a_new_call_for_a_new_tone(hub, state):
     hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
     second = hub.slack_sample({"voice": "Kore", "tone": "Bright."}, client=gemini)
     assert second["cached"] is False and len(gemini.calls) == 2, gemini.calls
+
+
+def test_equivalent_tones_share_one_sample_and_one_call(hub, state):
+    """Criteria (4) and (5): a trailing space and a different case spell the same sound, so the pair is one cache key
+    and one Gemini call, never two paid calls for one sound. The client receives the normalized pair."""
+    gemini = FakeGemini()
+    first = hub.slack_sample({"voice": " Kore ", "tone": "Calm and direct."}, client=gemini)
+    second = hub.slack_sample({"voice": "kore", "tone": "  calm and direct.  "}, client=gemini)
+
+    assert first["cached"] is False and second["cached"] is True, (first, second)
+    assert len(gemini.calls) == 1, gemini.calls
+    assert gemini.calls[0]["voice"] == "Kore" and gemini.calls[0]["tone"] == "calm and direct.", gemini.calls
+
+
+def test_a_tone_that_begins_with_a_dash_reaches_the_tts_script_as_one_value(hub, state, tmp_path, monkeypatch):
+    """Criterion (4): a leading dash is normal typing (a bullet). The hub hands the tone to the vendored script as a
+    single `--tone=<value>` element, so the script's option loop can never read the tone as a flag."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = list(cmd)
+        pathlib.Path(cmd[cmd.index("--out") + 1]).write_bytes(b"RIFF....WAVEfake")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(hub.subprocess, "run", fake_run)
+    got, err = hub._slack_tts_cli("Kore", "- Calm and direct.", tmp_path / "sample.wav")
+
+    assert err is None and got, (got, err)
+    cmd = seen["cmd"]
+    assert "--tone=- Calm and direct." in cmd, cmd
+    assert "- Calm and direct." not in cmd, "the tone is never its own argv element, where a flag parse eats it"
 
 
 def test_the_sample_refuses_a_voice_outside_the_gemini_list(hub, state):

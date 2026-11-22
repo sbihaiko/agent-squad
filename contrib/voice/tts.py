@@ -104,6 +104,8 @@ def main(argv):
         a = rest[i]
         if a == "--voice" and i + 1 < len(rest):
             voice = rest[i + 1]; i += 2
+        elif a.startswith("--tone="):
+            tone = a.split("=", 1)[1]; i += 1   # one element: a tone that begins with a dash is never a flag
         elif a == "--tone" and i + 1 < len(rest):
             tone = rest[i + 1]; i += 2
         elif a == "--out" and i + 1 < len(rest):
