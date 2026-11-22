@@ -177,6 +177,25 @@ def _send_grants(file, doc, out, local):
                                               "(YYYY-MM-DD)"))
 
 
+def _announce(file, doc, events, out):
+    """The defects of each channel's `announce` list. The list names only the events the committed file declares, so a
+    typo never subscribes a channel to nothing. A guest channel lives in the local file and names the same events."""
+    for i, ws in enumerate(_rows(doc.get("workspaces"))):
+        for j, ch in enumerate(_rows(ws.get("channels"))):
+            announce = ch.get("announce")
+            if announce is None:
+                continue
+            key = f"workspaces[{i}].channels[{j}].announce"
+            if not isinstance(announce, list):
+                out.append(_defect(file, key, "announce is a list of event ids"))
+                continue
+            for k, ev in enumerate(announce):
+                if str(ev) not in events:
+                    declared = ", ".join(sorted(events)) if events else "no event"
+                    out.append(_defect(file, f"{key}[{k}]", f"announce names the event {str(ev)!r}, and the project "
+                                                            f"declares {declared}"))
+
+
 def _guest_ids(local):
     """The team ids and channel ids a local file declares as guest."""
     teams, channels = set(), set()
@@ -214,7 +233,9 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     _send_grants("slack.yaml", committed, out, local=False)
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
+    events = {str(row.get("id")) for row in _rows(committed.get("events")) if row.get("id") is not None}
     for file, doc in ours:
+        _announce(file, doc, events, out)
         for i, ws in enumerate(_rows(doc.get("workspaces"))):
             base = f"workspaces[{i}]"
             _language(file, f"{base}.language", ws.get("language"), out)
