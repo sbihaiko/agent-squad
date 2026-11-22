@@ -212,9 +212,8 @@ def issue_close_reason(cmd, depth=0):
 SETTINGS_SLACK = SETTINGS_REL.with_name("slack.yaml")
 _SETTINGS_SLACK_DENIAL = ("sandbox: a write to the settings-path slack.yaml is denied; that file is the owner's grant, "
                           "and only the hub writes it after the owner's approval, so no ordinary code creates authority")
-_SLACK_WRITERS = {"cp", "mv", "rm", "tee", "touch", "truncate", "dd", "install"}
-_SLACK_EDITORS = {"sed", "perl"}
-_REDIRECT = (">", ">>", ">|", "&>", "&>>")
+_SLACK_WRITERS = {"cp", "mv", "ln", "rm", "tee", "touch", "truncate", "dd", "install", "ed", "ex"}
+_SLACK_EDITORS = {"sed", "perl", "awk"}
 
 
 def _settings_slack(root):
@@ -234,24 +233,39 @@ def _named_path(token, root, home):
 
 
 def _redirects_into(words, root, home, target):
-    """True when a `>` or `>>` of this segment sends its output to the target, not only when the target is read."""
+    """True when a `>` or `>>` of this segment sends its output to the target, not only when the target is read. The
+    operator may carry a leading descriptor number (`1>`), and it may attach to the word before it (`x>path`)."""
     for i, w in enumerate(words):
-        if w in _REDIRECT:
-            rest = words[i + 1] if i + 1 < len(words) else ""
-        elif w.startswith(">") and len(w) > 1:
-            rest = w
-        else:
+        pos = w.find(">")
+        if pos < 0:
             continue
-        if _named_path(rest.lstrip("<>&|"), root, home) == target:
+        rest = w[pos + 2:] if w[pos:pos + 2] == ">>" else w[pos + 1:]
+        rest = rest.lstrip("|")
+        if not rest:
+            rest = words[i + 1] if i + 1 < len(words) else ""
+        if rest.startswith("&"):
+            continue
+        if _named_path(rest, root, home) == target:
             return True
     return False
 
 
 def _in_place(verb, args):
-    """True when a text editor writes its file in place: `sed -i`, `perl -pi`."""
+    """True when a text editor writes its file in place: `sed -i`, `perl -pi`, `perl -i.bak`, `awk -i inplace`."""
+    if verb == "awk":
+        return any(a == "-i" and i + 1 < len(args) and args[i + 1] == "inplace" for i, a in enumerate(args))
     if verb not in _SLACK_EDITORS:
         return False
     return any(a == "-i" or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args)
+
+
+def _sort_output(args):
+    """True when `sort` writes its output to a file: `-o FILE`, `-oFILE`, `--output=FILE`."""
+    return any(a in ("-o", "--output") or a.startswith("--output=") or (a.startswith("-o") and len(a) > 2) for a in args)
+
+
+def _names_target(words, root, home, target):
+    return target in {_named_path(w, root, home) for w in words}
 
 
 def settings_slack_reason(cmd, root, home, depth=0):
@@ -268,9 +282,13 @@ def settings_slack_reason(cmd, root, home, depth=0):
             if body is not None and depth < 3 and (inner := settings_slack_reason(body, root, home, depth + 1)):
                 return inner
             continue
-        if target not in {_named_path(w, root, home) for w in words}:
+        if _redirects_into(words, root, home, target):
+            return _SETTINGS_SLACK_DENIAL
+        if verb == "dd" and any(a.startswith("of=") and _named_path(a[3:], root, home) == target for a in args):
+            return _SETTINGS_SLACK_DENIAL
+        if not _names_target(words, root, home, target):
             continue
-        if _redirects_into(words, root, home, target) or verb in _SLACK_WRITERS or _in_place(verb, args):
+        if verb in _SLACK_WRITERS or _in_place(verb, args) or (verb == "sort" and _sort_output(args)):
             return _SETTINGS_SLACK_DENIAL
     return None
 
