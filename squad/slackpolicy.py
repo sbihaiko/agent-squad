@@ -343,7 +343,8 @@ class Decision(NamedTuple):
     and `proposal`, and never in a `listen` channel. `mark` is true exactly when `reply` is `draft` or `send`, because
     that reply leaves from the owner's account; a `bot` reply and a decision with no reply carry no mark. `next_poll` is
     set only for an event of a known `guest` channel, so it is None for an unknown channel and for `ignore`/`data` of a
-    non-guest channel."""
+    non-guest channel. `voice_reply` is true exactly when the `guest` channel asks for the reply also in audio, so a
+    channel that does not ask carries no clip (story 70)."""
     kind: str
     role: str | None
     actions: tuple
@@ -352,6 +353,7 @@ class Decision(NamedTuple):
     reply: str | None
     mark: bool
     next_poll: datetime | None
+    voice_reply: bool = False
 
 
 def _row_at(rows, key, value):
@@ -525,12 +527,14 @@ def decide(committed, local, event, now, thread_state=None):
         return Decision(IGNORE, role, (), language, persona, None, False, None)
     class_ = str(workspace.get("class") or "owned")
     next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
+    # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
+    voice = class_ == "guest" and bool(channel.get("voice_reply"))
     role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
     if str(event.get("kind") or "message") != "message" or event.get("own"):
-        return Decision(IGNORE, role, (), language, persona, None, False, next_poll)
+        return Decision(IGNORE, role, (), language, persona, None, False, next_poll, voice)
     if event.get("bot") or event.get("external") or role is None:
-        return Decision(DATA, role, (), language, persona, None, False, next_poll)
+        return Decision(DATA, role, (), language, persona, None, False, next_poll, voice)
     reply = _reply_path(class_, channel, user)
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
-                    next_poll)
+                    next_poll, voice)
