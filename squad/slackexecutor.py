@@ -25,7 +25,7 @@ it there, so `squad/slackproposal.py` can offer it to the owner before any work 
 
 The `loop_control` action (#2705) runs no loop file of its own: it calls the hub loop switch the caller supplies, with
 the hub's own action, so a role holder's pause, resume or drain passes the hub's state rule and the hub's audit
-(ADR-0162). The reply confirms the state the hub applied.
+(ADR-0162). The reply confirms the state the role holder asked for.
 
 The module reads no clock and calls no network: the caller supplies the status, log, work, investigation and board
 sources and the hub loop switch, because those answers come from the repository, the board, the project's own log and
@@ -62,11 +62,14 @@ _ACTION_ARGUMENT = {REQUEST_WORK: ("title",), REQUEST_INVESTIGATION: ("question"
                     APPROVE_AND_MOVE: ("card", "to")}
 # The hub's loop switch is the one write path (ADR-0162): a Slack state maps to the hub's own action, and the hub applies
 # the state rule, the audit and the supervisor. A pause and a drain are one hub drain, because a drain pauses dispatch
-# and stops once the live work ends; a resume is a start.
+# and stops once the live work ends; a resume is a start. The two states stay distinct in the reply, so a person reads
+# the state they asked for, and a future hub `pause` action changes this one map.
 LOOP_STATES = {"pause": "drain", "resume": "start", "drain": "drain"}
-# The reply of each hub action, so an answer confirms the state the hub applied, never one the executor guessed.
+# The reply of each state the role holder asks for, so an answer confirms the state the hub applied, never one the
+# executor guessed and never the reply of a different state.
 LOOP_REPLY = {
-    "start": "The loop starts again: no new dispatch waits on a drain.",
+    "pause": "The loop pauses: it dispatches nothing new until a resume.",
+    "resume": "The loop starts again: no new dispatch waits on a drain.",
     "drain": "The loop drains: it dispatches nothing new and stops when the live runs and gates finish.",
 }
 
@@ -167,6 +170,11 @@ def check(request, decision, line, project, listed=None):
         return Refusal("proposal", "a request in a guest channel becomes a proposal to the owner: no action runs "
                                    "before the owner approves it (squad/slackproposal.py)")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
+    # The state is checked first, so one request that names both a bad state and an extra key reports the state that
+    # decides the action does not apply, and the caller fixes the reading in one round-trip.
+    if request.action == LOOP_CONTROL and request.arguments.get("state") not in LOOP_STATES:
+        return Refusal("arguments", "the loop_control action takes the state pause, resume or drain, and the request "
+                                    f"names {request.arguments.get('state')!r}")
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:
         takes = f"takes only {', '.join(sorted(allowed))}" if allowed else "takes no argument"
@@ -207,11 +215,12 @@ def _loop_control(state, who, loop):
     supervisor (ADR-0162), and the executor writes no loop file of its own."""
     action = LOOP_STATES[state]
     code, body = loop(action, who)
+    # The hub's answer is read defensively: a body that is not one mapping refuses the action with the hub's answer and
+    # never raises inside the request path.
+    body = body if isinstance(body, dict) else {}
     if code != 200:
-        body = body or {}
         return Refusal("hub", str(body.get("reason") or body.get("err") or f"the hub refused {action} with {code}"))
-    applied = str((body or {}).get("action") or action)
-    return LOOP_REPLY.get(applied, LOOP_REPLY.get(action, ""))
+    return LOOP_REPLY[state]
 
 
 def execute(request, decision, line, project, status=None, logs=None, guest=(), work=None, investigate=None,
