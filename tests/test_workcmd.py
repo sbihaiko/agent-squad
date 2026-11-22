@@ -13,6 +13,8 @@ import subprocess
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from squad import gates, git, workcmd
 from squad.runners.dispatch import Dispatch
 from squad.sdk_adapter import SdkAdapter
@@ -352,6 +354,7 @@ def test_a_missing_test_file_stays_a_measured_red(tmp_path):
     assert not r.ok and not r.malformed and not r.unproven, r
 
 
+@pytest.mark.heavy   # two pytest processes: a loaded runner pushes it past the heavy line
 def test_a_bad_k_after_a_red_command_stays_a_measured_red(tmp_path):
     """A compound command whose first suite named a failure keeps that red, even when its last call is a bad `-k`."""
     (tmp_path / "test_red.py").write_text("def test_r():\n    assert False\n")
