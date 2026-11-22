@@ -15,15 +15,19 @@ still delivered by the next read.
 The poller never answers itself. The writer records the `ts` of every message and draft it created in the own list
 (`OwnTs`), and a message from the owner account that starts with a persona mark is own too, whatever the connector
 footer says. A reply in a thread does not appear in the channel read, so the poller rereads every thread where the agent
-replied (`RepliedThreads`) until it goes quiet. The polling schedule is not here (#2709).
+replied (`RepliedThreads`) until it goes quiet.
+
+The polling schedule of each channel is `PollSchedule` (#2709). A tick fires every minute and does nothing before the
+`next_due` of the channel. The interval of a poll comes from `slackpolicy.poll_interval`, over the channel's `poll`
+block, so the schedule and the decision read one set of keys.
 
 The policy decision comes from `squad/slackpolicy.py` (#2684), and the caller passes the clock value. This module reads
 no clock of its own and calls no network: the connector is a callable that the caller supplies.
 
-Guards: `tests/test_slack_poller.py`.
+Guards: `tests/test_slack_poller.py`, `tests/test_slack_schedule.py`.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import slackpolicy
@@ -386,6 +390,119 @@ def _channel_row(committed, local, workspace, channel):
                 if str(row.get("id")) == str(channel):
                     return row
     return {}
+
+
+def guest_channels(committed, local):
+    """Every channel of a `guest` Slack workspace, as `(workspace_id, channel_id, row)` in file order. The local file
+    comes first, because it declares the `guest` workspaces (ADR-0177), and a channel the two files share reads once."""
+    out, seen = [], set()
+    for doc in (local, committed):
+        for ws in (doc or {}).get("workspaces") or []:
+            if str(ws.get("class") or "owned") != "guest":
+                continue
+            for row in ws.get("channels") or []:
+                key = (str(ws.get("id")), str(row.get("id")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((key[0], key[1], row))
+    return out
+
+
+class PollSchedule:
+    """The polling schedule of each `guest` channel (#2709): the `next_due` of the channel and the interval that
+    follows each poll.
+
+    A tick fires every minute and asks `due(now)`; the answer holds each channel whose `next_due` has passed, so a tick
+    does nothing before it. In `two_state` mode the interval is `fast` after a message from another person and `slow`
+    after `quiet_after` of silence. In `exponential` mode it starts at `floor`, multiplies by `factor` at each idle
+    window and stops at `ceiling`. A new message (`note_message`) and an announced event (`note_event`) return it to
+    fast, and an open agent thread newer than `thread_open` keeps it fast. Every interval comes from
+    `slackpolicy.poll_interval`, so the schedule and the decision read one set of keys.
+
+    The state lives in one JSON file in the guest state folder, keyed by Slack workspace and channel. An unreadable
+    file reads as an empty schedule, so a broken file never stops a poll, and every write is atomic (ADR-0030). The
+    module reads no clock of its own: the caller passes every clock value."""
+
+    def __init__(self, path, committed, local, threads=None):
+        self.path = Path(path)
+        self.committed, self.local, self.threads = committed or {}, local or {}, threads
+        self.channels = guest_channels(self.committed, self.local)
+
+    def _load(self):
+        try:
+            doc = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return doc if isinstance(doc, dict) else {}
+
+    def _save(self, doc):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
+
+    def _entry(self, doc, workspace, channel):
+        return (doc.get(str(workspace)) or {}).get(str(channel)) or {}
+
+    def _write_entry(self, workspace, channel, **fields):
+        doc = self._load()
+        entry = dict(self._entry(doc, workspace, channel))
+        entry.update(fields)
+        doc.setdefault(str(workspace), {})[str(channel)] = entry
+        self._save(doc)
+        return entry
+
+    @staticmethod
+    def _time(value):
+        try:
+            return datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+
+    def next_due(self, workspace, channel):
+        """The time of the next poll of the channel, or None when the schedule never held the channel."""
+        return self._time(self._entry(self._load(), workspace, channel).get("next_due"))
+
+    def last_at(self, workspace, channel):
+        """The time of the last message or announced event of the channel, or None."""
+        return self._time(self._entry(self._load(), workspace, channel).get("last_at"))
+
+    def interval(self, workspace, channel, now):
+        """The seconds to the next poll of the channel at `now`, from its `poll` block and its last activity. An open
+        agent thread newer than `thread_open` keeps the interval fast."""
+        thread_last = self.threads.last_at(channel) if self.threads is not None else None
+        row = _channel_row(self.committed, self.local, workspace, channel)
+        return slackpolicy.poll_interval(now, row, {"last_message_at": self.last_at(workspace, channel),
+                                                    "thread_last_at": thread_last})
+
+    def due(self, now):
+        """The guest channels whose `next_due` has passed at `now`, as `(workspace, channel)` in file order. A channel
+        the schedule never held is due, so its first tick reads it at once."""
+        doc = self._load()
+        out = []
+        for workspace, channel, _row in self.channels:
+            value = self._time(self._entry(doc, workspace, channel).get("next_due"))
+            if value is None or now >= value:
+                out.append((workspace, channel))
+        return out
+
+    def _advance(self, workspace, channel, at):
+        """Set the channel's next due time one interval after `at`."""
+        interval = self.interval(workspace, channel, at)
+        self._write_entry(workspace, channel, next_due=(at + timedelta(seconds=interval)).isoformat())
+
+    def note_message(self, workspace, channel, at):
+        """A message from another person returns the channel to fast: it is the last activity, and the next poll is one
+        fast interval away."""
+        self._write_entry(workspace, channel, last_at=at.isoformat())
+        self._advance(workspace, channel, at)
+
+    def note_event(self, workspace, channel, at):
+        """An announced event in the channel returns it to fast, as a new message does, so a reaction is read at once."""
+        self.note_message(workspace, channel, at)
+
+    def polled(self, workspace, channel, at):
+        """The poll of a due channel at `at`: its next due time is one interval away."""
+        self._advance(workspace, channel, at)
 
 
 class Poller:
