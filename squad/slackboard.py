@@ -10,7 +10,9 @@ this module is their one home:
   owner alone decides when it becomes tickets (ADR-0142).
 
 The module reads no clock and calls no network. The caller passes the board, and the board answers the card of one
-number and takes the approval and the move (`card`, `approve`, `move`). A refusal names one rule and writes nothing.
+number and takes the approval and the move (`card`, `approve`, `move`). The approval names its kind, and the action
+approves a review only: the board takes the kind and a breakdown is refused before any write, so approving a breakdown
+is impossible by construction and never rests on a label a card might omit. A refusal names one rule and writes nothing.
 
 Guard: `tests/test_approve_and_move.py`.
 """
@@ -18,6 +20,9 @@ from typing import NamedTuple
 
 TODO = "Todo"
 SPEC_LABEL = "spec"
+# The one kind the action approves. The board takes it as an explicit argument, so a caller cannot approve a breakdown
+# by leaving the kind out.
+REVIEW = "review"
 # The forward axis of the board definition (ADR-0141, ADR-0143). Abandoned is outside it: the action never abandons a card.
 FORWARD = ("Backlog", TODO, "Doing", "Reviewing", "Batching", "Testing", "Closed")
 
@@ -42,10 +47,12 @@ def _rank(column):
         return None
 
 
-def refusal(number, card, to):
+def refusal(number, card, to, kind=REVIEW):
     """The one rule a move of this card breaks, or None when the move follows every rule. The rules run in one order:
-    the card exists, the card is not a spec, the target is a column the action moves to, the target is after Todo, the
-    card sits after Todo, and the move is forward."""
+    the kind is a review, the card exists, the card is not a spec, the target is a column the action moves to, the
+    target is after Todo, the card sits after Todo, and the move is forward."""
+    if str(kind) != REVIEW:
+        return f"the action approves a {REVIEW} only, and never a {kind!r} breakdown"
     if card is None:
         return f"the board has no card {number}"
     if card.is_spec:
@@ -63,14 +70,15 @@ def refusal(number, card, to):
     return None
 
 
-def approve_and_move(board, number, to):
+def approve_and_move(board, number, to, kind=REVIEW):
     """One `(text, None)` for a request that follows every rule, or `(None, reason)` for the one rule it breaks. The
-    approval and the move reach the board only after every rule passes, so a refusal writes nothing."""
-    number, to = str(number), str(to)
+    approval and the move reach the board only after every rule passes, so a refusal writes nothing. The approval
+    names its `kind`, which is a review, so a breakdown is refused before the board is touched."""
+    number, to, kind = str(number), str(to), str(kind)
     card = board.card(number)
-    reason = refusal(number, card, to)
+    reason = refusal(number, card, to, kind)
     if reason is not None:
         return None, reason
-    board.approve(number)
+    board.approve(number, kind=kind)
     board.move(number, to)
     return f"approved #{number}, moved from {card.column} to {to}", None

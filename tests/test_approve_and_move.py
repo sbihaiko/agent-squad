@@ -77,8 +77,8 @@ class FakeBoard:
         self.calls.append(("card", str(number)))
         return self.cards.get(str(number))
 
-    def approve(self, number):
-        self.calls.append(("approve", str(number)))
+    def approve(self, number, kind="unstated"):
+        self.calls.append(("approve", str(number), str(kind)))
 
     def move(self, number, column):
         self.calls.append(("move", str(number), str(column)))
@@ -102,7 +102,7 @@ def test_a_role_holder_can_approve_a_review():
     board = FakeBoard(B.Card("2690", "Reviewing"))
     out = run(board, {"card": "2690", "to": "Batching"})
     assert out.ran is True
-    assert ("approve", "2690") in board.writes()
+    assert ("approve", "2690", "review") in board.writes()
     assert out.reply == {"path": "bot", "channel": CHANNEL, "text": "approved #2690, moved from Reviewing to Batching"}
 
 
@@ -166,11 +166,53 @@ def test_the_action_never_approves_a_breakdown_into_tickets():
 
 
 def test_a_role_without_approve_and_move_is_refused():
-    """Criterion (6): the colleague's role lists only `status`, so the action is refused and the board is untouched."""
+    """Criterion (6): the colleague's role lists only `status`, so the action is refused and the board is untouched. The
+    decision comes from the real policy, so its role and its action list are the ones the files give."""
     board = FakeBoard(B.Card("2690", "Reviewing"))
-    out = run(board, {"card": "2690", "to": "Batching"}, user=PEER, role="colleague")
+    dec = decision(PEER)
+    assert dec.role == "colleague"
+    assert X.APPROVE_AND_MOVE not in tuple(dec.actions)
+    out = run(board, {"card": "2690", "to": "Batching"}, user=PEER)
     assert out.ran is False
     assert out.record["error"].startswith("grant:")
+    assert board.writes() == []
+
+
+def test_an_unknown_action_with_arguments_writes_no_board():
+    """Finding (a): an action outside the five makes no board write, and its refusal names the action check."""
+    board = FakeBoard(B.Card("2690", "Reviewing"))
+    request, why = X.parse(json.dumps({"action": "approve_everything",
+                                       "arguments": {"card": "2690", "to": "Batching"},
+                                       "project": REPO, "channel": CHANNEL, "source": MID}))
+    assert request is not None, why
+    out = X.execute(request, decision(), line(), REPO, board=board)
+    assert out.ran is False
+    assert out.record["error"].startswith("action:")
+    assert board.writes() == []
+
+
+def test_a_board_request_missing_its_card_or_target_is_an_arguments_refusal():
+    """Finding (a): a request that names no card or no target is a structured arguments refusal, never a KeyError."""
+    for arguments in ({"to": "Batching"}, {"card": "2690"}):
+        board = FakeBoard(B.Card("2690", "Reviewing"))
+        out = run(board, arguments)
+        assert out.ran is False, arguments
+        assert out.record["error"].startswith("arguments:"), out.record["error"]
+        assert board.writes() == []
+
+
+def test_the_board_records_a_review_and_refuses_a_breakdown():
+    """Criterion (5) and ADR-0142: the action approves a review only. The board records the kind it approved, and a
+    breakdown is refused before any write, even for a card with no spec label that sits in a column after Todo."""
+    board = FakeBoard(B.Card("2690", "Reviewing"))
+    out = run(board, {"card": "2690", "to": "Batching"})
+    assert out.ran is True
+    assert board.writes() == [("approve", "2690", "review"), ("move", "2690", "Batching")]
+
+    board = FakeBoard(B.Card("2682", "Reviewing"))
+    text, why = B.approve_and_move(board, "2682", "Batching", kind="breakdown")
+    assert text is None and why is not None
+    assert "breakdown" in why
     assert board.writes() == []
 
 
@@ -178,18 +220,21 @@ def test_a_fake_board_proves_every_rule():
     """Criterion (7): each rule leaves the fake board unmoved, and the one allowed request writes exactly one approval
     and one move. The reasons are distinct, so no rule hides behind another."""
     rules = (
-        (B.Card("2690", "Reviewing"), "Todo", "board"),
-        (B.Card("2690", "Reviewing"), "Doing", "board"),
-        (B.Card("2690", "Todo"), "Doing", "board"),
-        (B.Card("2682", "Reviewing", ("spec",)), "Batching", "board"),
+        ((), "2690", "Batching", "board"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Todo", "board"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Doing", "board"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Abandoned", "board"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Nope", "board"),
+        ((B.Card("2690", "Todo"),), "2690", "Doing", "board"),
+        ((B.Card("2682", "Reviewing", ("spec",)),), "2682", "Batching", "board"),
     )
     reasons = []
-    for card, to, check in rules:
-        board = FakeBoard(card)
-        out = run(board, {"card": card.number, "to": to})
-        assert out.ran is False, f"{card} to {to} ran"
+    for cards, number, to, check in rules:
+        board = FakeBoard(*cards)
+        out = run(board, {"card": number, "to": to})
+        assert out.ran is False, f"#{number} to {to} ran"
         assert out.record["error"].startswith(f"{check}:"), out.record["error"]
-        assert board.writes() == [], f"{card} to {to} wrote the board"
+        assert board.writes() == [], f"#{number} to {to} wrote the board"
         reasons.append(out.record["error"])
     assert len(set(reasons)) == len(reasons)
 
@@ -201,4 +246,4 @@ def test_a_fake_board_proves_every_rule():
     board = FakeBoard(B.Card("2690", "Reviewing"))
     out = run(board, {"card": "2690", "to": "Batching"})
     assert out.ran is True
-    assert board.writes() == [("approve", "2690"), ("move", "2690", "Batching")]
+    assert board.writes() == [("approve", "2690", "review"), ("move", "2690", "Batching")]
