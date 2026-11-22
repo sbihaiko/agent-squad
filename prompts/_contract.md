@@ -30,3 +30,4 @@ A hook checks every tool call, and a denied call costs a turn. Follow these rule
 - Do not name `$SG_STATE` or the live skill copy (`~/.claude/skills/squad-goal`) in a command. They are the loop's, not yours.
 - Do not run `ps`. The kernel hides the process table from your session.
 - Do not close an issue. Only the landing closes an issue, because it holds the proof that the base carries the work. Report the state in a comment and end the turn.
+- Do not write `docs/squad/slack.yaml` with any tool, including a Bash verb such as `cp`, `mv`, `rm`, `tee` or `sed`. Only the hub writes that file, and only after the owner approves the diff. A fixture named `slack.yaml` elsewhere stays open.

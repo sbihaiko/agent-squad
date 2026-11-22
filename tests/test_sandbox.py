@@ -372,5 +372,102 @@ def test_the_session_contract_states_every_rule_the_sandbox_enforces():
     assert "## Sandbox" in text
     sect = text[text.index("## Sandbox"):]
     for needle in ("contrib/squad-goal/scripts/child-gate.sh", "inside your worktree", "/tmp", "$SG_STATE", "live skill copy", "`ps`",
-                   "Do not close an issue"):
+                   "Do not close an issue", "docs/squad/slack.yaml", "with any tool", "including a Bash verb"):
         assert needle in sect, needle
+
+
+# #2692, story 66: the committed `slack.yaml` beside the project settings file is the owner's written grant. Only the hub
+# writes it, and only after the owner approves the diff. A run or a child that edits it would create authority from
+# ordinary code, so the wall denies every write at that one path and leaves fixtures elsewhere alone.
+SETTINGS_SLACK = "docs/squad/slack.yaml"
+
+
+def test_a_child_cannot_edit_the_slack_file_at_the_settings_path(tmp_path):
+    ws = tmp_path / "wt"
+    (ws / "docs" / "squad").mkdir(parents=True)
+    for tool in ("Write", "Edit", "MultiEdit"):
+        for rel in (SETTINGS_SLACK, f"./{SETTINGS_SLACK}", "docs/squad/../squad/slack.yaml", str(ws / SETTINGS_SLACK)):
+            reason = sandbox.deny_reason(tool, {"file_path": rel, "content": "x", "old_string": "a", "new_string": "b"},
+                                         str(ws), env={}, home=str(tmp_path / "h"))
+            assert reason, (tool, rel)
+
+
+def test_the_settings_path_denial_names_the_rule(tmp_path):
+    ws = tmp_path / "wt"
+    reason = sandbox.deny_reason("Write", {"file_path": SETTINGS_SLACK, "content": "x"}, str(ws), env={}, home=str(tmp_path / "h"))
+    assert reason and reason.startswith("sandbox:") and "slack.yaml" in reason and "hub" in reason, reason
+
+
+def test_a_slack_fixture_under_a_temporary_folder_is_allowed(tmp_path):
+    ws = tmp_path / "wt"
+    (ws / "tests" / "fixtures" / "docs" / "squad").mkdir(parents=True)
+    for rel in ("tests/fixtures/docs/squad/slack.yaml", "tests/fixtures/slack.yaml",
+                str(ws / "tests" / "fixtures" / "docs" / "squad" / "slack.yaml")):
+        assert sandbox.deny_reason("Write", {"file_path": rel, "content": "version: 1"}, str(ws),
+                                   env={}, home=str(tmp_path / "h")) is None, rel
+
+
+@pytest.mark.parametrize("command", [
+    f"echo 'x: 1' > {SETTINGS_SLACK}",
+    f"echo 'x: 1' >> {SETTINGS_SLACK}",
+    f"echo 'x: 1' 1> {SETTINGS_SLACK}",
+    f"echo 'x: 1' 1>> {SETTINGS_SLACK}",
+    f"echo 'x: 1' 1>{SETTINGS_SLACK}",
+    f"echo 'x: 1' 1>>{SETTINGS_SLACK}",
+    f"echo 'x: 1'>{SETTINGS_SLACK}",
+    f"cp /tmp/x {SETTINGS_SLACK}",
+    f"mv /tmp/x {SETTINGS_SLACK}",
+    f"ln -sf /tmp/x {SETTINGS_SLACK}",
+    f"rm -f {SETTINGS_SLACK}",
+    f"tee {SETTINGS_SLACK}",
+    f"echo x | tee {SETTINGS_SLACK}",
+    f"touch {SETTINGS_SLACK}",
+    f"truncate -s 0 {SETTINGS_SLACK}",
+    f"dd of={SETTINGS_SLACK} if=/tmp/x",
+    f"install -m 644 /tmp/x {SETTINGS_SLACK}",
+    f"sed -i 's/a/b/' {SETTINGS_SLACK}",
+    f"sed -i '' 's/a/b/' {SETTINGS_SLACK}",
+    f"perl -pi -e 's/a/b/' {SETTINGS_SLACK}",
+    f"perl -i.bak -pe 's/a/b/' {SETTINGS_SLACK}",
+    f"awk -i inplace '{{print}}' {SETTINGS_SLACK}",
+    f"sort -o {SETTINGS_SLACK} {SETTINGS_SLACK}",
+    f"bash -c 'echo x >> {SETTINGS_SLACK}'",
+])
+def test_a_bash_write_to_the_settings_path_is_denied(tmp_path, command):
+    reason = sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h"))
+    assert reason and "slack.yaml" in reason, reason
+
+
+def test_a_slack_file_at_another_path_under_the_worktree_is_allowed(tmp_path):
+    """Only the exact settings path is the grant. A fixture below another `docs/squad` folder stays open."""
+    ws = tmp_path / "wt"
+    (ws / "sub" / "docs" / "squad").mkdir(parents=True)
+    for rel in ("sub/docs/squad/slack.yaml", str(ws / "sub" / "docs" / "squad" / "slack.yaml")):
+        assert sandbox.deny_reason("Write", {"file_path": rel, "content": "x"}, str(ws),
+                                   env={}, home=str(tmp_path / "h")) is None, rel
+    for cmd in ("echo x > sub/docs/squad/slack.yaml", "cp /tmp/x sub/docs/squad/slack.yaml",
+                "awk -i inplace '{print}' sub/docs/squad/slack.yaml"):
+        assert sandbox.deny_reason("Bash", {"command": cmd}, str(ws), env={}, home=str(tmp_path / "h")) is None, cmd
+
+
+@pytest.mark.parametrize("command", [f"cat {SETTINGS_SLACK}", f"grep -n roles {SETTINGS_SLACK}",
+                                     f"cat {SETTINGS_SLACK} > notes.txt", "ls docs/squad"])
+def test_a_read_of_the_settings_path_is_allowed(tmp_path, command):
+    assert sandbox.deny_reason("Bash", {"command": command}, str(tmp_path), env={}, home=str(tmp_path / "h")) is None, command
+
+
+async def test_the_settings_path_denial_holds_under_bypass_permissions(site):
+    tmp, home, ws = site
+    (ws / "docs" / "squad").mkdir(parents=True)
+    steps = [("Write", {"file_path": SETTINGS_SLACK, "content": "roles: []"})]
+    decisions, events = [], []
+    a = SdkAdapter(query=scripted(steps, decisions), options_cls=Options, hook_cls=Matcher)
+    a.bind(lambda kind, **f: events.append((kind, f)))
+    assert a.options(request(ws)).kw["permission_mode"] == "bypassPermissions"
+    await a.call(request(ws))
+    assert decisions == [("Write", "deny", decisions[0][2])] and decisions[0][2], decisions
+    assert "slack.yaml" in decisions[0][2], decisions
+    assert not (ws / SETTINGS_SLACK).exists()
+    deny = [f for k, f in events if k == "sandbox_deny"]
+    assert len(deny) == 1 and deny[0]["tool"] == "Write" and "slack.yaml" in deny[0]["reason"], deny
+    record.validate_event({"event": "sandbox_deny", **deny[0]})
