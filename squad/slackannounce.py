@@ -3,7 +3,8 @@
 The promotion pass, or a project's own deploy step, emits one record through `release_events.py emit` (#2702). This module
 maps that record to the drafts a project's `guest` channels get: one draft per channel whose `announce` list names the
 event. The draft follows the writer's own rules (#2712): the tool is the connector's draft tool, the text carries the
-persona mark, and it leaves through the `PreToolUse` hook. It names no thread, because an announcement is a channel post.
+persona mark, and it leaves through the `PreToolUse` hook. It names no thread, because an announcement is a channel
+post, and its connector call comes from `slackwriter.channel_post`, which sends no thread at all.
 
 The template is the channel's own `templates[<event>]` when it has one, else the project's `events` row for that event.
 The record's fields fill it: `{items}` joins the items with a comma and a space, and `{id}`, `{key}` and `{ts}` carry the
@@ -65,7 +66,8 @@ def render(template_text, record):
 
 def draft_for(committed, local, workspace, channel, record):
     """The one draft a channel gets for one record, or None when the channel gets nothing: it does not subscribe, it is
-    `listen`, the event has no template, the rendered body is empty, or the channel resolves no persona."""
+    `listen`, the event has no template, the rendered body is empty, or the channel resolves no persona. The draft names
+    no thread: its connector call comes from `slackwriter.channel_post`."""
     event_id = str(record.get("id") or "")
     if not event_id or not subscribed(channel, event_id):
         return None
@@ -89,11 +91,20 @@ def draft_for(committed, local, workspace, channel, record):
 
 def _over(base, row):
     """One row over another: a nested `templates` map merges key by key, so a local row that adds one event keeps the
-    others; every other key, list and scalar alike, replaces the committed value."""
+    others; an `announce` list is the union by event id, in the committed order then the local additions, so a local row
+    that names one event never drops a committed one; every other key, list and scalar alike, replaces the committed
+    value."""
     merged = dict(base)
     for key, value in row.items():
         if key == "templates" and isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = {**merged[key], **value}
+        elif key == "announce" and isinstance(value, list) and isinstance(merged.get(key), list):
+            union, seen = list(merged[key]), {str(item) for item in merged[key]}
+            for item in value:
+                if str(item) not in seen:
+                    seen.add(str(item))
+                    union.append(item)
+            merged[key] = union
         else:
             merged[key] = value
     return merged
@@ -102,8 +113,9 @@ def _over(base, row):
 def _merge_by_id(rows):
     """Rows of both documents as one list, one row per id: the committed row first, then the local row's own keys over
     it, so a local override wins and a key the local row omits stays as committed. The `templates` map merges per event
-    key, so a local row that adds one event template keeps the committed templates for the other events. A row with no
-    id never merges, and the first appearance of an id fixes its place in the list."""
+    key and the `announce` list unions per event id, so a local row that adds one event keeps the committed templates
+    and events of the others. A row with no id never merges, and the first appearance of an id fixes its place in the
+    list."""
     out, index = [], {}
     for row in rows:
         row_id = str(row.get("id") or "")
@@ -146,17 +158,20 @@ def _guest_workspaces(committed, local):
 
 def announcements(committed, local, record):
     """Every draft a project's `guest` channels get for one release record, one per channel, in the file's order. The
-    two documents are merged per workspace id and per channel id, committed first and local over it, so one channel id
-    yields one draft, whatever both files name."""
+    two documents are merged per workspace id and per channel id, committed first and local over it, so one channel in
+    one workspace yields one draft, whatever both files name. The dedup key is (workspace id, channel id): a channel id
+    that a second guest workspace also names gets that workspace's own draft."""
     out, seen = [], set()
     for group in _guest_workspaces(committed, local):
         if str(group["workspace"].get("class") or "owned") != "guest":
             continue
+        workspace_id = str(group["workspace"].get("id") or "")
         for channel in group["channels"]:
             channel_id = str(channel.get("id") or "")
-            if not channel_id or channel_id in seen:
+            key = (workspace_id, channel_id)
+            if not channel_id or key in seen:
                 continue
-            seen.add(channel_id)
+            seen.add(key)
             draft = draft_for(committed, local, group["workspace"], channel, record)
             if draft is not None:
                 out.append(draft)
