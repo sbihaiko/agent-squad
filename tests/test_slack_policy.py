@@ -160,6 +160,48 @@ def test_a_deploy_list_without_prod_passes():
     assert S.validate(committed, local) == []
 
 
+def test_an_action_outside_the_executor_list_is_refused():
+    """The actions a role may list are the ones the executor runs (issue #2699): the editor offers that list, and a
+    role that names another action is refused, with the message naming the key and the action."""
+    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status", "deploy"]}])
+    defects = S.validate(committed, local)
+    assert "roles[0].actions[1]" in keys(defects), defects
+    assert "'deploy'" in str(defects[0]), defects
+
+
+def test_the_role_actions_are_the_executor_actions():
+    """One list, never a copy: the policy module answers the vocabulary the executor runs."""
+    from squad import slackexecutor
+    assert set(S.role_actions()) == set(slackexecutor.ACTIONS)
+
+
+def test_a_member_value_that_is_not_a_user_id_is_refused():
+    """A member names its people by Slack user id in the local file (ADR-0177, issue #2699): any other value is
+    refused, and the message names the user inside the member row."""
+    committed, local = files()
+    local["members"][0]["users"] = ["U0OWNER001", "sandro"]
+    defects = S.validate(committed, local)
+    assert "members[0].users[1]" in keys(defects), defects
+    assert "'sandro'" in str(defects[0]), defects
+
+
+def test_members_live_only_in_the_local_file():
+    """The committed file holds a role's actions; the people of the role stay on the machine (ADR-0177). A committed
+    member list is refused, so the editor never lands a user id in `slack.yaml` (issue #2699)."""
+    committed, local = files()
+    committed["members"] = copy.deepcopy(local["members"])
+    defects = S.validate(committed, local)
+    assert [(d.file, d.key) for d in defects] == [("slack.yaml", "members")], defects
+
+
+def test_a_member_that_names_no_workspace_is_refused():
+    """One format, four fields: a member names its Slack workspace, its channel, its role and its user ids."""
+    committed, local = files()
+    del local["members"][0]["workspace"]
+    defects = S.validate(committed, local)
+    assert "members[0].workspace" in keys(defects), defects
+
+
 def test_a_send_grant_in_the_committed_file_is_refused():
     # The grant is written only by the hub, in the local file, with the date of the grant.
     committed, local = files()
