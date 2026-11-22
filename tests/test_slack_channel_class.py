@@ -78,8 +78,21 @@ def test_a_channel_class_in_the_committed_file_is_refused_with_its_key():
     assert named[0].file == "slack.yaml"
 
 
+def test_a_local_channel_class_is_guest_only():
+    """Criterion (3), the other direction: the local file narrows a channel to `guest` and never widens it, so a
+    channel class it sets to `owned` is one defect that names the key."""
+    committed, local = files()
+    local["workspaces"][0]["channels"][1]["class"] = "owned"
+    named = [d for d in S.validate(committed, local) if d.key == "workspaces[0].channels[1].class"]
+    assert len(named) == 1
+    assert named[0].file == "slack.local.yaml"
+    assert "guest" in named[0].reason
+
+
 def test_the_decision_for_a_guest_channel_in_an_owned_workspace_is_a_proposal():
-    """Criterion (4): the channel's class wins, so the decision polls it and answers with a `proposal`, never `inbox`."""
+    """Criterion (4): the channel's class wins, so the decision polls it and answers with a `proposal`, never `inbox`.
+    The workspace is the one `slack.yaml` declares `owned`; a local-only workspace is a guest workspace (decision 1),
+    so the committed file names the workspace this criterion covers."""
     committed, local = files()
     decision = S.decide(committed, local, event(), NOW)
     assert decision.kind == S.PROPOSAL
@@ -105,9 +118,19 @@ def test_the_guest_poller_lists_the_channel_as_due(tmp_path):
     committed, local = files()
     schedule = P.PollSchedule(tmp_path / "schedule.json", committed, local)
     due = schedule.due(NOW)
-    assert (TEAM, TRIAL) in due
-    assert (TEAM, ALERTS) in due
-    assert (TEAM, PROJECT) not in due
+    assert due == sorted([(TEAM, TRIAL), (TEAM, ALERTS)])
+
+
+def test_a_shared_guest_channel_keeps_the_committed_rows_keys():
+    """The seam behind criterion (6): the local row's class wins over a channel the two files share, and the committed
+    row's other keys stay, so a poll block in either file reaches the poller."""
+    committed, local = files()
+    committed["workspaces"][0]["channels"][1]["poll"] = {
+        "mode": "two_state", "fast": "2m", "slow": "20m", "quiet_after": "20m", "thread_open": "30m"}
+    rows = {(team, channel): row for team, channel, row in P.guest_channels(committed, local)}
+    row = rows[(TEAM, ALERTS)]
+    assert row["class"] == "guest"
+    assert row["poll"]["fast"] == "2m"
 
 
 def test_the_one_guest_workspace_rule_counts_the_team_that_holds_a_guest_channel():

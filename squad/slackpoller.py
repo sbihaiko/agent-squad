@@ -577,18 +577,28 @@ def open_thread_last(threads, committed, local, workspace, channel, now):
 def guest_channels(committed, local):
     """Every channel whose class is `guest`, as `(workspace_id, channel_id, row)` in file order. A channel of a `guest`
     workspace is one, and so is a channel the local file gives `class: guest` in an owned workspace (#2770). The local
-    file comes first, because it declares the guest channels (ADR-0177), and a channel the two files share reads once."""
+    file comes first, because it declares the guest channels (ADR-0177), and a channel the two files share reads once,
+    with the local row's keys over the committed row's, so no committed key is lost."""
+    committed_rows, committed_class = {}, {}
+    for ws in (committed or {}).get("workspaces") or []:
+        workspace_id = str(ws.get("id"))
+        committed_class[workspace_id] = ws.get("class")
+        for row in ws.get("channels") or []:
+            committed_rows[(workspace_id, str(row.get("id")))] = row
     out, seen = [], set()
     for doc in (local, committed):
         for ws in (doc or {}).get("workspaces") or []:
+            workspace_id = str(ws.get("id"))
+            ws = {**ws, "class": ws.get("class") or committed_class.get(workspace_id)}
             for row in ws.get("channels") or []:
-                if slackpolicy.channel_class(ws, row) != "guest":
-                    continue
-                key = (str(ws.get("id")), str(row.get("id")))
+                key = (workspace_id, str(row.get("id")))
                 if key in seen:
                     continue
+                merged = {**committed_rows[key], **row} if key in committed_rows else row
+                if slackpolicy.channel_class(ws, merged) != "guest":
+                    continue
                 seen.add(key)
-                out.append((key[0], key[1], row))
+                out.append((key[0], key[1], merged))
     return out
 
 

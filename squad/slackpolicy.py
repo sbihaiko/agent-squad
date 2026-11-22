@@ -245,8 +245,8 @@ def channel_row(local, workspace_id, channel_id):
 
 
 def _channel_classes(file, doc, out, local):
-    """A channel class lives in the local file (ADR-0177). The committed file never names one, and a local class is one
-    of the classes the file declares."""
+    """A channel class lives in the local file (ADR-0177), and it is `guest`: the local file narrows a channel and never
+    widens it. The committed file never names one."""
     for i, ws in enumerate(_rows(doc.get("workspaces"))):
         for j, ch in enumerate(_rows(ws.get("channels"))):
             if ch.get("class") is None:
@@ -254,8 +254,8 @@ def _channel_classes(file, doc, out, local):
             key = f"workspaces[{i}].channels[{j}].class"
             if not local:
                 out.append(_defect(file, key, "a channel class lives in the local file"))
-            elif str(ch["class"]) not in FIELD_CLASSES:
-                out.append(_defect(file, key, f"the class is one of {', '.join(FIELD_CLASSES)}"))
+            elif str(ch["class"]) != "guest":
+                out.append(_defect(file, key, "a local channel class is guest"))
 
 
 def _guest_ids(local):
@@ -364,6 +364,10 @@ def validate_field(documents, doc, path, field, value):
     def bad(reason):
         return key, reason
 
+    if field == "class" and "channels" in path:
+        if str(value) != "guest":
+            return bad("a local channel class is guest")
+        return None
     if field == "class" and str(value) not in FIELD_CLASSES:
         return bad(f"the class is one of {', '.join(FIELD_CLASSES)}")
     if field == "mode" and str(value) not in FIELD_MODES:

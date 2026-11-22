@@ -22,7 +22,9 @@ of the project, where a person reviews its commit.
 2. **A workspace has a class, and a channel may take one.** `owned` installs the agent-squad app, and `voiced` opens one
    Socket Mode connection per app. `guest` installs no bot, and a scheduled session reads the channel through the
    claude.ai connector. A channel row in the local file may carry `class: guest`, and the channel's class wins over its
-   workspace's class, so the owner tests the guest path in an owned test workspace. That channel takes no bot transport:
+   workspace's class, so the owner tests the guest path in an owned test workspace of `slack.yaml`. A local channel class
+   is `guest`: the local file narrows a channel and never widens it, and the validator refuses any other value. That
+   channel takes no bot transport:
    `voiced` posts nothing in it, though the bot of its workspace is a member, and the guest poller reads it through the
    connector. The class decides the transport, and the committed file names no channel class.
 3. **The policy module has one home.** The rules of both files and the decision for one event live in
