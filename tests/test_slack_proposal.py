@@ -88,6 +88,18 @@ class Work:
         return "issue #2705 opened"
 
 
+class Issue:
+    """The issue source `create` calls. It records the destination and the exact text, so a refused proposal proves it
+    was never reached."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, destination, text):
+        self.calls.append((destination, text))
+        return f"issue #2706 opened in {destination}"
+
+
 # --- criterion 1: a request from a role holder in a guest channel gets decision `proposal` --------------------------
 
 def test_a_request_from_a_role_holder_in_a_guest_channel_gets_decision_proposal():
@@ -125,3 +137,61 @@ def test_the_proposal_reaches_the_owner_dm_with_a_summary_that_holds_no_personal
     assert output["permissionDecision"] == "allow"
     assert output["updatedInput"]["channel"] == OWNER_DM
     assert output["updatedInput"]["text"] == draft.text
+
+
+# --- criteria 3 to 6: the owner confirms, edits or refuses; nothing is born without approval -------------------------
+
+def test_the_owner_can_confirm_the_proposal_with_its_destination():
+    """Criterion (3): a `confirm` reply approves the client's text and the destination the owner named."""
+    approved = P.approve(proposal(), P.parse_owner(f"confirm {REPO}", [REPO]))
+    assert approved == P.Approval(CLIENT_TITLE, REPO)
+
+
+def test_the_owner_can_edit_the_proposal_and_the_edit_is_the_approved_text():
+    """Criterion (3) and (5): an `edit` reply replaces the text, and the edited text is what the owner approved."""
+    approved = P.approve(proposal(), P.parse_owner(f"edit {REPO}: Add a CSV export button", [REPO]))
+    assert approved == P.Approval("Add a CSV export button", REPO)
+
+
+def test_the_owner_can_refuse_the_proposal():
+    """Criterion (3) and (4): a `refuse` reply approves nothing, and the issue source is never reached."""
+    issue = Issue()
+    assert P.approve(proposal(), P.parse_owner("refuse", [REPO])) is None
+    assert P.create(None, issue) is None
+    assert issue.calls == []
+
+
+def test_a_refused_proposal_creates_nothing():
+    """Criterion (4): the refusal ends at the owner's reply, so no issue is created and no work starts."""
+    issue = Issue()
+    refused = P.parse_owner("refuse", [REPO])
+    assert P.approve(proposal(), refused) is None
+    assert P.create(P.approve(proposal(), refused), issue) is None
+    assert issue.calls == []
+
+
+def test_an_issue_carries_only_the_exact_text_the_owner_approved():
+    """Criterion (5): the issue source receives the approved text unchanged, spaces, commas and dashes included."""
+    edited = "Add a CSV export button (comma, dash - and two  spaces kept)"
+    approved = P.approve(proposal(), P.parse_owner(f"edit {REPO}: {edited}", [REPO]))
+    issue = Issue()
+    answer = P.create(approved, issue)
+    assert issue.calls == [(REPO, edited)]
+    assert answer == f"issue #2706 opened in {REPO}"
+
+
+def test_the_owner_approves_the_destination_of_the_issue():
+    """Criterion (6): a reply that names no destination, or one outside the known list, approves nothing."""
+    issue = Issue()
+    assert P.approve(proposal(), P.parse_owner("confirm", [REPO])) is None
+    outside = P.parse_owner("confirm acme/other", [REPO])
+    assert P.approve(proposal(), outside) is None
+    assert P.create(P.approve(proposal(), outside), issue) is None
+    assert issue.calls == []
+
+
+def test_a_proposal_no_owner_approved_creates_nothing():
+    """Criterion (7): the raw proposal never reaches the issue source; only an `Approval` does."""
+    issue = Issue()
+    assert P.create(proposal(), issue) is None
+    assert issue.calls == []

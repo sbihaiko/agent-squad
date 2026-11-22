@@ -71,4 +71,60 @@ def dm(proposal, owner_dm, name):
     return W.Draft(W.DRAFT_WORD, str(owner_dm), "", W.compose(name, summary(proposal)), str(name))
 
 
-__all__ = ["Proposal", "clean", "dm", "of", "summary"]
+# The three owner decisions of one proposal. The whole set, so a reply outside it decides nothing.
+CONFIRM, EDIT, REFUSE = "confirm", "edit", "refuse"
+DECISIONS = (CONFIRM, EDIT, REFUSE)
+
+
+class Answer(NamedTuple):
+    """The owner's one reply to a proposal: the kind, the destination the reply names, and the edited text of an
+    `edit`. A `confirm` or a `refuse` carries no text of its own."""
+    kind: str
+    destination: str
+    text: str
+
+
+class Approval(NamedTuple):
+    """What the owner approved: the exact text of the issue and its destination. Only an `Approval` reaches the issue
+    source, so a proposal that no owner approved is never born."""
+    text: str
+    destination: str
+
+
+def parse_owner(reply, destinations):
+    """The `Answer` of one owner reply, or None when the reply names no decision. The first word is the decision, and
+    the destination is the one project id of `destinations` the reply names. A reply that names no destination, or one
+    outside the list, approves nothing: the owner always approves the destination."""
+    words = str(reply or "").strip()
+    verb, _, rest = words.partition(" ")
+    verb = verb.lower().strip(":")
+    if verb not in DECISIONS:
+        return None
+    if verb == REFUSE:
+        return Answer(REFUSE, "", "")
+    destination = next((str(d) for d in destinations if d and str(d) in rest), "")
+    after = rest.replace(destination, "", 1).lstrip(" :|\t") if destination else ""
+    return Answer(verb, destination, after)
+
+
+def approve(proposal, answer):
+    """The `Approval` of one owner reply, or None. A `confirm` approves the client's exact text; an `edit` approves the
+    owner's exact text; a `refuse` and a reply with no destination approve nothing."""
+    if answer is None or answer.kind not in (CONFIRM, EDIT) or not answer.destination:
+        return None
+    text = str(answer.text) if answer.kind == EDIT else str(proposal.text)
+    if not text.strip():
+        return None
+    return Approval(text, answer.destination)
+
+
+def create(approval, issue):
+    """Start the issue from one `Approval`, and return the issue source's answer. Anything else creates nothing: a raw
+    proposal never reaches the source, so no client content goes public before the owner's review."""
+    if not isinstance(approval, Approval) or not approval.text.strip() or not approval.destination.strip():
+        return None
+    return issue(approval.destination, approval.text)
+
+
+__all__ = ["Answer", "Approval", "CONFIRM", "DECISIONS", "EDIT", "Proposal", "REFUSE", "approve", "clean", "create",
+           "dm", "of", "parse_owner", "summary"]
