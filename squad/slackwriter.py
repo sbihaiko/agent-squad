@@ -8,9 +8,10 @@ own list (`OwnTs`, #2708), so the poller never delivers it back.
 
 Every guest text leaves the owner's account, so every guest text carries the mark that names the AI as the author: the
 line `*<persona>'s Msg*`, alone and in bold, with the body in italics (story 34). A write without that shape is denied
-(story 35), and so is a draft, so a draft sent unchanged still says an AI wrote it (story 36). Stage 3 produces drafts
-only: a direct send passes the hook only when the policy decided `send`, which needs `speak: send` and a grant
-(story 37). Direct send itself is Stage 4.
+(story 35), and so is a draft, so a draft sent unchanged still says an AI wrote it (story 36). A direct send passes the
+hook only when the policy decided `send`: `speak: send` with a `send_grant`, and never in a Slack Connect channel or for
+a person in `draft_for` (stories 37 and 38). Every write, draft or send, goes through this hook, so the model never
+redirects a send to another channel or thread (story 72).
 
 The module reads no clock and calls no network: the caller supplies the decided body, the question's `ts` and, for the
 thread store, its clock value.

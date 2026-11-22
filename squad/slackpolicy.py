@@ -389,14 +389,20 @@ def _role_actions(committed, role):
     return ()
 
 
-def _reply_path(class_, channel):
+def _reply_path(class_, channel, user):
     """The reply path: `bot` in an `owned` channel, a `draft` by default in a `guest` channel, `send` only with an
-    explicit `speak: send` and a `send_grant`, and none in a `listen` channel."""
+    explicit `speak: send` and a `send_grant`, and none in a `listen` channel.
+
+    A Slack Connect channel (`connect: true`) never gets a direct send, because `slack_send_message` does not post there.
+    A reply addressed to a person in `draft_for` already leaves as a draft, even with a grant, so the owner reviews what
+    goes to that person."""
     if str(channel.get("mode") or "listen") != "listen+speak":
         return None
     if str(class_) != "guest":
         return "bot"
-    if str(channel.get("speak") or "draft") == "send" and channel.get("send_grant"):
+    draft_for = {str(value) for value in channel.get("draft_for") or ()}
+    if (str(channel.get("speak") or "draft") == "send" and channel.get("send_grant")
+            and not channel.get("connect") and str(user) not in draft_for):
         return "send"
     return "draft"
 
@@ -473,7 +479,7 @@ def decide(committed, local, event, now, thread_state=None):
         return Decision(IGNORE, role, (), language, persona, None, False, next_poll)
     if event.get("bot") or event.get("external") or role is None:
         return Decision(DATA, role, (), language, persona, None, False, next_poll)
-    reply = _reply_path(class_, channel)
+    reply = _reply_path(class_, channel, user)
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
                     next_poll)

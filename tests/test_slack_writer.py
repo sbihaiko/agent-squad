@@ -39,13 +39,17 @@ LOCAL = {
 BODY = "Here is the answer to your question."
 
 
-def decision(speak=None, grant=None):
+def decision(speak=None, grant=None, draft_for=None, connect=None):
     committed, local = copy.deepcopy(COMMITTED), copy.deepcopy(LOCAL)
     channel = local["workspaces"][0]["channels"][0]
     if speak is not None:
         channel["speak"] = speak
     if grant is not None:
         channel["send_grant"] = grant
+    if draft_for is not None:
+        channel["draft_for"] = draft_for
+    if connect is not None:
+        channel["connect"] = connect
     event = {"kind": "message", "workspace": "T0CLIENT01", "channel": CH, "user": "U0CLIENT01"}
     return S.decide(committed, local, event, NOW)
 
@@ -155,6 +159,73 @@ def test_a_listen_speak_guest_channel_produces_only_a_draft():
     assert asking.tool == W.DRAFT_WORD
     hook = W.pre_write_tool_use(d)
     assert answer(run(hook, {"tool": W.SEND_WORD, "channel": CH, "thread_ts": QUESTION})).get("permissionDecision") == "deny"
+
+
+# --- 6b. direct send, with a fake connector -------------------------------------------------------------------------
+
+class FakeConnector:
+    """The connector's write calls, as the writer session makes them: one call per write the hook allowed, with the
+    arguments the hook returned. It records the tool and the exact text, so a test sees every write that leaves."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def write(self, tool, arguments):
+        self.calls.append((tool, dict(arguments)))
+        return {"ok": True, "ts": "900.000900"}
+
+
+def write_through(hook, connector, tool, args):
+    """One write of the writer session: the hook decides, and only an allow reaches the fake connector."""
+    decided = answer(run(hook, {"tool": tool, **args}))
+    if decided.get("permissionDecision") != "allow":
+        return decided, None
+    return decided, asyncio.run(connector.write(tool, decided["updatedInput"]))
+
+
+def test_a_granted_send_goes_through_the_hook_to_the_fake_connector():
+    d, sent = draft(speak="send", grant="2026-11-20")
+    assert (d.reply, sent.tool) == ("send", W.SEND_WORD)
+    connector = FakeConnector()
+    decided, result = write_through(W.pre_write_tool_use(sent), connector, W.SEND_WORD,
+                                    {"channel": CH, "thread_ts": QUESTION})
+    assert decided.get("permissionDecision") == "allow"
+    assert result["ts"] == "900.000900"
+    assert connector.calls == [(W.SEND_WORD, {"channel": CH, "thread_ts": QUESTION, "text": sent.text})]
+
+
+def test_a_send_without_the_grant_never_reaches_the_fake_connector():
+    d, planned = draft(speak="send")
+    assert (d.reply, planned.tool) == ("draft", W.DRAFT_WORD)
+    connector = FakeConnector()
+    decided, _ = write_through(W.pre_write_tool_use(planned), connector, W.SEND_WORD,
+                               {"channel": CH, "thread_ts": QUESTION})
+    assert decided.get("permissionDecision") == "deny"
+    assert connector.calls == []
+
+
+def test_a_person_in_draft_for_gets_a_draft_and_no_send_reaches_the_fake_connector():
+    d, planned = draft(speak="send", grant="2026-11-20", draft_for=["U0CLIENT01"])
+    assert (d.reply, planned.tool) == ("draft", W.DRAFT_WORD)
+    connector = FakeConnector()
+    decided, _ = write_through(W.pre_write_tool_use(planned), connector, W.SEND_WORD,
+                               {"channel": CH, "thread_ts": QUESTION})
+    assert decided.get("permissionDecision") == "deny"
+    assert connector.calls == []
+    allowed, _ = write_through(W.pre_write_tool_use(planned), connector, W.DRAFT_WORD,
+                               {"channel": CH, "thread_ts": QUESTION})
+    assert allowed.get("permissionDecision") == "allow"
+    assert [tool for tool, _ in connector.calls] == [W.DRAFT_WORD]
+
+
+def test_a_slack_connect_channel_gets_a_draft_and_no_send_reaches_the_fake_connector():
+    d, planned = draft(speak="send", grant="2026-11-20", connect=True)
+    assert (d.reply, planned.tool) == ("draft", W.DRAFT_WORD)
+    connector = FakeConnector()
+    decided, _ = write_through(W.pre_write_tool_use(planned), connector, W.SEND_WORD,
+                               {"channel": CH, "thread_ts": QUESTION})
+    assert decided.get("permissionDecision") == "deny"
+    assert connector.calls == []
 
 
 # --- 7. the draft lands in the thread of the question --------------------------------------------------------------
