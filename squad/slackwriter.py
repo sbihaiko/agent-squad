@@ -46,7 +46,8 @@ SPOKEN_MAX = 420                                  # characters, as the vendored 
 
 class Draft(NamedTuple):
     """The one write the decision allows: the tool, the channel, the `thread_ts` of the question, the exact text with
-    the persona mark, and the persona name the mark names."""
+    the persona mark, and the persona name the mark names. An empty `thread_ts` is a channel post, never a reply in a
+    thread: a release announcement (#2715) names no question to answer."""
     tool: str
     channel: str
     thread_ts: str
@@ -205,13 +206,16 @@ def _allow(arguments):
 
 def arguments_differ(args, channel, thread_ts, text=None):
     """The reason the model's arguments differ from the decision, or None. A missing channel or `thread_ts` is not a
-    difference: the hook fills both with the decided values, and the tool never chooses them. A different one is. When
-    the caller names the decided `text`, a different text is a difference too, so the model never rewrites the write."""
+    difference: the hook fills both with the decided values, and the tool never chooses them. A different one is. A
+    draft with no `thread_ts` is a channel post, so a `thread_ts` in the call is a difference too. When the caller
+    names the decided `text`, a different text is a difference too, so the model never rewrites the write."""
     for key in _CHANNEL_KEYS:
         if key in args and str(args[key]) != str(channel):
             return f"the write names channel {args[key]!r}, not the decided channel {channel!r}"
-    if "thread_ts" in args and str(args["thread_ts"]) != str(thread_ts):
+    if thread_ts and "thread_ts" in args and str(args["thread_ts"]) != str(thread_ts):
         return f"the write names thread {args['thread_ts']!r}, not the thread of the question {thread_ts!r}"
+    if not thread_ts and args.get("thread_ts"):
+        return f"the write names thread {args['thread_ts']!r}, but the decision names a channel post"
     if text and "text" in args and str(args["text"]) != str(text):
         return "the write names a text different from the decided text"
     return None
@@ -245,8 +249,9 @@ def _upload_answer(tool, args, upload):
 def pre_write_tool_use(draft, upload=None, server=DEFAULT_SERVER):
     """The `PreToolUse` hook of the writer session. It passes only the decided tool with the decided channel and
     `thread_ts`, and one denial answer for every other call: a different tool, a different channel or thread, or a
-    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel, `thread_ts` and
-    text, so the exact text reaches Slack whatever the model wrote.
+    decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel and text, and
+    the decided `thread_ts` when the draft names one, so the exact text reaches Slack whatever the model wrote. An
+    empty `thread_ts` names a channel post, so the payload omits the key.
 
     `upload` is the decided `Upload` of a voice reply. When it is there, the hook also passes the connector's two upload
     calls with the decided clip, channel, `thread_ts` and comment, and denies every other upload argument; when it is
@@ -265,7 +270,10 @@ def pre_write_tool_use(draft, upload=None, server=DEFAULT_SERVER):
         reason = write_denial(draft.text, (mark(draft.name),))
         if reason is not None:
             return _deny(reason)
-        return _allow({"channel": draft.channel, "thread_ts": draft.thread_ts, "text": draft.text})
+        updated = {"channel": draft.channel, "text": draft.text}
+        if draft.thread_ts:
+            updated["thread_ts"] = draft.thread_ts
+        return _allow(updated)
     return hook
 
 

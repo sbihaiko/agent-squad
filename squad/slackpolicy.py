@@ -383,9 +383,9 @@ def _effective_language(committed, local, workspace, channel):
     return DEFAULT_LANGUAGE
 
 
-def _effective_persona(committed, local, workspace, channel):
+def effective_persona(committed, local, workspace, channel):
     """The persona of a channel, resolved in the same order as the language. A channel, a workspace and the project name
-    an id; the `Persona` row comes from the committed file, then the local file."""
+    an id; the `Persona` row comes from the committed file, then the local file. The announcement writer reads it too."""
     workspace, channel = workspace or {}, channel or {}
     wanted = None
     for value in (channel.get("persona"), workspace.get("persona"), _project(committed, local).get("persona")):
@@ -552,7 +552,7 @@ def decide(committed, local, event, now, thread_state=None):
     workspace = _row_at(committed.get("workspaces"), "id", workspace_id) or _row_at(local.get("workspaces"), "id", workspace_id)
     channel = _row_at(workspace.get("channels"), "id", channel_id) if workspace else None
     language = _effective_language(committed, local, workspace, channel)
-    persona = _effective_persona(committed, local, workspace, channel)
+    persona = effective_persona(committed, local, workspace, channel)
     if channel is None:
         # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
         role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
