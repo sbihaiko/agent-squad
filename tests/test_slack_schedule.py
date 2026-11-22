@@ -62,16 +62,17 @@ def minutes(value):
 def test_a_tick_does_nothing_before_the_next_due_of_the_channel(tmp_path):
     s = schedule(tmp_path)
     assert s.due(NOW) == [(WS, CH), (WS, EXP)]      # a channel never polled is due at once
-    s.polled(WS, CH, NOW)                           # two_state with no message: fast, one minute
+    s.polled(WS, CH, NOW)                           # two_state with no message: slow, ten minutes
     s.polled(WS, EXP, NOW)                          # exponential with no message: the floor, five minutes
     assert s.due(NOW + timedelta(seconds=59)) == []
-    assert s.due(NOW + timedelta(minutes=1)) == [(WS, CH)]
-    assert s.due(NOW + timedelta(minutes=4, seconds=59)) == [(WS, CH)]
-    assert s.due(NOW + timedelta(minutes=5)) == [(WS, CH), (WS, EXP)]
+    assert s.due(NOW + timedelta(minutes=4, seconds=59)) == []
+    assert s.due(NOW + timedelta(minutes=5)) == [(WS, EXP)]
+    assert s.due(NOW + timedelta(minutes=9, seconds=59)) == [(WS, EXP)]
+    assert s.due(NOW + timedelta(minutes=10)) == [(WS, CH), (WS, EXP)]
     # The clock keeps the due time: a new schedule over the same file reads it back.
     again = schedule(tmp_path)
-    assert again.due(NOW + timedelta(seconds=59)) == []
-    assert again.next_due(WS, CH) == NOW + timedelta(minutes=1)
+    assert (WS, CH) not in again.due(NOW + timedelta(minutes=9, seconds=59))
+    assert again.next_due(WS, CH) == NOW + timedelta(minutes=10)
 
 
 # --- 2. two_state stays fast after a message from another person ----------------------------------------------------
@@ -145,6 +146,62 @@ def test_an_announced_event_returns_the_interval_to_fast(tmp_path):
 
 
 # --- 7. an agent thread newer than thread_open keeps the interval fast ----------------------------------------------
+
+def test_a_channel_with_no_message_waits_the_slow_interval(tmp_path):
+    # A channel that never delivered a message is quiet, so two_state reads it at the slow interval and not every
+    # minute: the schedule costs the quiet channel the quiet amount (stories 9 and 10).
+    s = schedule(tmp_path, local=only(CH))
+    assert s.due(NOW) == [(WS, CH)]                 # never polled: due at once
+    s.polled(WS, CH, NOW)
+    assert s.next_due(WS, CH) - NOW == minutes(10)
+
+
+def test_a_stale_agent_thread_does_not_keep_the_interval_fast(tmp_path):
+    # Only a thread message newer than thread_open keeps the interval fast. A thread whose last read is an hour old is
+    # out of the window, so the channel falls back on its own silence.
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900")
+    s = schedule(tmp_path, threads=threads, local=only(CH))
+    assert s.interval(WS, CH, NOW) == 600
+
+
+def test_the_newest_open_thread_of_the_channel_decides_the_window(tmp_path):
+    # The store answers one value per channel, the newest open thread, so a recent thread keeps the interval fast even
+    # while an older thread sits past thread_open.
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900")
+    threads.record(CH, "100.000200", at=NOW - minutes(2), ts="100.001000")
+    s = schedule(tmp_path, threads=threads, local=only(CH))
+    assert threads.last_at(CH) == NOW - minutes(2)
+    assert s.interval(WS, CH, NOW) == 60
+
+
+def test_the_minute_tick_never_polls_before_the_next_due(tmp_path):
+    # One tick a minute over a sequence of clock values: the tick answers a channel only on the minute its next_due
+    # falls, and never before (story 9).
+    s = schedule(tmp_path)
+    assert s.due(NOW) == [(WS, CH), (WS, EXP)]
+    s.polled(WS, CH, NOW)                           # no message: ten minutes
+    s.polled(WS, EXP, NOW)                          # exponential: the five minute floor
+    fired = {}
+    for minute in range(1, 23):
+        clock = NOW + minutes(minute)
+        for channel in s.due(clock):
+            fired.setdefault(channel[1], []).append(minute)
+            s.polled(channel[0], channel[1], clock)
+    assert fired[CH] == [10, 20]
+    assert fired[EXP] == [5, 10, 15, 20]
+
+
+def test_the_quiet_clock_runs_from_the_last_message_not_the_tick(tmp_path):
+    # A message at NOW is still the anchor at NOW + 20 minutes: the interval is slow, because quiet_after counts from
+    # the message and not from the clock value of the tick.
+    s = schedule(tmp_path, local=only(CH))
+    s.note_message(WS, CH, NOW)
+    assert s.interval(WS, CH, NOW + timedelta(seconds=59)) == 60
+    assert s.interval(WS, CH, NOW + minutes(10)) == 600
+    assert s.interval(WS, CH, NOW + minutes(20)) == 600
+
 
 def test_an_agent_thread_within_thread_open_keeps_the_interval_fast(tmp_path):
     threads = P.RepliedThreads(tmp_path / "threads.json")
