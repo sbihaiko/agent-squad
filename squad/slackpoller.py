@@ -213,8 +213,17 @@ class OwnTs:
 
 # --- the replied-thread store (#2708) -------------------------------------------------------------------------------
 
+_THREAD_KEY_SEP = "\x1f"
+
+
+def _thread_key(workspace, channel):
+    """The store key of a channel: the workspace and the channel id, so two guest workspaces that expose the same
+    channel id never read each other's threads. A caller that names no workspace keeps the bare channel id."""
+    return str(channel) if workspace is None else f"{workspace}{_THREAD_KEY_SEP}{channel}"
+
+
 class RepliedThreads:
-    """The threads where the agent replied, keyed by channel and `thread_ts`. Each entry holds the read cursor (the
+    """The threads where the agent replied, keyed by workspace, channel and `thread_ts`. Each entry holds the read cursor (the
     newest `ts` the thread read delivered) and the time of the last activity. The poller rereads every open thread and
     closes it after it goes quiet. The writer records a reply, so a thread opens the moment the agent answers in it. Only
     code writes the file, every write is atomic (ADR-0030), and an unreadable file reads as empty."""
@@ -233,12 +242,13 @@ class RepliedThreads:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
 
-    def record(self, channel, thread_ts, at=None, ts=None):
+    def record(self, channel, thread_ts, at=None, ts=None, workspace=None):
         """Record a reply in a thread, or move its activity and cursor forward. `at` is the caller's clock value of the
         last activity, and `ts` the newest `ts` the thread read delivered. A new thread needs an `at`, because the anchor
-        of its quiet time cannot be guessed. Returns False, and writes nothing, when no thread is recorded."""
+        of its quiet time cannot be guessed. `workspace` separates two guest workspaces that share a channel id. Returns
+        False, and writes nothing, when no thread is recorded."""
         doc = self.load()
-        key = str(channel)
+        key = _thread_key(workspace, channel)
         entry = (doc.get(key) or {}).get(str(thread_ts))
         if entry is None and at is None:
             return False
@@ -253,26 +263,28 @@ class RepliedThreads:
         self._save(doc)
         return True
 
-    def close(self, channel, thread_ts):
+    def close(self, channel, thread_ts, workspace=None):
         """Forget a thread, so the poller never rereads it again."""
         doc = self.load()
-        threads = doc.get(str(channel)) or {}
+        key = _thread_key(workspace, channel)
+        threads = doc.get(key) or {}
         if str(thread_ts) not in threads:
             return False
         del threads[str(thread_ts)]
         if threads:
-            doc[str(channel)] = threads
+            doc[key] = threads
         else:
-            doc.pop(str(channel), None)
+            doc.pop(key, None)
         self._save(doc)
         return True
 
-    def open_threads(self, channel):
+    def open_threads(self, channel, workspace=None):
         """The open threads of a channel as `{thread_ts: {"cursor": text or None, "last_at": datetime or None}}`. An
         entry without a readable `last_at` takes its cursor time, and None when the cursor is unreadable too, so a thread
         a writer stored with a cursor only is still reread."""
         out = {}
-        for thread_ts, entry in (self.load().get(str(channel)) or {}).items():
+        key = _thread_key(workspace, channel)
+        for thread_ts, entry in (self.load().get(key) or {}).items():
             entry = entry if isinstance(entry, dict) else {}
             cursor = entry.get("cursor")
             try:
@@ -283,9 +295,9 @@ class RepliedThreads:
             out[str(thread_ts)] = {"cursor": cursor, "last_at": last_at}
         return out
 
-    def last_at(self, channel):
+    def last_at(self, channel, workspace=None):
         """The last activity of the channel's open threads, as the caller's clock value, or None."""
-        stamps = [entry["last_at"] for entry in self.open_threads(channel).values()
+        stamps = [entry["last_at"] for entry in self.open_threads(channel, workspace=workspace).values()
                   if entry["last_at"] is not None]
         return max(stamps) if stamps else None
 
@@ -473,16 +485,16 @@ class PollSchedule:
         falls back on its own silence."""
         row = _channel_row(self.committed, self.local, workspace, channel)
         return slackpolicy.poll_interval(now, row, {"last_message_at": self.last_at(workspace, channel),
-                                                    "thread_last_at": self._thread_last(channel, row, now)})
+                                                    "thread_last_at": self._thread_last(workspace, channel, row, now)})
 
-    def _thread_last(self, channel, row, now):
+    def _thread_last(self, workspace, channel, row, now):
         """The newest activity of the channel's open threads, or None when the store is absent or that activity is
-        older than `thread_open`, so a thread that went quiet hours ago never keeps the channel fast. `RepliedThreads`
-        keys by channel id alone: a Slack channel id is unique across workspaces, and the connector reaches one guest
-        workspace at a time (ADR-0177), so its answer covers the channel whatever workspace the caller names."""
+        older than `thread_open`, so a thread that went quiet hours ago never keeps the channel fast. The store keys a
+        thread by workspace and channel id, so a thread in another guest workspace that shares the channel id never
+        keeps this channel fast."""
         if self.threads is None:
             return None
-        thread = self.threads.last_at(channel)
+        thread = self.threads.last_at(channel, workspace=workspace)
         if thread is None:
             return None
         poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
@@ -588,7 +600,7 @@ class Poller:
         poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
         quiet = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
         pairs = []
-        for thread_ts, state in sorted(self.threads.open_threads(channel).items()):
+        for thread_ts, state in sorted(self.threads.open_threads(channel, workspace=workspace).items()):
             response = self.connect(channel=str(channel), thread_ts=thread_ts, limit=self.limit)
             if read_failed(response):
                 continue
@@ -598,10 +610,10 @@ class Poller:
             newest = newest_ts(page)
             last_at = state["last_at"]
             if new or (newest is not None and _newer(newest, state["cursor"])):
-                self.threads.record(channel, thread_ts, at=now, ts=newest)
+                self.threads.record(channel, thread_ts, at=now, ts=newest, workspace=workspace)
                 last_at = now
             if last_at is not None and (now - last_at).total_seconds() > quiet:
-                self.threads.close(channel, thread_ts)
+                self.threads.close(channel, thread_ts, workspace=workspace)
             if new:
                 pairs += [(m, slackpolicy.decide(self.committed, self.local,
                                                  event_of(m, workspace, channel, _own_ts(self.own)), now,
