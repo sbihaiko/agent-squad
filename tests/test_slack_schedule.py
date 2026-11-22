@@ -53,6 +53,21 @@ def schedule(tmp_path, threads=None, local=LOCAL):
     return P.PollSchedule(tmp_path / "schedule.json", COMMITTED, local, threads=threads)
 
 
+WS2 = "T0CLIENT02"
+
+
+def two_workspaces_one_channel():
+    """Two guest workspaces that expose the same channel id, as two clients' connectors may."""
+    local = copy.deepcopy(LOCAL)
+    first = copy.deepcopy(local["workspaces"][0])
+    second = copy.deepcopy(first)
+    second["id"], second["label"] = WS2, "client-b"
+    first["channels"] = [row for row in first["channels"] if row["id"] == CH]
+    second["channels"] = [row for row in second["channels"] if row["id"] == CH]
+    local["workspaces"] = [first, second]
+    return local
+
+
 def minutes(value):
     return timedelta(minutes=value)
 
@@ -160,19 +175,29 @@ def test_a_stale_agent_thread_does_not_keep_the_interval_fast(tmp_path):
     # Only a thread message newer than thread_open keeps the interval fast. A thread whose last read is an hour old is
     # out of the window, so the channel falls back on its own silence.
     threads = P.RepliedThreads(tmp_path / "threads.json")
-    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900")
+    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900", workspace=WS)
     s = schedule(tmp_path, threads=threads, local=only(CH))
     assert s.interval(WS, CH, NOW) == 600
+
+
+def test_a_thread_in_one_workspace_does_not_keep_a_shared_channel_fast(tmp_path):
+    # Two guest workspaces expose the same channel id, and a thread recorded under one of them must not keep the other
+    # workspace's channel fast: only the channel's own thread newer than thread_open keeps it fast.
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    threads.record(CH, THREAD, at=NOW - minutes(2), ts="100.000900", workspace=WS)
+    s = schedule(tmp_path, threads=threads, local=two_workspaces_one_channel())
+    assert s.interval(WS, CH, NOW) == 60            # its own recent thread keeps it fast
+    assert s.interval(WS2, CH, NOW) == 600          # the other workspace's channel stays quiet
 
 
 def test_the_newest_open_thread_of_the_channel_decides_the_window(tmp_path):
     # The store answers one value per channel, the newest open thread, so a recent thread keeps the interval fast even
     # while an older thread sits past thread_open.
     threads = P.RepliedThreads(tmp_path / "threads.json")
-    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900")
-    threads.record(CH, "100.000200", at=NOW - minutes(2), ts="100.001000")
+    threads.record(CH, THREAD, at=NOW - minutes(60), ts="100.000900", workspace=WS)
+    threads.record(CH, "100.000200", at=NOW - minutes(2), ts="100.001000", workspace=WS)
     s = schedule(tmp_path, threads=threads, local=only(CH))
-    assert threads.last_at(CH) == NOW - minutes(2)
+    assert threads.last_at(CH, workspace=WS) == NOW - minutes(2)
     assert s.interval(WS, CH, NOW) == 60
 
 
@@ -193,6 +218,16 @@ def test_the_minute_tick_never_polls_before_the_next_due(tmp_path):
     assert fired[EXP] == [5, 10, 15, 20]
 
 
+def test_a_poll_well_after_the_message_measures_quiet_from_the_message(tmp_path):
+    # The tick reaches the channel twenty minutes after the message. quiet_after counts from the message, so the poll
+    # plans the slow interval, not the fast one it would plan if the tick's clock were the activity.
+    s = schedule(tmp_path, local=only(CH))
+    s.note_message(WS, CH, NOW)
+    late = NOW + minutes(20)
+    s.polled(WS, CH, late)
+    assert s.next_due(WS, CH) - late == minutes(10)
+
+
 def test_the_quiet_clock_runs_from_the_last_message_not_the_tick(tmp_path):
     # A message at NOW is still the anchor at NOW + 20 minutes: the interval is slow, because quiet_after counts from
     # the message and not from the clock value of the tick.
@@ -207,7 +242,7 @@ def test_an_agent_thread_within_thread_open_keeps_the_interval_fast(tmp_path):
     threads = P.RepliedThreads(tmp_path / "threads.json")
     s = schedule(tmp_path, threads=threads, local=only(CH))
     s.note_message(WS, CH, NOW)
-    threads.record(CH, THREAD, at=NOW + minutes(29), ts="100.000900")
+    threads.record(CH, THREAD, at=NOW + minutes(29), ts="100.000900", workspace=WS)
     quiet = NOW + minutes(31)                       # thirty-one minutes after the message, two after the thread
     plain = schedule(tmp_path / "plain", threads=None, local=only(CH))   # the same clock with no thread: slow
     plain.note_message(WS, CH, NOW)
