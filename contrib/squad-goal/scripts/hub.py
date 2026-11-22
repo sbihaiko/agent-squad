@@ -2290,6 +2290,188 @@ def slack_files_set(body, committed=None, local=None):
         out["documents"] = {"committed": {}, "local": new_l}
     return out
 
+# --- Settings > Communication, the editor of workspaces and channels (SPEC 2682 #2696). The theme hands one operation
+# over the two raw documents, and the hub applies it: it places a workspace in the file its class names, refuses a guest
+# id in the committed file and a second guest workspace, and returns the documents the save path (#2694) then writes.
+# The view holds no rule (ADR-0137) and the policy module holds the refusal text (ADR-0177).
+SLACK_WS_FIELDS = ("id", "label", "class", "app", "language", "persona")
+SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announce")
+SLACK_GUEST_FIELDS = ("speak", "transcribe", "voice_reply", "poll", "draft_for", "send_grant")
+SLACK_POLL_FIELDS = ("mode", "fast", "slow", "quiet_after", "thread_open", "floor", "ceiling", "factor", "idle_window")
+
+def _slack_doc_name(doc, committed, local):
+    return "slack.yaml" if doc == "committed" else pathlib.Path(local).name if local else "slack.local.yaml"
+
+def _slack_siblings(local):
+    """The other projects' local files beside this one, as `(name, document)`: the second-guest rule is summed over the
+    machine. A file the reader cannot open is no answer here; `squad slack check` names it."""
+    out = []
+    if not local: return out
+    for other in sorted(pathlib.Path(local).parent.glob("*slack.local.yaml")):
+        if other.resolve() == pathlib.Path(local).resolve(): continue
+        try: doc = yaml.safe_load(other.read_text())
+        except (OSError, yaml.YAMLError): continue
+        if isinstance(doc, dict): out.append((other.name, doc))
+    return out
+
+def _slack_defect_texts(P, committed, local, local_name, others):
+    try: return [str(d) for d in P.validate(committed=committed, local=local, others=others, local_name=local_name)]
+    except Exception: return []
+
+def _slack_rows_at(doc, path):
+    """The row a path names: `["workspaces", i, "channels", j]`. A missing row answers None, never an exception."""
+    node = doc
+    for step in path:
+        if isinstance(step, int):
+            if not isinstance(node, list) or not 0 <= step < len(node): return None
+            node = node[step]
+        else:
+            if not isinstance(node, dict): return None
+            node = node.get(step)
+    return node
+
+def _slack_op_field(path):
+    return str(path[-1]) if path else ""
+
+def _slack_key(path):
+    """A key path as the validator names it: `workspaces[0].channels[0].speak`."""
+    out = ""
+    for step in path:
+        out += f"[{step}]" if isinstance(step, int) else (f".{step}" if out else str(step))
+    return out
+
+def _slack_ws_class(doc, index):
+    ws = _slack_rows_at(doc, ["workspaces", index])
+    return str(ws.get("class", "owned")) if isinstance(ws, dict) else ""
+
+def _slack_permit(committed, local, doc, path, field):
+    """(ok, error): an editor field belongs to the document its row lives in, and a guest field belongs to a guest
+    channel alone. The key the error names is the one the owner edited."""
+    key = _slack_key(path)
+    if path[:1] != ["workspaces"]:
+        return False, "workspaces: an editor path starts at workspaces"
+    if len(path) >= 2 and isinstance(path[1], int):
+        if len(path) >= 3 and path[2] == "channels":
+            if field in set(SLACK_WS_FIELDS) - set(SLACK_CH_FIELDS):
+                return False, f"{_slack_doc_name(doc, committed, local)}: {key}: {field} belongs to a workspace"
+            if field not in SLACK_CH_FIELDS + SLACK_GUEST_FIELDS and not field.startswith("poll."):
+                return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown field {field!r}"
+            if (field in SLACK_GUEST_FIELDS or field.startswith("poll.")) and _slack_ws_class(
+                    committed if doc == "committed" else local, path[1]) != "guest":
+                return False, f"{_slack_doc_name(doc, committed, local)}: {key}: {field} belongs to a guest channel"
+            if field.startswith("poll.") and field.split(".", 1)[1] not in SLACK_POLL_FIELDS:
+                return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown poll field {field.split('.', 1)[1]!r}"
+            return True, None
+        if len(path) == 3 and field not in SLACK_WS_FIELDS:
+            return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown field {field!r}"
+    return True, None
+
+def _slack_place(op, docs, local_name):
+    """Apply one operation to the two documents, and answer an error when the class places the row elsewhere or the
+    operation breaks a policy rule. Returns (error, changed)."""
+    kind, doc = op.get("kind"), op.get("doc")
+    path, value = op.get("path"), op.get("value")
+    if kind not in ("add", "set", "remove") or doc not in ("committed", "local"):
+        return "the operation names add, set or remove and the file it edits", False
+    if not isinstance(path, list) or not path or path[0] != "workspaces":
+        return "the operation names a path from workspaces", False
+    target = docs[doc]
+    if kind == "add":
+        if not isinstance(value, dict):
+            return "the added row is a mapping", False
+        if path == ["workspaces"]:
+            cls = str(value.get("class", "owned"))
+            if cls not in ("owned", "guest"):
+                return "slack.yaml: workspaces[].class: the class is owned or guest", False
+            if not value.get("id"):
+                return "slack.yaml: workspaces[].id: a workspace names its team id", False
+            placed = "local" if cls == "guest" else "committed"
+            if placed == "local": value.pop("app", None)
+            docs[placed].setdefault("workspaces", []).append(value)
+            return None, True
+        if len(path) == 3 and path[2] == "channels":
+            if not value.get("id"):
+                return f"{local_name}: workspaces[].channels[].id: a channel names its Slack id", False
+            ws = _slack_rows_at(target, ["workspaces", path[1]])
+            if not isinstance(ws, dict):
+                return "workspaces: the workspace does not exist", False
+            value.setdefault("mode", "listen")
+            ws.setdefault("channels", []).append(value)
+            return None, True
+        return "the operation adds a workspace or a channel", False
+    if kind == "remove":
+        parent = _slack_rows_at(target, path[:-1])
+        if not isinstance(parent, list) or not isinstance(path[-1], int) or not 0 <= path[-1] < len(parent):
+            return "the removed row does not exist", False
+        parent.pop(path[-1])
+        return None, True
+    # set: the class decides the file, and the guest fields belong to a guest channel
+    field = _slack_op_field(path)
+    if field == "class":
+        row = _slack_rows_at(target, path[:-1])
+        if not isinstance(row, dict):
+            return "the edited workspace does not exist", False
+        cls = str(value)
+        if cls not in ("owned", "guest"):
+            return f"{_slack_doc_name(doc, None, local_name)}: workspaces[].class: the class is owned or guest", False
+        if doc == "committed" and cls == "guest":
+            ws = _slack_rows_at(target, ["workspaces", path[1]])
+            docs["committed"]["workspaces"].pop(path[1])
+            ws.pop("app", None)
+            ws["class"] = "guest"
+            docs["local"].setdefault("workspaces", []).append(ws)
+            return None, True
+        if doc == "local" and cls == "owned":
+            return f"{local_name}: {_slack_key(path)}: {slack_policy().GUEST_TEAM_REASON}", False
+        row["class"] = cls
+        return None, True
+    ok, err = _slack_permit(docs["committed"], docs["local"], doc, path, field)
+    if not ok: return err, False
+    row = _slack_rows_at(target, path[:-1])
+    if not isinstance(row, dict):
+        return "the edited row does not exist", False
+    if field.startswith("poll."):
+        poll = row.get("poll")
+        if not isinstance(poll, dict): poll = {}
+        poll[field.split(".", 1)[1]] = value
+        row["poll"] = poll
+    elif value == "" and field in ("language", "persona", "app"):
+        row.pop(field, None)   # the empty choice in the select inherits, so the key leaves the file
+    else:
+        row[field] = value
+    return None, True
+
+def slack_docs_edit(body, committed=None, local=None):
+    """POST /api/slack/files: one edit of a workspace or a channel over the two raw documents. It answers the documents
+    the save path writes, or the one refusal the owner repairs. Nothing is written here; the class places the row in the
+    file it belongs to, and the policy module decides every refusal (ADR-0177)."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    docs = {"committed": body.get("committed"), "local": body.get("local")}
+    if not isinstance(docs["committed"], dict) or not isinstance(docs["local"], dict):
+        return {"err": "committed and local: each one mapping"}
+    op = body.get("op")
+    if not isinstance(op, dict): return {"err": "the operation is a mapping"}
+    if committed is None and local is None: committed, local = slack_yaml_paths()
+    local_name = body.get("local_name") or (pathlib.Path(local).name if local else "slack.local.yaml")
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    others = _slack_siblings(local)
+    before = _slack_defect_texts(P, docs["committed"], docs["local"], local_name, others)
+    draft = {"committed": yaml.safe_load(yaml.safe_dump(docs["committed"])),
+             "local": yaml.safe_load(yaml.safe_dump(docs["local"]))}
+    err, changed = _slack_place(op, draft, local_name)
+    if err: return {"err": err, "committed": docs["committed"], "local": docs["local"]}
+    after = _slack_defect_texts(P, draft["committed"], draft["local"], local_name, others)
+    new = [d for d in after if d not in before]
+    if new:
+        second = next((d for d in new if getattr(P, "SECOND_GUEST_REASON", None) and
+                       d.rsplit(": ", 1)[-1] == P.SECOND_GUEST_REASON), None)
+        return {"err": f"One guest Slack workspace at a time: {second}" if second else new[0], "defects": new,
+                "committed": docs["committed"], "local": docs["local"]}
+    return {"committed": draft["committed"], "local": draft["local"], "err": None, "defects": [],
+            "documents": {"committed": draft["committed"], "local": draft["local"]}}
+
 # --- The project's Slack channel on Now (SPEC 2498, #2500). The hub resolves the address for one profile with reads
 # alone: the workspace domain comes from the Slack connection itself, and the channel comes from the always-on daemon's
 # own map, which it filled when it joined the channel once. So the hub calls `auth.test` only: it lists no channel,
@@ -7720,6 +7902,15 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slws{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
 #sbody .sltag{padding:0 6px;border-radius:var(--radius-sm);border:1px solid var(--line);font-weight:400;text-transform:none;letter-spacing:0}
 #sbody .sltag.owned{color:var(--ok)}#sbody .sltag.guest{color:var(--warn);border-color:var(--tint-warn-line)}
+/* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
+   lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
+#sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
+#sbody .slf{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--fs-caption);color:var(--mute)}
+#sbody .slf span{font-weight:600}
+#sbody .slf input,#sbody .slf select{width:100%;height:var(--ctl-h);padding:0 8px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}
+#sbody .slchk{display:flex;align-items:center;gap:6px;min-height:var(--ctl-h);font-size:var(--fs-caption);color:var(--fg)}
+#sbody .slact{grid-column:1/-1;display:flex;gap:6px}#sbody .slact button{height:var(--ctl-h);padding:0 12px}
+#sbody .slws{flex-wrap:wrap}#sbody .slws button{height:32px;padding:0 10px;margin-left:auto}
 #sbody .slt2{width:100%;border-collapse:collapse;font-size:var(--fs-caption)}
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
@@ -8541,7 +8732,7 @@ $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dat
  limWrite(key).catch(()=>{})});
 /* Settings > Communication (#924): how the agent reads and writes Slack for this profile. The page renders and asks; the hub
    validates, shows the diff and writes the profile's gitignored file on confirm (ADR-0137). The hub holds no token. */
-let slS=null,slDraft=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null;   // slDocs: the two raw files the save hands back (#2694)
+let slS=null,slDraft=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="";   // slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696)
 const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
 const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
 const slA=t=>esc(t).replace(/"/g,"&quot;");
@@ -8582,16 +8773,20 @@ function slReadHtml(r){if(!r)return "";
  h+=slSec("Roles",cf,["Role","Actions"],
   r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
   "No role: only the owner can trigger the agent.");
- h+=`<section class=slsec><h4>Slack workspaces <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>${r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`}`
- +r.workspaces.map(w=>`<h5 class=slws>${esc(w.label)} <span class="sltag ${slA(w.class)}">${esc(w.class)}</span> ${slTag(w.file)}</h5>`
-  +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th></tr></thead><tbody>`
-   +w.channels.map(c=>row([["Channel",`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`],["Mode",`<span class=nw>${esc(c.mode)}</span>`],["Language",`<span class=nw>${esc(c.language)}</span>`],["Persona",`<span class=nw>${esc(c.persona||"none")}</span>`],["Roles",join(c.roles,"owner only")],["Announce",join(c.announce,"never posts")]])).join("")
-   +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")+`</section>`;
+ h+=`<section class=slsec><h4>Slack workspaces <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>`
+ +(slDocs?slEditHtml():slWsReadHtml(r,join))+`</section>`;
  h+=slSec("Project events",cf,["Event","Template"],
   r.events.map(x=>row([["Event",`<b>${esc(x.id)}</b>`],["Template",`<code>${esc(x.template)}</code>`]])),
   "No event: the agent announces nothing.");
  return h+`</div>`}
 const slReadTiles=r=>!r?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
+/* The read-only workspace rows (#2693): a theme that could not read the raw documents draws these alone. With the
+   documents in hand, the editor draws the same rows and adds the controls (#2696). */
+function slWsReadHtml(r,join){return (r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`)
+ +r.workspaces.map(w=>`<h5 class=slws>${esc(w.label)} <span class="sltag ${slA(w.class)}">${esc(w.class)}</span> ${slTag(w.file)}</h5>`
+  +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th></tr></thead><tbody>`
+   +w.channels.map(c=>`<tr><td data-l="Channel">#${esc(c.name)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode)}</span></td><td data-l="Language"><span class=nw>${esc(c.language)}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"none")}</span></td><td data-l="Roles">${join(c.roles,"owner only")}</td><td data-l="Announce">${join(c.announce,"never posts")}</td></tr>`).join("")
+   +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")}
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
@@ -8612,7 +8807,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  `<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join(""),
  `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="Owner inbox: self-DM"> Owner inbox: self-DM</label></div>`,
  `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="Owner inbox: audio in and out"> Owner inbox: audio in and out</label></div>`]):"");
- if(slMsg)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;
+ if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
@@ -8620,6 +8815,79 @@ function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.valu
  else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
  else if(k==="tick"||k==="max")slDraft[k]=Number(v);
  else slDraft[k]=v}
+/* The workspace and channel editor (SPEC 2682 #2696): one detail opens in place, and every change is one operation the
+   hub applies to the two raw documents. The view draws the fields and binds them; the class, the file and every refusal
+   are the hub's (ADR-0137). A `guest` workspace and its channels live in the local file alone (ADR-0177). */
+const SL_MODE=["listen","listen+speak"],SL_SPEAK=["draft","send"],SL_TR=["off","local","gemini"],SL_PMOD=["two_state","exponential"];
+const SL_INHERIT="inherit";
+const slDocName=d=>d==="local"?((slR&&slR.files&&slR.files.local)||"slack.local.yaml"):((slR&&slR.files&&slR.files.committed)||"slack.yaml");
+const slWs=d=>{const doc=(slDocs||{})[d]||{};const list=Array.isArray(doc.workspaces)?doc.workspaces:(doc.workspaces=[]);return list};
+const slList=(d,k)=>(((slDocs||{})[d]||{})[k]||[]).map(x=>x&&x.id).filter(Boolean);
+const slLang=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+["pt-BR","en-US","es-ES"].map(x=>`<option value="${x}"${x===cur?" selected":""}>${x}</option>`).join("");
+const slPersona=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+slList("committed","personas").map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(x)}</option>`).join("");
+const slF=(attr,label,ctl)=>`<label class=slf><span>${esc(label)}</span>${ctl.replace("data-sle=",`data-sle="${attr}" aria-label="${slA(label)}"`)}</label>`;
+const slInput=(attr,label,value)=>slF(attr,label,`<input type=text data-sle= value="${slA(value||"")}">`);
+const slCheck=(attr,label,on)=>`<label class=slchk><input type=checkbox data-sle="${attr}" aria-label="${slA(label)}"${on?" checked":""}> ${esc(label)}</label>`;
+const slWsFields=(d,i)=>{const w=slWs(d)[i]||{},g=w.class==="guest",at=f=>`${d}:${i}::${f}`;
+ return `<div class="sle slwsdet" role=group aria-label="workspace fields">`
+ +slInput(at("id"),"Id",w.id)+slInput(at("label"),"Label",w.label)
+ +slF(at("class"),"Class",`<select data-sle=><option value=owned${g?"":" selected"}>owned</option><option value=guest${g?" selected":""}>guest</option></select>`)
+ +slInput(at("app"),"App",w.app)
+ +slF(at("language"),"Language",`<select data-sle=>${slLang(w.language)}</select>`)
+ +slF(at("persona"),"Persona",`<select data-sle=>${slPersona(w.persona)}</select>`)
+ +`<span class=slact><button data-slrmws="${d}:${i}">Remove workspace</button></span></div>`};
+const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=ws.class==="guest",at=f=>`${d}:${i}:${j}:${f}`,poll=c.poll||{};
+ let h=`<div class="sle slchdet" role=group aria-label="channel fields">`
+ +slInput(at("id"),"Id",c.id)+slInput(at("name"),"Name",c.name)
+ +slF(at("mode"),"Mode",`<select data-sle=>${slOpts(SL_MODE,c.mode||"listen")}</select>`)
+ +slF(at("language"),"Language",`<select data-sle=>${slLang(c.language)}</select>`)
+ +slF(at("persona"),"Persona",`<select data-sle=>${slPersona(c.persona)}</select>`)
+ +slInput(at("roles"),"Roles",(c.roles||[]).join(", "))+slInput(at("announce"),"Announce",(c.announce||[]).join(", "));
+ if(g){
+  h+=slF(at("speak"),"Answer as",`<select data-sle=>${slOpts(SL_SPEAK,c.speak||"draft")}</select>`)
+  +slF(at("transcribe"),"Transcribe a clip",`<select data-sle=>${slOpts(SL_TR,c.transcribe||"off")}</select>`)
+  +slCheck(at("voice_reply"),"Voice reply",!!c.voice_reply)
+  +slF(at("poll.mode"),"Poll mode",`<select data-sle=>${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`)
+  +slInput(at("poll.fast"),"Fast",poll.fast)+slInput(at("poll.slow"),"Slow",poll.slow)
+  +slInput(at("poll.quiet_after"),"Quiet after",poll.quiet_after)+slInput(at("poll.thread_open"),"Thread open",poll.thread_open)
+  +slInput(at("poll.floor"),"Floor",poll.floor)+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling)
+  +slInput(at("poll.factor"),"Factor",poll.factor)+slInput(at("poll.idle_window"),"Idle window",poll.idle_window)
+  +slInput(at("draft_for"),"Draft for",(c.draft_for||[]).join(", "));
+ }
+ return h+`<span class=slact><button data-slrmch="${d}:${i}:${j}">Remove channel</button></span></div>`};
+const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
+const slAddWs=()=>`<div class=slad><select data-slwsclass aria-label="new workspace class"><option value=owned>owned · app installed</option><option value=guest>guest · connector</option></select><input data-slwsid placeholder="team id" aria-label="new workspace id"><input data-slwslabel placeholder="label" aria-label="new workspace label"><input data-slwsapp placeholder="app" aria-label="new workspace app"><button data-sladdws>Add Slack workspace</button></div>`;
+const slOpenBtn=(key,label)=>`<button data-slopen="${key}">${slOpen===key?"Close":"Edit"}</button>`;
+function slEditHtml(){const docs=[["committed",slDocs&&slDocs.committed],["local",slDocs&&slDocs.local]];
+ let h=slMsg?`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`:"";
+ docs.forEach(([d,doc])=>{const list=(doc&&Array.isArray(doc.workspaces))?doc.workspaces:[];
+  h+=list.map((w,i)=>{const key=`${d}:${i}`,wsopen=slOpen===key,chans=Array.isArray(w.channels)?w.channels:[],
+   tag=`<span class="sltag ${slA(w.class||"owned")}">${esc(w.class||"owned")}</span>`,
+   how=w.class==="guest"?"claude.ai connector · your account":"app "+esc(w.app||"none");
+   let s=`<h5 class=slws>${esc(w.label||w.id||"workspace")} ${tag} <span class=m>${how}</span> ${slTag(slDocName(d))} ${slOpenBtn(key)}</h5>`;
+   if(wsopen)s+=slWsFields(d,i);
+   s+=`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th><th></th></tr></thead><tbody>`;
+   s+=chans.map((c,j)=>{const ck=`${key}:${j}`;
+    return `<tr><td>#${esc(c.name||c.id)} <span class=m>${esc(c.id)}</span></td><td><span class=nw>${esc(c.mode||"listen")}</span></td>`
+    +`<td><span class=nw>${esc(c.language||"inherit")}</span></td><td><span class=nw>${esc(c.persona||"inherit")}</span></td>`
+    +`<td>${(c.roles||[]).length?esc((c.roles||[]).join(", ")):"owner only"}</td><td>${(c.announce||[]).length?esc((c.announce||[]).join(", ")):"never posts"}</td>`
+    +`<td>${slOpenBtn(ck)}</td></tr>`+(slOpen===ck?`<tr><td colspan=7>${slChFields(d,i,j)}</td></tr>`:"")}).join("");
+   s+=`</tbody></table>`+(chans.length?"":`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)+slAddCh(d,i);
+   return s}).join("")});
+ return h+slAddWs()}
+function slDocEdit(attr,el){const p=attr.split(":"),field=p[3],v=el.type==="checkbox"?el.checked:el.value,
+ op={kind:"set",doc:p[0],path:["workspaces",+p[1]]};
+ if(p[2]==="")op.path.push(field);else op.path.push("channels",+p[2],field);
+ if(["roles","announce","draft_for"].includes(field))op.value=String(v).split(",").map(x=>x.trim()).filter(Boolean);else op.value=v;
+ slOp(op)}
+async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},local_name:slDocName("local"),op})}),d=await r.json();
+ if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};slMsg=""}}
+ catch(x){slMsg="!the edit failed"}slRender()}
+const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
+ value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
+const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
+ value:{id:(document.querySelector(`[data-slci="${d}:${i}"]`)||{}).value,name:(document.querySelector(`[data-slcn="${d}:${i}"]`)||{}).value}});
 /* The save path over the two Slack files (#2694): the view hands both raw documents back, the hub validates them, shows
    the diff of each file and, on confirm, writes the local file and lands the committed one in dev. */
 const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((d.diff||{}).committed)||[]).map(l=>themeLine("Communication",l))},
@@ -8633,8 +8901,17 @@ async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POS
  else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved"}
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
-$("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
-$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
+$("#sbody").addEventListener("change",e=>{const s=e.target.dataset.sle;
+ if(s&&slDocs){slDocEdit(s,e.target);return}
+ const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
+$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
+ if(b&&slDocs){const o=b.dataset.slopen;
+  if(o!==undefined){slOpen=slOpen===o?"":o;slRender();return}
+  if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
+  if(b.dataset.sladdws!==undefined){slAddWsOp();return}
+  if(b.dataset.slrmch){const[d,i,j]=b.dataset.slrmch.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i,"channels",+j]});return}
+  if(b.dataset.slrmws){const[d,i]=b.dataset.slrmws.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i]});return}}
+ if(!b||!slDraft)return;
  if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
@@ -11000,7 +11277,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/slack/files", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -11013,6 +11290,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/limits": out = limits_set(body)   # Settings > Spend & limits (#926)
                 elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
                 elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
+                elif self.path == "/api/slack/files": out = slack_docs_edit(body)   # Settings > Communication · one edit of a workspace or a channel (#2696)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
