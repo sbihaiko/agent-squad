@@ -347,6 +347,33 @@ def test_a_sibling_profile_file_is_validated_at_the_save(hub, tmp_path, monkeypa
     assert "workspaces[0].id" in out["err"], out
 
 
+def test_the_first_save_writes_the_local_file_of_a_profile_that_holds_none(hub, tmp_path, monkeypatch):
+    """A profile folder that resolves and holds no local file is a profile in force (GitHub issue #2762): the preview
+    answers the diff and names `<project>.slack.local.yaml`, and the confirm writes that file in the profile folder."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    checkout = tmp_path / "checkout"
+    c = checkout / "docs" / "squad" / "slack.yaml"
+    c.parent.mkdir(parents=True)
+    c.write_text(yaml.safe_dump(COMMITTED, sort_keys=False))
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    monkeypatch.setattr(hub, "CHECKOUT", str(checkout))
+    monkeypatch.setenv("SG_CHECKOUT", str(checkout))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_PROJECT", "4")
+    loc = prof / "4.slack.local.yaml"
+    assert not loc.exists()
+    preview = hub.slack_files_set({"committed": COMMITTED, "local": LOCAL, "confirm": False})
+    assert "err" not in preview, preview
+    assert preview["files"]["local"] == str(loc), preview["files"]
+    assert preview["diff"]["local"], preview["diff"]
+    out = hub.slack_files_set({"committed": COMMITTED, "local": LOCAL, "confirm": True})
+    assert "err" not in out, out
+    assert loc.exists(), out
+    assert yaml.safe_load(loc.read_text()) == LOCAL
+
+
 # ---------------------------------------------------------------- the save-dialog renderer
 
 def _node(body):
