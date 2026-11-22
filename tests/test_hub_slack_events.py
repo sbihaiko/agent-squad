@@ -359,7 +359,8 @@ def test_the_persona_roles_and_workspaces_sections_carry_their_own_controls(hub,
     ws = html[html.index("<h4>Slack workspaces"):html.index("<h4>Project events")]
     for ctl in ("<input", "<select", "<textarea", "<button"):
         assert ctl not in roles, f"the Roles section carries {ctl}"
-    assert "data-slsample=" in personas and "data-slpadd" in personas, personas
+    assert "data-slpadd" in personas and "data-sldefault" in personas, personas
+    assert "data-slow=" in personas and "data-slcw=" in personas, personas
     assert "data-slopen=" in ws and "<input" in ws, ws
 
 

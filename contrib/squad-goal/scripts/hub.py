@@ -2196,6 +2196,7 @@ SLACK_SAMPLES = "slack-samples"   # in the loop state directory, outside every r
 SLACK_SAMPLE_TEXT = "This is how the persona sounds. Short sentences, no filler."
 SLACK_SAMPLE_TIMEOUT = 90
 SLACK_SAMPLE_LOCK_STALE = SLACK_SAMPLE_TIMEOUT + 30   # a lock older than this belongs to a killed request
+SLACK_SAMPLE_WAIT = SLACK_SAMPLE_TIMEOUT / 3   # a waiter yields the hub thread for a fraction of one synthesis, then takes the lock
 
 def slack_samples_dir():
     """The sample cache: one folder in the loop state directory, outside every repository."""
@@ -2280,9 +2281,13 @@ def slack_sample(body, client=None):
         lock = d / f"{key}.lock"
         fd = _slack_lock(lock)
         if fd is None:
-            cached = _slack_await_wav(path, SLACK_SAMPLE_TIMEOUT)   # another request is making it: never call twice
-            if not cached: return {"err": "the sample is being made by another request; try again"}
-        else:
+            cached = _slack_await_wav(path, min(SLACK_SAMPLE_WAIT, SLACK_SAMPLE_TIMEOUT / 3))   # another request is making it: never call twice
+            if not cached:
+                try: lock.unlink()   # the holder is slow or died inside the stale window: take its lock on the spot
+                except OSError: pass
+                fd = _slack_lock(lock)
+            if fd is None and not cached: return {"err": "the sample is being made by another request; try again"}
+        if fd is not None:
             try:
                 cached = _slack_wav_ok(path)   # the request that held the lock before may have finished it
                 if not cached:
@@ -9161,6 +9166,7 @@ const slPersonaDetail=p=>{const id=slA(p.id);
  +`<div class=slf><label for=slpv_${id}>Voice</label><select id=slpv_${id} data-slef="voice:${id}" aria-label="persona voice">${slVoiceOpts((slR&&slR.voices)||[],p.voice)}</select><button type=button data-slsample="${id}">Sample</button><small>a Gemini TTS voice; the sample is generated once per voice and tone, then cached</small></div>`
  +`<div class=slf><label for=slpt_${id}>Tone</label><textarea id=slpt_${id} data-slef="tone:${id}" rows=3 maxlength=300 aria-label="persona tone">${esc(p.tone)}</textarea><small>guides the text and the speaking style; up to 300 characters</small></div>`
  +`</div>`};
+const slAudioReset=()=>{if(typeof window!=="undefined")window.__slAudio=""};   // the kept URL is one sample's: a new sample or a discarded draft drops it
 const slAudioCtl=()=>{const u=(typeof window!=="undefined"&&window.__slAudio)||"";   // a refused autoplay leaves a control the press can play
  return u?`<div class=slf><span class=sl>Voice sample</span><audio controls src="${slA(u)}" aria-label="persona voice sample"></audio></div>`:""};
 function slOverrideSection(d,ids){const rows=[];
@@ -9329,6 +9335,7 @@ async function slPreviewAsk(){try{const r=await(await fetch("/api/slack/preview"
 const slPreviewRefresh=()=>{slPv=null;slRender();slPreviewAsk().then(()=>slRender())};
 async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
  const vEl=$("#slpv_"+id),tEl=$("#slpt_"+id),voice=(vEl&&vEl.value)||p.voice,tone=(tEl&&tEl.value!==undefined?tEl.value:p.tone);
+ slAudioReset();   // the page draws only the sample of the latest press, never the one an earlier refusal kept
  slPvMsg="the sample is being made";slRender();
  try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice,tone})})).json();
   if(r.err)slPvMsg="!"+r.err;
@@ -9419,7 +9426,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slPv=null;slOpen=null;slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slPv=null;slOpen=null;slMsg="";slPvMsg="";slAudioReset();slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
@@ -11747,6 +11754,8 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
                 elif self.path == "/api/slack/files": out = slack_docs_edit(body)   # Settings > Communication · one edit of a workspace or a channel (#2696)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
+                # The preview writes nothing, and it still takes the write gate: it carries a whole draft of both files in a JSON
+                # body, so the same origin and the same JSON type keep another page from reading the draft through a POST (#2697).
                 elif self.path == "/api/slack/preview": out = slack_preview(*(body.get("committed"), body.get("local")) if isinstance(body, dict) else (None, None))   # the persona editor's reply preview (#2697)
                 elif self.path == "/api/slack/sample": out = slack_sample(body)   # the persona editor's voice sample (#2697)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)

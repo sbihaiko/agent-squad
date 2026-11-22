@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import re
+import struct
 import subprocess
 import tempfile
 import threading
@@ -183,11 +184,16 @@ def test_the_preview_shows_one_row_per_effective_channel(hub):
                     ("team/#extra", "*Iara's Msg*")], rows
 
 
+FULL_WAV = (b"RIFF" + struct.pack("<I", 38) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 8000, 1, 8)
+            + b"data" + struct.pack("<I", 2) + b"\x80\x80")   # a whole WAV: RIFF, WAVE, a fmt chunk and a data chunk
+
+
 class FakeGemini:
-    """The fake Gemini client: it records every synthesis request and writes a small WAV, so a cache hit is visible as
+    """The fake Gemini client: it records every synthesis request and writes a whole WAV, so a cache hit is visible as
     a missing call."""
 
-    def __init__(self, payload=b"RIFF....WAVEfake"):
+    def __init__(self, payload=FULL_WAV):
         self.calls = []
         self.payload = payload
 
@@ -313,23 +319,20 @@ def test_a_lock_left_by_a_killed_request_is_reclaimed(hub, state):
     assert not lock.exists(), "the reclaimed lock is gone"
 
 
-def test_a_waiter_retries_after_the_first_request_fails(hub, state, monkeypatch):
-    """Criteria (4) and (5): a request that waits on another request's lock calls no client. When that first request
-    dies without a WAV, the lock goes and the next request synthesizes cleanly."""
+def test_a_waiter_that_holds_no_wav_at_its_deadline_makes_the_sample(hub, state, monkeypatch):
+    """Criteria (4) and (5): a request that waits on a lock whose request died inside the stale window takes the lock
+    and synthesizes. The second press answers the sample, never try again, and the cache holds the WAV."""
     monkeypatch.setattr(hub, "SLACK_SAMPLE_TIMEOUT", 0.2)
     d = state / "slack-samples"
     d.mkdir(parents=True)
     key = hub.slack_sample_key("Kore", "Calm.")
     lock = d / f"{key}.lock"
-    lock.write_text("")   # the first request is in flight
+    lock.write_text("")   # the first request died here and left no WAV
     gemini = FakeGemini()
-    waited = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
-    assert "another request" in waited["err"], waited
-    assert gemini.calls == [], "a waiter never calls the client"
-    lock.unlink()   # the first request died and left no WAV
     out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
     assert out["err"] is None and out["cached"] is False, out
     assert len(gemini.calls) == 1, gemini.calls
+    assert list((d).glob("*.wav")), "the reclaimed request keeps its WAV"
 
 
 # ---------------------------------------------------------------- the save path of a staged persona edit
@@ -502,7 +505,7 @@ def test_an_edit_sets_the_draft_document_and_marks_the_theme_dirty(hub):
     """Criterion (1): the editor writes the two raw files the Save reads (#2694), so the change is staged and the Save
     shows its diff. A field outside name, voice and tone is refused."""
     body = (_slices(hub.PAGE) + f"\nslR={json.dumps({'voices': ['Kore', 'Puck']})};"
-            "slS={connection:'connected',people:[]};slDraft=slClone(slS);"
+            f"slS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);"
             "slDocs={committed:{version:1,project:{},personas:[{id:'iara',name:'Iara',voice:'Sulafat',tone:'Warm.'}]},local:{}};"
             "slSavedDocs=slClone(slDocs);"
             "const ok=slPersonaSet(slDocs,'iara','voice','Puck');"
@@ -534,3 +537,147 @@ def test_an_added_persona_id_follows_the_declared_name_rule(hub):
             "console.log(JSON.stringify({bad,long,ok,ids:slDocs.committed.personas.map(p=>p.id)}))")
     got = json.loads(_node(body))
     assert got == {"bad": False, "long": False, "ok": True, "ids": ["Nova 2"]}, got
+
+
+# ---------------------------------------------------------------- the review findings
+
+def test_a_staged_edit_is_dirty_only_against_its_saved_documents(hub):
+    """The Save enables from the two raw documents: an untouched stage is clean, and an edit to a persona marks the
+    theme dirty. The saved view the page loads is the hub's own default, so the first clause of slDirty never answers
+    for the documents' clause."""
+    body = (_slices(hub.PAGE) + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);"
+            f"slR={json.dumps({'voices': ['Kore', 'Puck']})};"
+            "slDocs={committed:{version:1,project:{},personas:[{id:'iara',name:'Iara',voice:'Sulafat',tone:'Warm.'}]},local:{}};"
+            "slSavedDocs=slClone(slDocs);"
+            "const before=slDirty();"
+            "const ok=slPersonaSet(slDocs,'iara','voice','Puck');"
+            "const added=slPersonaAdd(slDocs,'Nova');"
+            "console.log(JSON.stringify({before,ok,added,dirty:slDirty()}))")
+    got = json.loads(_node(body))
+    assert got == {"before": False, "ok": True, "added": True, "dirty": True}, got
+
+
+def test_the_real_client_builds_the_script_argv_and_returns_the_wav(hub, tmp_path, monkeypatch):
+    """The vendored TTS script is one process: the client hands it the sample text, the voice, the tone and the out
+    path, and answers the path it wrote. The tone reaches the script as its own flag."""
+    import types
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["kw"] = cmd, kw
+        pathlib.Path(cmd[cmd.index("--out") + 1]).write_bytes(FULL_WAV)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    script = tmp_path / "tts.py"
+    monkeypatch.setattr(hub.subprocess, "run", fake_run)
+    monkeypatch.setattr(hub, "load_squad", lambda roots, names: (types.SimpleNamespace(voice_script=lambda n: script),))
+    out = tmp_path / "sample.wav"
+    got, err = hub._slack_tts_cli("Kore", "Calm and direct.", out)
+    assert err is None and got == str(out), (got, err)
+    cmd = seen["cmd"]
+    assert hub.SLACK_SAMPLE_TEXT in cmd, cmd
+    assert cmd[cmd.index("--voice") + 1] == "Kore", cmd
+    assert cmd[cmd.index("--tone") + 1] == "Calm and direct.", cmd
+    assert cmd[cmd.index("--out") + 1] == str(out), cmd
+    assert str(script) in cmd, cmd
+
+
+def test_a_missing_gemini_key_is_the_message_the_owner_reads(hub, state):
+    """The real client reports the script's stderr, so a missing Gemini key reaches the page's status line, which
+    shows the route's error text. The sample leaves no cache entry."""
+    def nokey(voice, tone, out):
+        return None, "no Gemini key: the Keychain has none and no .env names GOOGLE_API_KEY"
+
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=nokey)
+    assert out["err"] and "no Gemini key" in out["err"], out
+    assert not list((state / "slack-samples").glob("*.wav")), "a missing key leaves no WAV"
+
+
+def test_a_waiter_takes_the_lock_when_its_wait_ends_with_no_wav(hub, state, monkeypatch):
+    """A lock whose request is slow or died inside the stale window is taken when the waiter's bounded wait ends, so
+    the press synthesizes instead of answering try again. The wait is a fraction of the synthesis timeout."""
+    monkeypatch.setattr(hub, "SLACK_SAMPLE_TIMEOUT", 0.3)
+    d = state / "slack-samples"
+    d.mkdir(parents=True)
+    key = hub.slack_sample_key("Kore", "Calm.")
+    lock = d / f"{key}.lock"
+    lock.write_text("")   # a live-looking lock: its mtime is inside the stale window
+    gemini = FakeGemini()
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    assert out["err"] is None and out["cached"] is False, out
+    assert len(gemini.calls) == 1, gemini.calls
+
+
+def test_the_preview_makes_no_sample_and_writes_no_cache(hub, state, monkeypatch):
+    """The preview resolves the documents and answers the rows: it synthesizes nothing and writes nothing to the
+    cache, though it takes the draft body behind the write gate."""
+    def boom(*a, **k):
+        raise AssertionError("the preview synthesized a sample")
+
+    monkeypatch.setattr(hub, "_slack_tts_cli", boom)
+    out = hub.slack_preview(COMMITTED, LOCAL)
+    assert out["err"] is None and out["previews"], out
+    assert not (state / "slack-samples").exists(), "the preview wrote a cache entry"
+
+
+def test_a_twelve_byte_header_is_not_a_cache_hit(hub, state):
+    """The rule is the RIFF/WAVE header and more than twelve bytes: a file of exactly twelve bytes is no hit."""
+    d = state / "slack-samples"
+    d.mkdir(parents=True)
+    (d / f"{hub.slack_sample_key('Kore', 'Calm.')}.wav").write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+    gemini = FakeGemini()
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    assert out["err"] is None and out["cached"] is False, out
+    assert len(gemini.calls) == 1, gemini.calls
+
+
+def test_a_header_only_file_past_twelve_bytes_is_a_cache_hit(hub, state):
+    """The other side of the same rule: a whole header past twelve bytes is a hit, so the pair is never synthesized
+    twice for a file the rule accepts."""
+    d = state / "slack-samples"
+    d.mkdir(parents=True)
+    (d / f"{hub.slack_sample_key('Kore', 'Calm.')}.wav").write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt \x00\x00\x00\x00")
+    gemini = FakeGemini()
+    out = hub.slack_sample({"voice": "Kore", "tone": "Calm."}, client=gemini)
+    assert out["err"] is None and out["cached"] is True, out
+    assert gemini.calls == [], "a hit calls no client"
+
+
+def test_a_successful_sample_clears_the_url_a_previous_refusal_kept(hub, tmp_path):
+    """A browser that refused an earlier sample leaves its URL on window.__slAudio. A later sample that plays must
+    not leave the old control on the page: the sample clears the kept URL before it asks, and the render draws only
+    the current sample."""
+    out = overview(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);"
+            f"slR={json.dumps(out)};slDocs=slClone((slR&&slR.docs)||{{}});slSavedDocs=slClone(slDocs);slOpen='iara';"
+            "globalThis.window={__slAudio:'data:audio/wav;base64,T0xE'};"
+            "globalThis.Audio=class{constructor(u){this.u=u}play(){return Promise.resolve()}};"
+            "globalThis.fetch=async()=>({json:async()=>({err:null,url:'data:audio/wav;base64,TkVX',cached:false})});"
+            "slSample('iara').then(()=>{slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))})")
+    html = json.loads(_node(body))
+    assert "data:audio/wav;base64,T0xE" not in html, "the stale refused sample kept its control"
+
+
+def test_a_discarded_draft_drops_the_kept_sample(hub, tmp_path):
+    """Discard clears the kept URL too, so a draft that is thrown away leaves no old sample control behind."""
+    out = overview(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);"
+            f"slR={json.dumps(out)};slDocs=slClone((slR&&slR.docs)||{{}});slSavedDocs=slClone(slDocs);slOpen='iara';"
+            "globalThis.window={__slAudio:'data:audio/wav;base64,T0xE'};"
+            "slAudioReset();slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    html = json.loads(_node(body))
+    assert "data:audio/wav;base64,T0xE" not in html and "<audio" not in html, html
+
+
+def test_the_missing_key_message_reaches_the_page(hub, tmp_path):
+    """The page shows the route's error text under the Personas section, so a missing Gemini key is what the owner
+    reads after the press, not a silent failure."""
+    out = overview(hub, tmp_path)
+    msg = "no Gemini key: the Keychain has none and no .env names GOOGLE_API_KEY"
+    body = (_slices(hub.PAGE) + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);"
+            f"slR={json.dumps(out)};slDocs=slClone((slR&&slR.docs)||{{}});slSavedDocs=slClone(slDocs);slOpen='iara';"
+            "globalThis.window={};"
+            f"globalThis.fetch=async()=>({{json:async()=>({{err:{json.dumps(msg)}}})}});"
+            "slSample('iara').then(()=>{slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))})")
+    html = json.loads(_node(body))
+    assert msg in html, "the page drops the route's error"

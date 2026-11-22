@@ -253,7 +253,17 @@ def test_the_read_view_draws_the_four_sections_and_wears_no_control(hub, tmp_pat
     for name in ("Roles", "Slack workspaces", "Project events"):
         for ctl in ("<input", "<select", "<textarea", "<button"):
             assert ctl not in by_name[name], f"the {name} section carries {ctl}"
-    assert "<button" in by_name["Personas"], "the persona editor carries its controls"
+    # The exact control set of the Personas section in a read with no raw documents: one Edit button per persona, the
+    # default persona select, and the Add persona input and button. The Sample button and the two override selects draw
+    # in the open persona detail and with the documents in hand, so this read draws neither.
+    personas = by_name["Personas"]
+    wanted = ("data-slopen=", "data-slpadd", "data-sldefault", "id=slpnew")
+    tags = re.findall(r"<(?:button|input|select|textarea)\b[^>]*>", personas)
+    for tag in tags:
+        assert any(k in tag for k in wanted), f"a control outside the persona editor: {tag}"
+    for k in wanted:
+        assert any(k in tag for tag in tags), f"the persona editor lost its {k} control"
+    assert len(tags) == 5, tags   # one Edit button for each of the two personas, and the three other controls
     for text in ("HAL9K", "Kore", "team/#proj-agent-squad", "manager", "status, logs, request_work",
                  "client-a", "guest", "support", "stg_release", "Deployed to STG: {items}."):
         assert text in html, text
