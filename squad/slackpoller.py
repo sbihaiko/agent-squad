@@ -26,7 +26,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from . import slackpolicy
+from . import guesstranscribe, slackpolicy
 from .record import atomic_write
 
 # The connector's own tool name carries its server: `mcp__slack__slack_read_channel`. A read tool's first word is one of
@@ -404,6 +404,11 @@ class Poller:
         self.own, self.limit = own, limit
         self.owner, self.threads = tuple(owner), threads
         self.footers, self.marks = tuple(footers), persona_marks(committed)
+
+    def clips(self, message):
+        """The audio files of one read message, read through `guesstranscribe.audio_clips` (#2714): the file id, the
+        mimetype and the name of each. The caller fetches each clip through the connector's read-file tool."""
+        return guesstranscribe.audio_clips(message)
 
     def read_request(self, workspace, channel):
         """The arguments of the next read of a channel: the channel, the stored cursor as `oldest`, and the page limit.

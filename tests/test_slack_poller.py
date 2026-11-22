@@ -342,3 +342,14 @@ def test_a_message_posted_between_the_read_and_the_post_is_delivered_by_the_next
     assert [m["ts"] for m, _ in second] == ["100.000500"]
     assert second[0][0]["text"] == "the bug report"
     assert json.loads(path.read_text())[CH] == "100.000500"
+
+
+# --- the clip source (#2714) -----------------------------------------------------------------------------------------
+
+def test_the_poller_reads_the_audio_clips_of_a_read_message(tmp_path):
+    conn = FakeConnector([message("100.000100", text="",
+                                  files=[{"id": "F0CLIP001", "mimetype": "audio/mp4", "name": "clip.m4a"},
+                                         {"id": "F0DOC001", "mimetype": "application/pdf", "name": "report.pdf"}])])
+    p = poller(conn, tmp_path / "checkpoint.json")
+    got, _ = p.poll(WS, CH)[0]
+    assert [(c.id, c.mimetype, c.name) for c in p.clips(got)] == [("F0CLIP001", "audio/mp4", "clip.m4a")]
