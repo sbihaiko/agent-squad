@@ -250,9 +250,10 @@ def _node(body):
 def _slack_js(page):
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     sett = page[page.index("// SETT{"):page.index("// }SETT")]
+    # The Slack slice runs from `let slS=null` to `slLoad`, so it already carries `slEdit` and every helper of the
+    # workspace editor (#2696). A second copy would declare each of the editor's consts twice, which node refuses.
     sl = page[page.index("let slS=null"):page.index("async function slLoad()")]
-    edit = page[page.index("function slEdit("):page.index("/* The save path over the two Slack files")]
-    return "\n".join([esc, sett, sl, edit])
+    return "\n".join([esc, sett, sl])
 
 
 STUB = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
@@ -349,13 +350,16 @@ def test_the_override_box_shows_the_text_the_channel_holds(hub, tmp_path):
     assert re.search(r'data-sl="ov:c:0:0:0"[^>]*value=""', html), html
 
 
-def test_the_other_sections_keep_no_control(hub, tmp_path):
-    """The editor belongs to the Project events section: Personas, Roles and Slack workspaces stay read-only for the
-    tickets that add their own editing."""
+def test_the_personas_and_roles_keep_no_control(hub, tmp_path):
+    """The workspaces section (#2696) and the Project events section (#2698) each carry an editor of their own.
+    Personas and Roles stay read-only, so no control appears before the workspaces section."""
     html = render(hub, overview(hub, tmp_path))
-    before = html[:html.index("Project events")]
+    workspaces = html.index("Slack workspaces")
+    before = html[:workspaces]
     for ctl in ("<input", "<select", "<textarea", "<button"):
-        assert ctl not in before, f"the read view carries {ctl} before the events editor"
+        assert ctl not in before, f"the read view carries {ctl} before the workspaces editor"
+    section = html[workspaces:html.index("Project events")]
+    assert "data-slopen=" in section and "<input" in section, section
 
 
 def test_checking_announce_writes_the_channel_list(hub, tmp_path):

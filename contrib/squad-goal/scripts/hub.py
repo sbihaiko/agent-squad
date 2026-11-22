@@ -8792,6 +8792,8 @@ $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dat
 let slS=null,slDraft=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="";   // slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696)
 const SL_LANG=["pt-br","en-US","es"],SL_ROLE={Manager:"drafts the answer; posts only after the owner's OK",Colleague:"answered directly; a bug it reports becomes an issue in Todo at once, with an acknowledgment and the link"};
 const SL_EV={stg:"STG release",prod:"PROD release",dev:"dev landing",bug:"bug acknowledgment",fix:"status correction"};
+const SL_MODE=["listen","listen+speak"],SL_SPEAK=["draft","send"],SL_TR=["off","local","gemini"],SL_PMOD=["two_state","exponential"];
+const SL_INHERIT="inherit";
 const slA=t=>esc(t).replace(/"/g,"&quot;");
 const slClone=o=>JSON.parse(JSON.stringify(o));
 const slDirty=()=>(!!slDraft&&JSON.stringify(slDraft)!==JSON.stringify(slS))||(!!slDocs&&JSON.stringify(slDocs)!==JSON.stringify(slSavedDocs));
@@ -8925,9 +8927,8 @@ function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.valu
  else slDraft[k]=v}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens in place, and every change is one operation the
    hub applies to the two raw documents. The view draws the fields and binds them; the class, the file and every refusal
-   are the hub's (ADR-0137). A `guest` workspace and its channels live in the local file alone (ADR-0177). */
-const SL_MODE=["listen","listen+speak"],SL_SPEAK=["draft","send"],SL_TR=["off","local","gemini"],SL_PMOD=["two_state","exponential"];
-const SL_INHERIT="inherit";
+   are the hub's (ADR-0137). A `guest` workspace and its channels live in the local file alone (ADR-0177). Its constants
+   stay above `slEdit`, so a test that slices the editor and the page together declares each one once. */
 const slDocName=d=>d==="local"?((slR&&slR.files&&slR.files.local)||"slack.local.yaml"):((slR&&slR.files&&slR.files.committed)||"slack.yaml");
 const slWs=d=>{const doc=(slDocs||{})[d]||{};const list=Array.isArray(doc.workspaces)?doc.workspaces:(doc.workspaces=[]);return list};
 const slList=(d,k)=>(((slDocs||{})[d]||{})[k]||[]).map(x=>x&&x.id).filter(Boolean);
