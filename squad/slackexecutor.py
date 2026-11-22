@@ -19,6 +19,9 @@ issue or a run, and `request_investigation` starts an investigation or a spike: 
 argument to the source the caller supplies, so the text is a request inside the role's actions and never an instruction
 of the agent.
 
+A request in a `guest` channel never reaches an action: the policy gives it the kind `proposal`, and the executor refuses
+it there, so `squad/slackproposal.py` can offer it to the owner before any work starts (story 61).
+
 The module reads no clock and calls no network: the caller supplies the status, log, work and investigation sources,
 because those answers come from the repository, the board, the project's own log, and the project's own work path.
 
@@ -27,6 +30,7 @@ Guards: `tests/test_slack_executor.py`.
 import json
 from typing import NamedTuple
 
+from . import slackpolicy as S
 from .redact import redact
 
 STATUS = "status"
@@ -110,8 +114,8 @@ def _actions(decision):
 
 def check(request, decision, line, project, listed=None):
     """The one `Refusal` of a request against its decision and its inbox line, or None when every check passes. The
-    checks run in one order: revision, identity, project, channel, action, grant, arguments, and the reply path of the
-    decision.
+    checks run in one order: revision, identity, project, channel, action, grant, the proposal kind, arguments, and the
+    reply path of the decision.
 
     `listed` is the set of `slack.yaml` shas the hub registry lists (#2695), and the line names the revision its decision
     came from. A request on a revision no save lists grants nothing. None leaves the check out of force, as it is on a
@@ -137,6 +141,9 @@ def check(request, decision, line, project, listed=None):
                                  f"{', '.join(sorted(ACTIONS))}, so an owner-only action stays with the owner")
     if request.action not in _actions(decision):
         return Refusal("grant", f"the role {decision.role!r} does not list action {request.action!r}")
+    if getattr(decision, "kind", None) == S.PROPOSAL:
+        return Refusal("proposal", "a request in a guest channel becomes a proposal to the owner: no action runs "
+                                   "before the owner approves it (squad/slackproposal.py)")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:

@@ -20,6 +20,10 @@ from typing import NamedTuple
 
 import yaml
 
+from .slackexecutor import ACTIONS as EXECUTOR_ACTIONS
+
+# The actions a role may list are the ones the executor runs: one vocabulary, never a copy (issue #2699).
+ROLE_ACTIONS = tuple(sorted(EXECUTOR_ACTIONS))
 COMMITTED = Path("docs") / "squad" / "slack.yaml"
 LOCAL_SUFFIX = "slack.local.yaml"       # a file whose name ends in this suffix is refused by the commit guard
 ADR_DIR = Path(__file__).resolve().parent.parent / "docs" / "adr"
@@ -37,6 +41,7 @@ LANGUAGES = ("pt-BR", "en-US", "es-ES")
 NAME = re.compile(r"^[A-Za-z0-9 _.\-]{1,32}\Z")     # ASCII letters, digits, space, period, hyphen, underscore; at most 32
 TONE_MAX = 300
 SECRET_KEY = "secret"
+USER_ID = re.compile(r"^[UW][A-Z0-9]{2,}\Z")   # a Slack user id: `U` or `W`, then uppercase letters and digits
 
 
 class Defect(NamedTuple):
@@ -131,6 +136,33 @@ def _roles(file, doc, out):
             for env in items:
                 if str(env).strip().lower() == "prod":
                     out.append(_defect(file, f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
+        if isinstance(role.get("actions"), (list, tuple)):
+            for j, action in enumerate(role["actions"]):
+                if str(action) not in ROLE_ACTIONS:
+                    out.append(_defect(file, f"roles[{i}].actions[{j}]",
+                                       f"action {action!r} is not one of {', '.join(ROLE_ACTIONS)}"))
+
+
+def _members(file, doc, out, local):
+    """The members of a role live in the local file (ADR-0177 decision 11). A member names its Slack workspace, its
+    channel, its role and its user ids, and a user id is a Slack user id: `U` or `W`, then uppercase letters and
+    digits (issue #2699)."""
+    for i, member in enumerate(_rows(doc.get("members"))):
+        base = f"members[{i}]"
+        if not local:
+            out.append(_defect(file, "members", "the members of a role live in the local file"))
+            return
+        for key in ("workspace", "channel", "role"):
+            if not str(member.get(key) or "").strip():
+                out.append(_defect(file, f"{base}.{key}", f"a member names its {key}"))
+        users = member.get("users")
+        if not isinstance(users, list) or not users:
+            out.append(_defect(file, f"{base}.users", "a member names at least one user id"))
+            continue
+        for j, user in enumerate(users):
+            if not USER_ID.match(str(user)):
+                out.append(_defect(file, f"{base}.users[{j}]",
+                                   f"user {user!r} is not a Slack user id (U... or W...)"))
 
 
 def _secret_keys(file, node, path, out):
@@ -230,6 +262,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     for file, doc in ours:
         _personas(file, doc, out)
         _roles(file, doc, out)
+        _members(file, doc, out, local=(file == local_name))
     _send_grants("slack.yaml", committed, out, local=False)
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
@@ -532,6 +565,11 @@ def poll_interval(now, channel, thread_state):
     if last is not None and _elapsed(now, last) >= quiet:
         return slow
     return fast
+
+
+def role_actions():
+    """The actions a role may list, in name order: the executor runs them, and the editor offers them (issue #2699)."""
+    return ROLE_ACTIONS
 
 
 def rows(value):
