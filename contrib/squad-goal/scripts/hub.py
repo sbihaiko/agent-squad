@@ -2164,10 +2164,20 @@ def _slack_make_worktree(wt):
         return f"the hub's Slack worktree could not be created at {wt}: {(r.stderr or r.stdout).strip()}"
     return None
 
+def _slack_owned(wt):
+    """True when `wt` is the worktree the hub derives for itself under its state directory. The hub advances only that
+    one: a worktree the owner names with `SG_SLACK_WORKTREE` keeps its HEAD, because the hub did not make its commits
+    (#2763)."""
+    try: return pathlib.Path(wt).resolve() == (pathlib.Path(STATE) / SLACK_WT_DIR).resolve()
+    except (OSError, ValueError): return False
+
+
 def _slack_sync(wt):
-    """Bring the hub's worktree to origin/<land> when it stands clean and behind, so a later landing in the branch never
-    strands the next save (#2763). A worktree that carries uncommitted work, or a commit of its own, is left as it stands
-    and `_slack_land_check` refuses it by name. Returns an error, or None."""
+    """Bring the hub's own derived worktree to origin/<land> when it stands clean and behind, so a later landing in the
+    branch never strands the next save (#2763). A worktree the owner names by hand is never advanced. A worktree that
+    carries uncommitted work, or a commit of its own, is left as it stands and `_slack_land_check` refuses it by name.
+    Returns an error, or None."""
+    if not _slack_owned(wt): return None
     g = lambda *a: _slack_git(wt, *a)   # noqa: E731
     r = g("fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
     if r.returncode: return f"git fetch failed: {(r.stderr or r.stdout).strip()}"
@@ -2230,6 +2240,8 @@ def _slack_land_check(wt):
     if r.returncode: return None, f"git fetch failed: {(r.stderr or r.stdout).strip()}"
     base, head = g("rev-parse", f"origin/{LAND}"), g("rev-parse", "HEAD")
     if base.returncode or head.returncode: return None, f"the worktree has no origin/{LAND} to land on"
+    if g("status", "--porcelain").stdout.strip():
+        return None, f"the hub's worktree at {wt} has uncommitted work: clean it before the save"
     if head.stdout.strip() != base.stdout.strip():
         return None, f"the hub's worktree is not one commit above origin/{LAND}: the save would carry other work"
     return base.stdout.strip(), None
@@ -2321,14 +2333,17 @@ def slack_files_set(body, committed=None, local=None):
     out = {"diff": diff, "files": files}
     needs_commit = bool(diff["committed"])
     base = None
-    if needs_commit:
-        # No half save: the worktree the land needs is prepared and checked, and the land refused, before any file is
-        # written. Provisioning derives and syncs it (#2763), so the diff the owner approves is the file dev now holds.
-        if why: return {"err": why, "diff": diff, "files": files}
+    if why:
+        if needs_commit: return {"err": why, "diff": diff, "files": files}
+    else:
+        # No half save: the worktree the land needs is prepared before any file is written. The committed diff is then
+        # read from the worktree as it now stands, so the diff the owner approves is the file the branch holds, not a
+        # stale one (#2763). A save that lands no committed change writes the local file alone.
         perr = _slack_provision(wt)
-        if perr: return {"err": perr, "diff": diff, "files": files}
-        diff["committed"] = _slack_yaml_lines(target, new_c)
-        needs_commit = bool(diff["committed"])
+        if perr and needs_commit: return {"err": perr, "diff": diff, "files": files}
+        if not perr:
+            diff["committed"] = _slack_yaml_lines(target, new_c)
+            needs_commit = bool(diff["committed"])
         if needs_commit:
             base, err = _slack_land_check(wt)
             if err: return {"err": err, "diff": diff, "files": files}
