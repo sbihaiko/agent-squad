@@ -31,13 +31,14 @@ never the message text (story 42).
 
 Guards: `tests/test_slack_poller.py`, `tests/test_slack_schedule.py`.
 """
-import fcntl
 import json
+import os
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import guesstranscribe, slackpolicy
+from .gueststate import DIR_MODE, FILE_MODE
 from .record import atomic_write
 
 # The connector's own tool name carries its server: `mcp__slack__slack_read_channel`. A read tool's first word is one of
@@ -250,8 +251,9 @@ def _thread_key(workspace, channel):
 class RepliedThreads:
     """The threads where the agent replied, keyed by workspace, channel and `thread_ts`. Each entry holds the read cursor (the
     newest `ts` the thread read delivered) and the time of the last activity, on the UTC clock. A file written before the
-    workspace entered the key holds the bare channel id, and the store keeps reading the table of that key, so an upgrade
-    loses no open thread. The poller rereads every open thread and closes it after it goes quiet. The writer records a
+    workspace entered the key holds the bare channel id, and the store keeps reading that table until its first write; the
+    write moves the table to the composite key of the workspace that writes, so no upgrade loses an open thread and no
+    other workspace reads it. The poller rereads every open thread and closes it after it goes quiet. The writer records a
     reply, so a thread opens the moment the agent answers in it. Only code writes the file, every write is atomic
     (ADR-0030), and an unreadable file reads as empty."""
 
@@ -271,20 +273,39 @@ class RepliedThreads:
 
     @staticmethod
     def _key(doc, workspace, channel):
-        """The key that holds the channel's threads. A file written before the workspace entered the key holds the bare
-        channel id, and such a file stays readable: the table it already holds is the one the store keeps. A file with
-        the channel under its composite key answers that key, and a channel the file never held takes the composite one."""
+        """The key that holds the channel's threads. The composite `(workspace, channel)` key wins whenever the file
+        holds it. A file written before the workspace entered the key holds the bare channel id, and such a file stays
+        readable until the first write moves it: the bare table answers only while the composite key is absent."""
         key, legacy = _thread_key(workspace, channel), str(channel)
         if key in doc:
             return key
         return legacy if legacy in doc else key
 
+    @staticmethod
+    def _migrate(doc, workspace, channel):
+        """Move a table the file holds under the bare channel id to the composite key of the writing workspace, so the
+        threads never reach a reader of another workspace that exposes the same channel id. A composite table already
+        present wins the merge, and no later write reuses the bare key."""
+        legacy = str(channel)
+        if workspace is None or legacy not in doc:
+            return doc
+        key = _thread_key(workspace, channel)
+        merged = dict(doc.pop(legacy) or {})
+        merged.update(doc.get(key) or {})
+        if merged:
+            doc[key] = merged
+        else:
+            doc.pop(key, None)
+        return doc
+
     def record(self, channel, thread_ts, at=None, ts=None, workspace=None):
         """Record a reply in a thread, or move its activity and cursor forward. `at` is the caller's clock value of the
         last activity, and `ts` the newest `ts` the thread read delivered. A new thread needs an `at`, because the anchor
-        of its quiet time cannot be guessed. `workspace` separates two guest workspaces that share a channel id. Returns
-        False, and writes nothing, when no thread is recorded."""
+        of its quiet time cannot be guessed. `workspace` separates two guest workspaces that share a channel id, and the
+        first write of a channel moves a legacy bare-key table to that workspace. Returns False, and writes nothing,
+        when no thread is recorded."""
         doc = self.load()
+        doc = self._migrate(doc, workspace, channel)
         key = self._key(doc, workspace, channel)
         entry = (doc.get(key) or {}).get(str(thread_ts))
         if entry is None and at is None:
@@ -301,8 +322,10 @@ class RepliedThreads:
         return True
 
     def close(self, channel, thread_ts, workspace=None):
-        """Forget a thread, so the poller never rereads it again."""
+        """Forget a thread, so the poller never rereads it again. The write moves a legacy bare-key table to the
+        workspace, as `record` does."""
         doc = self.load()
+        doc = self._migrate(doc, workspace, channel)
         key = self._key(doc, workspace, channel)
         threads = doc.get(key) or {}
         if str(thread_ts) not in threads:
@@ -585,12 +608,13 @@ class PollSchedule:
     The state lives in one JSON file in the guest state folder, keyed by Slack workspace and channel, and every clock
     value in it is UTC with an explicit offset. An unreadable file reads as an empty schedule, so a broken file never
     stops a poll. Every write is atomic (ADR-0030) and holds the file's lock, so a tick and a poll that note one channel
-    at the same moment lose no update. The module reads no clock of its own: the caller passes every clock value."""
+    at the same moment lose no update. Every call reads the guest workspaces and the channel rows from the config the
+    caller holds at that moment, so a workspace or a poll block added after construction is polled, as
+    `slackpolicy.decide` reads it. The module reads no clock of its own: the caller passes every clock value."""
 
     def __init__(self, path, committed, local, threads=None):
         self.path = Path(path)
         self.committed, self.local, self.threads = committed or {}, local or {}, threads
-        self.channels = guest_channels(self.committed, self.local)
 
     def _load(self):
         try:
@@ -606,14 +630,25 @@ class PollSchedule:
     @contextmanager
     def _locked(self):
         """The write lock of the schedule file: a tick and a poll that note one channel at the same moment each read the
-        entry they merge into under this lock, so neither update is lost to the other."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path.with_name(self.path.name + ".lock"), "a+") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+        entry they merge into under this lock, so neither update is lost to the other. The lock file sits in the private
+        folder with the mode that folder takes, and a platform without `fcntl` keeps the write with no lock rather than
+        fail to import."""
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+        lock = self.path.with_name(self.path.name + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(lock.parent, DIR_MODE)
+        with open(lock, "a+") as handle:
+            os.chmod(lock, FILE_MODE)
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 yield
             finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _entry(self, doc, workspace, channel):
         return (doc.get(str(workspace)) or {}).get(str(channel)) or {}
@@ -702,9 +737,10 @@ class PollSchedule:
 
     def due(self, now):
         """The guest channels whose `next_due` has passed at `now`, as `(workspace, channel)` in file order. A channel
-        the schedule never held is due, so its first tick reads it at once."""
+        the schedule never held is due, so its first tick reads it at once. The channels come from the live config the
+        caller holds at this call, so a workspace or a channel added after construction is polled on the next tick."""
         doc, at, out = self._load(), _utc(now), []
-        for workspace, channel, _row in self.channels:
+        for workspace, channel, _row in guest_channels(self.committed, self.local):
             value = _time_of(self._entry(doc, workspace, channel).get("next_due"))
             if value is None or at >= value:
                 out.append((workspace, channel))
@@ -723,20 +759,31 @@ class PollSchedule:
 
     def note_message(self, workspace, channel, at):
         """A message from another person returns the channel to fast: it is the last activity, and the next poll is one
-        interval away. A message older than the stored activity never moves it backward, so a replayed page plans the
-        same next poll it did before. An exponential channel stores the floor as its step, so its growth restarts. One
-        write carries every field, so an interrupted note never leaves a last activity with a stale due time."""
+        interval away. A channel that is already due stays due: its next due time is the earlier of the stored one and
+        one interval after the message, and a channel the schedule never held stays due at the message time, so a
+        message never delays a poll the tick owes. A message older than the stored activity never moves it backward, so
+        a replayed page plans the same next poll it did before. An exponential channel stores the floor as its step, so
+        its growth restarts. One write carries every field, so an interrupted note never leaves a last activity with a
+        stale due time."""
         at = _utc(at)
-        existing = self.last_at(workspace, channel)
-        new_last = at if existing is None or at > existing else existing
-        anchor = max(at, new_last)
-        row = _channel_row(self.committed, self.local, workspace, channel)
-        interval = self._interval_at(workspace, channel, anchor, new_last)
-        fields = {"last_at": new_last.isoformat(), "next_due": (anchor + timedelta(seconds=interval)).isoformat()}
-        if self._exponential(row):
-            floor, ceiling, _factor, _window = self._exp_poll(row)
-            fields["step"] = min(floor, ceiling)
-        self._write_entry(workspace, channel, **fields)
+        with self._locked():
+            doc = self._load()
+            entry = dict(self._entry(doc, workspace, channel))
+            existing = _time_of(entry.get("last_at"))
+            new_last = at if existing is None or at > existing else existing
+            anchor = max(at, new_last)
+            interval = self._interval_at(workspace, channel, anchor, new_last)
+            planned = anchor + timedelta(seconds=interval)
+            stored_due = _time_of(entry.get("next_due"))
+            entry["last_at"] = new_last.isoformat()
+            entry["next_due"] = (min(stored_due, planned) if stored_due is not None else anchor).isoformat()
+            row = _channel_row(self.committed, self.local, workspace, channel)
+            if self._exponential(row):
+                floor, ceiling, _factor, _window = self._exp_poll(row)
+                entry["step"] = min(floor, ceiling)
+            doc.setdefault(str(workspace), {})[str(channel)] = entry
+            self._save(doc)
+        return entry
 
     def note_event(self, workspace, channel, at):
         """An announced event in the channel returns it to fast, as a new message does, so a reaction is read at once."""
