@@ -417,8 +417,9 @@ def _elapsed(now, value):
 
 def poll_interval(now, channel, thread_state):
     """The interval to the next poll of a `guest` channel, in seconds. `two_state` is fast after a message and slow
-    after `quiet_after` of silence; `exponential` multiplies the floor by the factor at each idle window up to the
-    ceiling. A message in the agent's thread newer than `thread_open` keeps the interval fast in both modes."""
+    after `quiet_after` of silence, and a channel with no message yet is silent, so it waits `slow`; `exponential`
+    multiplies the floor by the factor at each idle window up to the ceiling. A message in the agent's thread newer than
+    `thread_open` keeps the interval fast in both modes."""
     poll = channel.get("poll") if isinstance(channel.get("poll"), dict) else {}
     state = thread_state or {}
     last = state.get("last_message_at")
@@ -441,7 +442,7 @@ def poll_interval(now, channel, thread_state):
     open_ = _seconds(poll.get("thread_open", _POLL_DEFAULTS["thread_open"]))
     if thread is not None and _elapsed(now, thread) <= open_:
         return fast
-    if last is not None and _elapsed(now, last) >= quiet:
+    if last is None or _elapsed(now, last) >= quiet:
         return slow
     return fast
 
