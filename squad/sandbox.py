@@ -14,6 +14,8 @@ import shlex
 import shutil
 from dataclasses import dataclass, field
 
+from squad.project_settings import REL as SETTINGS_REL
+
 WRITE_TOOLS = {"Edit": "file_path", "MultiEdit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 MATCHER = "|".join([*WRITE_TOOLS, "Bash"])
 MIGRATE = re.compile(r"modelreg(?:\.py)?\s+migrate\b")
@@ -204,6 +206,75 @@ def issue_close_reason(cmd, depth=0):
     return None
 
 
+# #2692, story 66: the committed `slack.yaml` sits beside the project settings file, and it is the owner's written grant.
+# Only the hub writes it, after the owner approves the diff. A run or a child that edits it would create authority from
+# ordinary code, so the wall denies every write at that one path and leaves a fixture named `slack.yaml` elsewhere alone.
+SETTINGS_SLACK = SETTINGS_REL.with_name("slack.yaml")
+_SETTINGS_SLACK_DENIAL = ("sandbox: a write to the settings-path slack.yaml is denied; that file is the owner's grant, "
+                          "and only the hub writes it after the owner's approval, so no ordinary code creates authority")
+_SLACK_WRITERS = {"cp", "mv", "rm", "tee", "touch", "truncate", "dd", "install"}
+_SLACK_EDITORS = {"sed", "perl"}
+_REDIRECT = (">", ">>", ">|", "&>", "&>>")
+
+
+def _settings_slack(root):
+    """The one path the rule guards: the `slack.yaml` beside the project settings file, under this session's root."""
+    return os.path.realpath(os.path.join(os.path.realpath(root), *SETTINGS_SLACK.parts))
+
+
+def _named_path(token, root, home):
+    """The real path a command word names, read from the root, or None for a shell operator."""
+    raw = token.strip("'\"")
+    if not raw or raw in ("<", "<<", "<<<"):
+        return None
+    raw = raw.lstrip("0123456789<>&|=")
+    if raw.startswith("~"):
+        raw = home + raw[1:] if home else raw
+    return os.path.realpath(os.path.join(root, raw))
+
+
+def _redirects_into(words, root, home, target):
+    """True when a `>` or `>>` of this segment sends its output to the target, not only when the target is read."""
+    for i, w in enumerate(words):
+        if w in _REDIRECT:
+            rest = words[i + 1] if i + 1 < len(words) else ""
+        elif w.startswith(">") and len(w) > 1:
+            rest = w
+        else:
+            continue
+        if _named_path(rest.lstrip("<>&|"), root, home) == target:
+            return True
+    return False
+
+
+def _in_place(verb, args):
+    """True when a text editor writes its file in place: `sed -i`, `perl -pi`."""
+    if verb not in _SLACK_EDITORS:
+        return False
+    return any(a == "-i" or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args)
+
+
+def settings_slack_reason(cmd, root, home, depth=0):
+    """Why a Bash command that writes the settings-path slack.yaml is denied, or None (#2692). A read stays open, and a
+    shell's `-c` body is read as the command it is."""
+    target = _settings_slack(root)
+    for seg in _SEGMENT.split(cmd):
+        words = _segment_words(seg)
+        if not words:
+            continue
+        verb, args = os.path.basename(words[0]), words[1:]
+        if verb in _SHELLS:
+            body = _shell_body(args)
+            if body is not None and depth < 3 and (inner := settings_slack_reason(body, root, home, depth + 1)):
+                return inner
+            continue
+        if target not in {_named_path(w, root, home) for w in words}:
+            continue
+        if _redirects_into(words, root, home, target) or verb in _SLACK_WRITERS or _in_place(verb, args):
+            return _SETTINGS_SLACK_DENIAL
+    return None
+
+
 def deny_reason(tool, tool_input, root, env=None, home=None):
     """Why the call is denied, or None when it may run. `root` is the session's worktree; a relative path is read from it."""
     env = os.environ if env is None else env
@@ -218,6 +289,8 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
         top = os.path.realpath(root)
         if not _inside(path, top):
             return f"sandbox: {tool} of {raw} is denied; this session writes only inside its worktree {top}"
+        if path == _settings_slack(top):
+            return _SETTINGS_SLACK_DENIAL
         return None
     if tool == "Bash":
         cmd = tool_input.get("command")
@@ -240,6 +313,8 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
         if (reason := suite_reason(cmd, root)) is not None:
+            return reason
+        if (reason := settings_slack_reason(cmd, root, home)) is not None:
             return reason
         if (reason := issue_close_reason(cmd)) is not None:
             return reason
