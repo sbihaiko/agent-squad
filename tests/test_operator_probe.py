@@ -116,7 +116,8 @@ def test_the_profile_grants_the_cli_background_service_its_runtime():
     assert f'(literal "{resolved_null}")' in write, write
     assert f'(literal "{os.path.realpath(os.devnull)}")' in write
     assert f'(subpath "{operators.daemon_root()}")' in write
-    assert operators.daemon_root() == f"/private/tmp/cc-daemon-{os.getuid()}"
+    # `/tmp` is a link on macOS and a plain folder on Linux, so the expected path is the resolved one (#2773).
+    assert operators.daemon_root() == os.path.realpath(f"/tmp/cc-daemon-{os.getuid()}")
     assert f'(allow network-outbound (remote unix-socket (subpath "{operators.daemon_root()}")))' in text.splitlines()
 
 

@@ -73,7 +73,8 @@ def _prelude():
 def _node(js):
     node = shutil.which("node")
     assert node, "node is required to evaluate hub panel JS"
-    p = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=15)
+    # The script goes on stdin: the hub's panel code passed Linux's 128 KiB cap on one argument (#2774).
+    p = subprocess.run([node, "-"], input=js, capture_output=True, text=True, timeout=15)
     assert p.returncode == 0, p.stderr or p.stdout
     return p.stdout
 
