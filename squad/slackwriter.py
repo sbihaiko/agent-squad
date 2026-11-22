@@ -54,9 +54,16 @@ def has_mark(text, name):
     return write_denial(text, (mark(name),)) is None
 
 
+def _one_italic(body):
+    """True when the body is exactly one italic run: a leading and a trailing `_`, a non-empty interior, and no other
+    `_` inside. `_a_ and _b_` is two runs with plain text between, so it is not fully italic; nor is `__`, an empty
+    run. A body of lines inside the one run stays one run."""
+    return len(body) >= 3 and body.startswith("_") and body.endswith("_") and "_" not in body[1:-1]
+
+
 def write_denial(text, marks):
     """None when the text carries one of the given persona mark lines and an italic body, else the reason a write hook
-    denies it. A mark alone, with no body, is a marked text."""
+    denies it. A mark alone, with no body, is a marked text; a body that follows the mark must be one italic run."""
     text = str(text or "").strip()
     for name_mark in marks:
         name = str(name_mark)
@@ -64,10 +71,10 @@ def write_denial(text, marks):
         if not lines or lines[0].strip() != name:
             continue
         body = "\n".join(lines[1:]).strip()
-        if not body or (len(body) >= 2 and body.startswith("_") and body.endswith("_")):
+        if not body or _one_italic(body):
             return None
     return ("the write carries no persona mark: every guest text starts with the line *<persona>'s Msg*, alone and in "
-            "bold, with the body in italics")
+            "bold, with the body in one italic run")
 
 
 def plan(decision, channel, thread_ts, body):

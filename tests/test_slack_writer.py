@@ -111,6 +111,23 @@ def test_the_hook_denies_a_write_without_the_mark():
     assert result.get("permissionDecision") == "deny"
 
 
+# --- 3b. a body that is not one italic run is denied --------------------------------------------------------------
+
+def test_a_body_that_is_not_one_italic_run_is_denied():
+    # The mark is alone and bold, but the body is plain text between two separate italic runs, so it is not fully italic.
+    assert W.write_denial("*Iara's Msg*\n_plain_ text _more_", ("*Iara's Msg*",)) is not None
+    assert W.write_denial("*Iara's Msg*\n_a_ and _b_", ("*Iara's Msg*",)) is not None
+    # An empty italic run (`__`) carries no body.
+    assert W.write_denial("*Iara's Msg*\n__", ("*Iara's Msg*",)) is not None
+    # One italic run over the whole body passes, with its inner plain text kept.
+    assert W.write_denial("*Iara's Msg*\n_plain text stays in one run_", ("*Iara's Msg*",)) is None
+    # A Draft whose decided text is not fully italic is denied by the hook.
+    _, d = draft()
+    lying = W.Draft(d.tool, d.channel, d.thread_ts, "*Iara's Msg*\n_plain_ text _more_", d.name)
+    result = answer(run(W.pre_write_tool_use(lying), {"tool": W.DRAFT_WORD, "channel": CH, "thread_ts": QUESTION}))
+    assert result.get("permissionDecision") == "deny"
+
+
 # --- 5. send is denied without speak: send and a grant -------------------------------------------------------------
 
 def test_the_hook_denies_send_without_speak_send_and_a_grant():
