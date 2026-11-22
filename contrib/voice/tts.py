@@ -51,6 +51,9 @@ def style_prompt(text, tone=""):
 
 
 def synth(key, text, voice, out, tone=""):
+    """Synthesize `text` in `voice` and write `out`. A tone goes into the text part through `style_prompt`, so Gemini TTS
+    reads it as the speaking style with the script; two tones therefore make two different requests, not only two names.
+    `tests/test_voiced_persona.py` proves the tone reaches the request body."""
     body = {
         "contents": [{"parts": [{"text": style_prompt(text, tone)}]}],
         "generationConfig": {
