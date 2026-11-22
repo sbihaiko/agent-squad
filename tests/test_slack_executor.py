@@ -361,13 +361,24 @@ def loop_request(state, **over):
 
 def test_a_role_holder_with_loop_control_pauses_the_loop_through_the_hub_switch():
     """Criteria (1), (4) and (7): the operator's role lists `loop_control`; a pause reaches the hub switch with its one
-    drain action, named for the person who asked, and the reply confirms the state the hub applied."""
+    drain action, named for the person who asked, and the reply confirms the paused state, not the hub's action."""
     hub = Hub()
     out, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
     assert out.ran is True
     assert hub.calls == [("drain", OPERATOR)]
-    assert out.reply == {"path": "bot", "channel": CHANNEL, "text": out.reply["text"]}
-    assert "drain" in out.reply["text"].lower()
+    assert out.reply == {"path": "bot", "channel": CHANNEL,
+                         "text": "The loop pauses: it dispatches nothing new until a resume."}
+
+
+def test_a_pause_and_a_drain_confirm_their_own_state():
+    """Criterion (7): the hub applies one drain for both, but the reply names the state the role holder asked for, so a
+    pause never answers with the drain text."""
+    hub = Hub()
+    pause, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    drain, _ = run(text=loop_request("drain"), decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert pause.reply["text"] != drain.reply["text"]
+    assert "pauses" in pause.reply["text"]
+    assert "drains" in drain.reply["text"]
 
 
 def test_a_role_holder_with_loop_control_resumes_the_loop_through_the_hub_switch():
@@ -418,6 +429,18 @@ def test_a_loop_control_request_for_a_state_it_does_not_take_is_refused():
     assert out.record["error"].startswith("arguments:")
 
 
+def test_a_state_a_loop_control_request_does_not_take_is_reported_before_an_extra_argument():
+    """Criterion (6): one request that names both a bad state and an extra key reports the state, so the caller fixes the
+    reading that matters in one round-trip."""
+    hub = Hub()
+    out, _ = run(text=request_text(action="loop_control", arguments={"state": "restart", "force": 1}),
+                 decision_user=OPERATOR, line_user=OPERATOR, loop=hub)
+    assert out.ran is False
+    assert hub.calls == []
+    assert "restart" in out.record["error"]
+    assert "force" not in out.record["error"]
+
+
 def test_a_hub_refusal_of_a_loop_action_is_recorded_as_data_naming_the_reason():
     """Criterion (4): the hub refuses an action the loop state does not allow, and its reason becomes the data record."""
     hub = Hub(code=409, err="the loop is not running")
@@ -426,6 +449,19 @@ def test_a_hub_refusal_of_a_loop_action_is_recorded_as_data_naming_the_reason():
     assert out.reply is None
     assert out.record["error"].startswith("hub:")
     assert "the loop is not running" in out.record["error"]
+
+
+def test_a_hub_answer_that_is_not_a_mapping_is_a_refusal_or_a_reply_never_a_crash():
+    """Criterion (4): the switch's answer is read defensively, so a body that is not one mapping refuses the action with
+    the hub's answer and never raises inside the request path."""
+    refused, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR,
+                     loop=lambda action, who: (409, "boom"))
+    assert refused.ran is False
+    assert refused.record["error"].startswith("hub:")
+    applied, _ = run(text=loop_request("pause"), decision_user=OPERATOR, line_user=OPERATOR,
+                     loop=lambda action, who: (200, "boom"))
+    assert applied.ran is True
+    assert "pauses" in applied.reply["text"]
 
 
 @pytest.fixture
@@ -448,8 +484,8 @@ def real_hub(monkeypatch, tmp_path):
         if a == ("start",):
             (mod.STATE / "watchd.pid").write_text(f"{os.getpid()}\n")
         return 0
-    mod.loop_watchd = watchd
-    mod.tailnet_block = lambda checkout=None: {}
+    monkeypatch.setattr(mod, "loop_watchd", watchd)
+    monkeypatch.setattr(mod, "tailnet_block", lambda checkout=None: {})
     return mod
 
 
