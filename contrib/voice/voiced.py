@@ -72,6 +72,7 @@ import sys
 import tempfile
 import urllib.request
 import xml.sax.saxutils
+from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -90,7 +91,6 @@ CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
-BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
@@ -979,7 +979,7 @@ class Daemon:
             return self.refuse_revision(
                 repo, active, [str(defect) for defect in tip_defects + local_defects], sha=sha,
                 local_files=sorted({defect.file for defect in local_defects}), tip_failed=bool(tip_defects))
-        record = {"repo": repo, "sha": sha, "revision": doc}
+        record = {"repo": repo, "sha": sha, "revision": doc, "local": local or {}}
         try:
             self.state.save_active_revision(repo, record)
         except OSError as x:
@@ -1086,13 +1086,17 @@ class Daemon:
             return False
         return True
 
-    def answer_failed_clip(self, record):
+    def answer_failed_clip(self, record, decision=None):
         """One line under a clip that did not work, in its own channel and thread, naming the failure in one sentence.
 
         The record is already durable when this runs, so a refused post never loses the failure and never makes the
         clip a second model call on the next start (#1618). The sentence comes from `record['answer']`, which the
-        recording path builds with `one_sentence`, so the line is the same shape whatever failed.
+        recording path builds with `one_sentence`, so the line is the same shape whatever failed. A decision with no
+        reply path is a `listen` channel, and it receives no post, not even this one (SPEC 2682).
         """
+        if decision is not None and decision.reply is None:
+            self.log(f"voiced: failure answer not posted, the channel is listen-only: {record.get('error')}")
+            return
         if not record.get("channel"):
             self.log(f"voiced: failure answer not posted, the clip names no channel: {record.get('error')}")
             return
@@ -1213,7 +1217,12 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            for record in read_lines(path):
+            records = read_lines(path)
+            if records and channel and not self.channel_accepts_answer(channel):
+                # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
+                self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
+                continue
+            for record in records:
                 digest = outbox_digest(record)
                 if digest in delivered:
                     continue
@@ -1232,39 +1241,134 @@ class Daemon:
                     self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
         return count
 
+    def policy_decision(self, event):
+        """The decision of one socket event, always: from the loaded files of the project that owns its channel.
+
+        A valid active revision and its local file decide the event, so a bot, a stranger and a Slack Connect user stay
+        data (SPEC 2682). A project channel whose revision is not active yet, the DM, and every channel no project owns
+        run through the daemon's empty policy instead: it names the channel and the owner as its one member, so the
+        owner's message still reaches the operator while a bot, a stranger and a Slack Connect user stay data from the
+        event flags and their missing role alone.
+        """
+        channel = str(event.get("channel") or "")
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if active and active.get("revision"):
+            committed = active["revision"]
+            local = active.get("local") or {}
+        else:
+            committed, local = self.baseline_files(event, repo)
+        return slackpolicy.decide(committed, local, self.policy_event(event, committed), datetime.now())
+
+    def baseline_files(self, event, repo):
+        """The empty policy of a channel with no loaded project files: it names the channel so the decision can
+        classify the event, and it names the owner as its one member, so the owner's message still reaches the
+        operator while every other caller has no role and stays data. A bot and a Slack Connect user stay data from
+        the event flags alone, whatever the owner is. A channel no project owns keeps the same empty policy; `handle`
+        records it as data before it reads the kind, so nothing is granted there."""
+        channel = str(event.get("channel") or "")
+        workspace = str(event.get("team") or event.get("team_id") or "")
+        row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
+        committed = {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
+                     "roles": [{"id": "owner", "actions": []}]}
+        local = {}
+        if self.owner:
+            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner",
+                                  "users": [self.owner]}]}
+        return committed, local
+
+    def channel_accepts_answer(self, channel):
+        """Whether the daemon may post an answer in one channel: its project's active revision names the channel
+        `listen+speak`. A channel with no active revision and a channel the revision does not name keep their answers,
+        because no loaded file forbids them."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if not active or not active.get("revision"):
+            return True
+        for workspace in active["revision"].get("workspaces") or []:
+            for row in workspace.get("channels") or []:
+                if str(row.get("id")) == str(channel):
+                    return str(row.get("mode") or "listen") == "listen+speak"
+        return True
+
+    def policy_event(self, event, committed):
+        """One socket event as the policy event the decision takes: its workspace, channel, caller, and the flags that
+        mark a bot, a Slack Connect user and the daemon's own post."""
+        workspace = self.workspace_of(event, committed)
+        return {"kind": "message",
+                "workspace": workspace,
+                "channel": str(event.get("channel") or ""),
+                "user": str(event.get("user") or event.get("bot_id") or ""),
+                "bot": bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
+                "external": bool(event.get("is_ext_shared_channel") or event.get("is_external")
+                                 or event.get("external")
+                                 or (event.get("user_team") and str(event.get("user_team")) != workspace)),
+                "own": str(event.get("ts") or "") in self.own_posts()}
+
+    @staticmethod
+    def workspace_of(event, committed):
+        """The workspace id of one event: the team the socket names, else the workspace whose file holds the channel.
+        A socket event may carry no team, and the file still tells which workspace the channel belongs to."""
+        team = str(event.get("team") or event.get("team_id") or "")
+        if team:
+            return team
+        channel = str(event.get("channel") or "")
+        for workspace in committed.get("workspaces") or []:
+            for row in workspace.get("channels") or []:
+                if str(row.get("id")) == channel:
+                    return str(workspace.get("id") or "")
+        return ""
+
+    def own_posts(self):
+        """The `ts` of every answer this daemon already posted, so the socket's echo of one is ignored, never recorded."""
+        return {str(row.get("ts")) for row in self.state.posted().values() if row.get("ts")}
+
     def handle(self, envelope):
-        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here."""
+        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here.
+
+        The policy decision decides what the event becomes: an ignored event writes no line, a bot, a stranger and a
+        Slack Connect user stay data, and every line carries the language, the persona and the caller role. A `listen`
+        channel never receives a post, neither the failure reply nor the answer.
+        """
         if (envelope.get("type") or "events_api") != "events_api":
             return "ignored"
         event = (envelope.get("payload") or {}).get("event") or {}
         if event.get("type") != "message":
             return "ignored"
-        if event.get("subtype") in BOT_SKIP or event.get("bot_id"):
+        if event.get("subtype") in ("channel_join", "channel_leave"):
             return "ignored"
         mid = message_id(event)
         if mid in self.state.seen():
             return "duplicate"
+        target = self.inbox_path_of(event)
+        decision = self.policy_decision(event)
         record = {
             "id": mid,
             "ts": event.get("ts"),
             "user": event.get("user"),
             "channel": event.get("channel"),
+            "language": decision.language,
+            "persona": decision.persona.name if decision.persona else None,
+            "role": decision.role,
         }
         if event.get("files"):
             record["files"] = [
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
-        target = self.inbox_path_of(event)
+        text = (event.get("text") or "").strip()
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
-            record["text"] = (event.get("text") or "").strip()
+            if text:
+                record["text"] = text
             record["error"] = "unknown channel: no project owns it"
             self.state.append_other(record)
             return "other"
-        text = (event.get("text") or "").strip()
-        if event.get("user") != self.owner:
-            record["text"] = text
+        if decision.kind == slackpolicy.IGNORE:
+            return "ignored"
+        if decision.kind == slackpolicy.DATA:
+            if text:
+                record["text"] = text
             self.state.append_other(record)
             return "other"
         clip = audio_file(event)
@@ -1280,19 +1384,18 @@ class Daemon:
                 record["answer"] = one_sentence(record["error"])
                 record["bytes"] = x.size
                 self.state.append_other(record)
-                self.answer_failed_clip(record)
+                self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
                 record["error"] = f"transcription failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
-                self.answer_failed_clip(record)
+                self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
         if not text:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
-            record["text"] = text
             record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
             self.state.append_other(record)
             return "other"

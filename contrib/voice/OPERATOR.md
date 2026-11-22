@@ -18,8 +18,11 @@ is delivered when the turn ends.
 After an upgrade, a Monitor still tailing the old root `$VOICE_STATE/inbox.jsonl` sees no new line, because the
 daemon now writes the DM queue to `$VOICE_STATE/inboxes/dm.jsonl`. Restart that Monitor on the new path.
 
-The inbox line carries `id`, `ts`, `user`, `channel`, `text` and `clip`. `text` is the owner's words, or the
-transcription of the clip. A line from any other user never reaches the inbox.
+The inbox line carries `id`, `ts`, `user`, `channel`, `text`, `clip`, `language`, `persona` and `role`, the decision
+the policy files give the event. `text` is the owner's words, or the transcription of the clip; a line with no text
+carries no `text` key. A line from a bot, a stranger or a Slack Connect user never reaches the inbox; it stays data in
+`other.jsonl` with the same `language`, `persona` and `role` fields, so a reader tells which caller and channel role
+produced it.
 
 ## Answer through the outbox
 
