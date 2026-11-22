@@ -418,7 +418,7 @@ def identity(committed, local, channel_id):
                 break
         if channel is not None:
             break
-    return _effective_language(committed, local, workspace, channel), _effective_persona(committed, local, workspace, channel)
+    return _effective_language(committed, local, workspace, channel), effective_persona(committed, local, workspace, channel)
 
 
 def _member_role(local, workspace_id, channel_id, user, accepted):
