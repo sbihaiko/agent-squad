@@ -12,8 +12,8 @@ import http.client
 import importlib.util
 import json
 import pathlib
-import threading
 import tempfile
+import threading
 from http.server import ThreadingHTTPServer
 
 import pytest

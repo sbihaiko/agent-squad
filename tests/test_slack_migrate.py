@@ -9,13 +9,8 @@ reader of the old file retired with the file (#2701). Every id is a placeholder.
 Guard: `squad/slackpolicy.py` (`migrate`).
 """
 import copy
-import importlib.util
 import json
 import pathlib
-import re
-import subprocess
-
-import pytest
 
 from squad import slackpolicy
 
