@@ -280,6 +280,8 @@ def check(target=".", profile=None, project=None):
 # that stays data, a command that reaches the inbox, and a request that becomes a proposal to the owner.
 IGNORE, DATA, INBOX, PROPOSAL = "ignore", "data", "inbox", "proposal"
 DEFAULT_LANGUAGE = "en-US"
+# The reply paths that leave from the owner's account, so the reply needs the AI authorship mark (SPEC 2682).
+_OWNER_ACCOUNT_REPLIES = ("draft", "send")
 _MS = {"s": 1, "m": 60, "h": 3600}
 _POLL_DEFAULTS = {"fast": "1m", "slow": "10m", "quiet_after": "10m", "thread_open": "30m"}
 _EXP_DEFAULTS = {"floor": "5m", "ceiling": "1h", "factor": 2, "idle_window": "15m", "thread_open": "30m"}
@@ -296,7 +298,14 @@ class Persona(NamedTuple):
 class Decision(NamedTuple):
     """What the operator session may do with one event: the kind of decision, the caller's role and actions, the
     language and persona of the channel, the reply path (`bot`, `draft` or `send`), the mark flag, and, for a `guest`
-    channel, the time of the next poll."""
+    channel, the time of the next poll.
+
+    Field population per kind. `language` and `persona` are always set, from the channel, its workspace or the project.
+    `role` is set when the files name one, and `actions` only on `inbox` and `proposal`. `reply` is set only on `inbox`
+    and `proposal`, and never in a `listen` channel. `mark` is true exactly when `reply` is `draft` or `send`, because
+    that reply leaves from the owner's account; a `bot` reply and a decision with no reply carry no mark. `next_poll` is
+    set only for an event of a known `guest` channel, so it is None for an unknown channel and for `ignore`/`data` of a
+    non-guest channel."""
     kind: str
     role: str | None
     actions: tuple
@@ -314,8 +323,19 @@ def _row_at(rows, key, value):
     return None
 
 
-def _effective_language(committed, workspace, channel):
-    for value in (channel.get("language"), workspace.get("language"), (committed.get("project") or {}).get("language")):
+def _project(committed, local):
+    """The project row: the committed file's project, with a key the local file adds only where the committed file omits
+    it. The local file never overrides a committed value, because it may not change a persona (ADR-0177)."""
+    merged = dict(local.get("project") or {})
+    merged.update(committed.get("project") or {})
+    return merged
+
+
+def _effective_language(committed, local, workspace, channel):
+    """The language of a channel: the channel first, then its Slack workspace, then the project, then `en-US`. An absent
+    channel or workspace reads as an empty row, so the same chain answers an event of an unknown channel."""
+    workspace, channel = workspace or {}, channel or {}
+    for value in (channel.get("language"), workspace.get("language"), _project(committed, local).get("language")):
         if value is not None:
             tag = normalize_language(value)
             if tag:
@@ -323,29 +343,34 @@ def _effective_language(committed, workspace, channel):
     return DEFAULT_LANGUAGE
 
 
-def _effective_persona(committed, workspace, channel):
+def _effective_persona(committed, local, workspace, channel):
+    """The persona of a channel, resolved in the same order as the language. A channel, a workspace and the project name
+    an id; the `Persona` row comes from the committed file, then the local file."""
+    workspace, channel = workspace or {}, channel or {}
     wanted = None
-    for value in (channel.get("persona"), workspace.get("persona"), (committed.get("project") or {}).get("persona")):
+    for value in (channel.get("persona"), workspace.get("persona"), _project(committed, local).get("persona")):
         if value is not None:
             wanted = value
             break
     if wanted is None:
         return None
-    row = _row_at(committed.get("personas"), "id", wanted)
+    row = _row_at(committed.get("personas"), "id", wanted) or _row_at(local.get("personas"), "id", wanted)
     if row is None:
         return None
     return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
 
 
-def _member_role(local, workspace_id, channel, user):
+def _member_role(local, workspace_id, channel_id, user, accepted):
     """The role the local file gives this user in this channel, or None. A membership in a role the channel does not
-    accept grants nothing, so a stranger's message stays data."""
-    accepted = {str(name) for name in channel.get("roles") or []}
+    accept grants nothing, so a stranger's message stays data. `accepted` is None for an unknown channel: no action is
+    granted there, so the decision reports the role the file names without an acceptance check."""
     for member in _rows(local.get("members")):
-        if (str(member.get("workspace")), str(member.get("channel"))) != (workspace_id, str(channel.get("id"))):
+        if (str(member.get("workspace")), str(member.get("channel"))) != (workspace_id, channel_id):
             continue
-        if user in {str(u) for u in member.get("users") or []} and str(member.get("role")) in accepted:
-            return str(member.get("role"))
+        if user in {str(u) for u in member.get("users") or []}:
+            role = str(member.get("role"))
+            if accepted is None or role in accepted:
+                return role
     return None
 
 
@@ -417,27 +442,30 @@ def decide(committed, local, event, now, thread_state=None):
     """The one decision for one event of one channel, from the two validated files and the caller's clock value.
 
     `event` names `workspace`, `channel`, `user` and `kind` (a `message` unless stated), and flags `bot`, `external`
-    and `own`. `thread_state` names `last_message_at` and `thread_last_at` of the agent's thread. The module reads no
-    clock and calls no network, so the caller passes both answers."""
+    and `own`. A `kind` other than `message` and an `own` event (the agent's own post) get `ignore`. `thread_state` names
+    `last_message_at` and `thread_last_at` of the agent's thread. The module reads no clock and calls no network, so the
+    caller passes both answers."""
     committed = committed or {}
     local = local or {}
-    project_language = _effective_language(committed, {}, {})
-    project_persona = _effective_persona(committed, {}, {})
     workspace_id = str(event.get("workspace") or "")
+    channel_id = str(event.get("channel") or "")
+    user = str(event.get("user") or "")
     workspace = _row_at(committed.get("workspaces"), "id", workspace_id) or _row_at(local.get("workspaces"), "id", workspace_id)
-    channel = _row_at(workspace.get("channels"), "id", event.get("channel")) if workspace else None
+    channel = _row_at(workspace.get("channels"), "id", channel_id) if workspace else None
+    language = _effective_language(committed, local, workspace, channel)
+    persona = _effective_persona(committed, local, workspace, channel)
     if channel is None:
-        return Decision(IGNORE, None, (), project_language, project_persona, None, False, None)
+        # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
+        role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
+        return Decision(IGNORE, role, (), language, persona, None, False, None)
     class_ = str(workspace.get("class") or "owned")
-    language = _effective_language(committed, workspace, channel)
-    persona = _effective_persona(committed, workspace, channel)
     next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
-    role = _member_role(local, workspace_id, channel, str(event.get("user") or ""))
+    role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
     if str(event.get("kind") or "message") != "message" or event.get("own"):
         return Decision(IGNORE, role, (), language, persona, None, False, next_poll)
     if event.get("bot") or event.get("external") or role is None:
         return Decision(DATA, role, (), language, persona, None, False, next_poll)
     reply = _reply_path(class_, channel)
     kind = PROPOSAL if class_ == "guest" else INBOX
-    return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply is not None and class_ == "guest",
+    return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
                     next_poll)

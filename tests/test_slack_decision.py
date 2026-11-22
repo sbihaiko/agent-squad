@@ -127,14 +127,42 @@ def test_a_role_holder_in_a_guest_channel_gets_a_marked_draft_proposal():
     assert d.mark is True
 
 
-def test_a_guest_channel_with_speak_send_and_a_grant_sends_with_the_mark():
+def test_a_guest_send_and_a_draft_leave_the_owner_account_and_both_carry_the_mark():
+    # The mark names authorship, not the transport: every guest write leaves from the owner's account, so a direct
+    # send carries it exactly as a draft does (SPEC 2682, stories 34, 36 and 38).
     committed, local = files()
     channel = local["workspaces"][0]["channels"][0]
     channel["speak"] = "send"
     event = message(workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
-    assert S.decide(committed, local, event, NOW).reply == "draft"
+    draft = S.decide(committed, local, event, NOW)
+    assert (draft.reply, draft.mark) == ("draft", True)
     channel["send_grant"] = "2026-11-20"
-    assert S.decide(committed, local, event, NOW).reply == "send"
+    sent = S.decide(committed, local, event, NOW)
+    assert (sent.reply, sent.mark) == ("send", True)
+
+
+def test_a_project_block_only_in_the_local_file_supplies_the_language_and_persona():
+    committed, local = files()
+    del committed["project"]
+    del committed["workspaces"][0]["language"]
+    del committed["workspaces"][0]["persona"]
+    local["project"] = {"language": "pt-BR", "persona": "iara"}
+    d = S.decide(committed, local, message(channel="C0ALERT001"), NOW)
+    assert d.language == "pt-BR"
+    assert d.persona.id == "iara"
+
+
+def test_an_unknown_channel_keeps_what_the_files_know_of_the_caller():
+    committed, local = files()
+    local["members"].append(
+        {"workspace": "T0TEAM0001", "channel": "C0UNKNOWN1", "role": "manager", "users": ["U0OWNER001"]})
+    d = S.decide(committed, local, message(channel="C0UNKNOWN1"), NOW)
+    assert d.kind == "ignore"
+    assert d.reply is None
+    assert d.role == "manager"
+    assert d.language == "es-ES"
+    assert d.persona.id == "hal"
+    assert d.next_poll is None
 
 
 def test_a_guest_two_state_channel_polls_fast_then_slow_and_stays_fast_with_an_open_thread():
@@ -149,10 +177,19 @@ def test_a_guest_two_state_channel_polls_fast_then_slow_and_stays_fast_with_an_o
 
 def test_a_guest_exponential_channel_grows_the_interval_to_the_ceiling():
     event = message(workspace="T0CLIENT01", channel="C0CLIGEN01", user="U0CLIENT01")
+
+    def poll(idle):
+        return decide(event, thread_state={"last_message_at": NOW - idle}).next_poll
+
+    # One window is the first step of the growth, so the boundary sits at exactly one window of idle.
+    assert poll(timedelta(minutes=14, seconds=59)) == NOW + timedelta(minutes=5)
+    assert poll(timedelta(minutes=15)) == NOW + timedelta(minutes=10)
     two_windows = {"last_message_at": NOW - timedelta(minutes=40)}
     assert decide(event, thread_state=two_windows).next_poll == NOW + timedelta(minutes=20)
-    long_idle = {"last_message_at": NOW - timedelta(hours=5)}
-    assert decide(event, thread_state=long_idle).next_poll == NOW + timedelta(hours=1)
+    # The last whole step stays under the ceiling; the next one is capped at it.
+    assert poll(timedelta(minutes=59, seconds=59)) == NOW + timedelta(minutes=40)
+    assert poll(timedelta(hours=1)) == NOW + timedelta(hours=1)
+    assert poll(timedelta(hours=5)) == NOW + timedelta(hours=1)
 
 
 def test_a_guest_listen_channel_has_no_reply_path_but_still_holds_the_next_poll():
