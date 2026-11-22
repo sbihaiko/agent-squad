@@ -444,10 +444,10 @@ def test_the_save_dialog_groups_its_lines_by_the_file_it_names(hub):
 
 
 def test_the_hub_names_each_path_the_dialog_shows(hub, monkeypatch):
-    """Re-anchored (#2433): Spend & limits writes each field on its own, so the one dialog no longer carries its group;
-    the theme still names the profile file it writes, and the other two themes name theirs in the dialog."""
+    """Re-anchored (#2433, #2694): Spend & limits writes each field on its own, so the one dialog no longer carries its
+    group. The Slack theme names both files the hub returns (#2694), and the other themes name theirs in the dialog."""
     page = hub.PAGE
-    assert "(mdl&&mdl.file)" in page and "(slS&&slS.file)" in page
+    assert "(mdl&&mdl.file)" in page and "((d.files||{}).committed)" in page and "((d.files||{}).local)" in page
     assert "(limS&&limS.file)" not in page, "the one dialog still carries a Spend & limits group"
     # the theme's Now footer names the profile it writes: the read's `file` on hover, its name in view
     lim = page[page.index("function limRender("):page.index("async function limLoad()")]

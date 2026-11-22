@@ -46,12 +46,22 @@ SPOKEN_MAX = 420                                  # characters, as the vendored 
 
 class Draft(NamedTuple):
     """The one write the decision allows: the tool, the channel, the `thread_ts` of the question, the exact text with
-    the persona mark, and the persona name the mark names."""
+    the persona mark, and the persona name the mark names. An empty `thread_ts` is a channel post, never a reply in a
+    thread: a release announcement (#2715) names no question to answer, and its connector call comes from
+    `channel_post`."""
     tool: str
     channel: str
     thread_ts: str
     text: str
     name: str
+
+
+def channel_post(draft):
+    """The connector call of one channel post (story 71): the decided tool's channel and exact text, and no `thread_ts`.
+    The `PreToolUse` hook keeps the writer's own shape and always emits `thread_ts` (#2712). An announcement answers no
+    question, so this path is where the write drops the key, instead of sending an empty thread to a tool that reads a
+    thread as a reply (#2715)."""
+    return {"channel": draft.channel, "text": draft.text}
 
 
 def compose(name, body):
@@ -246,7 +256,8 @@ def pre_write_tool_use(draft, upload=None, server=DEFAULT_SERVER):
     """The `PreToolUse` hook of the writer session. It passes only the decided tool with the decided channel and
     `thread_ts`, and one denial answer for every other call: a different tool, a different channel or thread, or a
     decided text without the persona mark. On a pass it returns `updatedInput` with the decided channel, `thread_ts` and
-    text, so the exact text reaches Slack whatever the model wrote.
+    text, so the exact text reaches Slack whatever the model wrote. The key is always there, whatever the draft names;
+    an announcement's channel call takes its arguments from `channel_post`, never from this payload.
 
     `upload` is the decided `Upload` of a voice reply. When it is there, the hook also passes the connector's two upload
     calls with the decided clip, channel, `thread_ts` and comment, and denies every other upload argument; when it is

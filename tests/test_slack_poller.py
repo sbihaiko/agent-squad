@@ -202,6 +202,26 @@ def test_each_delivered_message_reaches_the_policy(tmp_path):
     assert decision_ts(got) == [("100.000100", S.PROPOSAL), ("100.000200", S.DATA)]
 
 
+def test_a_delivered_message_is_fast_for_the_next_poll(tmp_path):
+    # The message the poller just read is the channel's last activity, so the decision it carries plans the next poll
+    # one fast interval away and never at the slow interval of an empty channel. Its `ts` is the epoch of the read, as
+    # the connector writes it, so the message's own time is the anchor.
+    conn = FakeConnector([message(f"{NOW.timestamp():.6f}")])
+    (_, decision), = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
+    assert decision.next_poll == NOW + timedelta(minutes=1)
+
+
+def test_each_message_plans_its_next_poll_from_its_own_ts(tmp_path):
+    # A page read late holds messages of different ages. Each decision plans from its message's own `ts`: an old message
+    # plans the slow interval after quiet_after and a fresh one the fast interval. The tick's clock is never the
+    # activity, and no delivered message turns the thread window on.
+    old = f"{NOW.timestamp() - 1200:.6f}"           # twenty minutes before the read: past quiet_after
+    fresh = f"{NOW.timestamp() - 120:.6f}"          # two minutes before the read: inside it
+    conn = FakeConnector([message(old), message(fresh)])
+    got = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
+    assert [d.next_poll - NOW for _, d in got] == [timedelta(minutes=10), timedelta(minutes=1)]
+
+
 def test_an_own_message_is_not_delivered_and_never_moves_the_checkpoint(tmp_path):
     path = tmp_path / "checkpoint.json"
     conn = FakeConnector([message("100.000100", user=OWNER)])
@@ -247,8 +267,8 @@ def test_a_thread_where_the_agent_replied_is_reread(tmp_path):
                           message("100.001300", text="more on the second", thread_ts=second)])
     p = poller(conn, tmp_path / "checkpoint.json", threads=threads)
     assert [m["ts"] for m, _ in p.poll(WS, CH)] == [first, second]
-    threads.record(CH, first, at=NOW, ts="100.000900")
-    threads.record(CH, second, at=NOW, ts="100.001000")
+    threads.record(CH, first, at=NOW, ts="100.000900", workspace=WS)
+    threads.record(CH, second, at=NOW, ts="100.001000", workspace=WS)
     got = p.poll(WS, CH)
     assert [(r["channel"], r["thread_ts"]) for r in conn.thread_reads] == [(CH, first), (CH, second)]
     assert sorted(m["ts"] for m, _ in got) == ["100.001200", "100.001300"]
@@ -260,7 +280,7 @@ def test_a_quiet_thread_is_no_longer_reread(tmp_path):
     clock = [NOW]
     p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
                  threads=threads)
-    threads.record(CH, THREAD, at=NOW, ts="100.000900")
+    threads.record(CH, THREAD, at=NOW, ts="100.000900", workspace=WS)
     clock[0] = NOW + timedelta(minutes=31)
     p.poll(WS, CH)
     assert len(conn.thread_reads) == 1        # one last read collects a reply that arrived before it closed
@@ -271,9 +291,9 @@ def test_a_quiet_thread_is_no_longer_reread(tmp_path):
 def test_a_thread_recorded_without_last_at_is_reread_not_dropped(tmp_path):
     path = tmp_path / "threads.json"
     # A writer stored the cursor only. The thread is still one where the agent replied, so the poller must reread it.
-    path.write_text(json.dumps({CH: {THREAD: {"cursor": "100.000100"}}}))
+    path.write_text(json.dumps({P._thread_key(WS, CH): {THREAD: {"cursor": "100.000100"}}}))
     threads = P.RepliedThreads(path)
-    assert THREAD in threads.open_threads(CH)
+    assert THREAD in threads.open_threads(CH, workspace=WS)
     conn = FakeConnector([message(THREAD, text="question"),
                           message("100.001200", text="the late reply", thread_ts=THREAD)])
     got = poller(conn, tmp_path / "checkpoint.json", threads=threads).poll(WS, CH)
@@ -287,7 +307,7 @@ def test_activity_in_a_thread_refreshes_its_quiet_clock(tmp_path):
     clock = [NOW + timedelta(minutes=31)]
     p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
                  owner=(OWNER,), threads=threads)
-    threads.record(CH, THREAD, at=NOW, ts="100.001100")
+    threads.record(CH, THREAD, at=NOW, ts="100.001100", workspace=WS)
     p.poll(WS, CH)                              # an own reply moves the thread's activity to now
     clock[0] = NOW + timedelta(minutes=45)      # fourteen minutes later, not yet quiet
     p.poll(WS, CH)
@@ -301,9 +321,9 @@ def test_a_failed_thread_read_leaves_the_thread_open(tmp_path):
     p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
                  threads=threads)
     P.Checkpoint(tmp_path / "checkpoint.json").advance(CH, "100.000100")
-    threads.record(CH, THREAD, at=NOW, ts="100.000900")
+    threads.record(CH, THREAD, at=NOW, ts="100.000900", workspace=WS)
     assert p.poll(WS, CH) == []
-    assert THREAD in threads.open_threads(CH)   # a failed read never closes the thread
+    assert THREAD in threads.open_threads(CH, workspace=WS)   # a failed read never closes the thread
     conn.fail_threads = False
     clock[0] = NOW + timedelta(minutes=45)
     conn.messages.append(message("100.001200", text="the late reply", thread_ts=THREAD))
@@ -318,7 +338,7 @@ def test_an_own_reply_in_a_thread_is_never_delivered(tmp_path):
                           message("100.001300", text="thanks", thread_ts=THREAD)])
     p = poller(conn, tmp_path / "checkpoint.json", owner=(OWNER,), footers=(FOOTER,), threads=threads)
     P.Checkpoint(tmp_path / "checkpoint.json").advance(CH, "100.000100")
-    threads.record(CH, THREAD, at=NOW, ts="100.000100")
+    threads.record(CH, THREAD, at=NOW, ts="100.000100", workspace=WS)
     got = p.poll(WS, CH)
     assert [m["ts"] for m, _ in got] == ["100.001300"]
     assert conn.thread_reads == [{"channel": CH, "thread_ts": THREAD, "limit": 100}]

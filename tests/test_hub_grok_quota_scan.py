@@ -38,6 +38,13 @@ def log(hub, tmp_path, monkeypatch):
     p = tmp_path / "unified.jsonl"
     monkeypatch.setattr(hub, "GROK_LOG", p)
     monkeypatch.setattr(hub, "GROK_KEPT", tmp_path / "hub-grok.json")   # no reading kept from another test (#553)
+    # The credit line's period has ended, so q_grok asks for a refresh. The live script starts the grok TUI on a pty,
+    # and on a loaded machine that call ran past the 20 s cap (#2709 landing, no message: the cap names the call).
+    # The stub stands in for the script and stamps a marker, so a case proves the refresh still ran through this seam.
+    mark = tmp_path / "refreshed"
+    stub = tmp_path / "grokrefresh-stub.sh"
+    stub.write_text(f"#!/bin/sh\n: > '{mark}'\nexit 0\n")
+    monkeypatch.setattr(hub, "GROK_REFRESH", stub)
     return p
 
 
@@ -92,3 +99,12 @@ def test_a_log_with_no_credit_line_reads_unavailable_and_names_its_first_entry(h
 
 def test_a_missing_log_does_not_raise(hub, log):
     assert hub.q_grok()["unavailable"] is True
+
+
+def test_a_due_period_refreshes_through_the_injected_script(hub, log, tmp_path):
+    """The scan asks for a refresh when the kept period has ended, and it runs that refresh through GROK_REFRESH, never
+    a path of its own. The fixture points GROK_REFRESH at a stub; the marker proves the seam is the one that ran."""
+    log.write_text(json.dumps(CREDIT) + "\n")
+    _filler_mb(log, 5)
+    assert hub.q_grok()["windows"][0]["pct"] == 100.0
+    assert (tmp_path / "refreshed").exists(), "the due refresh did not run the injected script"

@@ -383,9 +383,9 @@ def _effective_language(committed, local, workspace, channel):
     return DEFAULT_LANGUAGE
 
 
-def _effective_persona(committed, local, workspace, channel):
+def effective_persona(committed, local, workspace, channel):
     """The persona of a channel, resolved in the same order as the language. A channel, a workspace and the project name
-    an id; the `Persona` row comes from the committed file, then the local file."""
+    an id; the `Persona` row comes from the committed file, then the local file. The announcement writer reads it too."""
     workspace, channel = workspace or {}, channel or {}
     wanted = None
     for value in (channel.get("persona"), workspace.get("persona"), _project(committed, local).get("persona")):
@@ -418,7 +418,7 @@ def identity(committed, local, channel_id):
                 break
         if channel is not None:
             break
-    return _effective_language(committed, local, workspace, channel), _effective_persona(committed, local, workspace, channel)
+    return _effective_language(committed, local, workspace, channel), effective_persona(committed, local, workspace, channel)
 
 
 def _member_role(local, workspace_id, channel_id, user, accepted):
@@ -442,6 +442,12 @@ def _role_actions(committed, role):
     return ()
 
 
+def can_speak(channel):
+    """True when the channel's `mode` lets the agent post. One mode name answers every writer: the reply path and the
+    announcement writer both read it here, so a new writable mode is added in one place."""
+    return str(channel.get("mode") or "listen") == "listen+speak"
+
+
 def _reply_path(class_, channel, user):
     """The reply path: `bot` in an `owned` channel, a `draft` by default in a `guest` channel, `send` only with an
     explicit `speak: send` and a `send_grant`, and none in a `listen` channel.
@@ -449,7 +455,7 @@ def _reply_path(class_, channel, user):
     A Slack Connect channel (`connect: true`) never gets a direct send, because `slack_send_message` does not post there.
     A reply addressed to a person in `draft_for` already leaves as a draft, even with a grant, so the owner reviews what
     goes to that person."""
-    if str(channel.get("mode") or "listen") != "listen+speak":
+    if not can_speak(channel):
         return None
     if str(class_) != "guest":
         return "bot"
@@ -474,10 +480,12 @@ def _elapsed(now, value):
     return (now - value).total_seconds()
 
 
-def _poll_interval(now, channel, thread_state):
+def poll_interval(now, channel, thread_state):
     """The interval to the next poll of a `guest` channel, in seconds. `two_state` is fast after a message and slow
-    after `quiet_after` of silence; `exponential` multiplies the floor by the factor at each idle window up to the
-    ceiling. A message in the agent's thread newer than `thread_open` keeps the interval fast in both modes."""
+    after `quiet_after` of silence, and a channel with no prior message keeps the fast default; `exponential` multiplies
+    the floor by the factor at each idle window up to the ceiling. A message in the agent's thread newer than
+    `thread_open` keeps the interval fast in both modes. A caller that reads a channel with no message as quiet owns that
+    rule itself, so the shared answer never changes under it."""
     poll = channel.get("poll") if isinstance(channel.get("poll"), dict) else {}
     state = thread_state or {}
     last = state.get("last_message_at")
@@ -534,7 +542,7 @@ def effective(committed, local, workspace, channel=None):
     is None for a workspace row, which resolves in the workspace, project order. The persona is a `Persona` row or None."""
     committed, local = committed or {}, local or {}
     return (_effective_language(committed, local, workspace, channel),
-            _effective_persona(committed, local, workspace, channel))
+            effective_persona(committed, local, workspace, channel))
 
 
 def decide(committed, local, event, now, thread_state=None):
@@ -552,13 +560,13 @@ def decide(committed, local, event, now, thread_state=None):
     workspace = _row_at(committed.get("workspaces"), "id", workspace_id) or _row_at(local.get("workspaces"), "id", workspace_id)
     channel = _row_at(workspace.get("channels"), "id", channel_id) if workspace else None
     language = _effective_language(committed, local, workspace, channel)
-    persona = _effective_persona(committed, local, workspace, channel)
+    persona = effective_persona(committed, local, workspace, channel)
     if channel is None:
         # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
         role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
         return Decision(IGNORE, role, (), language, persona, None, False, None)
     class_ = str(workspace.get("class") or "owned")
-    next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
+    next_poll = now + timedelta(seconds=poll_interval(now, channel, thread_state)) if class_ == "guest" else None
     # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
     voice = class_ == "guest" and bool(channel.get("voice_reply"))
     role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})

@@ -86,7 +86,10 @@ import channels  # noqa: E402  the one Slack call path, so this daemon keeps no 
 import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
-from squad import slackpolicy  # noqa: E402  the one home of the Slack file rules (ADR-0177)
+from squad import (  # noqa: E402  a release event as a post in each subscribed owned channel (#2703)
+    slackannounce,
+    slackpolicy,  # the one home of the Slack file rules (ADR-0177)
+)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
@@ -102,6 +105,7 @@ DEV_REF = "refs/remotes/origin/dev"   # the tip a project's Slack file is read f
 CONFIG_POLL = 60.0                    # how long a moved dev tip waits for its revalidation
 VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
+RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 SCHEMA_FILE = "schema.json"
@@ -468,6 +472,7 @@ class State:
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
+        self.announced_path = os.path.join(directory, "announced.jsonl")
         self.release_events_path = os.path.join(directory, releases.RECORD)
         self.slack_dir = os.path.join(directory, "slack")
         self._seen = None
@@ -475,6 +480,7 @@ class State:
         self._registry_read = False
         self._delivered = None
         self._posted = None
+        self._announced = None
         if self.version < SCHEMA_VERSION:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
                 self._stamp_schema()
@@ -733,6 +739,20 @@ class State:
         record = {"digest": digest, "ts": ts}
         self._append(self.posted_path, record)
         self.posted()[digest] = record
+
+    def announced(self):
+        """Every `(event key, event id, channel)` notice already posted, so a restart posts no release notice a second
+        time, and one key that two events share is two notices, because the event id is part of the mark."""
+        if self._announced is None:
+            self._announced = {f"{r['key']}|{r['id']}|{r['channel']}" for r in read_lines(self.announced_path)
+                               if r.get("key") and r.get("id") and r.get("channel")}
+        return self._announced
+
+    def remember_announced(self, key, event_id, channel):
+        """One durable mark of a release notice already posted, written at once: the ledger is the one place a restart
+        reads the mark from. The event id is part of it, so a later event that reuses a key is a second notice."""
+        self._append(self.announced_path, {"key": key, "id": event_id, "channel": channel})
+        self.announced().add(f"{key}|{event_id}|{channel}")
 
     def remember_clip(self, digest, stage):
         """One durable mark of a clip already out, written at once: a later stage's refusal repeats that stage alone,
@@ -1084,6 +1104,7 @@ class Daemon:
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
+        self._unowned_logged = set()      # each release channel no app owns, whose skip is already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
 
     def app_of(self, channel):
@@ -1399,6 +1420,64 @@ class Daemon:
             self.log(f"voiced: answer refused: {got.get('error')}")
             return False, None
         return True, got.get("ts")
+
+    def announce_releases(self):
+        """Post each release event in the `owned` channels that subscribe to it, once per event and channel.
+
+        The record is one line of `$VOICE_STATE/release-events.jsonl` (#2702). A channel gets the template of its
+        project's event, or its own override, with the record's fields filled. The post carries the channel persona's
+        `username` and no mark, because an `owned` bot speaks as itself. A `listen` channel, a channel that does not
+        subscribe and an event with no template get nothing. Only the record of stage S1 is announced: a record another
+        stage emitted waits for its own path. The mark is durable, so a restart posts no second notice.
+        """
+        announced = self.state.announced()
+        records = self.state.release_events()
+        posted = 0
+        for repo in self.state.channels():
+            active = self.state.active_revision(repo)
+            if not active or not active.get("revision"):
+                continue
+            committed, local = active["revision"], active.get("local") or {}
+            for record in records:
+                key, event_id = str(record.get("key") or ""), str(record.get("id") or "")
+                if not key or not event_id or slackannounce.stage_of(record) != slackannounce.STAGE:
+                    continue
+                try:
+                    for post in slackannounce.announcements(committed, local, record):
+                        mark = f"{key}|{event_id}|{post.channel}"
+                        if mark in announced:
+                            continue
+                        if self.post_announcement(post):
+                            self.state.remember_announced(key, event_id, post.channel)
+                            announced.add(mark)
+                            posted += 1
+                except Exception as x:      # noqa: BLE001 - one bad record is a log line, the other records still run
+                    self.log(f"voiced: release notice for {repo} {key} failed: {type(x).__name__}")
+        return posted
+
+    def post_announcement(self, post):
+        """One notice through the client of the app that owns its channel; True when Slack accepts it.
+
+        A channel no app owns is one log line, said once, so a misconfigured channel reaches the operator instead of a
+        silent retry on every poll."""
+        client = self.client_for(post.channel)
+        if client is None:
+            if post.channel not in self._unowned_logged:
+                self._unowned_logged.add(post.channel)
+                self.log(f"voiced: release notice skipped: no app owns channel {post.channel}")
+            return False
+        payload = {"channel": post.channel, "text": post.text}
+        if post.persona:
+            payload["username"] = post.persona     # the scope `chat:write.customize` is what lets Slack accept it
+        try:
+            got = client.api("chat.postMessage", payload, post=True)
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops posting
+            self.log(f"voiced: release notice not posted: {type(x).__name__}")
+            return False
+        if not got.get("ok"):
+            self.log(f"voiced: release notice refused: {got.get('error')}")
+            return False
+        return True
 
     def synth_clip(self, script, voice=None, tone=None):
         """One spoken clip's path, or None when the voice refused: a missing voice never fails the answer.
@@ -1798,24 +1877,40 @@ async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
         await asyncio.sleep(interval)
 
 
+async def watch_releases(daemon, stop=None, interval=RELEASE_POLL):
+    """Post each new release event in the `owned` channels that subscribe to it, until `stop` is set.
+
+    The record is read from the state directory the promotion pass writes, so a release announced while the daemon
+    runs reaches its channels without a restart. A failed pass is a log line, never a watcher that stops announcing.
+    """
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.announce_releases)
+        except Exception as x:      # noqa: BLE001 - one bad record is a log line, never a daemon that stops
+            daemon.log(f"voiced: release announcement failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
-    """Hear Slack and answer the outboxes at once: one Socket Mode connection per app, beside two watchers.
+    """Hear Slack and answer the outboxes at once: one Socket Mode connection per app, beside three watchers.
 
     `apps` is one app token, or a mapping of app id to app token for several apps. One connection runs per app, so two
-    projects that name one app share one socket. The outbox watcher and the Slack-file watcher are tasks of the same
-    loop, so an answer the session appends is posted while a socket is open and a moved dev tip is read while the daemon
-    answers. All stop together, and the watchers are cancelled with the connection loops.
+    projects that name one app share one socket. The outbox watcher, the Slack-file watcher and the release watcher are
+    tasks of the same loop, so an answer the session appends is posted while a socket is open, a moved dev tip is read
+    while the daemon answers, and a release event reaches its channels without a restart. All stop together, and the
+    watchers are cancelled with the connection loops.
     """
     if isinstance(apps, str):
         apps = {"app": apps}
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
+    releases_task = asyncio.create_task(watch_releases(daemon, stop))
     hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
                for token in apps.values()]
     try:
         await asyncio.gather(*hearing)
     finally:
-        tasks = (outboxes, configs, *hearing)
+        tasks = (outboxes, configs, releases_task, *hearing)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
