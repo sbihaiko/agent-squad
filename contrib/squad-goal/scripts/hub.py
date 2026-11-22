@@ -7503,7 +7503,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 /* The Communication read view (SPEC 2682 #2693): each section states its name and the file its rows come from, and every
    field is text. The file tag is one quiet chip beside the field, never a second colour of its own. */
 #sbody .slfile{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);font-weight:400;text-transform:none;letter-spacing:0;vertical-align:middle;white-space:nowrap}
-#sbody .slrow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .slrow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}#sbody .slrow .slfile{justify-self:start}   /* the file chip keeps its own width in the row's grid, never stretched across it */
 #sbody .slrow .sl{color:var(--fg)}#sbody .slrow .sc{justify-self:end;color:var(--mute)}
 #sbody .slsec{margin:14px 0 0}
 #sbody .slsec>h4{margin:0 0 6px;font-size:var(--fs-body);font-weight:600;color:var(--fg)}
@@ -7513,7 +7513,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slt2{width:100%;border-collapse:collapse;font-size:var(--fs-caption)}
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
-@media (max-width:600px){#sbody .slt2{display:block;overflow-x:auto}#sbody .slrow{grid-template-columns:minmax(0,1fr) auto}}
+#sbody .slt2 .nw{white-space:nowrap}   /* a voice, a mode, a language tag or a persona id never breaks inside the word */
+@media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
@@ -8360,23 +8361,24 @@ const slSec=(name,file,head,rows,empty)=>`<section class=slsec><h4>${esc(name)} 
  :`<p class=m>${esc(empty)}</p>`}</section>`;
 function slReadHtml(r){if(!r)return "";
  if(r.err)return `<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3><p class="mx err" role=status>${esc(r.err)}</p></div>`;
- const cf=r.files.committed,row=cells=>`<tr>${cells.map(c=>`<td>${c}</td>`).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or;
+ const cf=r.files.committed,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
+ row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or;   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
  let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>`   // the block names the files under its one title, before the four sections
  +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
  +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
  h+=slSec("Personas",cf,["Persona","Voice","Tone","Used by"],
-  r.personas.map(p=>row([`<b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span>`,esc(p.voice),esc(p.tone),join(p.channels,"no channel")])),
+  r.personas.map(p=>row([["Persona",`<span class=nw><b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span></span>`],["Voice",`<span class=nw>${esc(p.voice)}</span>`],["Tone",esc(p.tone)],["Used by",join(p.channels,"no channel")]])),
   "No persona: the project declares no identity.");
  h+=slSec("Roles",cf,["Role","Actions"],
-  r.roles.map(x=>row([`<b>${esc(x.id)}</b>`,join(x.actions,"no action")])),
+  r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
   "No role: only the owner can trigger the agent.");
  h+=`<section class=slsec><h4>Slack workspaces</h4>${r.workspaces.length?"":`<p class=m>${esc("No Slack workspace: the agent reads no channel.")}</p>`}`
  +r.workspaces.map(w=>`<h5 class=slws>${esc(w.label)} <span class="sltag ${slA(w.class)}">${esc(w.class)}</span> ${slTag(w.file)}</h5>`
-  +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Answers</th><th>Announce</th></tr></thead><tbody>`
-   +w.channels.map(c=>row([`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`,esc(c.mode),esc(c.language),esc(c.persona||"none"),join(c.roles,"owner only"),join(c.announce,"never posts")])).join("")
+  +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th></tr></thead><tbody>`
+   +w.channels.map(c=>row([["Channel",`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`],["Mode",`<span class=nw>${esc(c.mode)}</span>`],["Language",`<span class=nw>${esc(c.language)}</span>`],["Persona",`<span class=nw>${esc(c.persona||"none")}</span>`],["Roles",join(c.roles,"owner only")],["Announce",join(c.announce,"never posts")]])).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")+`</section>`;
  h+=slSec("Project events",cf,["Event","Template"],
-  r.events.map(x=>row([`<b>${esc(x.id)}</b>`,`<code>${esc(x.template)}</code>`])),
+  r.events.map(x=>row([["Event",`<b>${esc(x.id)}</b>`],["Template",`<code>${esc(x.template)}</code>`]])),
   "No event: the agent announces nothing.");
  return h+`</div>`}
 const slReadTiles=r=>!r?[]:r.err?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
@@ -8384,7 +8386,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
  +slReadHtml(slR)
- +setSettings("slk",[
+ +(slR===null?setSettings("slk",[   // the legacy profile file's surface stays only when the read view could not answer
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
  setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
  setRow("read every",`<span><input data-sl=tick type=number min=1 max=30 value="${slA(d.tick)}" aria-label="read every, minutes"> min</span>`),
@@ -8399,7 +8401,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  `<div class=slad><input id=slpn placeholder="name" aria-label="person to add"><select id=slpr aria-label="role">${slOpts(Object.keys(SL_ROLE),"Colleague")}</select><button id=slpa>Add person</button></div>`,
  `<h4>Templates</h4>`+Object.keys(SL_EV).map(k=>`<details class=tp><summary>${SL_EV[k]} <span class=m>${d.channels.filter(c=>c.watch&&c.events[k]).map(c=>esc(c.name)).join(", ")||"no channel"}</span></summary><textarea data-sl="tpl:${k}" rows=3 maxlength=600 aria-label="${SL_EV[k]} template">${esc(d.templates[k])}</textarea></details>`).join(""),
  `<h4>Owner inbox</h4><div class=kr><label class=swt><input type=checkbox data-sl=dm${d.dm?" checked":""} aria-label="Owner inbox: self-DM"> Owner inbox: self-DM</label></div>`,
- `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="Owner inbox: audio in and out"> Owner inbox: audio in and out</label></div>`]);
+ `<div class=kr><label class=swt><input type=checkbox data-sl=audio${d.audio?" checked":""}${d.dm?"":" disabled"} aria-label="Owner inbox: audio in and out"> Owner inbox: audio in and out</label></div>`]):"");
  if(slMsg)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;

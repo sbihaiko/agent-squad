@@ -182,8 +182,10 @@ def render(hub, out, sls=None):
 
 
 def read_block(html):
+    """The read block alone: it ends where a Settings block begins, and at the end when the read view replaced it."""
     i = html.index("data-blk=read")
-    return html[i:html.index("data-blk=settings")]
+    j = html.find("data-blk=settings", i)
+    return html[i:j if j >= 0 else len(html)]
 
 
 def test_the_read_view_draws_the_four_sections_and_wears_no_control(hub, tmp_path):
