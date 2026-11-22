@@ -8,7 +8,7 @@ import importlib.util, os, json, pathlib, re, subprocess
 spec = importlib.util.spec_from_file_location("hub", os.environ["HUB_SRC"]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
 T = pathlib.Path(os.environ["T"])
 # the label code the page runs: the JS between `const label=` and `const sub=`
-js = re.search(r"const label=.*?(?=\nconst sub=)", pathlib.Path(os.environ["HUB_SRC"]).read_text(), re.S).group(0)
+js = re.search(r"const label=.*?(?=\nconst sub=)", "".join(q.read_text() for q in [pathlib.Path(os.environ["HUB_SRC"])] + sorted(pathlib.Path(os.environ["HUB_SRC"]).parent.glob("hub_theme_*.py"))), re.S).group(0)
 quoted = json.dumps({"ts": 1.0, "event": "prompt", "text": "see the old fix, Refs #1869, issue #1869"})   # a reference quoted inside the transcript
 def fixture(name, request, quote=True):
     d = T / "proj" / "runs" / name; d.mkdir(parents=True)
