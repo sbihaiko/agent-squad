@@ -6,13 +6,13 @@ a placeholder.
 """
 import copy
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from squad import slackpolicy
 from squad import slackpoller as P
 
 CLIENT = "U0CLIENT01"
-NOW = datetime(2026, 11, 22, 12, 0, 0)
+NOW = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
 THREAD = "100.000100"
 
 COMMITTED = {
@@ -319,3 +319,139 @@ def test_exponential_clamps_the_first_step_at_the_ceiling(tmp_path):
     step = NOW + minutes(15)                        # one idle window: forty minutes times two passes the ceiling
     s.polled(WS, EXP, step)
     assert s.next_due(WS, EXP) - step == minutes(60)
+
+
+# --- 12. a new message restarts the exponential schedule at the floor -----------------------------------------------
+
+def test_a_new_message_restarts_the_exponential_schedule_at_the_floor(tmp_path):
+    # The sequence: a message at T0, idle polls up to the ceiling, then a message at Tn. The next interval is exactly
+    # the floor, and the growth starts again from there. A doubled floor or a ceiling carried over fails it.
+    s = schedule(tmp_path, local=only(EXP))
+    s.note_message(WS, EXP, NOW)
+    clock = NOW
+    for _ in range(9):                              # nine idle polls: the last seven sit at the ceiling
+        clock = s.next_due(WS, EXP)
+        assert s.due(clock) == [(WS, EXP)]
+        s.polled(WS, EXP, clock)
+    assert s.next_due(WS, EXP) - clock == minutes(60)
+    fresh = clock + minutes(60)                     # a message arrives while the channel sits at the ceiling
+    s.note_message(WS, EXP, fresh)
+    assert s.next_due(WS, EXP) - fresh == minutes(5)   # exactly the floor, not the ceiling and not a doubled floor
+    clock = s.next_due(WS, EXP)
+    s.polled(WS, EXP, clock)
+    assert s.next_due(WS, EXP) - clock == minutes(5)   # growth starts again from the floor
+    clock = s.next_due(WS, EXP)
+    s.polled(WS, EXP, clock)
+    assert s.next_due(WS, EXP) - clock == minutes(5)
+    clock = s.next_due(WS, EXP)
+    s.polled(WS, EXP, clock)
+    assert s.next_due(WS, EXP) - clock == minutes(10)  # one idle window doubled the floor
+
+
+# --- 13. the exponential step is persisted with the channel --------------------------------------------------------
+
+def test_the_exponential_interval_reads_the_persisted_step(tmp_path):
+    # The idle step is state, not a value recomputed from last_at: a poll stores the step it planned, and a later read
+    # of the interval answers that step. A recomputation from last_at doubles here, because twenty minutes passed.
+    s = schedule(tmp_path, local=only(EXP))
+    s.note_message(WS, EXP, NOW)
+    clock = s.next_due(WS, EXP)
+    s.polled(WS, EXP, clock)                        # one poll at the floor: the stored step stays five minutes
+    assert s.interval(WS, EXP, NOW + minutes(20)) == 300
+    entry = json.loads((tmp_path / "schedule.json").read_text())[WS][EXP]
+    assert entry["step"] == 300
+
+
+# --- 14. a guest workspace declared only in the committed file is due -----------------------------------------------
+
+def test_a_guest_workspace_declared_only_in_the_committed_file_is_due(tmp_path):
+    # The committed file carries the guest workspace and the local file carries none: the tick still reads the channel.
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"] = [{"id": "T0CLIENT09", "label": "client-z", "class": "guest", "persona": "iara",
+                                "channels": [{"id": "C0CLISUP09", "name": "support", "mode": "listen",
+                                              "poll": {"mode": "two_state", "fast": "1m", "slow": "10m"}}]}]
+    s = P.PollSchedule(tmp_path / "schedule.json", committed, {"version": 1, "workspaces": []})
+    assert s.due(NOW) == [("T0CLIENT09", "C0CLISUP09")]
+
+
+# --- 15. every clock value is on the UTC clock ----------------------------------------------------------------------
+
+def test_message_time_reads_a_ts_on_the_utc_clock():
+    # The ts is an epoch stamp, so its reading never depends on the machine zone: the value carries the UTC offset.
+    at = P.message_time({"ts": now_ts(NOW)}, NOW)
+    assert at == NOW
+    assert at.utcoffset() == timedelta(0)
+
+
+def test_a_naive_time_in_the_schedule_file_reads_as_utc(tmp_path):
+    # A schedule file written before the clock carried an offset keeps its meaning: a naive time is the UTC clock.
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps({WS: {CH: {"last_at": "2026-11-22T12:00:00",
+                                          "next_due": "2026-11-22T12:10:00"}}}))
+    s = schedule(tmp_path, local=only(CH))
+    assert s.next_due(WS, CH) == NOW + minutes(10)
+    assert s.next_due(WS, CH).utcoffset() == timedelta(0)
+
+
+def test_a_clock_in_another_zone_plans_on_the_utc_clock(tmp_path):
+    # The caller may pass an aware clock in its own zone: the schedule converts it to UTC, so the state is one clock.
+    elsewhere = timezone(timedelta(hours=-5))
+    s = schedule(tmp_path, local=only(CH))
+    s.note_message(WS, CH, NOW.astimezone(elsewhere))
+    assert s.next_due(WS, CH) == NOW + minutes(1)
+    assert s.due(NOW + timedelta(seconds=59)) == []
+
+
+# --- 16. a legacy thread file keyed by the channel still opens ------------------------------------------------------
+
+def test_a_legacy_thread_file_keyed_by_the_channel_still_opens(tmp_path):
+    # A threads.json written before the workspace entered the key is keyed by the bare channel id, and a naive
+    # last_at. The store still opens the thread, so an upgrade loses no open thread.
+    path = tmp_path / "threads.json"
+    path.write_text(json.dumps({CH: {THREAD: {"cursor": "100.000900", "last_at": "2026-11-22T12:00:00"}}}))
+    threads = P.RepliedThreads(path)
+    assert threads.open_threads(CH, workspace=WS) == {THREAD: {"cursor": "100.000900", "last_at": NOW}}
+
+
+# --- 17. two writes to one channel keep both fields -----------------------------------------------------------------
+
+def test_two_writes_to_one_channel_keep_both_fields(tmp_path):
+    # A write reads the entry it merges into under the schedule's lock, so a second write of the channel never drops
+    # the last activity the first one stored.
+    s = schedule(tmp_path, local=only(CH))
+    s.note_message(WS, CH, NOW)
+    s.polled(WS, CH, NOW + minutes(1))
+    entry = json.loads((tmp_path / "schedule.json").read_text())[WS][CH]
+    assert entry["last_at"] == NOW.isoformat()
+    assert entry["next_due"] == (NOW + minutes(2)).isoformat()
+
+
+# --- 18. a thread message plans from that thread's own activity -----------------------------------------------------
+
+def test_a_thread_message_takes_its_own_thread_as_the_activity(tmp_path):
+    # A reply read in one thread is that thread's activity, and the channel's other threads never stand in for it.
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    threads.record(CH, THREAD, at=NOW - minutes(29), ts="100.000900", workspace=WS)
+    reply = {"ts": now_ts(NOW), "user": CLIENT, "text": "a reply", "thread_ts": THREAD}
+
+    def read(**request):
+        return {"ok": True, "messages": [reply] if request.get("thread_ts") else []}
+
+    p = P.Poller(read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, only(CH), lambda: NOW,
+                 threads=threads)
+    (message, decision), = p.poll(WS, CH)
+    assert decision.next_poll - NOW == minutes(1)
+    assert threads.open_threads(CH, workspace=WS)[THREAD]["last_at"] == NOW
+
+
+# --- 19. a replayed old page never moves the activity backwards ------------------------------------------------------
+
+def test_a_replayed_old_message_never_moves_the_activity_backwards(tmp_path):
+    # A note at NOW, then a note of a page read again at NOW minus thirty minutes: the stored activity stays at NOW,
+    # and the next poll stays one fast interval after NOW.
+    s = schedule(tmp_path, local=only(CH))
+    s.note_message(WS, CH, NOW)
+    assert s.next_due(WS, CH) == NOW + minutes(1)
+    s.note_message(WS, CH, NOW - minutes(30))
+    assert s.last_at(WS, CH) == NOW
+    assert s.next_due(WS, CH) == NOW + minutes(1)

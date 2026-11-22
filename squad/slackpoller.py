@@ -31,8 +31,10 @@ never the message text (story 42).
 
 Guards: `tests/test_slack_poller.py`, `tests/test_slack_schedule.py`.
 """
+import fcntl
 import json
-from datetime import datetime, timedelta
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import guesstranscribe, slackpolicy
@@ -114,6 +116,22 @@ def read_failed(response):
 def _stamp(ts):
     try:
         return float(ts)
+    except (TypeError, ValueError):
+        return None
+
+
+def _utc(value):
+    """The clock value on the UTC clock, so one store never mixes an aware value with a naive one. A naive value is the
+    UTC wall clock, which is how a file written before the clock carried an offset still reads. None stays None."""
+    if value is None:
+        return None
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _time_of(value):
+    """The clock value of an ISO text, on the UTC clock, or None when the text is missing or unreadable."""
+    try:
+        return _utc(datetime.fromisoformat(value))
     except (TypeError, ValueError):
         return None
 
@@ -231,9 +249,11 @@ def _thread_key(workspace, channel):
 
 class RepliedThreads:
     """The threads where the agent replied, keyed by workspace, channel and `thread_ts`. Each entry holds the read cursor (the
-    newest `ts` the thread read delivered) and the time of the last activity. The poller rereads every open thread and
-    closes it after it goes quiet. The writer records a reply, so a thread opens the moment the agent answers in it. Only
-    code writes the file, every write is atomic (ADR-0030), and an unreadable file reads as empty."""
+    newest `ts` the thread read delivered) and the time of the last activity, on the UTC clock. A file written before the
+    workspace entered the key holds the bare channel id, and the store keeps reading the table of that key, so an upgrade
+    loses no open thread. The poller rereads every open thread and closes it after it goes quiet. The writer records a
+    reply, so a thread opens the moment the agent answers in it. Only code writes the file, every write is atomic
+    (ADR-0030), and an unreadable file reads as empty."""
 
     def __init__(self, path):
         self.path = Path(path)
@@ -249,19 +269,29 @@ class RepliedThreads:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
 
+    @staticmethod
+    def _key(doc, workspace, channel):
+        """The key that holds the channel's threads. A file written before the workspace entered the key holds the bare
+        channel id, and such a file stays readable: the table it already holds is the one the store keeps. A file with
+        the channel under its composite key answers that key, and a channel the file never held takes the composite one."""
+        key, legacy = _thread_key(workspace, channel), str(channel)
+        if key in doc:
+            return key
+        return legacy if legacy in doc else key
+
     def record(self, channel, thread_ts, at=None, ts=None, workspace=None):
         """Record a reply in a thread, or move its activity and cursor forward. `at` is the caller's clock value of the
         last activity, and `ts` the newest `ts` the thread read delivered. A new thread needs an `at`, because the anchor
         of its quiet time cannot be guessed. `workspace` separates two guest workspaces that share a channel id. Returns
         False, and writes nothing, when no thread is recorded."""
         doc = self.load()
-        key = _thread_key(workspace, channel)
+        key = self._key(doc, workspace, channel)
         entry = (doc.get(key) or {}).get(str(thread_ts))
         if entry is None and at is None:
             return False
         entry = dict(entry or {})
         if at is not None:
-            entry["last_at"] = at.isoformat()
+            entry["last_at"] = _utc(at).isoformat()
         if ts is not None:
             new, old = _stamp(ts), _stamp(entry.get("cursor"))
             if new is not None and (old is None or new > old):
@@ -273,7 +303,7 @@ class RepliedThreads:
     def close(self, channel, thread_ts, workspace=None):
         """Forget a thread, so the poller never rereads it again."""
         doc = self.load()
-        key = _thread_key(workspace, channel)
+        key = self._key(doc, workspace, channel)
         threads = doc.get(key) or {}
         if str(thread_ts) not in threads:
             return False
@@ -290,15 +320,15 @@ class RepliedThreads:
         entry without a readable `last_at` takes its cursor time, and None when the cursor is unreadable too, so a thread
         a writer stored with a cursor only is still reread."""
         out = {}
-        key = _thread_key(workspace, channel)
-        for thread_ts, entry in (self.load().get(key) or {}).items():
+        doc = self.load()
+        key = self._key(doc, workspace, channel)
+        for thread_ts, entry in (doc.get(key) or {}).items():
             entry = entry if isinstance(entry, dict) else {}
             cursor = entry.get("cursor")
-            try:
-                last_at = datetime.fromisoformat(entry["last_at"])
-            except (KeyError, TypeError, ValueError):
+            last_at = _time_of(entry.get("last_at"))
+            if last_at is None:
                 stamp = _stamp(cursor)
-                last_at = datetime.fromtimestamp(stamp) if stamp is not None else None
+                last_at = datetime.fromtimestamp(stamp, tz=UTC) if stamp is not None else None
             out[str(thread_ts)] = {"cursor": cursor, "last_at": last_at}
         return out
 
@@ -461,6 +491,10 @@ def event_of(message, workspace, channel, own=()):
 
 _THREAD_OPEN_DEFAULT = "30m"
 _POLL_SLOW_DEFAULT = "10m"     # the slow interval of a two_state channel with no message yet
+_EXP_FLOOR = 300.0             # the exponential defaults of `slackpolicy.poll_interval`, in seconds
+_EXP_CEILING = 3600.0
+_EXP_FACTOR = 2.0
+_EXP_WINDOW = 900.0
 _MS = {"s": 1, "m": 60, "h": 3600}
 
 
@@ -491,10 +525,15 @@ def _channel_row(committed, local, workspace, channel):
 
 
 def message_time(message, now):
-    """The clock value of one message's `ts`, or `now` when the `ts` is not a number. A message plans the next poll from
-    its own `ts`, never from the clock value of the tick that read it."""
+    """The clock value of one message's `ts`, on the UTC clock, or `now` when the `ts` is not a number. A message plans
+    the next poll from its own `ts`, never from the clock value of the tick that read it. A caller that keeps a naive
+    clock gets a naive value, so the two never meet as an aware value against a naive one."""
     stamp = _stamp(message.get("ts"))
-    return datetime.fromtimestamp(stamp) if stamp is not None else now
+    if stamp is None:
+        return now
+    if now is not None and now.tzinfo is None:
+        return datetime.fromtimestamp(stamp)        # the caller keeps a naive clock: answer on the same one
+    return datetime.fromtimestamp(stamp, tz=UTC)
 
 
 def open_thread_last(threads, committed, local, workspace, channel, now):
@@ -509,7 +548,7 @@ def open_thread_last(threads, committed, local, workspace, channel, now):
     poll = _channel_row(committed, local, workspace, channel).get("poll")
     poll = poll if isinstance(poll, dict) else {}
     open_ = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
-    return thread if (now - thread).total_seconds() <= open_ else None
+    return thread if (_utc(now) - thread).total_seconds() <= open_ else None
 
 
 def guest_channels(committed, local):
@@ -536,14 +575,17 @@ class PollSchedule:
     A tick fires every minute and asks `due(now)`; the answer holds each channel whose `next_due` has passed, so a tick
     does nothing before it. In `two_state` mode the interval is `fast` after a message from another person and `slow`
     after `quiet_after` of silence, and a channel with no message yet is silent. In `exponential` mode it starts at
-    `floor`, multiplies by `factor` at each idle
-    window and stops at `ceiling`. A new message (`note_message`) and an announced event (`note_event`) return it to
-    fast, and an open agent thread newer than `thread_open` keeps it fast. Every interval comes from
+    `floor`, multiplies by `factor` at each idle window and stops at `ceiling`; the entry stores that idle `step`, so the
+    next interval reads the state and never a value recomputed from `last_at`. A new message (`note_message`) and an
+    announced event (`note_event`) return it to fast and store the floor as the step, so the growth restarts there. An
+    open agent thread newer than `thread_open` keeps it fast. A message older than the stored activity never moves it
+    backward, so a page read twice plans the same next poll. Every two_state interval comes from
     `slackpolicy.poll_interval`, so the schedule and the decision read one set of keys.
 
-    The state lives in one JSON file in the guest state folder, keyed by Slack workspace and channel. An unreadable
-    file reads as an empty schedule, so a broken file never stops a poll, and every write is atomic (ADR-0030). The
-    module reads no clock of its own: the caller passes every clock value."""
+    The state lives in one JSON file in the guest state folder, keyed by Slack workspace and channel, and every clock
+    value in it is UTC with an explicit offset. An unreadable file reads as an empty schedule, so a broken file never
+    stops a poll. Every write is atomic (ADR-0030) and holds the file's lock, so a tick and a poll that note one channel
+    at the same moment lose no update. The module reads no clock of its own: the caller passes every clock value."""
 
     def __init__(self, path, committed, local, threads=None):
         self.path = Path(path)
@@ -561,72 +603,140 @@ class PollSchedule:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self.path, json.dumps(doc, indent=1, sort_keys=True) + "\n")
 
+    @contextmanager
+    def _locked(self):
+        """The write lock of the schedule file: a tick and a poll that note one channel at the same moment each read the
+        entry they merge into under this lock, so neither update is lost to the other."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path.with_name(self.path.name + ".lock"), "a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
     def _entry(self, doc, workspace, channel):
         return (doc.get(str(workspace)) or {}).get(str(channel)) or {}
 
     def _write_entry(self, workspace, channel, **fields):
-        doc = self._load()
-        entry = dict(self._entry(doc, workspace, channel))
-        entry.update(fields)
-        doc.setdefault(str(workspace), {})[str(channel)] = entry
-        self._save(doc)
+        with self._locked():
+            doc = self._load()
+            entry = dict(self._entry(doc, workspace, channel))
+            entry.update(fields)
+            doc.setdefault(str(workspace), {})[str(channel)] = entry
+            self._save(doc)
         return entry
 
     @staticmethod
-    def _time(value):
+    def _step_of(entry):
+        """The stored idle step of the channel in seconds, or None when the entry holds none. It is the interval the
+        last poll planned, and the next interval reads it rather than a value recomputed from `last_at`."""
         try:
-            return datetime.fromisoformat(value)
-        except (TypeError, ValueError):
+            return float(entry["step"])
+        except (KeyError, TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _exp_poll(row):
+        """The `floor`, `ceiling`, `factor` and `idle_window` of an exponential channel, in seconds."""
+        poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
+        try:
+            factor = float(poll.get("factor", _EXP_FACTOR))
+        except (TypeError, ValueError):
+            factor = _EXP_FACTOR
+        return (_duration(poll.get("floor"), _EXP_FLOOR), _duration(poll.get("ceiling"), _EXP_CEILING),
+                factor, _duration(poll.get("idle_window"), _EXP_WINDOW))
+
+    @staticmethod
+    def _exponential(row):
+        poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
+        return str(poll.get("mode") or "two_state") == "exponential"
 
     def next_due(self, workspace, channel):
         """The time of the next poll of the channel, or None when the schedule never held the channel."""
-        return self._time(self._entry(self._load(), workspace, channel).get("next_due"))
+        return _time_of(self._entry(self._load(), workspace, channel).get("next_due"))
 
     def last_at(self, workspace, channel):
         """The time of the last message or announced event of the channel, or None."""
-        return self._time(self._entry(self._load(), workspace, channel).get("last_at"))
+        return _time_of(self._entry(self._load(), workspace, channel).get("last_at"))
 
     def interval(self, workspace, channel, now):
-        """The seconds to the next poll of the channel at `now`, from its `poll` block and its last activity. An open
-        agent thread newer than `thread_open` keeps the interval fast; an older one is out of the window, so the channel
-        falls back on its own silence."""
-        return self._interval_at(workspace, channel, now, self.last_at(workspace, channel))
+        """The seconds to the next poll of the channel at `now`, from its `poll` block and its state. An open agent thread
+        newer than `thread_open` keeps the interval fast; an older one is out of the window, so the channel falls back on
+        its own silence. An exponential channel answers the idle step its last poll stored, clamped to the floor and the
+        ceiling, so a message after an idle window restarts at the floor and never jumps to the ceiling."""
+        entry = self._entry(self._load(), workspace, channel)
+        row = _channel_row(self.committed, self.local, workspace, channel)
+        if self._exponential(row):
+            floor, ceiling, _factor, _window = self._exp_poll(row)
+            step = self._step_of(entry)
+            if step is None:
+                return self._exp_step(workspace, channel, now, _time_of(entry.get("last_at")))
+            thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
+            return min(floor, ceiling) if thread is not None else min(max(step, floor), ceiling)
+        return self._interval_at(workspace, channel, now, _time_of(entry.get("last_at")))
+
+    def _exp_step(self, workspace, channel, at, last):
+        """The idle step of an exponential channel at `at`: the floor times the factor once per idle window since `last`,
+        with the ceiling as the bound, and the floor while an agent thread is inside `thread_open`."""
+        row = _channel_row(self.committed, self.local, workspace, channel)
+        floor, ceiling, factor, window = self._exp_poll(row)
+        thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, at)
+        if thread is not None or last is None or window <= 0:
+            return min(floor, ceiling)
+        steps = max(0, int((_utc(at) - _utc(last)).total_seconds() // window))
+        return min(floor * (factor ** steps), ceiling)
 
     def _interval_at(self, workspace, channel, now, last):
         """The seconds to the next poll at `now`, with `last` as the channel's last activity. A `two_state` channel with
         no message and no open thread is quiet, so it waits `slow`: this rule lives in the schedule, and the shared
         `slackpolicy.poll_interval` keeps its own fast default for a channel with no prior message."""
         row = _channel_row(self.committed, self.local, workspace, channel)
+        if self._exponential(row):
+            return self._exp_step(workspace, channel, now, last)
         thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
         poll = row.get("poll") if isinstance(row.get("poll"), dict) else {}
-        if last is None and thread is None and str(poll.get("mode") or "two_state") != "exponential":
+        if last is None and thread is None:
             return _duration(poll.get("slow"), _duration(_POLL_SLOW_DEFAULT, 600.0))
-        return slackpolicy.poll_interval(now, row, {"last_message_at": last, "thread_last_at": thread})
+        return slackpolicy.poll_interval(_utc(now), row, {"last_message_at": _utc(last), "thread_last_at": thread})
 
     def due(self, now):
         """The guest channels whose `next_due` has passed at `now`, as `(workspace, channel)` in file order. A channel
         the schedule never held is due, so its first tick reads it at once."""
-        doc = self._load()
-        out = []
+        doc, at, out = self._load(), _utc(now), []
         for workspace, channel, _row in self.channels:
-            value = self._time(self._entry(doc, workspace, channel).get("next_due"))
-            if value is None or now >= value:
+            value = _time_of(self._entry(doc, workspace, channel).get("next_due"))
+            if value is None or at >= value:
                 out.append((workspace, channel))
         return out
 
     def _advance(self, workspace, channel, at):
-        """Set the channel's next due time one interval after `at`."""
-        interval = self.interval(workspace, channel, at)
-        self._write_entry(workspace, channel, next_due=(at + timedelta(seconds=interval)).isoformat())
+        """Set the channel's next due time one interval after `at`. An exponential channel stores the step the interval
+        came from, so the state carries the growth and the next read of the interval answers it."""
+        at = _utc(at)
+        last = self.last_at(workspace, channel)
+        interval = self._interval_at(workspace, channel, at, last)
+        fields = {"next_due": (at + timedelta(seconds=interval)).isoformat()}
+        if self._exponential(_channel_row(self.committed, self.local, workspace, channel)):
+            fields["step"] = interval
+        self._write_entry(workspace, channel, **fields)
 
     def note_message(self, workspace, channel, at):
         """A message from another person returns the channel to fast: it is the last activity, and the next poll is one
-        interval away. One write carries both fields, so an interrupted note never leaves a last activity with a stale
-        due time."""
-        interval = self._interval_at(workspace, channel, at, at)
-        self._write_entry(workspace, channel, last_at=at.isoformat(),
-                          next_due=(at + timedelta(seconds=interval)).isoformat())
+        interval away. A message older than the stored activity never moves it backward, so a replayed page plans the
+        same next poll it did before. An exponential channel stores the floor as its step, so its growth restarts. One
+        write carries every field, so an interrupted note never leaves a last activity with a stale due time."""
+        at = _utc(at)
+        existing = self.last_at(workspace, channel)
+        new_last = at if existing is None or at > existing else existing
+        anchor = max(at, new_last)
+        row = _channel_row(self.committed, self.local, workspace, channel)
+        interval = self._interval_at(workspace, channel, anchor, new_last)
+        fields = {"last_at": new_last.isoformat(), "next_due": (anchor + timedelta(seconds=interval)).isoformat()}
+        if self._exponential(row):
+            floor, ceiling, _factor, _window = self._exp_poll(row)
+            fields["step"] = min(floor, ceiling)
+        self._write_entry(workspace, channel, **fields)
 
     def note_event(self, workspace, channel, at):
         """An announced event in the channel returns it to fast, as a new message does, so a reaction is read at once."""
@@ -756,12 +866,14 @@ class Poller:
             if new or (newest is not None and _newer(newest, state["cursor"])):
                 self.threads.record(channel, thread_ts, at=now, ts=newest, workspace=workspace)
                 last_at = now
-            if last_at is not None and (now - last_at).total_seconds() > quiet:
+            if last_at is not None and (_utc(now) - _utc(last_at)).total_seconds() > quiet:
                 self.threads.close(channel, thread_ts, workspace=workspace)
             if new:
-                thread = open_thread_last(self.threads, self.committed, self.local, workspace, channel, now)
+                # A reply read in a thread is that thread's activity, never the newest activity of the whole channel,
+                # so the decision reads the timer of the thread the message came from.
                 pairs += [(m, slackpolicy.decide(self.committed, self.local,
                                                  event_of(m, workspace, channel, _own_ts(self.own)), now,
-                                                 {"last_message_at": message_time(m, now), "thread_last_at": thread}))
+                                                 {"last_message_at": message_time(m, now),
+                                                  "thread_last_at": last_at}))
                           for m in new]
         return pairs
