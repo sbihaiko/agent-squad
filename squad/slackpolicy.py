@@ -397,11 +397,13 @@ def _load(path, file, out):
 
 
 def local_path(profile, project):
-    """The local file of one project in a profile folder: `<project>.slack.local.yaml`, else `slack.local.yaml`."""
+    """The local file of one project in a profile folder: `<project>.slack.local.yaml`, else `slack.local.yaml`, else the
+    name this project's first save writes. Only a profile folder that resolves answers None, so the first save of a
+    project writes the file it builds (#2762)."""
     if profile is None:
         return None
     named = Path(profile) / f"{project}.slack.local.yaml"
-    return named if named.is_file() else (Path(profile) / LOCAL_SUFFIX if (Path(profile) / LOCAL_SUFFIX).is_file() else None)
+    return named if named.is_file() else (Path(profile) / LOCAL_SUFFIX if (Path(profile) / LOCAL_SUFFIX).is_file() else named)
 
 
 def project_root(target="."):
