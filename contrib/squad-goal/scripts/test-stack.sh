@@ -146,4 +146,28 @@ printf '%s\n' '[{"number":2007,"repo":"x/y","state":"open","labels":[],"body":"W
 printf '%s\n' '{"number":2007,"body":"Work.","blocked_by":[],"blocked_by_read":true,"parent":null,"blockers":[]}' > "$T/e2007.json"
 r=$(SG_STACK_GRAPH="$T/g2.json" SG_STACK_ISSUE="$T/e2007.json" run 2007)
 case "$r" in *"WAIT dependency component of #2007 is held by owner"*"#2006"*) ok "#1984: an edge found only on the graph holds its component";; *) ko "#1984 graph-only edge did not hold: '$r'";; esac
+# #2737: an owner hold holds only the cards whose transitive blocker closure reaches the held card, never the spec's other
+# tickets: the parent-to-child edges join one component but name no wait on the held card.
+cat > "$T/g3.json" <<'J'
+[
+{"number":2010,"repo":"x/y","state":"open","labels":[{"name":"spec"}],"body":"Work.","parent":null,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]},
+{"number":2011,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":2010,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]},
+{"number":2012,"repo":"x/y","state":"open","labels":[{"name":"frozen:owner"}],"body":"Work.","parent":2010,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[],"blocked_by_edges":[],"blockers":[]},
+{"number":2013,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":2010,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2012],"blocked_by_edges":[{"repo":"x/y","number":2012,"state":"open"}],"blockers":[{"number":2012,"state":"open"}]},
+{"number":2014,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":2010,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2013],"blocked_by_edges":[{"repo":"x/y","number":2013,"state":"open"}],"blockers":[{"number":2013,"state":"open"}]},
+{"number":2015,"repo":"x/y","state":"open","labels":[],"body":"Work.","parent":2010,"blocked_by_read":true,"blocked_by_complete":true,"blocked_by":[2011],"blocked_by_edges":[{"repo":"x/y","number":2011,"state":"open"}],"blockers":[{"number":2011,"state":"open"}]}
+]
+J
+for n in 2011 2013 2014 2015; do jq --argjson n "$n" '[.[]|select(.number==$n)][0]' "$T/g3.json" > "$T/e$n.json"; done
+printf '2010\tDoing\n' > "$T/board3"
+h3() { SG_STACK_GRAPH="$T/g3.json" SG_STACK_BOARD="$T/board3" SG_STACK_ISSUE="$T/e$1.json" run "$1"; }
+r=$(h3 2011)
+case "$r" in READY*) ok "#2737: a sibling ticket with no path to the held card stays READY";; *) ko "#2737 #2011 held by a sibling's owner hold: '$r'";; esac
+r=$(h3 2015)
+case "$r" in *"held by owner"*) ko "#2737 #2015 held though its blockers never reach #2012: '$r'";; *) ok "#2737: a card whose blockers never reach the held card is not held by owner";; esac
+r=$(h3 2013)
+case "$r" in WAIT*"held by owner"*"#2012"*) ok "#2737: a direct dependent of the held card waits and names it";; *) ko "#2737 #2013 not held by #2012: '$r'";; esac
+r=$(h3 2014)
+case "$r" in WAIT*"held by owner"*) ok "#2737: a transitive dependent of the held card waits on the owner";; *) ko "#2737 #2014 not held transitively: '$r'";; esac
+grep -q "#2011 " "$T/st/alerts.log" 2>/dev/null && ko "#2737 alerts.log holds a line for #2011: $(grep "#2011 " "$T/st/alerts.log")" || ok "#2737: no owner alert is written for a sibling ticket"
 rm -rf "$T"; exit $fail
