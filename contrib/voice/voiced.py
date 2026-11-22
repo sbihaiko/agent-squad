@@ -91,7 +91,6 @@ CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
-BOT_SKIP = ("channel_join", "channel_leave", "bot_message")
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
@@ -1438,7 +1437,12 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            for record in read_lines(path):
+            records = read_lines(path)
+            if records and channel and not self.channel_accepts_answer(channel):
+                # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
+                self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
+                continue
+            for record in records:
                 cid = (record.get("channel") or channel or "").strip()
                 refusal = self.refused_channels.get(cid)
                 if refusal:      # a channel two projects claim is held, never posted, and is told once
@@ -1466,21 +1470,54 @@ class Daemon:
         return count
 
     def policy_decision(self, event):
-        """The decision of one socket event, from the loaded files of the project that owns its channel.
+        """The decision of one socket event, always: from the loaded files of the project that owns its channel.
 
-        The decision comes from the active revision and its local file, so a bot, a stranger and a Slack Connect user
-        stay data (SPEC 2682). No project owns the DM or a channel whose revision is not active yet, so that path keeps
-        the owner rule it had before the decision.
+        A valid active revision and its local file decide the event, so a bot, a stranger and a Slack Connect user stay
+        data (SPEC 2682). A project channel whose revision is not active yet, the DM, and every channel no project owns
+        run through the daemon's empty policy instead: it names the channel and the owner as its one member, so the
+        owner's message still reaches the operator while a bot, a stranger and a Slack Connect user stay data from the
+        event flags and their missing role alone.
         """
-        repo = self.state.channel_for(event.get("channel"))
-        if not repo:
-            return None
-        active = self.state.active_revision(repo)
+        channel = str(event.get("channel") or "")
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if active and active.get("revision"):
+            committed = active["revision"]
+            local = active.get("local") or {}
+        else:
+            committed, local = self.baseline_files(event, repo)
+        return slackpolicy.decide(committed, local, self.policy_event(event, committed), datetime.now())
+
+    def baseline_files(self, event, repo):
+        """The empty policy of a channel with no loaded project files: it names the channel so the decision can
+        classify the event, and it names the owner as its one member, so the owner's message still reaches the
+        operator while every other caller has no role and stays data. A bot and a Slack Connect user stay data from
+        the event flags alone, whatever the owner is. A channel no project owns keeps the same empty policy; `handle`
+        records it as data before it reads the kind, so nothing is granted there."""
+        channel = str(event.get("channel") or "")
+        workspace = str(event.get("team") or event.get("team_id") or "")
+        row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
+        committed = {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
+                     "roles": [{"id": "owner", "actions": []}]}
+        local = {}
+        if self.owner:
+            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner",
+                                  "users": [self.owner]}]}
+        return committed, local
+
+    def channel_accepts_answer(self, channel):
+        """Whether the daemon may post an answer in one channel: its project's active revision names the channel
+        `listen+speak`. A channel with no active revision and a channel the revision does not name keep their answers,
+        because no loaded file forbids them."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
         if not active or not active.get("revision"):
-            return None
-        committed = active["revision"]
-        return slackpolicy.decide(committed, active.get("local") or {}, self.policy_event(event, committed),
-                                  datetime.now())
+            return True
+        for workspace in active["revision"].get("workspaces") or []:
+            for row in workspace.get("channels") or []:
+                if str(row.get("id")) == str(channel):
+                    return str(row.get("mode") or "listen") == "listen+speak"
+        return True
 
     def policy_event(self, event, committed):
         """One socket event as the policy event the decision takes: its workspace, channel, caller, and the flags that
@@ -1518,8 +1555,8 @@ class Daemon:
         """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here.
 
         The policy decision decides what the event becomes: an ignored event writes no line, a bot, a stranger and a
-        Slack Connect user stay data, and an inbox line carries the language, the persona and the caller role. A
-        `listen` channel never receives the error reply that the failure path used to post.
+        Slack Connect user stay data, and every line carries the language, the persona and the caller role. A `listen`
+        channel never receives a post, neither the failure reply nor the answer.
         """
         if (envelope.get("type") or "events_api") != "events_api":
             return "ignored"
@@ -1531,47 +1568,42 @@ class Daemon:
         mid = message_id(event)
         if mid in self.state.seen():
             return "duplicate"
+        target = self.inbox_path_of(event)
         decision = self.policy_decision(event)
-        if decision is None and (event.get("subtype") in BOT_SKIP or event.get("bot_id")):
-            return "ignored"    # no policy file governs this event, so a bot stays the silent event it was
-        if decision is not None and decision.kind == slackpolicy.IGNORE:
-            return "ignored"
         record = {
             "id": mid,
             "ts": event.get("ts"),
             "user": event.get("user"),
             "channel": event.get("channel"),
+            "language": decision.language,
+            "persona": decision.persona.name if decision.persona else None,
+            "role": decision.role,
         }
-        if decision is not None:
-            record["language"] = decision.language
-            record["persona"] = decision.persona.name if decision.persona else None
-            record["role"] = decision.role
         if event.get("files"):
             record["files"] = [
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        text = (event.get("text") or "").strip()
         refusal = self.refused_channels.get((event.get("channel") or "").strip())
         if refusal:
             # A channel two projects claim belongs to neither: its events are data, and no project owns the line.
-            record["text"] = (event.get("text") or "").strip()
+            record["text"] = text
             record["error"] = refusal
             self.state.append_other(record)
             return "other"
-        target = self.inbox_path_of(event)
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
-            record["text"] = (event.get("text") or "").strip()
+            if text:
+                record["text"] = text
             record["error"] = "unknown channel: no project owns it"
             self.state.append_other(record)
             return "other"
-        text = (event.get("text") or "").strip()
-        if decision is not None and decision.kind == slackpolicy.DATA:
-            record["text"] = text
-            self.state.append_other(record)
-            return "other"
-        if decision is None and event.get("user") != self.owner:
-            record["text"] = text
+        if decision.kind == slackpolicy.IGNORE:
+            return "ignored"
+        if decision.kind == slackpolicy.DATA:
+            if text:
+                record["text"] = text
             self.state.append_other(record)
             return "other"
         clip = audio_file(event)
@@ -1599,7 +1631,6 @@ class Daemon:
                 return "failed"
         if not text:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
-            record["text"] = text
             record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
             self.state.append_other(record)
             return "other"
