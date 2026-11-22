@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, difflib, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
+import base64, datetime as dt, difflib, glob, hashlib, html, importlib.util, itertools, json, math, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, types, pathlib, urllib.parse, urllib.request
 import yaml   # the Slack files are YAML: the hub shows their diff and writes them whole (#2694)
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, board_priority, chainhealth, ghread, ghthrottle, hubstream, hub_profiler, issue_ledger, modelreg, models_chains, priority_backfill, procscan, provkey, steprec   # the chains and the one registry resolve a model (ADR-0147); ghread is the one GitHub door (ADR-0277); the ledger is the one source of a hold (#1173); procscan keeps one process scan for every profile of a tick (#1746); steprec is the one reader of the dated step records (#1750)
@@ -2049,7 +2049,7 @@ def _slack_overview_shape(project, roles, events, personas, workspaces, defects,
            {"key": "Files", "value": f"{cf} · {lf}", "tone": "neutral"}]
     return {"err": None, "files": {"committed": cf, "local": lf}, "project": project, "now": now,
             "personas": personas, "roles": roles, "workspaces": workspaces, "events": events,
-            "defects": [str(d) for d in defects]}
+            "defects": [str(d) for d in defects], "voices": [], "previews": []}
 
 def _slack_overview_empty(err, committed=None, local=None):
     """The read view of a theme that can read nothing: the same Now tiles and four empty sections, with the reason in
@@ -2110,7 +2110,94 @@ def slack_overview(committed=None, local=None):
     out = _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
     # The raw documents the view hand back on Save (#2694); the resolved rows above are what it draws.
     out["docs"] = {"committed": committed_doc, "local": local_doc}
+    # The persona editor (#2697): the voice list the policy module owns, and the reply of each channel before a save.
+    out["voices"] = sorted(str(v) for v in P.GEMINI_VOICES)
+    out["previews"] = _slack_reply_previews(P, committed_doc, local_doc)
     return out
+
+
+def _slack_reply_previews(P, committed, local):
+    """One row per channel: the four facts of its reply, resolved through the policy module. The mark is the policy
+    rule, and a channel with no persona carries empty fields, never another persona's name."""
+    committed, local = committed or {}, local or {}
+    out = []
+    for doc in (committed, local):
+        for ws in P.rows(doc.get("workspaces")):
+            label = _slack_text(ws.get("label") or ws.get("id"))
+            for ch in P.rows(ws.get("channels")):
+                language, persona = P.effective(committed, local, ws, ch)
+                name = _slack_text(ch.get("name") or ch.get("id"))
+                out.append({"channel": f"{label}/#{name}", "mark": P.mark(persona), "language": language,
+                            "tone": persona.tone if persona else "", "voice": persona.voice if persona else ""})
+    return out
+
+
+def slack_preview(committed, local=None):
+    """The reply preview of the documents the view hands in, before the save: one row per channel with the mark, the
+    language, the tone and the voice. The policy module resolves them; the hub holds no copy of a rule (ADR-0177)."""
+    if not isinstance(committed, dict) or not isinstance(local, (dict, type(None))):
+        return {"err": "committed and local: each one mapping", "previews": []}
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "previews": []}
+    return {"err": None, "previews": _slack_reply_previews(P, committed, local or {})}
+
+
+# --- Settings > Communication, the persona sample (SPEC 2682 #2697). The sample button asks the hub for one voice and
+# tone pair; the hub synthesizes once through the vendored TTS script, keeps the WAV in its state directory, and answers
+# the same bytes from the cache on a second request. The policy module owns the voice list and the tone limit. The
+# client is one seam, so a test hands in a fake Gemini client and no request reaches Gemini.
+SLACK_SAMPLES = "slack-samples"   # in the loop state directory, outside every repository
+SLACK_SAMPLE_TEXT = "This is how the persona sounds. Short sentences, no filler."
+SLACK_SAMPLE_TIMEOUT = 90
+
+def slack_samples_dir():
+    """The sample cache: one folder in the loop state directory, outside every repository."""
+    return pathlib.Path(STATE) / SLACK_SAMPLES
+
+def slack_sample_key(voice, tone):
+    """The cache key of one voice and tone pair: a hash, so the file name is stable and carries no tone text."""
+    return hashlib.sha256(f"{voice}\0{tone}".encode()).hexdigest()[:32]
+
+def _slack_tts_cli(voice, tone, out):
+    """The real client: the vendored TTS script, found by name (ADR-0129), in its own process, so no key and no module
+    state enters the hub. Returns (path, error)."""
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    try: (SKP,) = load_squad(roots, ("skillpath",))
+    except Exception as e: return None, f"the skill path did not resolve: {type(e).__name__}: {e}"
+    script = SKP.voice_script("tts.py")
+    if script is None: return None, "the TTS script did not resolve"
+    cmd = [sys.executable, str(script), SLACK_SAMPLE_TEXT, "--voice", voice, "--tone", tone, "--out", str(out)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=SLACK_SAMPLE_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"{type(e).__name__}: {e}"
+    if r.returncode or not pathlib.Path(out).is_file():
+        return None, (r.stderr or r.stdout or "the script made no WAV").strip()[:200]
+    return str(out), None
+
+def slack_sample(body, client=None):
+    """POST /api/slack/sample: the WAV of one voice and tone pair, made once and kept in the cache. A body that names a
+    voice outside the policy list, or a tone over its limit, is refused with a message that names the key and calls
+    nothing. The answer carries the audio as a data URL and states whether it came from the cache."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    voice, tone = str(body.get("voice") or ""), str(body.get("tone") or "")
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    if voice not in P.GEMINI_VOICES: return {"err": f"personas[].voice: voice {voice!r} is not a Gemini voice"}
+    if len(tone) > P.TONE_MAX: return {"err": f"personas[].tone: a tone holds at most {P.TONE_MAX} characters ({len(tone)} given)"}
+    path = slack_samples_dir() / f"{slack_sample_key(voice, tone)}.wav"
+    cached = path.is_file() and path.stat().st_size > 0
+    if not cached:
+        try: path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e: return {"err": f"the sample cache could not be made: {e.strerror or e}"}
+        got, err = (client or _slack_tts_cli)(voice, tone, path)
+        if err or not got: return {"err": f"the sample could not be made: {err or 'no WAV'}"}
+    try: data = path.read_bytes()
+    except OSError as e: return {"err": f"the sample could not be read: {e.strerror or e}"}
+    return {"err": None, "url": "data:audio/wav;base64," + base64.b64encode(data).decode(), "cached": cached,
+            "bytes": len(data), "voice": voice, "tone": tone}
 
 # --- Settings > Communication, the save path (SPEC 2682 #2694). The theme saves the two files it reads: the profile's
 # local file, written at once beside the profile, and the committed `slack.yaml`, written only in the hub's own worktree,
@@ -7733,6 +7820,18 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
 #sbody .slt2 .nw{white-space:nowrap}   /* a voice, a mode, a language tag or a persona id never breaks inside the word */
+/* The persona editor (SPEC 2682 #2697): a persona row opens a detail in place, and the detail draws the name, the voice
+   with its sample, and the tone. The reply preview states the four facts of each channel and carries no control. */
+#sbody .sldef{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .sldef .slfile{justify-self:start}
+#sbody .slhs{margin:12px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
+#sbody .sle{margin:6px 0 8px;padding:10px;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--raise)}
+#sbody .slf{display:grid;grid-template-columns:88px minmax(0,1fr) auto;gap:8px;align-items:center;padding:4px 0}
+#sbody .slf label{color:var(--mute);font-weight:600;font-size:var(--fs-caption)}
+#sbody .slf small{grid-column:2 / -1;color:var(--mute);font-size:var(--fs-caption)}
+#sbody .slf textarea{grid-column:2 / -1;min-height:64px;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-field);resize:vertical}
+#sbody .slf button{height:var(--ctl-h);padding:0 12px}
+@media (max-width:600px){#sbody .slf,#sbody .sldef{grid-template-columns:1fr}}
 @media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
@@ -8627,16 +8726,14 @@ function slEvHtml(){const evs=slEvDoc();
    +`<table class=slt2><thead><tr><th>Channel</th><th>Announce</th><th>Template override</th></tr></thead><tbody>${subs}</tbody></table></details></div>`}).join("");
  return (rows||`<p class=m>${esc("No event: the agent announces nothing.")}</p>`)
   +`<div class=slad><input id=slevnew placeholder="event id" aria-label="event to add"><button id=slevadd>Add event</button></div>`}
-function slReadHtml(r){if(!r)return "";
+function slReadHtml(r,d){if(!r)return "";
  const cf=r.files.committed,lf=r.files.local,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
  row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or,   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
  ban=(r.defects||[]).length?`<p class="mx err" role=status>${r.defects.map(d=>esc(d)).join(" ")}</p>`:"";   // a defect is a message above the sections, never a page of its own
  let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>${ban}`   // the block names the files under its one title, before the four sections
  +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
  +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
- h+=slSec("Personas",cf,["Persona","Voice","Tone","Used by"],
-  r.personas.map(p=>row([["Persona",`<span class=nw><b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span></span>`],["Voice",`<span class=nw>${esc(p.voice)}</span>`],["Tone",esc(p.tone)],["Used by",join(p.channels,"no channel")]])),
-  "No persona: the project declares no identity.");
+ h+=slPersonaSection(r,d);
  h+=slSec("Roles",cf,["Role","Actions"],
   r.roles.map(x=>row([["Role",`<b>${esc(x.id)}</b>`],["Actions",join(x.actions,"no action")]])),
   "No role: only the owner can trigger the agent.");
@@ -8647,11 +8744,58 @@ function slReadHtml(r){if(!r)return "";
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")+`</section>`;
  h+=`<section class=slsec><h4>Project events ${slTag(cf)}</h4>${slEvHtml()}</section>`;   // the one editable section (#2698)
  return h+`</div>`}
+/* The persona editor (SPEC 2682 #2697): the owner edits a persona name, voice and tone, hears a voice sample and checks
+   the reply of each channel before saving. A persona carries no language and no permission, so the editor draws neither.
+   The editor writes the two raw files the Save reads (#2694), so the hub validates, diffs and lands them on confirm. */
+let slOpen=null,slPv=null,slPvMsg="";
+const slDoc=(d,k)=>((d&&d[k])||{});
+const slPersonaLists=d=>slDoc(d,"committed").personas||[];
+const slPersonaAt=(d,id)=>slPersonaLists(d).find(p=>String(p.id)===String(id))||null;
+const slPersonaIds=r=>((r&&r.personas)||[]).map(p=>String(p.id));
+const slVoiceOpts=(voices,cur)=>voices.map(v=>`<option${v===cur?" selected":""}>${slA(v)}</option>`).join("");
+const slPick=(ids,cur,empty)=>`<option value=""${cur?"":" selected"}>${esc(empty)}</option>`+ids.map(i=>`<option${i===cur?" selected":""}>${slA(i)}</option>`).join("");
+const slVoiceFirst=()=>(((slR&&slR.voices)||[])[0])||"Kore";
+function slPersonaSet(d,id,f,v){const p=slPersonaAt(d,id);if(!p||!["name","voice","tone"].includes(f))return false;p[f]=v;return true}   // a field outside name, voice and tone never edits a persona
+function slPersonaAdd(d,name){const k=String(name||"").trim();if(!k)return false;const c=slDoc(d,"committed"),ps=c.personas||(c.personas=[]);
+ if(ps.some(p=>String(p.id)===k))return false;ps.push({id:k,name:k,voice:slVoiceFirst(),tone:""});return true}
+function slDefaultSet(d,id){const c=slDoc(d,"committed");c.project=c.project||{};if(id)c.project.persona=id;else delete c.project.persona;return true}
+function slOverrideSet(d,file,wi,ci,id){const ws=(slDoc(d,file).workspaces||[])[wi];if(!ws)return false;const row=ci==null?ws:(ws.channels||[])[ci];
+ if(!row)return false;if(id)row.persona=id;else delete row.persona;return true}
+const slPersonaDetail=p=>{const id=slA(p.id);
+ return `<div class=sle data-sle="${id}">`
+ +`<div class=slf><label for=slpn_${id}>Name</label><input id=slpn_${id} data-slef="name:${id}" value="${slA(p.name)}" maxlength=32 aria-label="persona name"><small>letters, digits, space, period, hyphen and underscore; up to 32 characters</small></div>`
+ +`<div class=slf><label for=slpv_${id}>Voice</label><select id=slpv_${id} data-slef="voice:${id}" aria-label="persona voice">${slVoiceOpts((slR&&slR.voices)||[],p.voice)}</select><button type=button data-slsample="${id}">Sample</button><small>a Gemini TTS voice; the sample is generated once per voice and tone, then cached</small></div>`
+ +`<div class=slf><label for=slpt_${id}>Tone</label><textarea id=slpt_${id} data-slef="tone:${id}" rows=3 maxlength=300 aria-label="persona tone">${esc(p.tone)}</textarea><small>guides the text and the speaking style; up to 300 characters</small></div>`
+ +`</div>`};
+function slOverrideSection(d,ids){const rows=[];
+ for(const[file,doc,chip] of [["committed",slDoc(d,"committed"),"slack.yaml"],["local",slDoc(d,"local"),"local"]]){(doc.workspaces||[]).forEach((ws,wi)=>{
+   const lab=String(ws.label||ws.id||file+" "+wi);
+   rows.push(`<tr><td data-l="Slack workspace">${esc(lab)} <span class=m>${chip}</span></td><td data-l="Persona"><select data-slow="${file}:${wi}" aria-label="${slA(lab)}: persona">${slPick(ids,String(ws.persona||""),"inherit the default")}</select></td></tr>`);
+   (ws.channels||[]).forEach((ch,ci)=>{const n=String(ch.name||ch.id||ci);
+     rows.push(`<tr><td data-l="Channel">#${esc(n)} <span class=m>${chip}</span></td><td data-l="Persona"><select data-slcw="${file}:${wi}:${ci}" aria-label="#${slA(n)}: persona">${slPick(ids,String(ch.persona||""),"inherit the default")}</select></td></tr>`)})})}
+ if(!rows.length)return "";
+ return `<h5 class=slhs>Persona by Slack workspace and channel</h5><table class=slt2><thead><tr><th>Workspace or channel</th><th>Persona</th></tr></thead><tbody>${rows.join("")}</tbody></table>`}
+function slPreviewSection(){const pv=slPv||(slR&&slR.previews)||[];
+ return `<h5 class=slhs>Reply preview</h5>`+(pv.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mark</th><th>Language</th><th>Tone</th><th>Voice</th></tr></thead><tbody>`
+ +pv.map(p=>`<tr><td data-l="Channel"><span class=nw>${esc(p.channel)}</span></td><td data-l="Mark"><span class=nw>${esc(p.mark||"none")}</span></td><td data-l="Language"><span class=nw>${esc(p.language)}</span></td><td data-l="Tone">${esc(p.tone||"none")}</td><td data-l="Voice"><span class=nw>${esc(p.voice||"none")}</span></td></tr>`).join("")
+ +`</tbody></table>`:`<p class=m>${esc("No channel: the agent replies nowhere.")}</p>`)}
+function slPersonaSection(r,d){const cf=r.files.committed,ps=r.personas||[],ids=slPersonaIds(r),lists=slPersonaLists(d),use=lists.length?lists:ps;
+ const cur=String((slDoc(d,"committed").project||{}).persona||""),byId={};for(const p of ps)byId[String(p.id)]=p;
+ const rows=use.map(p=>{const o=byId[String(p.id)]||{},used=(o.channels||[]).length?o.channels.map(esc).join(", "):"no channel";
+  return `<tr><td data-l="Persona"><span class=nw><b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span></span></td><td data-l="Voice"><span class=nw>${esc(p.voice)}</span></td><td data-l="Tone">${esc(p.tone)}</td><td data-l="Used by">${used}</td><td><button type=button data-slopen="${slA(p.id)}">${String(slOpen)===String(p.id)?"Close":"Edit"}</button></td></tr>`});
+ const open=slOpen!=null?slPersonaAt(d,slOpen):null;
+ return `<section class=slsec><h4>Personas ${slTag(cf)}</h4>`
+ +(use.length?`<table class=slt2><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Used by</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<p class=m>${esc("No persona: the project declares no identity.")}</p>`)
+ +`<div class=sldef><span class=sl>Default persona</span><select data-sldefault aria-label="default persona">${slPick(ids,cur,"none")}</select>${slTag(cf)}</div>`
+ +(open?slPersonaDetail(open):"")
+ +(slPvMsg?`<div class="mx${slPvMsg.startsWith("!")?" err":""}" role=status>${esc(slPvMsg.replace(/^!/,""))}</div>`:"")
+ +`<div class=slad><input id=slpnew placeholder="persona name" aria-label="persona to add" maxlength=32><button type=button data-slpadd>Add persona</button></div>`
+ +slOverrideSection(d,ids)+slPreviewSection()+`</section>`}
 const slReadTiles=r=>!r?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const d=slDraft,st=slStatusText(slS);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  let h=setNow("slk",[setTile("Connection",slS.connection,slS.connection==="connected"?"ok":"warn"),...slReadTiles(slR)],`Posts through your own account by the Claude Slack connector. No token is stored here.`)
- +slReadHtml(slR)
+ +slReadHtml(slR,slDocs)
  +(slR===null?setSettings("slk",[   // the legacy profile file's surface stays only when the read view could not answer
  setRow("prefix",`<input data-sl=prefix value="${slA(d.prefix)}" maxlength=40 aria-label="prefix">`),
  setRow("default language",`<select data-sl=lang aria-label="default language">${slOpts(SL_LANG,d.lang)}</select>`),
@@ -8686,6 +8830,21 @@ const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((
  {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Communication",l))}];
 const slAsk=async()=>{try{const r=await(await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},confirm:false})})).json();
  return r.err?[{file:(slR&&slR.files&&slR.files.committed)||"slack.yaml",lines:["! Communication · "+r.err]}]:slGroups(r)}catch(x){return[{file:"slack.yaml",lines:["! Communication · the diff could not be read"]}]}};
+/* The reply preview and the voice sample ask the hub for the draft documents, so a change shows before the save (#2697).
+   The hub resolves the mark, the language, the tone and the voice through the policy module, and it makes the sample once
+   per voice and tone pair and keeps the WAV in its cache. */
+async function slPreviewAsk(){try{const r=await(await fetch("/api/slack/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{}})})).json();
+ slPv=r&&r.previews?r.previews:null}catch(x){slPv=null}}
+const slPreviewRefresh=()=>{slPv=null;slRender();slPreviewAsk().then(()=>slRender())};
+async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
+ const vEl=$("#slpv_"+id),tEl=$("#slpt_"+id),voice=(vEl&&vEl.value)||p.voice,tone=(tEl&&tEl.value!==undefined?tEl.value:p.tone);
+ slPvMsg="the sample is being made";slRender();
+ try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice,tone})})).json();
+  if(r.err)slPvMsg="!"+r.err;
+  else{slPvMsg=r.cached?"the same voice and tone: the cached sample plays":"a new voice and tone: the sample is made once and cached now";
+   try{new Audio(r.url).play()}catch(x){window.__slAudio=r.url}}}   // a browser that refuses to play keeps the URL for the next press
+ catch(x){slPvMsg="!the sample could not be fetched"}
+ slRender()}
 async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fetch("/api/slack/files")]);slS=await a.json();slR=await b.json();slDraft=slClone(slS);slDocs=slClone((slR&&slR.docs)||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},confirm})}),d=await r.json();
@@ -8694,9 +8853,18 @@ async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POS
   try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
-$("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
-$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
- if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
+$("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
+ if(dt.slef&&slDocs){const[f,id]=dt.slef.split(":");if(slPersonaSet(slDocs,id,f,e.target.value)){slD=null;slMsg="";slOpen=id;slPreviewRefresh()}return}
+ if(dt.sldefault!==undefined&&slDocs){slDefaultSet(slDocs,e.target.value);slD=null;slMsg="";slPreviewRefresh();return}
+ if(dt.slow&&slDocs){const[file,wi]=String(dt.slow).split(":");if(slOverrideSet(slDocs,file,+wi,null,e.target.value)){slD=null;slMsg="";slPreviewRefresh()}return}
+ if(dt.slcw&&slDocs){const[file,wi,ci]=String(dt.slcw).split(":");if(slOverrideSet(slDocs,file,+wi,+ci,e.target.value)){slD=null;slMsg="";slPreviewRefresh()}return}
+ const k=dt.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
+$("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const dt=b.dataset||{};
+ if(dt.slopen!==undefined&&slDocs){slOpen=String(slOpen)===String(dt.slopen)?null:dt.slopen;slRender();return}
+ if(dt.slpadd!==undefined&&slDocs){const el=$("#slpnew"),v=el?el.value:"";if(slPersonaAdd(slDocs,v)){slOpen=String(v).trim();slMsg="";slPreviewRefresh()}return}
+ if(dt.slsample!==undefined&&slDocs){slSample(dt.slsample);return}
+ if(!slDraft)return;
+ if(dt.slevrm!==undefined){slEvRemove(+dt.slevrm);slD=null;slRender()}
  else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
  else if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
@@ -8751,7 +8919,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slS){slDraft=slClone(slS);slDocs=slClone(slSavedDocs);slPv=null;slOpen=null;slMsg="";slRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
@@ -11063,7 +11231,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack", "/api/slack/preview", "/api/slack/sample", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -11077,6 +11245,8 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
                 elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
                 elif self.path == "/api/slack": out = slack_set(body)   # Settings > Communication (#924)
+                elif self.path == "/api/slack/preview": out = slack_preview(*(body.get("committed"), body.get("local")) if isinstance(body, dict) else (None, None))   # the persona editor's reply preview (#2697)
+                elif self.path == "/api/slack/sample": out = slack_sample(body)   # the persona editor's voice sample (#2697)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         if not a.allowed and a.tailnet: return self.refuse(a.reason)

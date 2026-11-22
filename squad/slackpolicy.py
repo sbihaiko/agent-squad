@@ -421,6 +421,13 @@ def effective_persona(committed, local, workspace, channel):
     return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
 
 
+def mark(persona):
+    """The authorship mark that opens every text sent from the owner's account: `*<name>'s Msg*`, alone and bold. A
+    persona with no name, and a missing persona, carry no mark, so a channel never wears another persona's name."""
+    name = getattr(persona, "name", "") if persona is not None else ""
+    return f"*{name}'s Msg*" if name else ""
+
+
 def identity(committed, local, channel_id):
     """The language and persona one channel answers with, from its id alone: the same chain `decide` uses.
 

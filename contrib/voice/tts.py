@@ -3,7 +3,7 @@
 Vendored from the `slack-hal9k` skill, so this repository runs and times the pipeline it ships. A caller finds it by name
 with `python3 -m squad.skillpath --script tts.py` (squad/skillpath.py) and never by a path.
 
-usage: tts.py <text> [--voice Kore] [--out /tmp/say.wav] [--service <keychain service>]
+usage: tts.py <text> [--voice Kore] [--tone STYLE] [--out /tmp/say.wav] [--service <keychain service>]
 
 The key comes from the macOS Keychain first, then GOOGLE_API_KEY in the project's .env, then in a sibling project's .env
 — the sibling is named with --sibling-env or SG_TTS_SIBLING (default: the agent-squad checkout beside this skill's
@@ -94,16 +94,18 @@ def synth(key, text, voice, out, tone=""):
 
 def main(argv):
     if not argv:
-        print("usage: tts.py <text> [--voice Kore] [--out file.wav] [--project <slug>] [--service S] [--sibling-env PATH]",
+        print("usage: tts.py <text> [--voice Kore] [--tone STYLE] [--out file.wav] [--project <slug>] [--service S] [--sibling-env PATH]",
               file=sys.stderr)
         return 2
-    text, voice, out, project, service, sibling = "", "Kore", "/tmp/hal9k-say.wav", "agent-squad", None, None
+    text, voice, tone, out, project, service, sibling = "", "Kore", "", "/tmp/hal9k-say.wav", "agent-squad", None, None
     rest = list(argv)
     i = 0
     while i < len(rest):
         a = rest[i]
         if a == "--voice" and i + 1 < len(rest):
             voice = rest[i + 1]; i += 2
+        elif a == "--tone" and i + 1 < len(rest):
+            tone = rest[i + 1]; i += 2
         elif a == "--out" and i + 1 < len(rest):
             out = rest[i + 1]; i += 2
         elif a == "--project" and i + 1 < len(rest):
@@ -123,7 +125,7 @@ def main(argv):
     if not key:
         print("no Gemini key: the Keychain has none and no .env names GOOGLE_API_KEY", file=sys.stderr)
         return 1
-    path, err = synth(key, text, voice, out)
+    path, err = synth(key, text, voice, out, tone=tone)
     if not path:
         print(f"tts refused: {err}", file=sys.stderr)
         return 1
