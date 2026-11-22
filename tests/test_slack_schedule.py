@@ -5,8 +5,10 @@ sequence of clock values, so the rule is proven by the sequence and not by one r
 a placeholder.
 """
 import copy
+import json
 from datetime import datetime, timedelta
 
+from squad import slackpolicy
 from squad import slackpoller as P
 
 CLIENT = "U0CLIENT01"
@@ -39,6 +41,15 @@ LOCAL = {
 }
 
 WS, CH, EXP = "T0CLIENT01", "C0CLISUP01", "C0CLIGEN01"
+
+# An exponential channel whose floor times its factor already exceeds its ceiling, so the first idle step clamps.
+CLAMPED = copy.deepcopy(LOCAL)
+CLAMPED["workspaces"][0]["channels"][1]["poll"].update({"floor": "40m", "ceiling": "1h", "factor": 2})
+
+
+def now_ts(value):
+    """A Slack `ts` of one clock value: the epoch with a fractional part, as the connector writes it."""
+    return f"{value.timestamp():.6f}"
 
 
 def only(*ids):
@@ -251,3 +262,60 @@ def test_an_agent_thread_within_thread_open_keeps_the_interval_fast(tmp_path):
     assert s.due(quiet) == [(WS, CH)]
     s.polled(WS, CH, quiet)
     assert s.next_due(WS, CH) - quiet == minutes(1)
+
+
+# --- 8. a poll that delivers a new message notes it on the schedule --------------------------------------------------
+
+def test_a_polled_message_sets_the_channel_next_due_through_the_schedule(tmp_path):
+    # A poll that delivers a new message notes it on the schedule, so the channel's next poll is one fast interval away
+    # and the schedule reads the channel fast until quiet_after. Found in review: the schedule knew nothing of a poll.
+    s = schedule(tmp_path, local=only(CH))
+    page = [{"ts": now_ts(NOW), "user": CLIENT, "text": "hello"}]
+    p = P.Poller(lambda **request: {"ok": True, "messages": list(page)},
+                 P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, only(CH), lambda: NOW, schedule=s)
+    assert [m["ts"] for m, _ in p.poll(WS, CH)] == [page[0]["ts"]]
+    assert s.next_due(WS, CH) - NOW == minutes(1)
+    assert s.interval(WS, CH, NOW) == 60
+    assert s.interval(WS, CH, NOW + minutes(10)) == 600
+
+
+# --- 9. the quiet-when-no-message rule lives in the schedule, not the shared policy ----------------------------------
+
+def test_the_policy_keeps_its_fast_default_with_no_prior_message(tmp_path):
+    # decide() keeps its fast default for a guest channel with no prior message, so the shared policy output never
+    # changes silently. The schedule alone reads a channel with no message at the slow interval.
+    row = only(CH)["workspaces"][0]["channels"][0]
+    assert slackpolicy.poll_interval(NOW, row, {}) == 60
+    s = schedule(tmp_path, local=only(CH))
+    s.polled(WS, CH, NOW)
+    assert s.next_due(WS, CH) - NOW == minutes(10)
+
+
+# --- 10. the interval of a note is planned in the same write as the activity ---------------------------------------
+
+def test_a_note_writes_the_last_activity_and_the_next_due_once(tmp_path, monkeypatch):
+    # One write carries both fields, so an interrupted note never leaves a last activity with a stale due time.
+    s = schedule(tmp_path, local=only(CH))
+    docs = []
+    real = P.atomic_write
+
+    def capture(path, text):
+        docs.append(json.loads(text))
+        real(path, text)
+
+    monkeypatch.setattr(P, "atomic_write", capture)
+    s.note_message(WS, CH, NOW)
+    assert len(docs) == 1
+    entry = docs[0][WS][CH]
+    assert entry["last_at"] == NOW.isoformat()
+    assert entry["next_due"] == (NOW + minutes(1)).isoformat()
+
+
+# --- 11. exponential clamps the first idle step at the ceiling -----------------------------------------------------
+
+def test_exponential_clamps_the_first_step_at_the_ceiling(tmp_path):
+    s = schedule(tmp_path, local=CLAMPED)
+    s.note_message(WS, EXP, NOW)
+    step = NOW + minutes(15)                        # one idle window: forty minutes times two passes the ceiling
+    s.polled(WS, EXP, step)
+    assert s.next_due(WS, EXP) - step == minutes(60)
