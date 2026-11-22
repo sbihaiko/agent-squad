@@ -1,0 +1,50 @@
+version: 1
+project:
+  language: pt-BR
+  persona: hal
+apps:
+- id: hal9k
+  keychain:
+    bot: agent-squad-voice-slack-bot-token
+    app: agent-squad-voice-slack-app-token
+personas:
+- id: hal
+  name: HAL9K
+  voice: Kore
+  tone: Calmo e direto. Comeca pelo resultado, frases curtas, sem floreio.
+events:
+- id: stg_release
+  template: 'Subiu para STG: {items}.'
+- id: prod_release
+  template: 'Subiu para producao: {items}.'
+roles:
+- id: viewer
+  actions:
+  - status
+  - logs
+- id: maintainer
+  actions:
+  - status
+  - logs
+  - request_work
+  - request_investigation
+  - approve_and_move
+workspaces:
+- id: T0CFRFR05RU
+  label: bihaiko-test
+  class: owned
+  app: hal9k
+  language: pt-BR
+  persona: hal
+  channels:
+  - id: C0CFX6FJTS8
+    name: proj-agent-squad
+    mode: listen+speak
+    language: pt-BR
+    persona: hal
+    roles:
+    - viewer
+    - maintainer
+    announce:
+    - stg_release
+    - prod_release
