@@ -77,6 +77,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import channels  # noqa: E402  the one Slack call path, so this daemon keeps no second copy of it
 import keychain  # noqa: E402  the one reader for the three voice secrets
+import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
@@ -239,6 +240,7 @@ class State:
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
+        self.release_events_path = os.path.join(directory, releases.RECORD)
         self._seen = None
         self._channels = None
         self._registry_read = False
@@ -257,6 +259,14 @@ class State:
     def outbox_path(self):
         """The DM's outbox: the file the owner's session appends its DM answers to."""
         return self.outbox_for(DM)
+
+    def release_events(self):
+        """Every release event the promotion pass or a project emitted, oldest first (#2702).
+
+        One record per event, in `$VOICE_STATE/release-events.jsonl`, the file `release_events.py emit` appends to. A
+        channel that subscribes to the event announces it; a record this build cannot read is skipped.
+        """
+        return releases.read(self.dir)
 
     def _stamp_schema(self):
         """One atomic write of this build's version, after the migration it covers (ADR-0030)."""
