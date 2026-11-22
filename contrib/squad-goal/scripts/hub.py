@@ -2019,6 +2019,11 @@ def _slack_name(path, fallback):
 def _slack_text(value):
     return "" if value is None else str(value)
 
+def _slack_dicts(value):
+    """The mappings of a list with the position each one holds in its own document, so the editor addresses a row by
+    the place it holds in the file it writes (#2698), and a malformed entry never shifts another row's address."""
+    return [(i, row) for i, row in enumerate(value or []) if isinstance(row, dict)] if isinstance(value, list) else []
+
 def _slack_counts(n, word):
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
@@ -2081,23 +2086,27 @@ def slack_overview(committed=None, local=None):
               for r in P.rows(committed_doc.get("events"))]
     workspaces = []
     for doc, file in ((committed_doc, cf), (local_doc, lf)):
-        for row in P.rows(doc.get("workspaces")):
+        # `index` is the row's position in its own document: the editor writes the raw document (#2698), and a row is
+        # addressed by that position, so two rows of the same name never take each other's place.
+        for wi, row in _slack_dicts(doc.get("workspaces")):
             label = _slack_text(row.get("label") or row.get("id"))
             language, persona = P.effective(committed_doc, local_doc, row)
             channels = []
-            for ch in P.rows(row.get("channels")):
+            for ci, ch in _slack_dicts(row.get("channels")):
                 ch_language, ch_persona = P.effective(committed_doc, local_doc, row, ch)
                 name = _slack_text(ch.get("name") or ch.get("id"))
                 channels.append({"id": _slack_text(ch.get("id")), "name": name,
                                  "mode": _slack_text(ch.get("mode") or "listen"), "language": ch_language,
                                  "persona": ch_persona.id if ch_persona else None,
                                  "roles": [_slack_text(x) for x in ch.get("roles") or ()],
-                                 "announce": [_slack_text(x) for x in ch.get("announce") or ()], "file": file})
+                                 "announce": [_slack_text(x) for x in ch.get("announce") or ()], "file": file,
+                                 "index": ci})
                 if ch_persona and ch_persona.id in by_id:
                     by_id[ch_persona.id]["channels"].append(f"{label}/#{name}")
             workspaces.append({"id": _slack_text(row.get("id")), "label": label,
                                "class": _slack_text(row.get("class") or "owned"), "language": language,
-                               "persona": persona.id if persona else None, "file": file, "channels": channels})
+                               "persona": persona.id if persona else None, "file": file, "channels": channels,
+                               "index": wi})
     out = _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
     # The raw documents the view hand back on Save (#2694); the resolved rows above are what it draws.
     out["docs"] = {"committed": committed_doc, "local": local_doc}
@@ -8569,6 +8578,55 @@ const slTag=f=>`<span class=slfile title="this value is written in ${slA(f)}">${
 const slSec=(name,file,head,rows,empty)=>`<section class=slsec><h4>${esc(name)} ${slTag(file)}</h4>${rows.length
  ?`<table class=slt2><thead><tr>${head.map(x=>`<th>${esc(x)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
  :`<p class=m>${esc(empty)}</p>`}</section>`;
+/* The events editor (SPEC 2682 #2698). The owner declares the project events and one template for each, the announce
+   list of each channel, and a template override for one event in one channel. Every edit writes the raw committed
+   document the save path posts (#2694), and the policy module refuses an unknown event and a token (ADR-0177). A row is
+   addressed by the place it holds in its own document, and every edit names the document it writes: `c` for the
+   committed file, `l` for the local one. */
+const slEvDoc=()=>{const c=(slDocs||{}).committed;return c&&Array.isArray(c.events)?c.events:[]};
+const slEvId=i=>{const e=slEvDoc()[i];return e?String(e.id==null?"":e.id):""};
+function slEvAdd(id){const v=String(id||"").trim(),c=(slDocs||{}).committed;if(!v||!c)return false;
+ if(!Array.isArray(c.events))c.events=[];
+ if(c.events.some(e=>e&&String(e.id)===v))return false;c.events.push({id:v,template:""});return true}
+function slEvRemove(i){const c=(slDocs||{}).committed;if(!c||!Array.isArray(c.events)||!c.events[i])return;c.events.splice(i,1)}
+function slEvRename(i,to){const ev=slEvDoc()[i];if(!ev)return;const was=String(ev.id==null?"":ev.id);ev.id=to;
+ if(!was||was===to)return;   // the id is the key announce lists and override maps hold, so a rename carries them along
+ for(const d of [(slDocs||{}).committed||{},(slDocs||{}).local||{}])
+  for(const w of Array.isArray(d.workspaces)?d.workspaces:[]){if(!w||typeof w!=="object")continue;
+   for(const ch of Array.isArray(w.channels)?w.channels:[]){if(!ch||typeof ch!=="object")continue;
+    if(Array.isArray(ch.announce)&&ch.announce.some(x=>String(x)===was))ch.announce=ch.announce.map(x=>String(x)===was?to:x);
+    if(ch.templates&&typeof ch.templates==="object"&&was in ch.templates){ch.templates[to]=ch.templates[was];delete ch.templates[was]}}}}
+function slChanAt(f,w,c){const d=f==="l"?(slDocs||{}).local:(slDocs||{}).committed||{};
+ const ws=Array.isArray(d.workspaces)&&d.workspaces[w];return ws&&Array.isArray(ws.channels)?ws.channels[c]:null}
+function slAnnSet(f,w,c,i,on){const ch=slChanAt(f,w,c),id=slEvId(i);if(!ch||typeof ch!=="object"||!id)return;
+ const list=Array.isArray(ch.announce)?ch.announce.slice():[],at=list.map(String).indexOf(id);
+ if(on&&at<0)list.push(id);else if(!on&&at>=0)list.splice(at,1);
+ if(list.length)ch.announce=list;else delete ch.announce}
+function slAnnOverride(f,w,c,i,text){const ch=slChanAt(f,w,c),id=slEvId(i);if(!ch||typeof ch!=="object"||!id)return;
+ const map=ch.templates&&typeof ch.templates==="object"?ch.templates:{};
+ if(String(text||"").trim())map[id]=text;else delete map[id];
+ if(Object.keys(map).length)ch.templates=map;else delete ch.templates}
+const slEvChannels=()=>{const r=slR,out=[];
+ for(const w of (r&&r.workspaces)||[])for(const c of w.channels)out.push({f:w.file===r.files.local?"l":"c",w:w.index,c:c.index,ch:c,wl:w.label});
+ return out};
+function slEvHtml(){const evs=slEvDoc();
+ if(!(slDocs&&slDocs.committed)){const rows=((slR&&slR.events)||[]);   // a read with no documents stays read-only
+  return rows.length?`<table class=slt2><thead><tr><th>Event</th><th>Template</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.id)}</b></td><td><code>${esc(x.template)}</code></td></tr>`).join("")}</tbody></table>`
+   :`<p class=m>${esc("No event: the agent announces nothing.")}</p>`}
+ const chans=slEvChannels(),announces=id=>{let n=0;for(const x of chans){const ch=slChanAt(x.f,x.w,x.c)||{};if(Array.isArray(ch.announce)&&ch.announce.map(String).indexOf(id)>=0)n++}return n};
+ const rows=evs.map((ev,i)=>{const id=String(ev&&ev.id!=null?ev.id:""),n=slA(id||"event");
+  const subs=chans.map(x=>{const ch=slChanAt(x.f,x.w,x.c)||{},
+   on=Array.isArray(ch.announce)&&ch.announce.map(String).indexOf(id)>=0,
+   ov=ch.templates&&typeof ch.templates==="object"&&ch.templates[id]!=null?String(ch.templates[id]):"";
+   return `<tr><td>#${esc(x.ch.name)} <span class=m>${esc(x.wl)}</span> <span class=slfile>${esc(x.ch.file)}</span></td>`
+   +`<td><label class=swt><input type=checkbox data-sl="an:${x.f}:${x.w}:${x.c}:${i}"${on?" checked":""} aria-label="${slA(x.ch.name)}: announces ${n}"> announces</label></td>`
+   +`<td><input data-sl="ov:${x.f}:${x.w}:${x.c}:${i}" value="${slA(ov)}" placeholder="the project template" aria-label="${slA(x.ch.name)}: template for ${n}"></td></tr>`}).join("");
+  return `<div class=slev><div class=slevr role=row><span class=c1 role=cell><input data-sl="ev:${i}:id" value="${slA(id)}" aria-label="event ${i+1} id" size=16><button data-slevrm="${i}" aria-label="remove event ${n}">Remove</button></span>`
+   +`<span role=cell data-l="template"><textarea data-sl="ev:${i}:tpl" rows=2 aria-label="${n} template">${esc(ev&&ev.template!=null?String(ev.template):"")}</textarea></span></div>`
+   +`<details class=slov><summary>Channels of ${esc(id||"this event")} <span class=m>${announces(id)} announce</span></summary>`
+   +`<table class=slt2><thead><tr><th>Channel</th><th>Announce</th><th>Template override</th></tr></thead><tbody>${subs}</tbody></table></details></div>`}).join("");
+ return (rows||`<p class=m>${esc("No event: the agent announces nothing.")}</p>`)
+  +`<div class=slad><input id=slevnew placeholder="event id" aria-label="event to add"><button id=slevadd>Add event</button></div>`}
 function slReadHtml(r){if(!r)return "";
  const cf=r.files.committed,lf=r.files.local,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
  row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or,   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
@@ -8587,9 +8645,7 @@ function slReadHtml(r){if(!r)return "";
   +(w.channels.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mode</th><th>Language</th><th>Persona</th><th>Roles</th><th>Announce</th></tr></thead><tbody>`
    +w.channels.map(c=>row([["Channel",`#${esc(c.name)} <span class=m>${esc(c.id)}</span>`],["Mode",`<span class=nw>${esc(c.mode)}</span>`],["Language",`<span class=nw>${esc(c.language)}</span>`],["Persona",`<span class=nw>${esc(c.persona||"none")}</span>`],["Roles",join(c.roles,"owner only")],["Announce",join(c.announce,"never posts")]])).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")+`</section>`;
- h+=slSec("Project events",cf,["Event","Template"],
-  r.events.map(x=>row([["Event",`<b>${esc(x.id)}</b>`],["Template",`<code>${esc(x.template)}</code>`]])),
-  "No event: the agent announces nothing.");
+ h+=`<section class=slsec><h4>Project events ${slTag(cf)}</h4>${slEvHtml()}</section>`;   // the one editable section (#2698)
  return h+`</div>`}
 const slReadTiles=r=>!r?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
 function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
@@ -8616,6 +8672,10 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slS){b.innerHTML="<span
  b.innerHTML=h;if(typeof setBar==="function")setBar()}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ch"){const c=slDraft.channels[+p[1]];if(p[2]==="ev")c.events[p[3]]=v;else c[p[2]]=v}
+ else if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
+ else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}
+ else if(p[0]==="an")slAnnSet(p[1],+p[2],+p[3],+p[4],v);
+ else if(p[0]==="ov")slAnnOverride(p[1],+p[2],+p[3],+p[4],v);
  else if(p[0]==="pp")slDraft.people[+p[1]].role=v;
  else if(p[0]==="tpl")slDraft.templates[p[1]]=v;
  else if(k==="tick"||k==="max")slDraft[k]=Number(v);
@@ -8630,12 +8690,15 @@ async function slLoad(){try{const[a,b]=await Promise.all([fetch("/api/slack"),fe
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:(slDocs||{}).committed||{},local:(slDocs||{}).local||{},confirm})}),d=await r.json();
  if(d.err){slD=null;slMsg="!"+d.err}
- else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved"}
+ else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
+  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const k=e.target.dataset.sl;if(!k||!slDraft)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b||!slDraft)return;
- if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
+ if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
+ else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
+ else if(b.dataset.slrm){const[t,i]=b.dataset.slrm.split(":");(t==="ch"?slDraft.channels:slDraft.people).splice(+i,1);slD=null;slRender()}
  else if(b.id==="slcha"){const v=$("#slch").value.trim();if(v)slDraft.channels.push({name:v,lang:slDraft.lang,...slS.new_channel,events:{...slS.new_channel.events}});slD=null;slRender()}
  else if(b.id==="slpa"){const v=$("#slpn").value.trim();if(v&&!slDraft.people.some(p=>p.name===v))slDraft.people.push({name:v,role:$("#slpr").value});slD=null;slRender()}
  });

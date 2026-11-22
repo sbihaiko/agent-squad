@@ -68,5 +68,6 @@ gets them from the same module, so a second copy of a rule never disagrees with 
 
 ## Guard
 
-`tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `tests/test_setup.py` (the tracked step that arms the
+`tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `tests/test_hub_slack_events.py` (the editor of the
+project events and of each channel's `announce` list), `tests/test_setup.py` (the tracked step that arms the
 guard), `contrib/squad-goal/scripts/test-commit-guard.sh`.

@@ -281,6 +281,39 @@ def edit(hub, out, docs, calls):
     return json.loads(_node(body))
 
 
+def test_a_confirmed_save_reloads_the_read_view(hub, tmp_path):
+    """The workspaces table draws the announce list from the read view, and the editor writes it into the documents. A
+    save that reloaded neither would leave the table on the old list, so the confirm reads the view again (#2698)."""
+    page = hub.PAGE
+    esc = re.search(r"^const esc=.*$", page, re.M).group(0)
+    sett = page[page.index("// SETT{"):page.index("// }SETT")]
+    sl = page[page.index("let slS=null"):page.index('$("#sbody").addEventListener("change"')]
+    body = "\n".join([esc, sett, sl]) + "\n" + STUB
+    body += ('\nconst save={files:{committed:"slack.yaml",local:"4.slack.local.yaml"},diff:{committed:[],local:[]}};'
+             'const read={files:{committed:"slack.yaml",local:"4.slack.local.yaml"},now:[],personas:[],roles:[],'
+             'workspaces:[],events:[{id:"fix_release",template:"Fixed: {items}."}],defects:[],'
+             'project:{language:"en-US",persona:null,persona_name:null},'
+             'docs:{committed:{events:[{id:"fix_release",template:"Fixed: {items}."}]},local:{}}};'
+             'let n=0;globalThis.fetch=async()=>({json:async()=>n++?read:save});'
+             f'slS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR=null;'
+             'slDocs={committed:{events:[]},local:{}};'
+             'slSavedDocs=slClone(slDocs);await slPost(true);'
+             'console.log(JSON.stringify({docs:slDocs,events:(slR||{}).events,msg:slMsg}))')
+    out = json.loads(_node(body))
+    assert out["docs"]["committed"]["events"] == [{"id": "fix_release", "template": "Fixed: {items}."}], out
+    assert out["events"] == [{"id": "fix_release", "template": "Fixed: {items}."}], out
+    assert out["msg"].startswith("saved"), out
+
+
+def state(hub, out, docs, lines):
+    """Run the functions the editor's buttons call, in order, and hand back the two documents they left."""
+    body = (_slack_js(hub.PAGE) + "\n" + STUB
+            + f"\nslS={json.dumps(hub.SLACK_DEFAULT)};slDraft=slClone(slS);slR={json.dumps(out)};"
+            + f"slDocs={json.dumps(docs)};slSavedDocs=slClone(slDocs);" + "".join(lines)
+            + "console.log(JSON.stringify(slDocs))")
+    return json.loads(_node(body))
+
+
 def events_block(html):
     """The Project events section alone: from its heading to the end of the read block."""
     i = html.index("Project events")
@@ -350,10 +383,13 @@ def test_the_override_box_writes_the_channel_template(hub, tmp_path):
 def test_a_new_event_and_its_template_reach_the_document(hub, tmp_path):
     """Criterion 1 through the interface: an event is added with its id, its template, and a remove that drops it."""
     out = overview(hub, tmp_path)
-    docs = edit(hub, out, out["docs"], [("evadd", "fix_release"),
-                                        ("ev:2:tpl", {"type": "text", "value": "Fixed: {items}."})])
+    docs = state(hub, out, out["docs"], [
+        "slEvAdd('fix_release');",
+        "slEdit('ev:2:tpl',{type:'text',value:'Fixed: {items}.'});",
+        "slEvAdd('fix_release');"])   # a second event of the same id is refused: two rows never share one key
     assert docs["committed"]["events"][-1] == {"id": "fix_release", "template": "Fixed: {items}."}, docs
-    docs = edit(hub, out, out["docs"], [("evrm", 1)])
+    assert [e["id"] for e in docs["committed"]["events"]] == ["stg_release", "prod_release", "fix_release"], docs
+    docs = state(hub, out, out["docs"], ["slEvRemove(1);"])
     assert [e["id"] for e in docs["committed"]["events"]] == ["stg_release"], docs
 
 
