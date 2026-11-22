@@ -198,11 +198,20 @@ def hub_projects(script=None):
         if not repo or any(entry["repo"] == repo for entry in found):
             continue
         name = (ctx.get("SG_PROJECT") or "").strip() or repo.rsplit("/", 1)[-1]
-        # The local file sits beside the hub's profile, so its name is the `--list` slug. `SG_PROJECT` and the repo
-        # leaf are the fallback, for a hub that names no profile.
-        local = slackpolicy.local_path(profiles, slug) or slackpolicy.local_path(profiles, name)
-        found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(),
-                      "local": str(local) if local else ""})
+        # The local file sits beside the hub's profile, so the `--list` slug names it first. `SG_PROJECT` and the repo
+        # leaf are the fallback, and a generic `slack.local.yaml` the last one. A candidate the profile does not hold
+        # never wins, so a missing slug file cannot hide the project's own file.
+        local = ""
+        for candidate in (slug, name):
+            path = os.path.join(profiles, f"{candidate}.slack.local.yaml") if candidate else ""
+            if path and os.path.isfile(path):
+                local = path
+                break
+        else:
+            generic = os.path.join(profiles, slackpolicy.LOCAL_SUFFIX)
+            if os.path.isfile(generic):
+                local = generic
+        found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(), "local": local})
     return found
 
 
@@ -213,16 +222,6 @@ def hub_repos(script=None):
 
 class TipUnreadable(Exception):
     """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
-
-
-def names_a_local_file(reason):
-    """Whether one defect line names a local Slack file rather than the committed one at the dev tip.
-
-    A defect renders as `<file>: <key>: <reason>`, and a local file's name ends in `slack.local.yaml` with no space. A
-    tip message holds spaces and no `: ` prefix, and the committed file is `slack.yaml`, so both count as the tip side.
-    """
-    head, sep, _ = reason.partition(": ")
-    return bool(sep) and head.endswith(slackpolicy.LOCAL_SUFFIX) and " " not in head
 
 
 def git_output(checkout, *args):
@@ -337,15 +336,46 @@ class State:
         """The file that records the last refused revision of one project, beside its active revision."""
         return self.slack_path(repo)[: -len(".json")] + ".refused.json"
 
-    def active_revision(self, repo):
-        """The Slack revision this daemon accepted for one project, or None. The file survives a restart, so a refused
-        revision keeps the previous one active across one (#2685)."""
+    def _legacy_slack_path(self, repo):
+        """The sanitized name an older build gave one project's active revision, before the digest name."""
+        leaf = re.sub(r"[^A-Za-z0-9_.-]", "-", (repo or "").strip()) or "project"
+        return os.path.join(self.slack_dir, leaf + ".json")
+
+    @staticmethod
+    def _read_record(path):
         try:
-            with open(self.slack_path(repo), encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
             return None
-        return data if isinstance(data, dict) and data.get("sha") else None
+        return data if isinstance(data, dict) else None
+
+    def _adopt_legacy(self, repo):
+        """Move one record an older build wrote under the sanitized name to this build's digest name, once.
+
+        A sanitized name collided (`a/b` and `a-b`), so the record is adopted only when it names this repository. A
+        collision that names another repository is left where it is, never handed to the wrong project.
+        """
+        old = self._legacy_slack_path(repo)
+        if os.path.abspath(old) == os.path.abspath(self.slack_path(repo)):
+            return None
+        data = self._read_record(old)
+        if data is None or data.get("repo") != repo:
+            return None
+        try:
+            self._atomic_json(self.slack_path(repo), data)
+            os.remove(old)
+        except OSError:
+            return data     # the record is still valid for this read even when the move cannot be written
+        return data
+
+    def active_revision(self, repo):
+        """The Slack revision this daemon accepted for one project, or None. The file survives a restart, so a refused
+        revision keeps the previous one active across one (#2685). A record an older build wrote is adopted once."""
+        data = self._read_record(self.slack_path(repo))
+        if data is None:
+            data = self._adopt_legacy(repo)
+        return data if data and data.get("sha") else None
 
     def save_active_revision(self, repo, record):
         """The active revision as one atomic write (ADR-0030): a crash leaves the previous file, never half of a new one."""
@@ -878,6 +908,7 @@ class Daemon:
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+        self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
 
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
@@ -930,34 +961,41 @@ class Daemon:
         try:
             sha, text = dev_tip((entry.get("checkout") or "").strip())
         except TipUnreadable as x:
-            return self.refuse_revision(repo, active, [str(x)], sha=None)
+            return self.refuse_revision(repo, active, [str(x)], sha=None, tip_failed=True)
         if active is not None and active.get("sha") == sha:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
-        out = []
-        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
+        tip_defects = []
+        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), tip_defects)
         name, local = local_docs.get(repo, (None, None))
-        out.extend(local_defects.get(repo) or [])
+        local_defects = list(local_defects.get(repo) or [])
+        local_name = name or slackpolicy.LOCAL_SUFFIX
         others = [(other_name, other_doc) for other_repo, (other_name, other_doc) in local_docs.items()
                   if other_repo != repo]
         if doc is not None:
-            out.extend(slackpolicy.validate(doc, local or {}, others, local_name=name or slackpolicy.LOCAL_SUFFIX))
-        if out:
-            return self.refuse_revision(repo, active, [str(defect) for defect in out], sha=sha)
+            for defect in slackpolicy.validate(doc, local or {}, others, local_name=local_name):
+                # `validate` names the local side with `local_name`; every other defect is the committed file.
+                (local_defects if defect.file == local_name else tip_defects).append(defect)
+        if tip_defects or local_defects:
+            return self.refuse_revision(
+                repo, active, [str(defect) for defect in tip_defects + local_defects], sha=sha,
+                local_files=sorted({defect.file for defect in local_defects}), tip_failed=bool(tip_defects))
         record = {"repo": repo, "sha": sha, "revision": doc}
         try:
             self.state.save_active_revision(repo, record)
         except OSError as x:
             self.log(f"voiced: {repo}: cannot write the Slack revision: {type(x).__name__}: {x.strerror or x}")
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
-        self.state.clear_refusal(repo)     # a valid revision resets the notice, so the next distinct refusal warns
+        self._last_refusal.pop(repo, None)     # a valid revision resets the notice, so the next distinct refusal warns
+        self.state.clear_refusal(repo)
         self.log(f"voiced: {repo}: slack.yaml revision {sha[:12]} is active")
         return {"repo": repo, "sha": sha, "changed": True, "active": record}
 
-    def refuse_revision(self, repo, active, reasons, sha=None):
+    def refuse_revision(self, repo, active, reasons, sha=None, local_files=(), tip_failed=True):
         """Keep the active revision and log each reason; send the owner one notice per distinct rejected revision.
 
-        An unchanged refusal is only a log line: the record of the last notice stops a broken dev tip from writing one DM
-        per poll until someone fixes the repository.
+        The signature the owner was told about is held in memory, so an unchanged refusal is only a log line even when
+        the state directory cannot hold a record. The persisted record is read once, so a restart still keeps the
+        owner silent about a notice the previous process already sent.
         """
         kept = (active or {}).get("sha")
         stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
@@ -965,17 +1003,23 @@ class Daemon:
         for reason in reasons:
             self.log(f"voiced: {repo}: {reason}")
         signature = {"repo": repo, "sha": sha, "reasons": list(reasons)}
-        if self.state.last_refusal(repo) == signature:
+        known = self._last_refusal.get(repo)
+        if known is None:
+            known = self.state.last_refusal(repo)
+            if known is not None:
+                self._last_refusal[repo] = known
+        if known == signature:
             self.log(f"voiced: {repo}: the same revision was refused before; the owner is not told twice")
             return {"repo": repo, "changed": False, "active": active, "defects": reasons}
-        if self.notice_owner(repo, reasons, active):
+        if self.notice_owner(repo, reasons, active, local_files, tip_failed):
+            self._last_refusal[repo] = signature
             try:
                 self.state.save_refusal(repo, signature)
             except OSError as x:
                 self.log(f"voiced: {repo}: cannot record the refused revision: {type(x).__name__}: {x.strerror or x}")
         return {"repo": repo, "changed": False, "active": active, "defects": reasons}
 
-    def notice_owner(self, repo, reasons, active):
+    def notice_owner(self, repo, reasons, active, local_files=(), tip_failed=True):
         """One DM to the owner about a refused revision; a refused DM is a log line, never a lost notice.
 
         The text names the side that fails: the committed file at the dev tip, the local file beside the profile, or
@@ -985,7 +1029,8 @@ class Daemon:
             return False
         kept = (active or {}).get("sha")
         stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
-        text = f"voiced: {self._refusal_summary(repo, reasons)}, so {stays}.\n" + "\n".join(reasons)
+        summary = self._refusal_summary(repo, local_files, tip_failed)
+        text = f"voiced: {summary}, so {stays}.\n" + "\n".join(reasons)
         try:
             got = self.client.api("chat.postMessage", {"channel": self.owner, "text": text}, post=True)
         except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops answering
@@ -997,10 +1042,8 @@ class Daemon:
         return True
 
     @staticmethod
-    def _refusal_summary(repo, reasons):
+    def _refusal_summary(repo, local_files, tip_failed):
         """The sentence before the defect lines: which side failed, the committed dev tip or the local file."""
-        local_files = sorted({reason.partition(": ")[0] for reason in reasons if names_a_local_file(reason)})
-        tip_failed = any(not names_a_local_file(reason) for reason in reasons)
         parts = []
         if tip_failed:
             parts.append(f"I refused the slack.yaml of {repo} at its dev tip")

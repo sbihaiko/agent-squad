@@ -1489,10 +1489,11 @@ def test_an_unreadable_dev_tip_never_kills_the_daemon_and_warns_the_owner(tmp_pa
 
 
 def test_a_failed_active_revision_write_leaves_the_previous_file_whole(tmp_path, monkeypatch):
-    """Rule (8), ADR-0030: a write that dies at the replace leaves the previous revision, and the temp file alone.
+    """Rule (8), ADR-0030: a write that dies at the replace leaves the previous revision, and no residue after a retry.
 
     The target bytes are read while the write is refused, so a writer that opens the target and truncates it fails
-    this case even when it never reaches the replace.
+    this case even when it never reaches the replace. The retry also proves the temp file is cleared and the folder is
+    synced after the replace.
     """
     repo = git_project(tmp_path, SLACK_VALID)
     mod, daemon, _ = revision_daemon(tmp_path)
@@ -1512,10 +1513,19 @@ def test_a_failed_active_revision_write_leaves_the_previous_file_whole(tmp_path,
     monkeypatch.undo()
 
     assert path.read_bytes() == before, "the target changed while the write was refused"
-    assert Path(str(path) + ".tmp").exists(), "the refused write left no temp file behind"
     active = daemon.state.active_revision("acme/app")
     assert active["sha"] == first != moved
     assert active["revision"]["project"]["language"] == "en-US"
+
+    synced = []
+    real_sync = mod.State._sync_dir
+    monkeypatch.setattr(mod.State, "_sync_dir", staticmethod(lambda directory: (synced.append(directory), real_sync(directory))))
+    daemon.refresh_slack(projects=[project(repo)])
+    monkeypatch.undo()
+
+    assert daemon.state.active_revision("acme/app")["sha"] == moved
+    assert not Path(str(path) + ".tmp").exists(), "the successful retry left the temp file behind"
+    assert synced == [str(path.parent)], "the replace never synced its folder"
 
 
 def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_tip(tmp_path, monkeypatch):
@@ -1622,3 +1632,89 @@ def test_a_local_file_that_cannot_be_read_is_named_as_the_file_to_fix(tmp_path):
     assert "acme-app.slack.local.yaml" in posts[0]["text"]
     assert "must be fixed" in posts[0]["text"]
     assert "at its dev tip" not in posts[0]["text"]
+
+
+def test_a_refusal_that_cannot_be_recorded_still_warns_the_owner_only_once(tmp_path, monkeypatch):
+    """Rule (5): a state file that cannot be written must not turn one refusal into a DM every poll.
+
+    The daemon holds the refused signature in memory, so the persisted record is only what survives a restart.
+    """
+    repo = git_project(tmp_path, SLACK_BAD_VOICE)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    def refuse_save(repo_name, record):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(daemon.state, "save_refusal", refuse_save)
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+
+
+def test_a_local_file_name_with_a_space_is_named_as_the_local_side(tmp_path):
+    """Rule (2) and rule (5): the failing side is known structurally, never read back from a rendered line."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme app.slack.local.yaml"
+    local.write_text("version: 1\nworkspaces:\n  - id: T0CLIENT01\n    label: xoxb-token-here\n")
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme app.slack.local.yaml" in posts[0]["text"]
+    assert "must be fixed" in posts[0]["text"]
+    assert "at its dev tip" not in posts[0]["text"]
+
+
+def test_a_hub_slug_without_its_own_local_file_falls_back_to_the_project_file(tmp_path, monkeypatch):
+    """Rule (1): the slug names the local file only when that file exists; a generic file never hides the project one."""
+    mod = voiced()
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    (profiles / "acme-app.slack.local.yaml").write_text("version: 1\n")
+    (profiles / "slack.local.yaml").write_text("version: 1\n")
+    script = tmp_path / "address.sh"
+    script.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        '  --list) printf "alpha\\tAcme/My.App\\n" ;;\n'
+        f'  alpha) printf "SG_REPO=Acme/My.App\\nSG_PROJECT=acme-app\\nSG_CHECKOUT={tmp_path}\\n" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("SG_PROFILES_DIR", str(profiles))
+
+    got = mod.hub_projects(script=str(script))
+
+    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path),
+                    "local": str(profiles / "acme-app.slack.local.yaml")}]
+
+
+def test_an_active_revision_written_under_the_old_name_is_adopted(tmp_path):
+    """Rule (3): a record an older build wrote under the sanitized name survives the digest rename."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    legacy = Path(state.slack_dir) / "a-b.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"repo": "a/b", "sha": "111111111111", "revision": {"project": {"language": "en-US"}}}))
+
+    active = state.active_revision("a/b")
+
+    assert active is not None and active["sha"] == "111111111111"
+    assert Path(state.slack_path("a/b")).exists(), "the legacy record was not adopted under the digest name"
+
+
+def test_a_legacy_record_of_another_repository_is_never_adopted(tmp_path):
+    """Rule (3): a colliding old name belongs to one repository only, so a record that names another is left alone."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    legacy = Path(state.slack_dir) / "a-b.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"repo": "a-b", "sha": "222222222222", "revision": {}}))
+
+    assert state.active_revision("a/b") is None
+    assert Path(state.slack_path("a/b")).exists() is False
