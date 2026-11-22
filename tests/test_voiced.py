@@ -566,6 +566,7 @@ class ScopedClient:
         self.listing = list(listing)
         self.taken = taken
         self.calls = []
+        self.listings = []
 
     def api(self, method, params=None, post=False):
         self.calls.append((method, dict(params or {}), post))
@@ -576,7 +577,9 @@ class ScopedClient:
             for kind in kinds:
                 scope = LIST_SCOPE.get(kind)
                 if scope and scope not in self.granted:
+                    self.listings.append({"types": types, "error": "missing_scope"})
                     return {"ok": False, "error": "missing_scope", "needed": scope, "provided": "channels:read"}
+            self.listings.append({"types": types, "error": None})
             visible = [c for c in self.listing if "private_channel" in kinds or not c.get("is_private")]
             return {"ok": True, "channels": [dict(c) for c in visible]}
         if method == "conversations.create" and self.taken:
@@ -629,9 +632,27 @@ def test_a_taken_name_held_by_a_private_channel_is_found_when_the_app_may_read_i
 
 def test_a_taken_name_a_fresh_install_cannot_read_is_reported_by_its_own_line():
     """#2767: the shipped manifest grants no `groups:read`, so a name held by a private channel stays out of reach.
-    The daemon names that plainly, in one line of its own, and never as the `missing_scope` refusal."""
+    The daemon names that plainly, in one line of its own, and never as the `missing_scope` refusal. The line names
+    the scope that would reach the channel, so a maintainer sees the fix. The fallback keeps its order: the public
+    listing first, the private one second, and the refusal of that second one is what the line reports."""
     mod = voiced()
     client = ScopedClient(listing=[{"id": "C0PRIV", "name": "proj-app", "is_private": True}], taken=True)
+    log = []
+
+    got = mod._ensure_channel(client, "proj-app", {}, log.append)
+
+    assert got is None, got
+    assert log == ["voiced: Slack holds the name proj-app and lists no channel for it; "
+                   "grant groups:read so a private channel can be found"], log
+    assert client.listings == [{"types": "public_channel", "error": None},
+                               {"types": "public_channel,private_channel", "error": "missing_scope"}], client.listings
+
+
+def test_a_taken_name_an_app_may_read_but_holds_nowhere_is_reported_without_the_scope_hint():
+    """#2767: when the app grants `groups:read` and Slack still lists no channel under the name, the scope is not the
+    cause, so the line never sends a maintainer to a scope the app already holds."""
+    mod = voiced()
+    client = ScopedClient(taken=True, extra_scopes=("groups:read",))
     log = []
 
     got = mod._ensure_channel(client, "proj-app", {}, log.append)

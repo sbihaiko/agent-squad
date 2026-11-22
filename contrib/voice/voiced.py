@@ -1124,16 +1124,19 @@ def _listed_channel(client, name):
 
     A `name_taken` error can name a private channel the bot can see, and a `public_channel` listing omits it. The
     second read asks for both types, which Slack refuses when the app grants no `groups:read`; a fresh install then
-    searches the public list alone, and the caller reports that line.
+    searches the public list alone. The return is the channel, or None, and a flag that the private type was refused,
+    so the caller names the missing scope only when that refusal is the reason.
     """
+    refused = False
     for types in ("public_channel", "public_channel,private_channel"):
         listing = client.api(f"conversations.list?types={types}&limit=1000")
         if not listing.get("ok"):
+            refused = refused or "private_channel" in types
             continue
         found = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
         if found:
-            return found
-    return None
+            return found, refused
+    return None, refused
 
 
 def _ensure_channel(client, name, channels, log):
@@ -1145,9 +1148,10 @@ def _ensure_channel(client, name, channels, log):
     if got.get("ok"):
         channel = got.get("channel") or {}
     elif got.get("error") == "name_taken":
-        channel = _listed_channel(client, name)
+        channel, private_refused = _listed_channel(client, name)
         if not channel:
-            log(f"voiced: Slack holds the name {name} and lists no channel for it")
+            hint = "; grant groups:read so a private channel can be found" if private_refused else ""
+            log(f"voiced: Slack holds the name {name} and lists no channel for it{hint}")
             return None
     else:
         log(f"voiced: cannot create the channel {name}: {got.get('error')}")
