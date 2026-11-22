@@ -30,6 +30,7 @@ Guards: `tests/test_slack_executor.py`.
 import json
 from typing import NamedTuple
 
+from . import slackpolicy as S
 from .redact import redact
 
 STATUS = "status"
@@ -140,7 +141,7 @@ def check(request, decision, line, project, listed=None):
                                  f"{', '.join(sorted(ACTIONS))}, so an owner-only action stays with the owner")
     if request.action not in _actions(decision):
         return Refusal("grant", f"the role {decision.role!r} does not list action {request.action!r}")
-    if str(getattr(decision, "kind", "")) == "proposal":
+    if getattr(decision, "kind", None) == S.PROPOSAL:
         return Refusal("proposal", "a request in a guest channel becomes a proposal to the owner: no action runs "
                                    "before the owner approves it (squad/slackproposal.py)")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
