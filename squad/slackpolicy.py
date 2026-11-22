@@ -5,12 +5,15 @@ sits in the profile folder and never enters a repository. This module loads both
 `Defect` per failing key, so a caller prints a message that names the key. It reads no clock and calls no network.
 
 `squad slack check` imports it, and the hub imports it before it writes a Slack setting. No other file holds a copy of
-these rules.
+these rules. `decide` maps one event of one channel to one decision; the caller passes the clock value, and the module
+reads neither a clock nor the network.
 
-Guards: `tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
+Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
+`contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
@@ -271,3 +274,170 @@ def check(target=".", profile=None, project=None):
                 others.append((other.name, doc))
     found = validate(committed, local, others, local_name=Path(path).name if path else "slack.local.yaml")
     return out + found
+
+
+# One decision of the policy module. The four kinds are the whole set: an event the module does not handle, a message
+# that stays data, a command that reaches the inbox, and a request that becomes a proposal to the owner.
+IGNORE, DATA, INBOX, PROPOSAL = "ignore", "data", "inbox", "proposal"
+DEFAULT_LANGUAGE = "en-US"
+_MS = {"s": 1, "m": 60, "h": 3600}
+_POLL_DEFAULTS = {"fast": "1m", "slow": "10m", "quiet_after": "10m", "thread_open": "30m"}
+_EXP_DEFAULTS = {"floor": "5m", "ceiling": "1h", "factor": 2, "idle_window": "15m", "thread_open": "30m"}
+
+
+class Persona(NamedTuple):
+    """The identity a channel answers with: the bot name, the voice, and the tone. It carries no language, no permission."""
+    id: str
+    name: str
+    voice: str
+    tone: str
+
+
+class Decision(NamedTuple):
+    """What the operator session may do with one event: the kind of decision, the caller's role and actions, the
+    language and persona of the channel, the reply path (`bot`, `draft` or `send`), the mark flag, and, for a `guest`
+    channel, the time of the next poll."""
+    kind: str
+    role: str | None
+    actions: tuple
+    language: str
+    persona: Persona | None
+    reply: str | None
+    mark: bool
+    next_poll: datetime | None
+
+
+def _row_at(rows, key, value):
+    for row in _rows(rows):
+        if str(row.get("id")) == str(value):
+            return row
+    return None
+
+
+def _effective_language(committed, workspace, channel):
+    for value in (channel.get("language"), workspace.get("language"), (committed.get("project") or {}).get("language")):
+        if value is not None:
+            tag = normalize_language(value)
+            if tag:
+                return tag
+    return DEFAULT_LANGUAGE
+
+
+def _effective_persona(committed, workspace, channel):
+    wanted = None
+    for value in (channel.get("persona"), workspace.get("persona"), (committed.get("project") or {}).get("persona")):
+        if value is not None:
+            wanted = value
+            break
+    if wanted is None:
+        return None
+    row = _row_at(committed.get("personas"), "id", wanted)
+    if row is None:
+        return None
+    return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
+
+
+def _member_role(local, workspace_id, channel, user):
+    """The role the local file gives this user in this channel, or None. A membership in a role the channel does not
+    accept grants nothing, so a stranger's message stays data."""
+    accepted = {str(name) for name in channel.get("roles") or []}
+    for member in _rows(local.get("members")):
+        if (str(member.get("workspace")), str(member.get("channel"))) != (workspace_id, str(channel.get("id"))):
+            continue
+        if user in {str(u) for u in member.get("users") or []} and str(member.get("role")) in accepted:
+            return str(member.get("role"))
+    return None
+
+
+def _role_actions(committed, role):
+    for row in _rows(committed.get("roles")):
+        if str(row.get("id")) == role:
+            return tuple(str(action) for action in row.get("actions") or ())
+    return ()
+
+
+def _reply_path(class_, channel):
+    """The reply path: `bot` in an `owned` channel, a `draft` by default in a `guest` channel, `send` only with an
+    explicit `speak: send` and a `send_grant`, and none in a `listen` channel."""
+    if str(channel.get("mode") or "listen") != "listen+speak":
+        return None
+    if str(class_) != "guest":
+        return "bot"
+    if str(channel.get("speak") or "draft") == "send" and channel.get("send_grant"):
+        return "send"
+    return "draft"
+
+
+def _seconds(value):
+    """A duration of the file, as seconds: `1m`, `30m`, `1h`, or a number of seconds."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    if text and text[-1] in _MS:
+        return float(text[:-1]) * _MS[text[-1]]
+    return float(text or 0)
+
+
+def _elapsed(now, value):
+    return (now - value).total_seconds()
+
+
+def _poll_interval(now, channel, thread_state):
+    """The interval to the next poll of a `guest` channel, in seconds. `two_state` is fast after a message and slow
+    after `quiet_after` of silence; `exponential` multiplies the floor by the factor at each idle window up to the
+    ceiling. A message in the agent's thread newer than `thread_open` keeps the interval fast in both modes."""
+    poll = channel.get("poll") if isinstance(channel.get("poll"), dict) else {}
+    state = thread_state or {}
+    last = state.get("last_message_at")
+    thread = state.get("thread_last_at")
+    if str(poll.get("mode") or "two_state") == "exponential":
+        floor = _seconds(poll.get("floor", _EXP_DEFAULTS["floor"]))
+        ceiling = _seconds(poll.get("ceiling", _EXP_DEFAULTS["ceiling"]))
+        factor = float(poll.get("factor", _EXP_DEFAULTS["factor"]))
+        window = _seconds(poll.get("idle_window", _EXP_DEFAULTS["idle_window"]))
+        open_ = _seconds(poll.get("thread_open", _EXP_DEFAULTS["thread_open"]))
+        if thread is not None and _elapsed(now, thread) <= open_:
+            return floor
+        if last is None or window <= 0:
+            return floor
+        steps = max(0, int(_elapsed(now, last) // window))
+        return min(floor * (factor ** steps), ceiling)
+    fast = _seconds(poll.get("fast", _POLL_DEFAULTS["fast"]))
+    slow = _seconds(poll.get("slow", _POLL_DEFAULTS["slow"]))
+    quiet = _seconds(poll.get("quiet_after", _POLL_DEFAULTS["quiet_after"]))
+    open_ = _seconds(poll.get("thread_open", _POLL_DEFAULTS["thread_open"]))
+    if thread is not None and _elapsed(now, thread) <= open_:
+        return fast
+    if last is not None and _elapsed(now, last) >= quiet:
+        return slow
+    return fast
+
+
+def decide(committed, local, event, now, thread_state=None):
+    """The one decision for one event of one channel, from the two validated files and the caller's clock value.
+
+    `event` names `workspace`, `channel`, `user` and `kind` (a `message` unless stated), and flags `bot`, `external`
+    and `own`. `thread_state` names `last_message_at` and `thread_last_at` of the agent's thread. The module reads no
+    clock and calls no network, so the caller passes both answers."""
+    committed = committed or {}
+    local = local or {}
+    project_language = _effective_language(committed, {}, {})
+    project_persona = _effective_persona(committed, {}, {})
+    workspace_id = str(event.get("workspace") or "")
+    workspace = _row_at(committed.get("workspaces"), "id", workspace_id) or _row_at(local.get("workspaces"), "id", workspace_id)
+    channel = _row_at(workspace.get("channels"), "id", event.get("channel")) if workspace else None
+    if channel is None:
+        return Decision(IGNORE, None, (), project_language, project_persona, None, False, None)
+    class_ = str(workspace.get("class") or "owned")
+    language = _effective_language(committed, workspace, channel)
+    persona = _effective_persona(committed, workspace, channel)
+    next_poll = now + timedelta(seconds=_poll_interval(now, channel, thread_state)) if class_ == "guest" else None
+    role = _member_role(local, workspace_id, channel, str(event.get("user") or ""))
+    if str(event.get("kind") or "message") != "message" or event.get("own"):
+        return Decision(IGNORE, role, (), language, persona, None, False, next_poll)
+    if event.get("bot") or event.get("external") or role is None:
+        return Decision(DATA, role, (), language, persona, None, False, next_poll)
+    reply = _reply_path(class_, channel)
+    kind = PROPOSAL if class_ == "guest" else INBOX
+    return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply is not None and class_ == "guest",
+                    next_poll)
