@@ -196,8 +196,8 @@ def test_the_draft_goes_through_the_write_hook_and_the_connector_gets_the_decide
     connector = FakeConnector()
     out = deliver(d, connector)
     assert out.get("permissionDecision") == "allow", out
-    assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "thread_ts": "", "text": d.text})], connector.calls
-    assert connector.calls[0][1]["thread_ts"] == "", "an announcement is a channel post, not a reply in a thread"
+    assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "text": d.text})], connector.calls
+    assert "thread_ts" not in connector.calls[0][1], "a channel post omits thread_ts, as main emits it"
 
 
 def test_the_hook_denies_a_thread_on_a_channel_post():
@@ -249,3 +249,62 @@ def test_a_fake_connector_receives_a_committed_channel_and_its_local_override():
         deliver(draft, connector)
     calls = [(tool, args["channel"], args["text"]) for tool, args in connector.calls]
     assert calls == [(W.DRAFT_WORD, GENERAL, "*Iara's Msg*\n_Local: a1b2c3 Merge the fix, d4e5f6 Land the doc._")], calls
+
+
+def test_a_fake_connector_receives_a_guest_channel_named_only_by_the_committed_file():
+    """A project that commits its own guest workspace and channel, with no local row, still gets the announcement."""
+    committed_ws = [{"id": "T0CLIENT01", "label": "client-a", "class": "guest", "language": "en-US",
+                     "persona": "iara", "channels": [
+                         {"id": GENERAL, "name": "general", "mode": "listen+speak", "speak": "draft",
+                          "announce": ["stg_release"]}]}]
+    committed, local = files(committed__workspaces=committed_ws, local__workspaces=[])
+    connector = FakeConnector()
+    for draft in A.announcements(committed, local, STG):
+        deliver(draft, connector)
+    calls = [(tool, args["channel"], args["text"]) for tool, args in connector.calls]
+    assert calls == [(W.DRAFT_WORD, GENERAL,
+                      "*Iara's Msg*\n_Subiu para STG: a1b2c3 Merge the fix, d4e5f6 Land the doc._")], calls
+
+
+def test_a_fake_connector_receives_a_committed_channel_with_its_local_persona_override():
+    """A local channel row that names another persona wins, and the mark names that persona."""
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "name": "general", "mode": "listen+speak", "speak": "draft",
+                                   "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "channels": [{"id": GENERAL, "persona": "lia"}]}]
+    committed, local = files(committed__workspaces=committed_ws, local__workspaces=local_ws,
+                             committed__personas=[{"id": "iara", "name": "Iara", "voice": "Sulafat",
+                                                   "tone": "Warm and patient."},
+                                                  {"id": "lia", "name": "Lia", "voice": "Kore",
+                                                   "tone": "Direct."}])
+    connector = FakeConnector()
+    for draft in A.announcements(committed, local, STG):
+        deliver(draft, connector)
+    calls = [(tool, args["channel"], args["text"]) for tool, args in connector.calls]
+    assert calls == [(W.DRAFT_WORD, GENERAL,
+                      "*Lia's Msg*\n_Subiu para STG: a1b2c3 Merge the fix, d4e5f6 Land the doc._")], calls
+
+
+# --- 7. a local row merges into the committed one -------------------------------------------------------------------
+
+def test_a_local_channel_override_keeps_the_committed_templates_it_does_not_name():
+    """A local channel row that adds one event template keeps the committed templates for the other events."""
+    templates = {"stg_release": "Committed STG: {items}.", "prod_release": "Committed PROD: {items}."}
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft",
+                                   "announce": ["stg_release", "prod_release"], "templates": templates}]}]
+    local_ws = [{"id": "T0CLIENT01", "channels": [{"id": GENERAL, "templates": {"stg_release": "Local STG: {items}."}}]}]
+    got_stg = drafts(STG, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    got_prod = drafts(PROD, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    assert [body(d) for d in got_stg] == ["Local STG: a1b2c3 Merge the fix, d4e5f6 Land the doc."]
+    assert [body(d) for d in got_prod] == ["Committed PROD: 99aa Ship the release."], "the kept committed template"
+
+
+def test_a_local_workspace_row_never_demotes_a_committed_guest_workspace():
+    """The committed file fixes the workspace class; a local row that names `owned` cannot silence a guest workspace."""
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft",
+                                   "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "class": "owned", "channels": []}]
+    got = drafts(STG, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    assert [d.channel for d in got] == [GENERAL], "a local row keeps the committed class"
