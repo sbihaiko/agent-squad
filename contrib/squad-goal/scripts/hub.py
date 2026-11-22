@@ -1887,8 +1887,27 @@ def _slack_untracked(path):
     r = subprocess.run(["git", "-C", str(path.parent), "check-ignore", "-q", str(path)], capture_output=True, timeout=20)
     return r.returncode == 1
 
+def slack_policy():
+    """The one home of the Slack file rules (ADR-0177): the hub holds no copy of a rule."""
+    (SP,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("slackpolicy",))
+    return SP
+
 def slack_clean(body, cur):
     """The typed settings, checked: (settings, None), or (None, the message for the first value that breaks its rule)."""
+    try:
+        policy = slack_policy()
+        hit = policy.first_token(body)
+    except Exception as e:
+        return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
+    if hit: return None, f"{hit[0]}: a value in token format ({hit[1]}) is refused; this file names a Keychain entry, never a token"
+    # The hub edits the project's Slack use, so the file rules hold here too: a role that lists prod is refused and the
+    # message names its key, exactly as `squad slack check` refuses the committed file (ADR-0177 decision 8). A validator
+    # that raises answers a named error, so a settings save never degrades into a traceback.
+    try:
+        defects = policy.validate(committed=body)
+    except Exception as e:
+        return None, f"the Slack rules module did not resolve: {type(e).__name__}: {e}"
+    if defects: return None, str(defects[0])
     prefix = str(body.get("prefix", cur["prefix"])).strip()
     if not prefix or "\n" in prefix or len(prefix) > 40: return None, "prefix is one line of 1 to 40 characters"
     lang = body.get("lang", cur["lang"])

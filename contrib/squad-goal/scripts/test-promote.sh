@@ -16,6 +16,7 @@ G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 # SQUAD_CAPS_DIR is a throwaway: the promotion takes the machine-wide gate budget, and a box whose slots other gates hold
 # would refuse this suite's promotions with no defect to find (#1171). test-promote-pass.sh takes the same budget for itself.
 export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0 SQUAD_CAPS_DIR=$T/caps; mkdir -p "$SG_STATE"
+export VOICE_STATE=$T/voice   # #2702: the release events land in a throwaway state directory, never the owner's
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
 for b in dev stg main; do $W push -q origin "main:refs/heads/$b"; done
@@ -137,6 +138,23 @@ out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 adv dev real-green; printf '%s' "$GREEN_P" > "$T/checks.json"; rm -f "$T/pr"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "real CI: a green tip is promoted" || ko "real CI green: rc $rc out '$out'"
+
+# (#2702) The promotion pass emits `stg_release` when the `dev` to `stg` pull request merges: a subscribed channel can then
+# announce the release. The record holds the event id and the list of items, and it lands in the voiced state directory.
+rm -rf "$VOICE_STATE"; adv dev announce; ta=$(tip dev); rm -f "$T/pr"; printf '%s' "$GREEN_P" > "$T/checks.json"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$ta" ] || ko "announce: rc $rc, stg $(tip stg), out '$out'"
+ann=$(python3 - "$VOICE_STATE/release-events.jsonl" <<'PY'
+import json, sys
+try:
+    rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+except OSError:
+    rows = []
+print(len(rows), "|".join(f"{r.get('id')}|{r.get('key')}|{len(r.get('items') or [])}|{' '.join(r.get('items') or [])}" for r in rows))
+PY
+)
+case "$ann" in "1 stg_release|stg_release:$ta|1|"*announce*) ok "the promotion pass emits stg_release when the dev -> stg pull request merges (#2702)";;
+  *) ko "no stg_release record: '$ann'";; esac
 
 # #1723: the dev -> stg promotion reads the fast tier alone. The complete tier belongs to the stg -> main pull request, so a tip
 # whose fast tier is green and whose complete tier never ran, or was skipped by the event, is promoted.

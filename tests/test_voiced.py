@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -1301,3 +1302,712 @@ def test_a_second_start_on_one_state_stands_aside_before_the_keychain(tmp_path, 
     assert code != 0
     assert reads == [], "a second daemon read the Keychain before it proved it was the only one"
     assert "another daemon holds" in err.getvalue()
+
+
+# --- the project Slack file at the dev tip (#2685, SPEC #2682 story 43)
+
+SLACK_PATH = Path("docs") / "squad" / "slack.yaml"
+
+# One valid file in the format of #2683, written as text so the expectation never comes from the loader itself.
+SLACK_VALID = """\
+version: 1
+project:
+  language: en-US
+  persona: hal
+apps:
+  - id: hal9k
+    keychain: {bot: agent-squad-slack-bot, app: agent-squad-slack-app}
+personas:
+  - id: hal
+    name: HAL9K
+    voice: Kore
+    tone: "Calm and direct. Starts with the result."
+roles:
+  - id: manager
+    actions: [status, logs]
+workspaces:
+  - id: T0TEAM0001
+    label: team
+    class: owned
+    app: hal9k
+    channels:
+      - id: C0PROJ0001
+        name: proj-acme-app
+        mode: listen+speak
+        language: pt-BR
+        roles: [manager]
+"""
+
+# The same file with one broken key: the voice is not a Gemini voice.
+SLACK_BAD_VOICE = SLACK_VALID.replace("voice: Kore", "voice: NotAVoice")
+
+
+def git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def git_project(tmp_path, text, name="acme-app"):
+    """A project checkout whose `origin/dev` holds one commit with the given Slack file; returns it and the commit sha."""
+    repo = tmp_path / name
+    (repo / SLACK_PATH.parent).mkdir(parents=True)
+    git(repo, "init", "-q", "-b", "dev")
+    git(repo, "config", "user.email", "t@t")
+    git(repo, "config", "user.name", "t")
+    git(repo, "config", "maintenance.auto", "false")
+    commit(repo, text)
+    return repo
+
+
+def commit(repo, text):
+    """Write the Slack file, commit it on dev, and move the checkout's `origin/dev` tip to the new commit."""
+    (repo / SLACK_PATH).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "slack")
+    sha = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-ref", "refs/remotes/origin/dev", sha)
+    return sha
+
+
+def revision_daemon(tmp_path, client=None, log=None):
+    """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives."""
+    mod = voiced()
+    lines = log if log is not None else []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lines.append if isinstance(lines, list) else lines, client=client)
+    return mod, daemon, lines
+
+
+def project(repo, local=None):
+    return {"repo": "acme/app", "checkout": str(repo), "local": local}
+
+
+def test_voiced_reads_a_projects_slack_file_from_its_dev_tip(tmp_path):
+    """Rule (1) and (7): the committed file comes from git's own object store at the dev tip, and its revision is logged."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, lines = revision_daemon(tmp_path)
+
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == sha
+    assert active["revision"]["project"]["language"] == "en-US"
+    assert any("acme/app" in line and sha[:12] in line for line in lines), lines
+
+
+def test_an_uncommitted_edit_never_changes_the_active_revision(tmp_path):
+    """Story 43: an edit in progress in the working tree is not the dev tip, so it never reaches a live channel."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    sha = git(repo, "rev-parse", "refs/remotes/origin/dev")
+    _, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    (repo / SLACK_PATH).write_text(SLACK_BAD_VOICE)     # uncommitted: the tip does not move
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == sha
+
+
+def test_a_valid_revision_replaces_the_active_one_when_the_dev_tip_moves(tmp_path):
+    """Rule (3) and rule (6): a moved tip is read again, and a valid revision becomes the active one."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    _, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+    daemon.refresh_slack(projects=[project(repo)])
+
+    active = daemon.state.active_revision("acme/app")
+    assert moved != first
+    assert active["sha"] == moved
+    assert active["revision"]["project"]["language"] == "es-ES"
+
+
+def test_a_tip_that_did_not_move_is_not_read_again(tmp_path):
+    """Rule (6): a second refresh over an unchanged tip adds no revision read and no line."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    _, daemon, lines = revision_daemon(tmp_path)
+
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len([line for line in lines if "slack.yaml" in line]) == 1, lines
+
+
+def test_an_invalid_revision_keeps_the_previous_one_and_warns_the_owner_by_key(tmp_path):
+    """Rules (4) and (5): the key that fails is named in one DM to the owner, and the old revision stays active."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    commit(repo, SLACK_BAD_VOICE)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == first
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == OWNER
+    assert "personas[0].voice" in posts[0]["text"]
+    assert "acme/app" in posts[0]["text"]
+
+
+def test_a_revision_is_validated_together_with_the_local_file(tmp_path):
+    """Rule (2): a defect in the local file refuses the revision too, and the notice names that file and its key."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme-app.slack.local.yaml"
+    local.write_text("version: 1\nworkspaces:\n  - id: T0CLIENT01\n    label: xoxb-token-here\n")
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    assert daemon.state.active_revision("acme/app") is None
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme-app.slack.local.yaml" in posts[0]["text"]
+    assert "workspaces[0].label" in posts[0]["text"]
+
+
+def test_an_unreadable_dev_tip_never_kills_the_daemon_and_warns_the_owner(tmp_path):
+    """Rule (4): an incompatible or unreadable revision keeps the previous one active and never stops the daemon."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    git(repo, "update-ref", "-d", "refs/remotes/origin/dev")     # the tip is now unreadable
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert daemon.state.active_revision("acme/app")["sha"] == first
+    assert len(client.posts()) == 1
+    assert "acme/app" in client.posts()[0]["text"]
+
+
+def test_a_failed_active_revision_write_leaves_the_previous_file_whole(tmp_path, monkeypatch):
+    """Rule (8), ADR-0030: a write that dies at the replace leaves the previous revision, and no residue after a retry.
+
+    The target bytes are read while the write is refused, so a writer that opens the target and truncates it fails
+    this case even when it never reaches the replace. The retry also proves the temp file is cleared and the folder is
+    synced after the replace.
+    """
+    repo = git_project(tmp_path, SLACK_VALID)
+    mod, daemon, _ = revision_daemon(tmp_path)
+    daemon.refresh_slack(projects=[project(repo)])
+    first = daemon.state.active_revision("acme/app")["sha"]
+
+    path = Path(daemon.state.slack_path("acme/app"))
+    before = path.read_bytes()
+
+    moved = commit(repo, SLACK_VALID.replace("en-US", "es-ES"))
+
+    def refuse_replace(src, dst):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(mod.os, "replace", refuse_replace)
+    daemon.refresh_slack(projects=[project(repo)])
+    monkeypatch.undo()
+
+    assert path.read_bytes() == before, "the target changed while the write was refused"
+    active = daemon.state.active_revision("acme/app")
+    assert active["sha"] == first != moved
+    assert active["revision"]["project"]["language"] == "en-US"
+
+    synced = []
+    real_sync = mod.State._sync_dir
+    monkeypatch.setattr(mod.State, "_sync_dir", staticmethod(lambda directory: (synced.append(directory), real_sync(directory))))
+    daemon.refresh_slack(projects=[project(repo)])
+    monkeypatch.undo()
+
+    assert daemon.state.active_revision("acme/app")["sha"] == moved
+    assert not Path(str(path) + ".tmp").exists(), "the successful retry left the temp file behind"
+    assert synced == [str(path.parent)], "the replace never synced its folder"
+
+
+def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_tip(tmp_path, monkeypatch):
+    """Rule (1) and rule (2): the local file is the one named after the hub's profile, not after `SG_PROJECT`."""
+    mod = voiced()
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    # The profile slug is `alpha`; `SG_PROJECT` is `acme-app`, so only the slug names the real local file.
+    (profiles / "alpha.slack.local.yaml").write_text("version: 1\n")
+    script = tmp_path / "address.sh"
+    script.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        '  --list) printf "alpha\\tAcme/My.App\\n" ;;\n'
+        f'  alpha) printf "SG_REPO=Acme/My.App\\nSG_OWNER=Acme\\nSG_PROJECT=acme-app\\n'
+        f'SG_CHECKOUT={tmp_path}\\n" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("SG_PROFILES_DIR", str(profiles))
+
+    got = mod.hub_projects(script=str(script))
+
+    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path), "local": str(profiles / "alpha.slack.local.yaml")}]
+    assert mod.hub_repos(script=str(script)) == ["Acme/My.App"]
+
+
+def test_a_repeatedly_refused_revision_warns_the_owner_only_once(tmp_path):
+    """Rule (5): one notice per distinct rejected revision; an unchanged refusal is a log line, never a storm."""
+    repo = git_project(tmp_path, SLACK_BAD_VOICE)
+    client = FakeClient()
+    _, daemon, lines = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+    assert len([line for line in lines if line.startswith("voiced: acme/app: slack.yaml refused")]) == 3, lines
+
+    commit(repo, SLACK_BAD_VOICE.replace("en-US", "pt-BR"))     # a distinct rejected revision
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 2, client.posts()
+
+
+def test_a_tip_that_stays_unreadable_warns_the_owner_once(tmp_path):
+    """Rule (5): a checkout that loses its dev tip sends one notice, not one notice per poll."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    git(repo, "update-ref", "-d", "refs/remotes/origin/dev")
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+
+
+def test_a_valid_revision_clears_the_refusal_so_a_returning_one_warns_again(tmp_path):
+    """Rules (3) and (5): a valid revision resets the notice record, so the same rejected revision warns again."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    good = git(repo, "rev-parse", "refs/remotes/origin/dev")
+
+    bad = commit(repo, SLACK_BAD_VOICE)
+    daemon.refresh_slack(projects=[project(repo)])
+    assert len(client.posts()) == 1, client.posts()
+
+    git(repo, "update-ref", "refs/remotes/origin/dev", good)
+    daemon.refresh_slack(projects=[project(repo)])
+    assert daemon.state.active_revision("acme/app")["sha"] == good
+
+    git(repo, "update-ref", "refs/remotes/origin/dev", bad)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 2, client.posts()
+
+
+def test_two_repositories_never_share_one_active_revision_record(tmp_path):
+    """Rule (3): a record is keyed by the full repository name, so two names never collide on one file."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    state.save_active_revision("a/b", {"repo": "a/b", "sha": "111111111111", "revision": {"project": {"language": "en-US"}}})
+    state.save_active_revision("a-b", {"repo": "a-b", "sha": "222222222222", "revision": {"project": {"language": "es-ES"}}})
+
+    assert state.active_revision("a/b")["sha"] == "111111111111"
+    assert state.active_revision("a-b")["sha"] == "222222222222"
+
+
+def test_a_local_file_that_cannot_be_read_is_named_as_the_file_to_fix(tmp_path):
+    """Rule (2) and rule (5): when only the local file fails, the notice says that file must be fixed, not the dev tip."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme-app.slack.local.yaml"
+    local.mkdir()       # a folder where a file belongs: the reader cannot open it
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme-app.slack.local.yaml" in posts[0]["text"]
+    assert "must be fixed" in posts[0]["text"]
+    assert "at its dev tip" not in posts[0]["text"]
+
+
+def test_a_refusal_that_cannot_be_recorded_still_warns_the_owner_only_once(tmp_path, monkeypatch):
+    """Rule (5): a state file that cannot be written must not turn one refusal into a DM every poll.
+
+    The daemon holds the refused signature in memory, so the persisted record is only what survives a restart.
+    """
+    repo = git_project(tmp_path, SLACK_BAD_VOICE)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    def refuse_save(repo_name, record):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(daemon.state, "save_refusal", refuse_save)
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+
+
+def test_a_local_file_name_with_a_space_is_named_as_the_local_side(tmp_path):
+    """Rule (2) and rule (5): the failing side is known structurally, never read back from a rendered line."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    local = tmp_path / "acme app.slack.local.yaml"
+    local.write_text("version: 1\nworkspaces:\n  - id: T0CLIENT01\n    label: xoxb-token-here\n")
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo, local=str(local))])
+
+    posts = client.posts()
+    assert len(posts) == 1, posts
+    assert "acme app.slack.local.yaml" in posts[0]["text"]
+    assert "must be fixed" in posts[0]["text"]
+    assert "at its dev tip" not in posts[0]["text"]
+
+
+def test_a_hub_slug_without_its_own_local_file_falls_back_to_the_project_file(tmp_path, monkeypatch):
+    """Rule (1): the slug names the local file only when that file exists; a generic file never hides the project one."""
+    mod = voiced()
+    profiles = tmp_path / "profiles"
+    profiles.mkdir()
+    (profiles / "acme-app.slack.local.yaml").write_text("version: 1\n")
+    (profiles / "slack.local.yaml").write_text("version: 1\n")
+    script = tmp_path / "address.sh"
+    script.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        '  --list) printf "alpha\\tAcme/My.App\\n" ;;\n'
+        f'  alpha) printf "SG_REPO=Acme/My.App\\nSG_PROJECT=acme-app\\nSG_CHECKOUT={tmp_path}\\n" ;;\n'
+        'esac\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("SG_PROFILES_DIR", str(profiles))
+
+    got = mod.hub_projects(script=str(script))
+
+    assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path),
+                    "local": str(profiles / "acme-app.slack.local.yaml")}]
+
+
+def test_an_active_revision_written_under_the_old_name_is_adopted(tmp_path):
+    """Rule (3): a record an older build wrote under the sanitized name survives the digest rename."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    legacy = Path(state.slack_dir) / "a-b.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"repo": "a/b", "sha": "111111111111", "revision": {"project": {"language": "en-US"}}}))
+
+    active = state.active_revision("a/b")
+
+    assert active is not None and active["sha"] == "111111111111"
+    assert Path(state.slack_path("a/b")).exists(), "the legacy record was not adopted under the digest name"
+
+
+def test_a_legacy_record_of_another_repository_is_never_adopted(tmp_path):
+    """Rule (3): a colliding old name belongs to one repository only, so a record that names another is left alone."""
+    mod = voiced()
+    state = mod.State(str(tmp_path / "state"))
+    legacy = Path(state.slack_dir) / "a-b.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"repo": "a-b", "sha": "222222222222", "revision": {}}))
+
+    assert state.active_revision("a/b") is None
+    assert Path(state.slack_path("a/b")).exists() is False
+
+
+# --- one Socket Mode connection per app across projects (#2686, SPEC #2682 stories 6 and 7)
+
+# Two project revisions that name one app, each with its own channel. Written as data so the expectation never comes
+# from the loader.
+SLACK_APP_A = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0PROJ0001", "name": "proj-acme-app", "mode": "listen+speak"}],
+    }],
+}
+
+SLACK_APP_B = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0OTHER001", "name": "proj-acme-other", "mode": "listen+speak"}],
+    }],
+}
+
+
+def test_two_projects_that_name_one_app_open_one_socket(tmp_path):
+    """Criterion 1 and story 7: two projects on one app share one socket, so Slack sees one connection."""
+    mod = voiced()
+    apps = mod.app_keychains({"acme/app": SLACK_APP_A, "acme/other": SLACK_APP_B})
+    assert apps == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}
+
+    stop = asyncio.Event()
+    opened = []
+
+    def connect(url, **kw):
+        socket = FakeWebSocket([], stop)
+        opened.append(socket)
+        return socket
+
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"", log=lambda line: None)
+    asyncio.run(mod.serve(daemon, {app_id: "xapp-" + app_id for app_id in apps},
+                          connect=connect, open_connection=lambda: {"url": "wss://fake"}, stop=stop))
+
+    assert len(opened) == 1, "two projects that name one app opened two sockets"
+
+
+def test_the_app_id_stays_separate_from_the_keychain_entry_names():
+    """Criterion 2: the app id keys the entry; the Keychain entry names are its values, never the id."""
+    mod = voiced()
+    apps = mod.app_keychains({"acme/app": SLACK_APP_A})
+    assert apps == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}
+    assert "hal9k" not in (apps["hal9k"]["bot"], apps["hal9k"]["app"])
+
+
+def test_voiced_reads_both_token_entries_by_name():
+    """Criterion 3: the bot and app tokens come from the Keychain entry names, never from a value in the file."""
+    mod = voiced()
+    reads = []
+
+    def read(name):
+        reads.append(name)
+        return "value-of-" + name
+
+    got = mod.app_tokens({"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}, read=read)
+
+    assert reads == ["agent-squad-slack-bot", "agent-squad-slack-app"]
+    assert got == {"hal9k": {"bot": "value-of-agent-squad-slack-bot", "app": "value-of-agent-squad-slack-app"}}
+    assert "xoxb-" not in json.dumps(SLACK_APP_A) and "xapp-" not in json.dumps(SLACK_APP_A)
+
+
+def test_two_projects_that_claim_one_channel_id_are_refused(tmp_path):
+    """Criteria 4 and 5: the refusal names both projects and the channel id, in a line and in one DM."""
+    mod = voiced()
+    client = FakeClient()
+    lines = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lines.append, client=client)
+    shared = {"version": 1, "workspaces": [{
+        "id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0SHARED01", "name": "shared"}],
+    }]}
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": shared})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": shared})
+
+    got = daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+
+    assert got == ["voiced: acme/app and acme/other claim the channel C0SHARED01; refused"]
+    assert any("acme/app" in line and "acme/other" in line and "C0SHARED01" in line for line in lines), lines
+    posts = client.posts()
+    assert len(posts) == 1, client.calls
+    assert "C0SHARED01" in posts[0]["text"]
+    assert "acme/app" in posts[0]["text"] and "acme/other" in posts[0]["text"]
+
+
+def test_two_projects_on_one_app_with_distinct_channels_are_not_refused(tmp_path):
+    """Criterion 6: the fake SlackClient sees no refusal when each project claims its own channel."""
+    mod = voiced()
+    client = FakeClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_APP_A})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": SLACK_APP_B})
+
+    assert daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}]) == []
+    assert client.posts() == []
+
+
+# --- the refusal holds the shared channel, and each app keeps its own token (#2686 review)
+
+# A second project revision on a different app id, so two sockets and two bot tokens are observable as data.
+SLACK_SECOND_APP = {
+    "version": 1,
+    "apps": [{"id": "astra", "keychain": {"bot": "astra-slack-bot", "app": "astra-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0002", "label": "other", "class": "owned", "app": "astra",
+        "channels": [{"id": "C0OTHER001", "name": "proj-acme-other", "mode": "listen+speak"}],
+    }],
+}
+
+# One revision two projects both claim.
+SLACK_SHARED = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0SHARED01", "name": "shared"}],
+    }],
+}
+
+
+def shared_revisions(daemon):
+    """Two projects whose active revisions claim one channel id."""
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_SHARED})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": SLACK_SHARED})
+
+
+def test_a_refused_channel_holds_its_outbox_line_and_never_posts_it(tmp_path):
+    """Criterion 4: the refusal drops the shared channel from routing, so no answer reaches it."""
+    mod = voiced()
+    client = FakeClient()
+    log = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client)
+    shared_revisions(daemon)
+    assert daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}]) == [
+        "voiced: acme/app and acme/other claim the channel C0SHARED01; refused"]
+
+    append_outbox(daemon.state.outbox_path, {"text": "this answer must stay held", "channel": "C0SHARED01"})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [p for p in client.posts() if p.get("channel") == "C0SHARED01"] == [], \
+        "an answer was posted to a channel two projects claim"
+    assert any("held" in line and "C0SHARED01" in line for line in log), log
+
+
+def test_an_event_on_a_refused_channel_never_reaches_a_project_inbox(tmp_path):
+    """Criterion 4: an inbound message on the shared channel is data, never one project's inbox line."""
+    mod = voiced()
+    client = FakeClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    shared_revisions(daemon)
+    daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+    daemon.state.save_channels({"acme/app": {"name": "shared", "id": "C0SHARED01"}})
+
+    outcome = daemon.handle(message_event(text="who owns this?", channel="C0SHARED01"))
+
+    assert outcome == "other"
+    assert lines(daemon.state.inbox_for("C0SHARED01")) == []
+    assert [r for r in lines(daemon.state.other_path) if r.get("channel") == "C0SHARED01"], "the event was not recorded"
+
+
+def test_a_channel_conflict_is_refused_before_any_revision_is_active(tmp_path):
+    """Criterion 4 at startup: the dev tips alone prove the conflict, with no active revision saved yet."""
+    mod = voiced()
+    client = FakeClient()
+    first = git_project(tmp_path, SLACK_VALID, name="acme-app")
+    second = git_project(tmp_path, SLACK_VALID, name="acme-other")
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+
+    got = daemon.refuse_channel_claims([{"repo": "acme/app", "checkout": str(first)},
+                                        {"repo": "acme/other", "checkout": str(second)}])
+
+    assert got == ["voiced: acme/app and acme/other claim the channel C0PROJ0001; refused"]
+    assert daemon.state.active_revision("acme/app") is None
+    assert len(client.posts()) == 1 and "C0PROJ0001" in client.posts()[0]["text"]
+
+
+def test_two_apps_open_two_sockets_each_with_its_own_app_token(tmp_path, monkeypatch):
+    """Criterion 1 and 2: one socket per distinct app, opened with that app's own token."""
+    mod = voiced()
+    specs = mod.app_keychains({"acme/app": SLACK_APP_A, "acme/other": SLACK_SECOND_APP})
+    assert specs == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"},
+                     "astra": {"bot": "astra-slack-bot", "app": "astra-slack-app"}}
+    opened = []
+
+    def api(token, method, params=None, post=False):
+        opened.append((token, method))
+        return {"url": "wss://fake"}
+
+    monkeypatch.setattr(mod.channels, "api", api)
+    stop = asyncio.Event()
+    sockets = []
+
+    def connect(url, **kw):
+        socket = FakeWebSocket([], stop)
+        sockets.append(socket)
+        return socket
+
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"", log=lambda line: None)
+    app_tokens = {"hal9k": "xapp-hal", "astra": "xapp-astra"}
+    asyncio.run(mod.serve(daemon, app_tokens, connect=connect, stop=stop))
+
+    assert len(sockets) == 2, "two distinct apps did not open two sockets"
+    assert sorted(token for token, method in opened if method == "apps.connections.open") == \
+        ["xapp-astra", "xapp-hal"], opened
+
+
+def test_each_app_serves_its_own_channels_with_its_own_bot_token(tmp_path):
+    """Criterion 2 and 3: a channel is answered, downloaded and uploaded with its own app's bot token."""
+    mod = voiced()
+    hal, astra = FakeClient(), FakeClient()
+    uploads = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"default",
+                        log=lambda line: None, clients={"hal9k": hal, "astra": astra},
+                        bot_tokens={"hal9k": "xoxb-hal", "astra": "xoxb-astra"},
+                        downloaders={"hal9k": lambda url: b"hal", "astra": lambda url: b"astra"},
+                        uploaders={"hal9k": lambda path, cid, ts, title: uploads.append(("hal", cid)) or ("F1", None),
+                                   "astra": lambda path, cid, ts, title: uploads.append(("astra", cid)) or ("F2", None)})
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_APP_A})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12,
+                                                     "revision": SLACK_SECOND_APP})
+    daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+
+    assert daemon.bot_for("C0PROJ0001") == "xoxb-hal"
+    assert daemon.bot_for("C0OTHER001") == "xoxb-astra"
+    assert daemon.download_clip("C0OTHER001", "https://files/x") == b"astra"
+
+    daemon.post_text("C0OTHER001", None, "an answer for the second app")
+    assert [p["text"] for p in astra.posts()] == ["an answer for the second app"]
+    assert hal.posts() == []
+
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"RIFF")
+    assert daemon.post_clip(str(clip), "C0OTHER001", None, "the answer")
+    assert uploads == [("astra", "C0OTHER001")]
+
+
+def test_a_conflict_notice_is_retried_and_a_returning_conflict_is_announced_again(tmp_path):
+    """Criterion 5: a refused DM is retried, and a conflict resolved then reintroduced warns again."""
+    mod = voiced()
+
+    class FlakyClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.refuse_next = 1
+
+        def api(self, method, params=None, post=False):
+            if method == "chat.postMessage" and self.refuse_next:
+                self.refuse_next -= 1
+                self.calls.append((method, dict(params or {}), post))
+                return {"ok": False, "error": "ratelimited"}
+            return super().api(method, params, post)
+
+    client = FlakyClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    shared_revisions(daemon)
+    projects = [{"repo": "acme/app"}, {"repo": "acme/other"}]
+
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 1 and "C0SHARED01" in client.posts()[0]["text"]
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 2, "a refused conflict DM was not retried on the next poll"
+
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "3" * 12,
+                                                     "revision": SLACK_SECOND_APP})
+    assert daemon.refuse_channel_claims(projects) == []
+
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "4" * 12,
+                                                     "revision": SLACK_SHARED})
+    assert len(daemon.refuse_channel_claims(projects)) == 1
+    assert len(client.posts()) == 3, "a conflict that returned after being resolved was not announced again"

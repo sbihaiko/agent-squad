@@ -12,6 +12,7 @@ unset SERIAL_TRY
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git; ST=$T/st
 export SG_STATE=$ST SQUAD_CAPS_DIR=$T/caps SG_PROMOTE_REMOTE=$R SG_REPO=x/emu SG_OWNER=x SG_PROJECT=1 GIT_TERMINAL_PROMPT=0
+export VOICE_STATE=$T/voice   # #2702: the release events land in a throwaway state directory, never the owner's
 export SG_PROMOTE_MAIN_QUIET_S=3600 SG_PROMOTE_MAIN_MAX_S=14400 SG_PROMOTE_MAIN_FLIGHT_S=3600
 mkdir -p "$ST" "$T/bin"
 git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
@@ -154,6 +155,12 @@ rm -f "$T/jobs-quiet"
 # A green move after a red clears the bug record, the hold and the red sha.
 adv stg healed 7200; r5=$(tip stg); request "$r5" 600; checks "$r5" success success; pass
 [ "$(tip main)" = "$r5" ] && [ ! -e "$ST/promote-main-bug" ] && [ ! -e "$ST/promote-main-hold" ] && [ ! -e "$ST/promote-main-red" ] && ok "11 a move clears the bug record, the hold and the red sha" || ko "11 after the move: main $(tip main), $(/bin/ls "$ST" | tr '\n' ' ')"
+# (#2702) The promotion pass emits `prod_release` when main moves: the record names the event id and the list of items.
+/usr/bin/grep -qF "\"key\": \"prod_release:$r5\"" "$VOICE_STATE/release-events.jsonl" 2>/dev/null \
+  && ok "the promotion pass emits prod_release when main moves (#2702)" || ko "no prod_release record for $r5: '$(cat "$VOICE_STATE/release-events.jsonl" 2>/dev/null)'"
+/usr/bin/grep -qF '"id": "prod_release"' "$VOICE_STATE/release-events.jsonl" 2>/dev/null \
+  && /usr/bin/grep -qF '"items": ["' "$VOICE_STATE/release-events.jsonl" 2>/dev/null \
+  && ok "the prod_release record holds the event id and the list of items" || ko "prod_release record shape: '$(/usr/bin/grep prod_release "$VOICE_STATE/release-events.jsonl" 2>/dev/null)'"
 
 # 12) Unproven: every conclusion of the one unproven set clears the request, files nothing, writes one alert per tip and
 # records the hold. The set is the seam the workflow's guard reads too (promote-pass.sh --ci-unproven-conclusions).

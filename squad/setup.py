@@ -5,6 +5,7 @@ and follow the project's own numbers; nothing is renumbered.
 """
 import os
 import re
+import subprocess
 from pathlib import Path
 
 ADR_DIR = Path("docs/adr")
@@ -200,6 +201,35 @@ def _entry_files(root, rules):
     return _claude_plan(root, rules) + _agents_plan(root)
 
 
+GUARD_INSTALL = Path("contrib") / "squad-goal" / "scripts" / "install-hooks.sh"
+
+
+def guard_installer():
+    """The tracked script that arms the commit guard (ADR-0177), found beside this package, or None."""
+    path = Path(__file__).resolve().parent.parent / GUARD_INSTALL
+    return path if path.is_file() else None
+
+
+def _guard_plan(root):
+    """Arm the commit guard in a repository, so a `slack.local.yaml` never enters a commit. A target outside a repository
+    holds no hook to arm, and a checkout that carries no installer reports that instead of guessing a path."""
+    if not (root / ".git").exists():
+        return [("report", "commit guard", "not a repository; nothing to arm")]
+    if guard_installer() is None:
+        return [("report", "commit guard", f"no {GUARD_INSTALL}; run `squad slack check` by hand")]
+    return [("arm", "commit guard", str(guard_installer()))]
+
+
+def arm_guard(root):
+    """Run the installer in the repository at root. Return its combined output; the guard's own rules decide whether the
+    hook is written, so a foreign hook is reported and never overwritten."""
+    installer = guard_installer()
+    if installer is None:
+        return f"commit guard: no {GUARD_INSTALL}"
+    proc = subprocess.run(["bash", str(installer), str(root)], capture_output=True, text=True)
+    return (proc.stdout + proc.stderr).strip() or f"commit guard: installer exited {proc.returncode}"
+
+
 def plan(target, **opts):
     """Return a list of (action, relative path, text): action is "create", "keep", "append" (text is added to the file),
     "link" (AGENTS.md as a symlink to CLAUDE.md; text is the target) or "report" (text says why nothing changes).
@@ -236,6 +266,7 @@ def plan(target, **opts):
     else:
         out.append(("create", str(ADR_DIR / INDEX), _index_text(root.name, adr, new)))
     out += _entry_files(root, rules)
+    out += _guard_plan(root)
     return out + _memory_plan(root, opts.get("memory_dir"))
 
 
@@ -299,6 +330,10 @@ def apply(target, **opts):
             title = re.search(r"^name: (.*)$", text, re.M).group(1)
             with open(path.parent / MEMORY_INDEX, "a") as f:
                 f.write(f"- [{title}]({path.name}) - moved from {CLAUDE}\n")
+            written.append(rel)
+            continue
+        if action == "arm":
+            print(f"squad: {arm_guard(root)}")
             written.append(rel)
             continue
         if action != "create" or path.exists():

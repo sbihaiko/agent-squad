@@ -111,9 +111,59 @@ def test_the_file_holds_only_the_settings_and_no_token(ctx):
     assert set(json.loads(saved_file(ctx).read_text())) <= set(ctx["hub"].SLACK_DEFAULT)
 
 
+def test_a_value_in_token_format_is_refused_and_the_key_is_named(ctx):
+    got = save(ctx, channels=[chan(name="#xoxb-1234567890")], confirm=True)
+    assert "channels[0].name" in got["err"] and "xoxb-" in got["err"]
+    assert not saved_file(ctx).exists()
+
+
 def test_a_person_role_is_manager_or_colleague(ctx):
     got = save(ctx, people=[{"name": "Example Person", "role": "Admin"}], confirm=True)
     assert got["err"] == "role is Manager or Colleague"
+    assert not saved_file(ctx).exists()
+
+
+def spy_policy(ctx, monkeypatch, validate):
+    """A stand-in for the Slack rules module that records the document the hub hands `validate`."""
+    real = ctx["hub"].slack_policy()
+    seen = {}
+
+    class Spy:
+        first_token = staticmethod(real.first_token)
+
+        @staticmethod
+        def validate(committed=None, **kw):
+            seen["committed"] = committed
+            return validate(committed, **kw)
+
+    monkeypatch.setattr(ctx["hub"], "slack_policy", lambda: Spy)
+    return seen
+
+
+def test_the_hub_editor_accepts_a_role_deploy_without_prod(ctx, monkeypatch):
+    # The spy proves the posted roles reach the validator unfiltered: a hub that dropped the key would fail here.
+    real = ctx["hub"].slack_policy().validate
+    seen = spy_policy(ctx, monkeypatch, real)
+    roles = [{"id": "manager", "deploy": ["stg", "dev"]}]
+    got = save(ctx, roles=roles, confirm=True)
+    assert "err" not in got, got
+    assert seen["committed"]["roles"] == roles, "the hub dropped the posted roles before the validator saw them"
+
+
+def test_the_hub_editor_refuses_prod_in_a_role_deploy_and_names_deploy(ctx):
+    # Every other setting is its valid default, so the only error source is roles[0].deploy.
+    got = save(ctx, roles=[{"id": "manager", "deploy": ["prod"]}], confirm=True)
+    assert "roles[0].deploy" in got.get("err", "")
+    assert not saved_file(ctx).exists()
+
+
+def test_a_validator_that_raises_answers_a_clean_error(ctx, monkeypatch):
+    def boom(committed=None, **kw):
+        raise ValueError("the roles shape is not what the validator expects")
+
+    spy_policy(ctx, monkeypatch, boom)
+    got = save(ctx, prefix="[bot]", confirm=True)
+    assert "err" in got and "roles shape" in got["err"], got
     assert not saved_file(ctx).exists()
 
 

@@ -267,3 +267,28 @@ def test_a_ledger_line_or_a_missing_bullet_in_a_copy_of_this_repo_fails(tmp_path
     assert "ticket status" in capsys.readouterr().out
     (d / "CLAUDE.md").write_text(text.replace("[ADR-0030]", "[ADR-0030x]"))
     assert cli.main(["setup", "--target", str(d), "--check"]) == 1
+
+
+def test_apply_arms_the_commit_guard_so_a_local_slack_file_is_refused(tmp_path):
+    """ADR-0177: setup is the tracked step that arms the guard; a fresh project refuses `slack.local.yaml` at once."""
+    d = _repo(tmp_path)
+    assert cli.main(["setup", "--target", str(d), "--apply"]) == 0
+    hook = d / ".git" / "hooks" / "pre-commit"
+    assert hook.is_file() and hook.stat().st_mode & 0o111
+
+    (d / "slack.local.yaml").write_text("workspaces: []\n")
+    (d / "notes.yaml").write_text("x: 1\n")
+    git = ["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(git + ["add", "notes.yaml"], check=True)
+    assert subprocess.run(git + ["commit", "-qm", "ordinary"]).returncode == 0
+    subprocess.run(git + ["add", "slack.local.yaml"], check=True)
+    assert subprocess.run(git + ["commit", "-qm", "leak"]).returncode != 0
+    assert "leak" not in subprocess.run(git + ["log", "--oneline"], capture_output=True, text=True).stdout
+
+
+def test_arming_is_reported_without_apply_and_skipped_outside_a_repository(tmp_path, capsys):
+    d = tmp_path / "plain"
+    d.mkdir()
+    assert cli.main(["setup", "--target", str(d), "--apply"]) == 0
+    assert not (d / ".git").exists()
+    assert "commit guard" in capsys.readouterr().out

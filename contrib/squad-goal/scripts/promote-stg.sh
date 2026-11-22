@@ -93,6 +93,17 @@ say() {  # sha, reason: one line per tip and reason
   grep -qxF "$1 $2" "$state/promote.seen" 2>/dev/null && return; seen "$1 $2"
   echo "$(date -u +%FT%TZ) promote-stg: $1 $2" >> "$log"; }
 refuse() { say "$1" "$2"; echo "promote-stg: $2" >&2; exit 1; }   # the one reason, on the log line and stderr
+# (#2702) The promotion pass emits one release event when stg moves: `stg_release`, which a subscribed channel announces. The
+# record holds the event id and the items the release carries, and `voiced` reads it. A record that cannot be written costs the
+# announcement alone: the promotion already happened, so it never changes this exit code.
+emit_release() {  # <event> <key> <from> <to>
+  local event=$1 key=$2 args=() l out
+  while IFS= read -r l; do [ -n "$l" ] && args+=(--item "$l"); done <<< "$(g log --no-merges --format='%h %s' "$3..$4" 2>/dev/null)"
+  [ ${#args[@]} -gt 0 ] || args=(--item "$4")
+  out=$(python3 "$d/../../voice/release_events.py" emit --event "$event" --key "$key" "${args[@]}" 2>&1) \
+    || { echo "release: $event not emitted: $(printf '%s' "$out" | tail -1)" >&2; return 0; }
+  echo "release: $out"
+}
 proof=${SG_PROMOTE_PROOF:-ci}
 ci_state() {  # sha -> green | red | running | unproven | unknown, from the check runs of the commit, a red refined by its run's jobs
   if [ -n "$SG_CI_STATE_CMD" ]; then "$SG_CI_STATE_CMD" "$1"; return; fi
@@ -131,6 +142,7 @@ prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal 
 g init -q . 2>/dev/null; g remote add origin "$remote"
 o=$(g fetch -q origin "+refs/heads/$dev:refs/remotes/origin/$dev" "+refs/heads/$stg:refs/remotes/origin/$stg" 2>&1) || { echo "promote-stg: fetch failed: $(printf '%s' "$o" | tail -1)" >&2; exit 1; }
 tip=$(g rev-parse "origin/$dev") || exit 1
+prev=$(g rev-parse "origin/$stg" 2>/dev/null) || prev=   # the stg this merge moves, for the release event's items (#2702)
 echo "promote-stg: tip $tip"
 g merge-base --is-ancestor "$tip" "origin/$stg" && exit 0   # the tip is already in the promotion branch: no pull request is opened
 # A promotion leaves a merge commit in stg, so stg is never an ancestor of the next dev tip. The work stg holds and dev lacks
@@ -167,3 +179,4 @@ o=$(gh_send -X PUT "repos/$SG_REPO/pulls/$pr/merge" -f merge_method=merge -f sha
 printf '%s' "$o" | jq -e '.merged == true' >/dev/null 2>&1 \
   || refuse "$tip" "not promoted: pull request #$pr did not merge: $(printf '%s' "$o" | jq -r '.message // "no reason"' 2>/dev/null)"
 echo "PROMOTED $stg $tip via pull request #$pr"
+emit_release stg_release "stg_release:$tip" "${prev:-$tip}" "$tip"

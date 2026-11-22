@@ -74,9 +74,15 @@ import urllib.request
 import xml.sax.saxutils
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 import channels  # noqa: E402  the one Slack call path, so this daemon keeps no second copy of it
 import keychain  # noqa: E402  the one reader for the three voice secrets
+import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
+
+from squad import slackpolicy  # noqa: E402  the one home of the Slack file rules (ADR-0177)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
@@ -89,6 +95,8 @@ AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
 TIMEOUT = 60
 MAX_CLIP_BYTES = 20 * 1024 * 1024     # Gemini's inline_data request cap; a larger clip is a record, never a guess
 CHUNK = 1 << 16
+DEV_REF = "refs/remotes/origin/dev"   # the tip a project's Slack file is read from, never the working tree
+CONFIG_POLL = 60.0                    # how long a moved dev tip waits for its revalidation
 VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
@@ -165,11 +173,11 @@ def context_of(text):
     return ctx
 
 
-def hub_repos(script=None):
-    """Every repository the hub lists: the profile names `address.sh --list` prints, each resolved to its SG_REPO.
+def hub_projects(script=None):
+    """Every project the hub lists: its `SG_REPO`, the checkout its dev tip is read from, and its local Slack file.
 
     The seam is the hub's own (ADR-0138), so a project added to the hub needs no second list beside it. A seam that
-    refuses or a profile that names no repository contributes nothing, and the daemon keeps the channels it already has.
+    refuses or a profile that names no repository contributes nothing, and the daemon keeps the revisions it holds.
     """
     script = script or ADDRESS
     try:
@@ -177,16 +185,196 @@ def hub_repos(script=None):
         slugs = [ln.split("\t")[0].strip() for ln in (out.stdout or "").splitlines() if ln.strip()]
     except (OSError, subprocess.SubprocessError):
         return []
-    repos = []
+    profiles = os.environ.get("SG_PROFILES_DIR") or os.path.abspath(
+        os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
+    found = []
     for slug in slugs:
         try:
             p = subprocess.run(["bash", script, slug], capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
             continue
-        repo = (context_of(p.stdout).get("SG_REPO") or "").strip()
-        if repo and repo not in repos:
-            repos.append(repo)
-    return repos
+        ctx = context_of(p.stdout)
+        repo = (ctx.get("SG_REPO") or "").strip()
+        if not repo or any(entry["repo"] == repo for entry in found):
+            continue
+        name = (ctx.get("SG_PROJECT") or "").strip() or repo.rsplit("/", 1)[-1]
+        # The local file sits beside the hub's profile, so the `--list` slug names it first. `SG_PROJECT` and the repo
+        # leaf are the fallback, and a generic `slack.local.yaml` the last one. A candidate the profile does not hold
+        # never wins, so a missing slug file cannot hide the project's own file.
+        local = ""
+        for candidate in (slug, name):
+            path = os.path.join(profiles, f"{candidate}.slack.local.yaml") if candidate else ""
+            if path and os.path.isfile(path):
+                local = path
+                break
+        else:
+            generic = os.path.join(profiles, slackpolicy.LOCAL_SUFFIX)
+            if os.path.isfile(generic):
+                local = generic
+        found.append({"repo": repo, "checkout": (ctx.get("SG_CHECKOUT") or "").strip(), "local": local})
+    return found
+
+
+def hub_repos(script=None):
+    """Every repository the hub lists: the `SG_REPO` of each project `hub_projects` names."""
+    return [entry["repo"] for entry in hub_projects(script)]
+
+
+class TipUnreadable(Exception):
+    """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
+
+
+def git_output(checkout, *args):
+    """One git read in a project's checkout, or None when git refuses: a broken checkout is a notice, never a dead daemon."""
+    if not checkout:
+        return None
+    try:
+        done = subprocess.run(["git", "-C", checkout, *args], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def dev_tip(checkout):
+    """The `(sha, text)` of a project's committed Slack file at its dev tip, or `TipUnreadable`.
+
+    The tip is read from git's object store, never from the working tree, so an edit in progress in a checkout never
+    becomes the active revision (#2685).
+    """
+    sha = (git_output(checkout, "rev-parse", "--verify", DEV_REF) or "").strip()
+    if not sha:
+        raise TipUnreadable(f"cannot read the dev tip {DEV_REF} of the checkout {checkout or '(none named)'}")
+    name = slackpolicy.COMMITTED.as_posix()
+    text = git_output(checkout, "show", f"{sha}:{name}")
+    if text is None:
+        raise TipUnreadable(f"the dev tip {sha[:12]} holds no {name}")
+    return sha, text
+
+
+def _rows(value):
+    """The mappings of a list, so a file whose shape is wrong still yields the rows it can name."""
+    return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def project_documents_at_start(projects):
+    """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
+
+    A tip that cannot be read, or a revision that breaks a rule, contributes nothing: the refresh that follows reports
+    it, and this start opens only the sockets it can justify.
+    """
+    docs = {}
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if not repo:
+            continue
+        try:
+            _, text = dev_tip((entry.get("checkout") or "").strip())
+        except TipUnreadable:
+            continue
+        out = []
+        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
+        if doc is not None and not out and not slackpolicy.validate(doc, {}):
+            docs[repo] = doc
+    return docs
+
+
+def project_documents(state, projects):
+    """The active revision of each project: repository -> document; a project with no active revision contributes none."""
+    docs = {}
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if not repo:
+            continue
+        revision = (state.active_revision(repo) or {}).get("revision")
+        if isinstance(revision, dict):
+            docs[repo] = revision
+    return docs
+
+
+def effective_documents(state, projects, read_start=None):
+    """Each project's active revision, or its dev-tip document while it has none: repository -> document.
+
+    The dev tip answers on a fresh start, before the first revision is promoted, so a channel claim is refused from
+    the first poll. A tip is read only for a project with no active revision, so a steady daemon reads no extra tip.
+    """
+    active = project_documents(state, projects)
+    missing = []
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if repo and repo not in active:
+            missing.append(entry)
+    docs = dict((read_start or project_documents_at_start)(missing))
+    docs.update(active)
+    return docs
+
+
+def channel_apps(documents):
+    """channel id -> the app id its workspace names, read from the same documents the revision check reads."""
+    apps = {}
+    for repo in sorted(documents or {}):
+        for ws in _rows((documents[repo] or {}).get("workspaces")):
+            app_id = str(ws.get("app") or "").strip()
+            for channel in _rows(ws.get("channels")):
+                cid = str(channel.get("id") or "").strip()
+                if cid and app_id:
+                    apps.setdefault(cid, app_id)
+    return apps
+
+
+def app_keychains(documents):
+    """app id -> {"bot", "app"}: the Keychain entry names of each app an owned workspace names.
+
+    One entry per app id, so two projects that name one app yield one entry and one socket. The app id keys the entry
+    and the Keychain entry names are its values, so an id never becomes a Keychain name.
+    """
+    apps = {}
+    for repo in sorted(documents or {}):
+        doc = documents[repo] or {}
+        declared = {str(app.get("id")): app for app in _rows(doc.get("apps")) if app.get("id")}
+        for ws in _rows(doc.get("workspaces")):
+            if str(ws.get("class") or "") != "owned":
+                continue
+            app_id = str(ws.get("app") or "").strip()
+            if not app_id or app_id in apps:
+                continue
+            entry = (declared.get(app_id) or {}).get("keychain")
+            entry = entry if isinstance(entry, dict) else {}
+            apps[app_id] = {"bot": str(entry.get("bot") or "").strip(),
+                            "app": str(entry.get("app") or "").strip()}
+    return apps
+
+
+def app_tokens(specs, read=None):
+    """app id -> {"bot": token, "app": token}, each read from the Keychain entry its name points to.
+
+    The file holds only the entry names, so a token value never enters it. `read` is the one Keychain reader, injected
+    so a test proves the names that are read.
+    """
+    read = read or keychain.read_secret
+    return {app_id: {"bot": read(spec["bot"]), "app": read(spec["app"])} for app_id, spec in (specs or {}).items()}
+
+
+def channel_claims(documents):
+    """channel id -> the projects that name it, in sorted project order."""
+    claims = {}
+    for repo in sorted(documents or {}):
+        for ws in _rows((documents[repo] or {}).get("workspaces")):
+            for channel in _rows(ws.get("channels")):
+                cid = str(channel.get("id") or "").strip()
+                if cid:
+                    claims.setdefault(cid, []).append(repo)
+    return claims
+
+
+def channel_claim_refusals(documents):
+    """One line per channel id that two or more projects claim; the line names both projects and the channel id."""
+    claims = channel_claims(documents)
+    lines = []
+    for cid in sorted(claims):
+        repos = claims[cid]
+        if len(repos) > 1:
+            lines.append(f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused")
+    return lines
 
 
 class SlackClient:
@@ -239,6 +427,8 @@ class State:
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
+        self.release_events_path = os.path.join(directory, releases.RECORD)
+        self.slack_dir = os.path.join(directory, "slack")
         self._seen = None
         self._channels = None
         self._registry_read = False
@@ -257,6 +447,127 @@ class State:
     def outbox_path(self):
         """The DM's outbox: the file the owner's session appends its DM answers to."""
         return self.outbox_for(DM)
+
+    def slack_path(self, repo):
+        """The file one project's active Slack revision lives in, named by the repository it belongs to.
+
+        The name is a digest of the full repository name, so two distinct repositories never share one record. A name
+        built from the repository's own characters would collide (`a/b` and `a-b`) and hand one project another's
+        revision.
+        """
+        digest = hashlib.sha256((repo or "").strip().encode("utf-8")).hexdigest()[:16]
+        return os.path.join(self.slack_dir, digest + ".json")
+
+    def refusal_path(self, repo):
+        """The file that records the last refused revision of one project, beside its active revision."""
+        return self.slack_path(repo)[: -len(".json")] + ".refused.json"
+
+    def _legacy_slack_path(self, repo):
+        """The sanitized name an older build gave one project's active revision, before the digest name."""
+        leaf = re.sub(r"[^A-Za-z0-9_.-]", "-", (repo or "").strip()) or "project"
+        return os.path.join(self.slack_dir, leaf + ".json")
+
+    @staticmethod
+    def _read_record(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _adopt_legacy(self, repo):
+        """Move one record an older build wrote under the sanitized name to this build's digest name, once.
+
+        A sanitized name collided (`a/b` and `a-b`), so the record is adopted only when it names this repository. A
+        collision that names another repository is left where it is, never handed to the wrong project.
+        """
+        old = self._legacy_slack_path(repo)
+        if os.path.abspath(old) == os.path.abspath(self.slack_path(repo)):
+            return None
+        data = self._read_record(old)
+        if data is None or data.get("repo") != repo:
+            return None
+        try:
+            self._atomic_json(self.slack_path(repo), data)
+            os.remove(old)
+        except OSError:
+            return data     # the record is still valid for this read even when the move cannot be written
+        return data
+
+    def active_revision(self, repo):
+        """The Slack revision this daemon accepted for one project, or None. The file survives a restart, so a refused
+        revision keeps the previous one active across one (#2685). A record an older build wrote is adopted once."""
+        data = self._read_record(self.slack_path(repo))
+        if data is None:
+            data = self._adopt_legacy(repo)
+        return data if data and data.get("sha") else None
+
+    def save_active_revision(self, repo, record):
+        """The active revision as one atomic write (ADR-0030): a crash leaves the previous file, never half of a new one."""
+        self._atomic_json(self.slack_path(repo), record)
+
+    def last_refusal(self, repo):
+        """The `(sha, reasons)` of the last refused revision this daemon told the owner about, or None.
+
+        The record is what stops an unchanged refusal from becoming one DM per poll: the daemon compares a new refusal
+        with it and stays silent when they match.
+        """
+        try:
+            with open(self.refusal_path(repo), encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def save_refusal(self, repo, record):
+        """Record a refused revision as one atomic write, so a crash leaves the previous record whole (ADR-0030)."""
+        self._atomic_json(self.refusal_path(repo), record)
+
+    def clear_refusal(self, repo):
+        """Forget the last refused revision after a valid one, so a returning refusal warns the owner again."""
+        try:
+            os.remove(self.refusal_path(repo))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    def _atomic_json(self, path, record):
+        """Write one JSON record to its path atomically (ADR-0030): fsync the file, replace it, then fsync the folder.
+
+        The folder sync makes the new name durable, so a crash right after the replace cannot bring the old file back.
+        """
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(record, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        self._sync_dir(os.path.dirname(path))
+
+    @staticmethod
+    def _sync_dir(directory):
+        """Persist one folder entry after a replace; a filesystem that refuses the sync is no write failure."""
+        try:
+            fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+    def release_events(self):
+        """Every release event the promotion pass or a project emitted, oldest first (#2702).
+
+        One record per event, in `$VOICE_STATE/release-events.jsonl`, the file `release_events.py emit` appends to. A
+        channel that subscribes to the event announces it; a record this build cannot read is skipped.
+        """
+        return releases.read(self.dir)
 
     def _stamp_schema(self):
         """One atomic write of this build's version, after the migration it covers (ADR-0030)."""
@@ -711,17 +1022,242 @@ class Daemon:
     """One handler for one event; the acknowledging loop is `serve` and `handle_envelope` beside it."""
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
-                 synthesizer=None, uploader=None):
+                 synthesizer=None, uploader=None, configs=None,
+                 clients=None, bot_tokens=None, downloaders=None, uploaders=None):
         self.state = state
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
         self.log = log or (lambda line: print(line, file=sys.stderr))
         self.client = client
+        # One Slack client, token and clip path per app id, so two projects that name different apps never borrow each
+        # other's bot. A channel resolves its app from the active revisions; `client`, `downloader` and `uploader` are
+        # the fallback when the start named no app for it.
+        self.clients = clients or {}
+        self.bot_tokens = bot_tokens or {}
+        self.downloaders = downloaders or {}
+        self.uploaders = uploaders or {}
+        self.channel_apps = {}     # channel id -> app id, rebuilt from the documents each refusal pass reads
+        self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
+        self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+        self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
+        self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
+        self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
+        self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
+
+    def app_of(self, channel):
+        """The app id that owns one channel, or None when no active document names it."""
+        return self.channel_apps.get((channel or "").strip())
+
+    def client_for(self, channel):
+        """The Slack client of the app that owns `channel`, else the daemon's one fallback client."""
+        return self.clients.get(self.app_of(channel)) or self.client
+
+    def bot_for(self, channel):
+        """The bot token of the app that owns `channel`, else the first app's token (the daemon's fallback)."""
+        app = self.app_of(channel)
+        if app in self.bot_tokens:
+            return self.bot_tokens[app]
+        return next(iter(self.bot_tokens.values()), None)
+
+    def download_clip(self, channel, url):
+        """One clip's bytes, fetched with the token of the app that serves its channel."""
+        app = self.app_of(channel)
+        if app in self.downloaders:
+            return self.downloaders[app](url)
+        return self.downloader(url)
+
+    def refresh_slack(self, projects=None):
+        """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
+
+        A tip that did not move is not read again. A valid revision replaces the active one. A revision that breaks a
+        rule, or a tip that cannot be read, keeps the previous revision active, so an invalid edit never changes a live
+        channel. The owner gets one DM naming the failing key, and every write is atomic (ADR-0030).
+        """
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        local_docs, local_defects = self.local_documents(projects)
+        results = []
+        for entry in projects:
+            repo = (entry.get("repo") or "").strip()
+            if not repo:
+                continue
+            results.append(self.refresh_one(repo, entry, local_docs, local_defects))
+        self.refuse_channel_claims(projects)
+        return results
+
+    def refuse_channel_claims(self, projects=None):
+        """Refuse every channel id two projects claim: one line and one DM that name both projects and the id.
+
+        The claim is read across each project's active revision, or its dev tip while it has none, so a file edit alone
+        never widens one project's reach and a fresh start refuses before any socket answers. A refused channel leaves
+        the effective routing for both projects, so no answer and no clip reaches it (criterion 4). A conflict already
+        told is not told again, and a DM Slack refuses is retried on the next poll; a conflict that is resolved and
+        later reintroduced is told again once.
+        """
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        documents = effective_documents(self.state, projects)
+        claims = channel_claims(documents)
+        lines = channel_claim_refusals(documents)
+        self.refused_channels = {cid: f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused"
+                                 for cid, repos in claims.items() if len(repos) > 1}
+        if not self.refused_channels:
+            self._held.clear()
+        self.channel_apps = channel_apps(documents)
+        current = set(lines)
+        self._channel_logged &= current
+        self._channel_conflicts &= current
+        for line in lines:
+            if line not in self._channel_logged:
+                self._channel_logged.add(line)
+                self.log(line)
+            if line in self._channel_conflicts:
+                continue
+            if self.notice_channel_conflict(line):
+                self._channel_conflicts.add(line)
+        return lines
+
+    def notice_channel_conflict(self, line):
+        """One DM to the owner about a channel id two projects claim; a refused DM is a log line, never a lost refusal."""
+        if self.client is None or not self.owner:
+            return False
+        try:
+            got = self.client.api("chat.postMessage", {"channel": self.owner, "text": line}, post=True)
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops answering
+            self.log(f"voiced: the channel conflict notice was not sent: {type(x).__name__}")
+            return False
+        if not got.get("ok"):
+            self.log(f"voiced: the channel conflict notice was refused: {got.get('error')}")
+            return False
+        return True
+
+    def local_documents(self, projects):
+        """Each project's local Slack file read once: `(file name, document)` by repository, and the defects of reading it.
+
+        The local file stays outside the repository, so its defect is one that names the file a person edits. A missing
+        local file is no defect, and the committed revision is validated without it.
+        """
+        docs, defects = {}, {}
+        for entry in projects:
+            repo = (entry.get("repo") or "").strip()
+            path = (entry.get("local") or "").strip()
+            if not repo or not path:
+                continue
+            out = []
+            try:
+                with open(path, encoding="utf-8") as f:
+                    text = f.read()
+            except FileNotFoundError:
+                continue
+            except OSError as x:
+                out.append(slackpolicy.Defect(os.path.basename(path), "(root)",
+                                              f"cannot read the file: {x.strerror or x}"))
+                docs[repo] = (os.path.basename(path), {})
+            else:
+                docs[repo] = (os.path.basename(path), slackpolicy.read_document(text, os.path.basename(path), out) or {})
+            defects[repo] = out
+        return docs, defects
+
+    def refresh_one(self, repo, entry, local_docs, local_defects):
+        """One project's revision: read, validate with its local file, then save it or keep the previous one."""
+        active = self.state.active_revision(repo)
+        try:
+            sha, text = dev_tip((entry.get("checkout") or "").strip())
+        except TipUnreadable as x:
+            return self.refuse_revision(repo, active, [str(x)], sha=None, tip_failed=True)
+        if active is not None and active.get("sha") == sha:
+            return {"repo": repo, "sha": sha, "changed": False, "active": active}
+        tip_defects = []
+        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), tip_defects)
+        name, local = local_docs.get(repo, (None, None))
+        local_defects = list(local_defects.get(repo) or [])
+        local_name = name or slackpolicy.LOCAL_SUFFIX
+        others = [(other_name, other_doc) for other_repo, (other_name, other_doc) in local_docs.items()
+                  if other_repo != repo]
+        if doc is not None:
+            for defect in slackpolicy.validate(doc, local or {}, others, local_name=local_name):
+                # `validate` names the local side with `local_name`; every other defect is the committed file.
+                (local_defects if defect.file == local_name else tip_defects).append(defect)
+        if tip_defects or local_defects:
+            return self.refuse_revision(
+                repo, active, [str(defect) for defect in tip_defects + local_defects], sha=sha,
+                local_files=sorted({defect.file for defect in local_defects}), tip_failed=bool(tip_defects))
+        record = {"repo": repo, "sha": sha, "revision": doc}
+        try:
+            self.state.save_active_revision(repo, record)
+        except OSError as x:
+            self.log(f"voiced: {repo}: cannot write the Slack revision: {type(x).__name__}: {x.strerror or x}")
+            return {"repo": repo, "sha": sha, "changed": False, "active": active}
+        self._last_refusal.pop(repo, None)     # a valid revision resets the notice, so the next distinct refusal warns
+        self.state.clear_refusal(repo)
+        self.log(f"voiced: {repo}: slack.yaml revision {sha[:12]} is active")
+        return {"repo": repo, "sha": sha, "changed": True, "active": record}
+
+    def refuse_revision(self, repo, active, reasons, sha=None, local_files=(), tip_failed=True):
+        """Keep the active revision and log each reason; send the owner one notice per distinct rejected revision.
+
+        The signature the owner was told about is held in memory, so an unchanged refusal is only a log line even when
+        the state directory cannot hold a record. The persisted record is read once, so a restart still keeps the
+        owner silent about a notice the previous process already sent.
+        """
+        kept = (active or {}).get("sha")
+        stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
+        self.log(f"voiced: {repo}: slack.yaml refused; {stays}")
+        for reason in reasons:
+            self.log(f"voiced: {repo}: {reason}")
+        signature = {"repo": repo, "sha": sha, "reasons": list(reasons)}
+        known = self._last_refusal.get(repo)
+        if known is None:
+            known = self.state.last_refusal(repo)
+            if known is not None:
+                self._last_refusal[repo] = known
+        if known == signature:
+            self.log(f"voiced: {repo}: the same revision was refused before; the owner is not told twice")
+            return {"repo": repo, "changed": False, "active": active, "defects": reasons}
+        if self.notice_owner(repo, reasons, active, local_files, tip_failed):
+            self._last_refusal[repo] = signature
+            try:
+                self.state.save_refusal(repo, signature)
+            except OSError as x:
+                self.log(f"voiced: {repo}: cannot record the refused revision: {type(x).__name__}: {x.strerror or x}")
+        return {"repo": repo, "changed": False, "active": active, "defects": reasons}
+
+    def notice_owner(self, repo, reasons, active, local_files=(), tip_failed=True):
+        """One DM to the owner about a refused revision; a refused DM is a log line, never a lost notice.
+
+        The text names the side that fails: the committed file at the dev tip, the local file beside the profile, or
+        both. A person who reads it knows which file to edit.
+        """
+        if self.client is None or not self.owner:
+            return False
+        kept = (active or {}).get("sha")
+        stays = f"revision {kept[:12]} stays active" if kept else "no revision is active yet"
+        summary = self._refusal_summary(repo, local_files, tip_failed)
+        text = f"voiced: {summary}, so {stays}.\n" + "\n".join(reasons)
+        try:
+            got = self.client.api("chat.postMessage", {"channel": self.owner, "text": text}, post=True)
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops answering
+            self.log(f"voiced: {repo}: the Slack notice was not sent: {type(x).__name__}")
+            return False
+        if not got.get("ok"):
+            self.log(f"voiced: {repo}: the Slack notice was refused: {got.get('error')}")
+            return False
+        return True
+
+    @staticmethod
+    def _refusal_summary(repo, local_files, tip_failed):
+        """The sentence before the defect lines: which side failed, the committed dev tip or the local file."""
+        parts = []
+        if tip_failed:
+            parts.append(f"I refused the slack.yaml of {repo} at its dev tip")
+        if local_files:
+            parts.append(f"the local file {' and '.join(local_files)} of {repo} must be fixed")
+        return ", and ".join(parts)
 
     def sync_projects(self):
         """Give every project the hub lists its channel, once; no client or no list leaves the channels as they are.
@@ -747,12 +1283,15 @@ class Daemon:
 
     def answer(self, question, text):
         """Post one answer in the channel its question came from, threaded under it. True when Slack accepts it."""
-        if self.client is None or not question.get("channel"):
+        if not question.get("channel"):
+            return False
+        client = self.client_for(question.get("channel"))
+        if client is None:
             return False
         payload = {"channel": question["channel"], "text": text}
         if question.get("ts"):
             payload["thread_ts"] = question["ts"]
-        got = self.client.api("chat.postMessage", payload, post=True)
+        got = client.api("chat.postMessage", payload, post=True)
         if not got.get("ok"):
             self.log(f"voiced: answer refused: {got.get('error')}")
             return False
@@ -788,12 +1327,13 @@ class Daemon:
 
     def post_text(self, channel, thread_ts, text):
         """Post the readable answer in its channel; True and its ts when Slack accepts it, so the clips answer it."""
-        if self.client is None:
+        client = self.client_for(channel)
+        if client is None:
             return False, None
         payload = {"channel": channel, "text": text}
         if thread_ts:
             payload["thread_ts"] = thread_ts
-        got = self.client.api("chat.postMessage", payload, post=True)
+        got = client.api("chat.postMessage", payload, post=True)
         if not got.get("ok"):
             self.log(f"voiced: answer refused: {got.get('error')}")
             return False, None
@@ -808,12 +1348,20 @@ class Daemon:
             self.log(f"voiced: speech skipped: {type(x).__name__}")
             return None
 
+    def upload_for(self, channel):
+        """The clip uploader of the app that owns `channel`, else the daemon's one fallback uploader."""
+        app = self.app_of(channel)
+        if app in self.uploaders:
+            return self.uploaders[app]
+        return self.uploader
+
     def post_clip(self, path, channel, thread_ts, title):
         """Upload one spoken clip, then drop its temporary file; False when the upload was refused."""
+        uploader = self.upload_for(channel)
         try:
-            if self.uploader is None:
+            if uploader is None:
                 return False
-            fid, err = self.uploader(path, channel, thread_ts, title)
+            fid, err = uploader(path, channel, thread_ts, title)
             if not fid:
                 self.log(f"voiced: clip refused: {err}")
                 return False
@@ -886,6 +1434,14 @@ class Daemon:
         count = 0
         for channel, path in self.outbox_sources():
             for record in read_lines(path):
+                cid = (record.get("channel") or channel or "").strip()
+                refusal = self.refused_channels.get(cid)
+                if refusal:      # a channel two projects claim is held, never posted, and is told once
+                    digest = outbox_digest(record)
+                    if digest not in self._held:
+                        self._held.add(digest)
+                        self.log(f"voiced: outbox line held: {refusal}")
+                    continue
                 digest = outbox_digest(record)
                 if digest in delivered:
                     continue
@@ -927,6 +1483,13 @@ class Daemon:
                 {"id": f.get("id"), "name": f.get("name"), "mimetype": f.get("mimetype")}
                 for f in event.get("files") or []
             ]
+        refusal = self.refused_channels.get((event.get("channel") or "").strip())
+        if refusal:
+            # A channel two projects claim belongs to neither: its events are data, and no project owns the line.
+            record["text"] = (event.get("text") or "").strip()
+            record["error"] = refusal
+            self.state.append_other(record)
+            return "other"
         target = self.inbox_path_of(event)
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
@@ -943,7 +1506,7 @@ class Daemon:
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
             try:
-                audio = self.downloader(url)
+                audio = self.download_clip(event.get("channel"), url)
                 if len(audio) > MAX_CLIP_BYTES:
                     raise ClipTooLarge(len(audio))
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
@@ -1056,18 +1619,40 @@ async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
         await asyncio.sleep(interval)
 
 
-async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
-    """Hear Slack and answer the outboxes at once: the connection loop runs beside the outbox watcher.
+async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
+    """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
-    The watcher is one task of the same loop, so an answer the session appends is posted while the socket is open and
-    while it reconnects. Both stop together, and the watcher is cancelled with the connection loop.
+    A refused revision keeps the active one and is a log line, never a watcher that stops reading.
     """
-    watcher = asyncio.create_task(watch_outboxes(daemon, stop))
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.refresh_slack)
+        except Exception as x:      # noqa: BLE001 - one project's failure is a log line, never a daemon that stops
+            daemon.log(f"voiced: Slack file refresh failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
+async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
+    """Hear Slack and answer the outboxes at once: one Socket Mode connection per app, beside two watchers.
+
+    `apps` is one app token, or a mapping of app id to app token for several apps. One connection runs per app, so two
+    projects that name one app share one socket. The outbox watcher and the Slack-file watcher are tasks of the same
+    loop, so an answer the session appends is posted while a socket is open and a moved dev tip is read while the daemon
+    answers. All stop together, and the watchers are cancelled with the connection loops.
+    """
+    if isinstance(apps, str):
+        apps = {"app": apps}
+    outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
+    configs = asyncio.create_task(watch_configs(daemon, stop))
+    hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
+               for token in apps.values()]
     try:
-        await hear(daemon, app_token, connect=connect, open_connection=open_connection, stop=stop)
+        await asyncio.gather(*hearing)
     finally:
-        watcher.cancel()
-        await asyncio.gather(watcher, return_exceptions=True)
+        tasks = (outboxes, configs, *hearing)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def hear(daemon, app_token, connect=None, open_connection=None, stop=None):
@@ -1168,21 +1753,36 @@ def main(argv):
         print(f"voiced: another daemon holds {state_dir}; this start stands aside", file=sys.stderr)
         lock.close()
         return 1
+    projects = hub_projects()
+    specs = app_keychains(project_documents_at_start(projects))
+    if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
+        specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
-        bot = keychain.read_secret(keychain.BOT_TOKEN)
-        app = keychain.read_secret(keychain.APP_TOKEN)
         key = keychain.read_secret(keychain.GEMINI_KEY)
+        tokens = app_tokens(specs)
     except keychain.SecretMissing as x:
         print(f"voiced: Keychain entry missing: {x}", file=sys.stderr)
         return 1
+    bots = {app_id: entry["bot"] for app_id, entry in tokens.items()}
+    bot = next(iter(bots.values()))      # the fallback for a channel no active document maps to an app
+    apps = {app_id: entry["app"] for app_id, entry in tokens.items()}
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
-                    client=SlackClient(bot), projects=hub_repos,
+                    client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
                     synthesizer=lambda script: spoken_clip(key, script),
-                    uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title))
+                    uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
+                    clients={app_id: SlackClient(entry) for app_id, entry in bots.items()},
+                    bot_tokens=bots,
+                    downloaders={app_id: (lambda url, token=entry: download(url, token))
+                                 for app_id, entry in bots.items()},
+                    uploaders={app_id: (lambda path, channel, thread_ts, title, token=entry:
+                                        upload_clip(token, path, channel, thread_ts, title))
+                               for app_id, entry in bots.items()})
+    # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
+    daemon.refuse_channel_claims(projects)
     try:
-        asyncio.run(serve(daemon, app))
+        asyncio.run(serve(daemon, apps))
     except KeyboardInterrupt:
         return 0
     return 0
