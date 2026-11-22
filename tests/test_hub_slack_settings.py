@@ -231,7 +231,7 @@ def _channel_row(ctx, channel):
     if shutil.which("node") is None:
         pytest.skip("node is required")
     page = ctx["hub"].served_page()
-    rules = page[page.index("const SL_LANG="):page.index("function slRender(")]
+    rules = page[page.index("let slS=null"):page.index("function slRender(")]   # from the state the renderer reads, the persona editor's included (#2697)
     esc = 'const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));'
     script = esc + "\n" + rules + "\nconst c=" + json.dumps(channel) + ";console.log(JSON.stringify(slChan(c,0)));"
     r = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=60)
@@ -287,8 +287,8 @@ def test_the_communication_theme_reads_its_connection_and_edits_everything_else(
     page = ctx["hub"].served_page()
     esc = 'const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));'
     sett = page[page.index("// SETT{"):page.index("// }SETT")]
-    rules = page[page.index("const SL_LANG="):page.index("async function slLoad(")]
-    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});let slMsg="";'
+    rules = page[page.index("let slS=null"):page.index("async function slLoad(")]   # from the state the renderer reads, the persona editor's included (#2697)
+    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'   # the state the slice declares, the persona editor's included (#2697)
     view = {k: v for k, v in ctx["hub"].slack_view(ctx["hub"].slack_file()).items() if k != "new_channel"}
     script = "\n".join([stub, esc, sett, rules, f"slS={json.dumps(view)};slDraft=JSON.parse(JSON.stringify(slS));"
                         "slRender();console.log(STORE['#sbody'].innerHTML);"])
