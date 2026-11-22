@@ -16,8 +16,13 @@ The `logs` action answers with the log of the project that owns the channel and 
 one project, and `check` has already refused a request that names another. `scrub` masks every secret and drops every
 guest line, so a client's text never reaches the reply (SPEC 2682, story 42).
 
-The module reads no clock and calls no network: the caller supplies the project status source and the log source,
-because the status of a project comes from the repository and the board, and the log comes from the project's own log.
+The `loop_control` action (#2705) runs no loop file of its own: it calls the hub loop switch the caller supplies, with
+the hub's own action, so a role holder's pause, resume or drain passes the hub's state rule and the hub's audit
+(ADR-0162). The reply confirms the state the role holder asked for.
+
+The module reads no clock and calls no network: the caller supplies the project status source, the log source and the
+hub loop switch, because the status of a project comes from the repository and the board, the log comes from the
+project's own log, and the loop is the hub's to write.
 
 Guards: `tests/test_slack_executor.py`.
 """
@@ -28,10 +33,24 @@ from .redact import redact
 
 STATUS = "status"
 LOGS = "logs"
-ACTIONS = frozenset((STATUS, LOGS))
+LOOP_CONTROL = "loop_control"
+ACTIONS = frozenset((STATUS, LOGS, LOOP_CONTROL))
 REQUEST_FIELDS = ("action", "arguments", "project", "channel", "source")
 # The arguments each action takes. `status` and `logs` take none: they answer for the project the caller already named.
-_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {STATUS: frozenset(), LOGS: frozenset()}
+# `loop_control` takes one `state`, the change the role holder asks for.
+_ACTION_ARGUMENTS: dict[str, frozenset[str]] = {STATUS: frozenset(), LOGS: frozenset(), LOOP_CONTROL: frozenset({"state"})}
+# The hub's loop switch is the one write path (ADR-0162): a Slack state maps to the hub's own action, and the hub applies
+# the state rule, the audit and the supervisor. A pause and a drain are one hub drain, because a drain pauses dispatch
+# and stops once the live work ends; a resume is a start. The two states stay distinct in the reply, so a person reads
+# the state they asked for, and a future hub `pause` action changes this one map.
+LOOP_STATES = {"pause": "drain", "resume": "start", "drain": "drain"}
+# The reply of each state the role holder asks for, so an answer confirms the state the hub applied, never one the
+# executor guessed and never the reply of a different state.
+LOOP_REPLY = {
+    "pause": "The loop pauses: it dispatches nothing new until a resume.",
+    "resume": "The loop starts again: no new dispatch waits on a drain.",
+    "drain": "The loop drains: it dispatches nothing new and stops when the live runs and gates finish.",
+}
 
 
 class Request(NamedTuple):
@@ -114,6 +133,11 @@ def check(request, decision, line, project):
     if request.action not in _actions(decision):
         return Refusal("grant", f"the role {decision.role!r} does not list action {request.action!r}")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
+    # The state is checked first, so one request that names both a bad state and an extra key reports the state that
+    # decides the action does not apply, and the caller fixes the reading in one round-trip.
+    if request.action == LOOP_CONTROL and request.arguments.get("state") not in LOOP_STATES:
+        return Refusal("arguments", "the loop_control action takes the state pause, resume or drain, and the request "
+                                    f"names {request.arguments.get('state')!r}")
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:
         return Refusal("arguments", f"the {request.action} action takes no argument, and the request names {', '.join(extra)}")
@@ -140,17 +164,39 @@ def scrub(text, guest=()):
     return redact("".join(keep))
 
 
-def execute(request, decision, line, project, status=None, logs=None, guest=()):
+def _loop_control(state, who, loop):
+    """One `loop_control` action through the hub loop switch, whose `(code, body)` answer it returns as a reply text or
+    the one `Refusal` the hub gave. The switch is the caller's: the hub owns the state rule, the audit and the
+    supervisor (ADR-0162), and the executor writes no loop file of its own."""
+    action = LOOP_STATES[state]
+    code, body = loop(action, who)
+    # The hub's answer is read defensively: a body that is not one mapping refuses the action with the hub's answer and
+    # never raises inside the request path.
+    body = body if isinstance(body, dict) else {}
+    if code != 200:
+        return Refusal("hub", str(body.get("reason") or body.get("err") or f"the hub refused {action} with {code}"))
+    return LOOP_REPLY[state]
+
+
+def execute(request, decision, line, project, status=None, logs=None, guest=(), loop=None):
     """One request through every check, then its action. The action runs only when `check` returns None and its source
     is there; a refusal returns its data record and no reply. The reply carries the path the decision names, the
     channel of the line, and the answer text. `status` answers for the project, `logs` answers with the project's log
-    after `scrub`, and both receive the one project the check proved."""
+    after `scrub`, and both receive the one project the check proved. `loop` is the hub loop switch: it takes the hub
+    action and the asker's name, and answers the hub's `(code, body)`."""
     refusal = check(request, decision, line, project)
     if refusal is None and request.action == STATUS and status is None:
         refusal = Refusal("source", "the status action needs a status source")
     if refusal is None and request.action == LOGS and logs is None:
         refusal = Refusal("source", "the logs action needs a logs source")
+    if refusal is None and request.action == LOOP_CONTROL and loop is None:
+        refusal = Refusal("source", "the loop_control action needs the hub loop switch")
     if refusal is not None:
         return Outcome(False, None, data_record(line, refusal))
-    text = status(project) if request.action == STATUS else scrub(logs(project), guest)
+    if request.action == LOOP_CONTROL:
+        text = _loop_control(request.arguments["state"], str((line or {}).get("user") or ""), loop)
+        if isinstance(text, Refusal):
+            return Outcome(False, None, data_record(line, text))
+    else:
+        text = status(project) if request.action == STATUS else scrub(logs(project), guest)
     return Outcome(True, {"path": decision.reply, "channel": str((line or {}).get("channel") or ""), "text": text}, None)
