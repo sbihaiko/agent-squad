@@ -35,7 +35,6 @@ import json
 from typing import NamedTuple
 
 from . import slackboard
-from . import slackpolicy as S
 from .redact import redact
 
 STATUS = "status"
@@ -131,6 +130,10 @@ def check(request, decision, line, project, listed=None):
     `listed` is the set of `slack.yaml` shas the hub registry lists (#2695), and the line names the revision its decision
     came from. A request on a revision no save lists grants nothing. None leaves the check out of force, as it is on a
     machine that names no registry."""
+    # `slackpolicy` imports `ACTIONS` from this module, so the import waits for the call: a top-level one makes the two
+    # modules a cycle that fails when this module is the first one imported.
+    from .slackpolicy import PROPOSAL
+
     line = line or {}
     if listed is not None:
         revision = str(line.get("revision") or "")
@@ -152,7 +155,7 @@ def check(request, decision, line, project, listed=None):
                                  f"{', '.join(sorted(ACTIONS))}, so an owner-only action stays with the owner")
     if request.action not in _actions(decision):
         return Refusal("grant", f"the role {decision.role!r} does not list action {request.action!r}")
-    if getattr(decision, "kind", None) == S.PROPOSAL:
+    if getattr(decision, "kind", None) == PROPOSAL:
         return Refusal("proposal", "a request in a guest channel becomes a proposal to the owner: no action runs "
                                    "before the owner approves it (squad/slackproposal.py)")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())

@@ -11,6 +11,8 @@ never the executor's own rule.
 import copy
 import json
 
+import yaml
+
 from squad import slackboard as B
 from squad import slackexecutor as X
 from squad import slackpolicy as S
@@ -47,9 +49,24 @@ LOCAL = {
 }
 
 
-def decision(user=OWNER):
+def policy():
+    """The committed policy document, loaded by the real reader from the YAML text a project commits. Every case reads
+    the role definitions from this document, so a decision object a test built is never the source of a grant."""
+    defects = []
+    document = S.read_document(yaml.safe_dump(COMMITTED), "slack.yaml", defects)
+    assert document is not None and not defects, defects
+    return document
+
+
+def role_actions(document, role):
+    """The action list of one role, as the committed policy document ships it."""
+    row = next(row for row in document["roles"] if str(row.get("id")) == role)
+    return tuple(str(action) for action in row.get("actions") or ())
+
+
+def decision(user=OWNER, committed=None):
     """One inbox decision of the real policy module for one message of the project channel."""
-    committed, local = copy.deepcopy(COMMITTED), copy.deepcopy(LOCAL)
+    committed, local = committed or policy(), copy.deepcopy(LOCAL)
     event = {"kind": "message", "workspace": WORKSPACE, "channel": CHANNEL, "user": user}
     return S.decide(committed, local, event, now=None)
 
@@ -165,11 +182,25 @@ def test_the_action_never_approves_a_breakdown_into_tickets():
     assert board.writes() == []
 
 
+def test_a_card_marked_as_a_breakdown_is_refused_when_the_caller_omits_the_kind():
+    """Blocking finding and ADR-0142: a card the board marks as a breakdown into tickets is refused from that marker,
+    so the refusal never rests on the caller naming a breakdown."""
+    board = FakeBoard(B.Card("2690", "Reviewing", ("breakdown",)))
+    out = run(board, {"card": "2690", "to": "Batching"})
+    assert out.ran is False
+    assert out.record["error"].startswith("board:")
+    assert "breakdown" in out.record["error"]
+    assert board.writes() == []
+
+
 def test_a_role_without_approve_and_move_is_refused():
     """Criterion (6): the colleague's role lists only `status`, so the action is refused and the board is untouched. The
-    decision comes from the real policy, so its role and its action list are the ones the files give."""
+    colleague's action list comes from the policy document the project commits, loaded by the real reader, so the
+    refusal never rests on a decision object the test built."""
+    committed = policy()
+    assert X.APPROVE_AND_MOVE not in role_actions(committed, "colleague")
     board = FakeBoard(B.Card("2690", "Reviewing"))
-    dec = decision(PEER)
+    dec = decision(PEER, committed)
     assert dec.role == "colleague"
     assert X.APPROVE_AND_MOVE not in tuple(dec.actions)
     out = run(board, {"card": "2690", "to": "Batching"}, user=PEER)
@@ -218,25 +249,32 @@ def test_the_board_records_a_review_and_refuses_a_breakdown():
 
 def test_a_fake_board_proves_every_rule():
     """Criterion (7): each rule leaves the fake board unmoved, and the one allowed request writes exactly one approval
-    and one move. The reasons are distinct, so no rule hides behind another."""
+    and one move. Each rule pins the text only it produces, so a merged message fails here, and the Abandoned case and
+    the unknown-column case reach refusals of their own."""
     rules = (
-        ((), "2690", "Batching", "board"),
-        ((B.Card("2690", "Reviewing"),), "2690", "Todo", "board"),
-        ((B.Card("2690", "Reviewing"),), "2690", "Doing", "board"),
-        ((B.Card("2690", "Reviewing"),), "2690", "Abandoned", "board"),
-        ((B.Card("2690", "Reviewing"),), "2690", "Nope", "board"),
-        ((B.Card("2690", "Todo"),), "2690", "Doing", "board"),
-        ((B.Card("2682", "Reviewing", ("spec",)),), "2682", "Batching", "board"),
+        ((), "2690", "Batching", "board", "the board has no card"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Todo", "board", "starting work stays with the owner"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Doing", "board", "a card only moves forward"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Abandoned", "board", "Abandoned"),
+        ((B.Card("2690", "Reviewing"),), "2690", "Nope", "board", "Nope"),
+        ((B.Card("2690", "Todo"),), "2690", "Doing", "board", "between columns after Todo"),
+        ((B.Card("2682", "Reviewing", ("spec",)),), "2682", "Batching", "board", "is a spec"),
+        ((B.Card("2690", "Reviewing", ("breakdown",)),), "2690", "Batching", "board", "is a breakdown into tickets"),
     )
     reasons = []
-    for cards, number, to, check in rules:
+    for cards, number, to, check, needle in rules:
         board = FakeBoard(*cards)
         out = run(board, {"card": number, "to": to})
         assert out.ran is False, f"#{number} to {to} ran"
         assert out.record["error"].startswith(f"{check}:"), out.record["error"]
+        assert needle in out.record["error"], f"#{number} to {to} did not name {needle!r}: {out.record['error']}"
         assert board.writes() == [], f"#{number} to {to} wrote the board"
         reasons.append(out.record["error"])
     assert len(set(reasons)) == len(reasons)
+    abandoned, nope = reasons[3], reasons[4]
+    assert "outside the forward axis" in abandoned, abandoned
+    assert "does not name" in nope, nope
+    assert abandoned != nope
 
     board = FakeBoard(B.Card("2690", "Reviewing"))
     out = run(board, {"card": "2690", "to": "Batching", "breakdown": "2682"})
