@@ -8893,29 +8893,29 @@ const slWs=d=>{const doc=(slDocs||{})[d]||{};const list=Array.isArray(doc.worksp
 const slList=(d,k)=>(((slDocs||{})[d]||{})[k]||[]).map(x=>x&&x.id).filter(Boolean);
 const slLang=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+["pt-BR","en-US","es-ES"].map(x=>`<option value="${x}"${x===cur?" selected":""}>${x}</option>`).join("");
 const slPersona=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+slList("committed","personas").map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(x)}</option>`).join("");
-const slF=(attr,label,ctl)=>`<label class=slf><span>${esc(label)}</span>${ctl.replace("data-sle=",`data-sle="${attr}" aria-label="${slA(label)}"`)}</label>`;
-const slInput=(attr,label,value,ph)=>slF(attr,label,`<input type=text data-sle= value="${slA(value||"")}"${ph?` placeholder="${slA(ph)}"`:""}>`);
+const slF=(attr,label,ctl)=>`<label class=slf><span>${esc(label)}</span>${ctl.replace("data-sle=",`data-sle="${attr}"`).replace('aria-label="Slack field"',`aria-label="${slA(label)}"`)}</label>`;
+const slInput=(attr,label,value,ph)=>slF(attr,label,`<input type=text data-sle= aria-label="Slack field" value="${slA(value||"")}"${ph?` placeholder="${slA(ph)}"`:""}>`);
 const slCheck=(attr,label,on)=>`<label class=slchk><input type=checkbox data-sle="${attr}" aria-label="${slA(label)}"${on?" checked":""}> ${esc(label)}</label>`;
 const slWsFields=(d,i)=>{const w=slWs(d)[i]||{},g=w.class==="guest",at=f=>`${d}:${i}::${f}`;
  return `<div class="sle slwsdet" role=group aria-label="workspace fields">`
  +slInput(at("id"),"Id",w.id)+slInput(at("label"),"Label",w.label)
- +slF(at("class"),"Class",`<select data-sle=><option value=owned${g?"":" selected"}>owned</option><option value=guest${g?" selected":""}>guest</option></select>`)
+ +slF(at("class"),"Class",`<select data-sle= aria-label="Slack field"><option value=owned${g?"":" selected"}>owned</option><option value=guest${g?" selected":""}>guest</option></select>`)
  +slInput(at("app"),"App",w.app)
- +slF(at("language"),"Language",`<select data-sle=>${slLang(w.language)}</select>`)
- +slF(at("persona"),"Persona",`<select data-sle=>${slPersona(w.persona)}</select>`)
+ +slF(at("language"),"Language",`<select data-sle= aria-label="Slack field">${slLang(w.language)}</select>`)
+ +slF(at("persona"),"Persona",`<select data-sle= aria-label="Slack field">${slPersona(w.persona)}</select>`)
  +`<span class=slact><button data-slrmws="${d}:${i}">Remove workspace</button></span></div>`};
 const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=ws.class==="guest",at=f=>`${d}:${i}:${j}:${f}`,poll=c.poll||{};
  let h=`<div class="sle slchdet" role=group aria-label="channel fields">`
  +slInput(at("id"),"Id",c.id)+slInput(at("name"),"Name",c.name)
- +slF(at("mode"),"Mode",`<select data-sle=>${slOpts(SL_MODE,c.mode||"listen")}</select>`)
- +slF(at("language"),"Language",`<select data-sle=>${slLang(c.language)}</select>`)
- +slF(at("persona"),"Persona",`<select data-sle=>${slPersona(c.persona)}</select>`)
+ +slF(at("mode"),"Mode",`<select data-sle= aria-label="Slack field">${slOpts(SL_MODE,c.mode||"listen")}</select>`)
+ +slF(at("language"),"Language",`<select data-sle= aria-label="Slack field">${slLang(c.language)}</select>`)
+ +slF(at("persona"),"Persona",`<select data-sle= aria-label="Slack field">${slPersona(c.persona)}</select>`)
  +slInput(at("roles"),"Roles",(c.roles||[]).join(", "))+slInput(at("announce"),"Announce",(c.announce||[]).join(", "));
  if(g){
-  h+=slF(at("speak"),"Answer as",`<select data-sle=>${slOpts(SL_SPEAK,c.speak||"draft")}</select>`)
-  +slF(at("transcribe"),"Transcribe a clip",`<select data-sle=>${slOpts(SL_TR,c.transcribe||"off")}</select>`)
+  h+=slF(at("speak"),"Answer as",`<select data-sle= aria-label="Slack field">${slOpts(SL_SPEAK,c.speak||"draft")}</select>`)
+  +slF(at("transcribe"),"Transcribe a clip",`<select data-sle= aria-label="Slack field">${slOpts(SL_TR,c.transcribe||"off")}</select>`)
   +slCheck(at("voice_reply"),"Voice reply",!!c.voice_reply)
-  +slF(at("poll.mode"),"Poll mode",`<select data-sle=>${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`);
+  +slF(at("poll.mode"),"Poll mode",`<select data-sle= aria-label="Slack field">${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`);
   h+=((poll.mode||"two_state")==="exponential")
    ?slInput(at("poll.floor"),"Floor",poll.floor,"5m")+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling,"1h")
     +slInput(at("poll.factor"),"Factor",poll.factor,"2")+slInput(at("poll.idle_window"),"Idle window",poll.idle_window,"15m")
