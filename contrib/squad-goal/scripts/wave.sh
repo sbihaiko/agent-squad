@@ -1403,13 +1403,16 @@ sys.exit(0 if sha and q.get("head") == sha else 1)' "$2" "$3" 2>/dev/null
 evicted_mark() { mkdir -p "$SG_STATE/auto" 2>/dev/null && printf '%s\n' "$3" >> "$SG_STATE/auto/evicted-$2-$1"; }
 # drop_evicted <clone> <run>: removes from the clone's tip each child commit the run already evicted (#2216), newest first, and
 # prints the issues it removed. A tip with no child left reads as an empty landing, so no tip check runs on it.
+# (#2757) A marked commit takes its whole child out, as the eviction did: every commit of the range that names its issue. A
+# commit an earlier drop of this loop already removed is no longer on the tip, so it is skipped.
 drop_evicted() {
   local S=$1 run=$2 sha cx
   while read -r sha; do
     [ -n "$sha" ] || continue
+    $G -C "$S" merge-base --is-ancestor "$sha" HEAD 2>/dev/null || continue
     cx=$(child_of "$S" "$sha")
     evicted_before "$cx" "$run" "$sha" || continue
-    $G -C "$S" rebase --onto "$sha^" "$sha" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1; return 1; }
+    evict_child "$S" "$cx" "$sha" || return 1
     printf '%s ' "$cx"
   done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)
 }
