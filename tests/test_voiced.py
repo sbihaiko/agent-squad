@@ -1532,3 +1532,57 @@ def test_each_registered_project_names_the_checkout_and_local_file_of_its_dev_ti
 
     assert got == [{"repo": "Acme/My.App", "checkout": str(tmp_path), "local": str(profiles / "acme-app.slack.local.yaml")}]
     assert mod.hub_repos(script=str(script)) == ["Acme/My.App"]
+
+
+def test_a_repeatedly_refused_revision_warns_the_owner_only_once(tmp_path):
+    """Rule (5): one notice per distinct rejected revision; an unchanged refusal is a log line, never a storm."""
+    repo = git_project(tmp_path, SLACK_BAD_VOICE)
+    client = FakeClient()
+    _, daemon, lines = revision_daemon(tmp_path, client=client)
+
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+    assert len([line for line in lines if line.startswith("voiced: acme/app: slack.yaml refused")]) == 3, lines
+
+    commit(repo, SLACK_BAD_VOICE.replace("en-US", "pt-BR"))     # a distinct rejected revision
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 2, client.posts()
+
+
+def test_a_tip_that_stays_unreadable_warns_the_owner_once(tmp_path):
+    """Rule (5): a checkout that loses its dev tip sends one notice, not one notice per poll."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    git(repo, "update-ref", "-d", "refs/remotes/origin/dev")
+    daemon.refresh_slack(projects=[project(repo)])
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 1, client.posts()
+
+
+def test_a_valid_revision_clears_the_refusal_so_a_returning_one_warns_again(tmp_path):
+    """Rules (3) and (5): a valid revision resets the notice record, so the same rejected revision warns again."""
+    repo = git_project(tmp_path, SLACK_VALID)
+    client = FakeClient()
+    _, daemon, _ = revision_daemon(tmp_path, client=client)
+    good = git(repo, "rev-parse", "refs/remotes/origin/dev")
+
+    bad = commit(repo, SLACK_BAD_VOICE)
+    daemon.refresh_slack(projects=[project(repo)])
+    assert len(client.posts()) == 1, client.posts()
+
+    git(repo, "update-ref", "refs/remotes/origin/dev", good)
+    daemon.refresh_slack(projects=[project(repo)])
+    assert daemon.state.active_revision("acme/app")["sha"] == good
+
+    git(repo, "update-ref", "refs/remotes/origin/dev", bad)
+    daemon.refresh_slack(projects=[project(repo)])
+
+    assert len(client.posts()) == 2, client.posts()
