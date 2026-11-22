@@ -39,6 +39,8 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import voiced  # noqa: E402  the one reader of a scope's active Slack revision, so the supervisor needs no second copy
 WRAPPER = os.path.normpath(os.path.join(HERE, "..", "squad-goal", "scripts", "claude-sandboxed.sh"))
+SANDBOXED = "CLAUDE_CODE_SANDBOXED"         # the CLI's own flag: this session already runs inside a kernel sandbox (#2768)
+DAEMON = "/tmp/cc-daemon-%d" % os.getuid()  # the CLI background service's runtime dir, in the tmp folder it names
 PROXY = os.path.join(HERE, "model_proxy.py")
 MODEL_URL = "https://api.anthropic.com"  # the endpoint when ANTHROPIC_BASE_URL is unset
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -168,22 +170,36 @@ The full contract is {repo}/contrib/voice/OPERATOR.md. In short:
 - If the Monitor ends, re-arm it. Keep this session alive."""
 
 
+def daemon_root():
+    """The one runtime dir the CLI's background service owns (#2768): `<tmp>/cc-daemon-<uid>`, holding its roster,
+    its spare workers and its control socket. `/tmp` is a link, so the profile names the resolved path."""
+    return os.path.realpath(DAEMON)
+
+
 def profile_text(outbox, inboxes, own_inbox):
     """The kernel bound of one operator session: write its own outbox file, read its own inbox only, reach loopback only.
 
     Seatbelt applies the last matching rule, so the own-inbox allow follows the inboxes deny. A foreign model host is not
     named here: Seatbelt accepts only `*` or `localhost` as a host, so that endpoint goes through model_proxy.py.
+
+    The background service (#2768): `claude --bg` reaches the service the CLI already runs, or starts one, so the session
+    needs the service's own runtime. It takes `/dev/null` for the ignored stdio of a detached spawn, it writes its run dir
+    and its control socket under `daemon_root()`, and it connects to that socket. Without them the service cannot start
+    and posix_spawn fails with EPERM.
     """
     home = os.path.realpath(os.path.expanduser("~"))
+    daemon = daemon_root()
     return "\n".join([
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
-        f'(allow file-write* (literal "{outbox}") (subpath "{home}/.claude") (literal "{home}/.claude.json"))',
+        f'(allow file-write* (literal "/dev/null") (literal "{outbox}") (subpath "{home}/.claude") '
+        f'(literal "{home}/.claude.json") (subpath "{daemon}"))',
         f'(deny file-read* (subpath "{inboxes}"))',
         f'(allow file-read* (literal "{own_inbox}"))',
         "(deny network-outbound)",
         '(allow network-outbound (remote ip "localhost:*"))',
+        f'(allow network-outbound (remote unix-socket (subpath "{daemon}")))',
     ]) + "\n"
 
 
@@ -253,7 +269,7 @@ def start(scope, state, repo):
         f.write(profile)
     entry = {"profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
     env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
-    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI})
+    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
     host, port = model_endpoint()
     proxy = None
     if host not in LOOPBACK:

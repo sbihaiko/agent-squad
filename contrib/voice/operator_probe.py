@@ -13,6 +13,10 @@ under that same loopback rule, and any other host is reached through contrib/voi
 target and refuses every other CONNECT, recording each refusal. The probe proves the kernel refusal, the refusal the proxy
 records, and a model call that succeeds.
 
+Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile. The CLI must
+reach the service it already runs, or start one, print the new session's id, and list that id; the probe stops the
+session. A service the profile refuses fails the probe, as it would fail a live operator.
+
 Guest sessions (#2716): the probe then runs the `guest` poller session (squad/slackpoller.py) and the `guest` writer
 session (squad/slackwriter.py) through the same wrapper, profile and endpoint. Each session's real `PreToolUse` hook runs
 inside the CLI through contrib/voice/guest_probe_hook.py, and the Slack connector is a stand-in, contrib/voice/
@@ -71,6 +75,11 @@ READ_TOOL, SEND_TOOL, DRAFT_TOOL = (f"mcp__{GUEST_SERVER}__{name}" for name in
                                     ("slack_read_channel", "slack_send_message", "slack_send_message_draft"))
 GUEST_TOOLS = (READ_TOOL, SEND_TOOL, DRAFT_TOOL)
 PROBE_CHANNEL = "CPROBE01"
+# The background-service phase (#2768): a `--bg` session runs under the same profile, so a service the sandbox refuses
+# fails the probe rather than a live operator.
+BG_PROMPT = "Reply with the single word ok. Use no tool."
+BG_DEADLINE = 120.0                    # seconds, the one `claude --bg` call
+BG_LIST = ("agents", "--json")         # the CLI reads the live roster: a listed id proves the service is reachable
 PROBE_THREAD = "1700000000.000100"
 PROBE_DRAFT = slackwriter.Draft(slackwriter.DRAFT_WORD, PROBE_CHANNEL, PROBE_THREAD,
                                 slackwriter.compose("Probe", "probe reply"), "Probe")
@@ -222,6 +231,38 @@ def check_session(init, result):
         raise ProbeFailed(f"the CLI call did not succeed: {result.get('subtype')}")
 
 
+def bg_id(stdout):
+    """The session id a `claude --bg` call printed, or None: the first word that is a plain hex id."""
+    for word in (stdout or "").split():
+        word = word.strip("`'\".,")
+        if len(word) >= 8 and all(c in "0123456789abcdef-" for c in word) and any(c.isdigit() for c in word):
+            return word
+    return None
+
+
+def bg_listed(cli, sid, work):
+    """True when the CLI lists the session id in its live roster: the background service answered."""
+    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+    return sid in (done.stdout or "")
+
+
+def bg_session(work, profile, cli, proxy_url=None):
+    """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
+    session id, and lists that id. A service the profile refuses fails here, as it does in the supervisor."""
+    proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
+    done = sandboxed(profile, cli, ["--bg", BG_PROMPT, "--permission-mode", "dontAsk"], work, BG_DEADLINE, proxy_env)
+    sid = bg_id(done.stdout)
+    if done.returncode != 0 or sid is None:
+        reason = (done.stderr or done.stdout).strip().splitlines()
+        raise ProbeFailed(f"a --bg session did not start under the sandbox (exit {done.returncode}): "
+                          f"{reason[-1] if reason else 'no output'}")
+    try:
+        if not bg_listed(cli, sid, work):
+            raise ProbeFailed(f"the --bg session {sid} did not start: the CLI does not list it")
+    finally:
+        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+
+
 def expected_control(role):
     """The arguments the stand-in must receive for the role's control call: the writer's are the decided ones."""
     if role == "writer":
@@ -356,6 +397,7 @@ def run_probe(work, cli):
         check_denials(*denials(work, profile, leak, other_inbox, port))
         init, result = session(work, profile, cli)
         check_session(init, result)
+        bg_session(work, profile, cli)
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
@@ -363,6 +405,7 @@ def run_probe(work, cli):
         check_proxy_refuses(proxy)
         init, result = session(work, profile, cli, proxy.url)
         check_session(init, result)
+        bg_session(work, profile, cli, proxy.url)
         guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
 
@@ -387,7 +430,8 @@ def main(argv=None):
     route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
         f"the proxy refused {refused} target(s) and recorded them"
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
-          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}; guest poller denial held (write tool); "
+          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}; a --bg session started and was listed; "
+          f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
           f"stand-in connector")
     return 0
