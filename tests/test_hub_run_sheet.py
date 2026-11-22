@@ -201,10 +201,11 @@ def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
     assert '"/ended/"+encodeURIComponent(id)' in page
     src = HUB_PY.read_text()
     routes = ('self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", '
-              '"/api/slots", "/api/slack", "/api/slack/files", "/api/sync")')
+              '"/api/slots", "/api/slack", "/api/slack/files", "/api/slack/preview", "/api/slack/sample", "/api/sync")')
     assert routes in src, "the write routes changed"
     # /api/columns: Spend & limits saves the column limits (#2432); /api/slots: its slots sub-group (#2435);
-    # /api/slack/files: the Slack editor's one edit route (#2696)
+    # /api/slack/files: the Slack editor's one edit route (#2696);
+    # /api/slack/preview and /api/slack/sample: the persona editor's reply preview and voice sample (#2697)
 
 
 def test_keyboard_and_clicks_go_through_the_sheet_controls(hub):
