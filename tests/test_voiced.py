@@ -556,12 +556,13 @@ class ScopedClient:
     """A Slack client that refuses a listing type the shipped manifest grants no scope for, as Slack does (#2767).
 
     The granted scopes are read from the manifest the setup wizard installs, so the test reads the shipped agreement
-    and never a list of its own.
+    and never a list of its own. A listing returns only the channels its types cover, so a `public_channel` listing
+    omits every channel marked `is_private`, as Slack does.
     """
 
-    def __init__(self, listing=(), taken=False):
+    def __init__(self, listing=(), taken=False, extra_scopes=()):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.granted = set(manifest["oauth_config"]["scopes"]["bot"])
+        self.granted = set(manifest["oauth_config"]["scopes"]["bot"]) | set(extra_scopes)
         self.listing = list(listing)
         self.taken = taken
         self.calls = []
@@ -571,11 +572,13 @@ class ScopedClient:
         if method.startswith("conversations.list"):
             query = method.split("?", 1)[1] if "?" in method else ""
             types = next((part.split("=", 1)[1] for part in query.split("&") if part.startswith("types=")), "")
-            for kind in filter(None, types.split(",")):
+            kinds = [kind for kind in types.split(",") if kind]
+            for kind in kinds:
                 scope = LIST_SCOPE.get(kind)
                 if scope and scope not in self.granted:
                     return {"ok": False, "error": "missing_scope", "needed": scope, "provided": "channels:read"}
-            return {"ok": True, "channels": [dict(c) for c in self.listing]}
+            visible = [c for c in self.listing if "private_channel" in kinds or not c.get("is_private")]
+            return {"ok": True, "channels": [dict(c) for c in visible]}
         if method == "conversations.create" and self.taken:
             return {"ok": False, "error": "name_taken"}
         return {"ok": True}
@@ -589,7 +592,8 @@ def test_the_rule_runs_on_the_scopes_the_shipped_manifest_grants():
     `private_channel` is refused with `missing_scope` and the `proj-` check never runs. The listing the check reads
     must ask for a type the shipped manifest covers, and an empty registry must then report no violation."""
     mod = voiced()
-    client = ScopedClient(listing=[{"id": "C0APP", "name": "proj-app", "is_member": True}])
+    client = ScopedClient(listing=[{"id": "C0APP", "name": "proj-app", "is_member": True},
+                                   {"id": "C0HID", "name": "proj-hidden", "is_private": True}])
 
     lines = mod.check_channel_names({}, client)
 
@@ -597,16 +601,43 @@ def test_the_rule_runs_on_the_scopes_the_shipped_manifest_grants():
     assert lines == [], lines
 
 
-def test_a_taken_name_is_found_from_a_listing_the_shipped_manifest_covers():
-    """#2767: the `name_taken` fallback reads the same listing, so a fresh install must find the existing channel
-    through a type the manifest grants, and never fail with `missing_scope`."""
+def test_a_project_channel_is_created_public():
+    """#2767: the public-only listing is sound only while a project channel is created public, so the create call
+    tells Slack so in words, never by a default. A later conversion to private is Slack's act, out of this rule."""
     mod = voiced()
-    client = ScopedClient(listing=[{"id": "C0APP", "name": "proj-app", "is_member": True}], taken=True)
+    client = ScopedClient()
+
+    mod._ensure_channel(client, "proj-app", {}, [].append)
+
+    create = next(params for method, params, _ in client.calls if method == "conversations.create")
+    assert create.get("is_private") is False, create
+
+
+def test_a_taken_name_held_by_a_private_channel_is_found_when_the_app_may_read_it():
+    """#2767: a `name_taken` error can name a private channel the bot can see, and a `public_channel` listing omits
+    it. The fallback asks for the private type too when the app grants `groups:read`, so the existing channel is
+    found, as the diagnostic on main found it."""
+    mod = voiced()
+    client = ScopedClient(listing=[{"id": "C0PRIV", "name": "proj-app", "is_private": True}], taken=True,
+                          extra_scopes=("groups:read",))
     log = []
 
     got = mod._ensure_channel(client, "proj-app", {}, log.append)
 
-    assert got == {"name": "proj-app", "id": "C0APP"}, (got, log)
+    assert got == {"name": "proj-app", "id": "C0PRIV"}, (got, log)
+
+
+def test_a_taken_name_a_fresh_install_cannot_read_is_reported_by_its_own_line():
+    """#2767: the shipped manifest grants no `groups:read`, so a name held by a private channel stays out of reach.
+    The daemon names that plainly, in one line of its own, and never as the `missing_scope` refusal."""
+    mod = voiced()
+    client = ScopedClient(listing=[{"id": "C0PRIV", "name": "proj-app", "is_private": True}], taken=True)
+    log = []
+
+    got = mod._ensure_channel(client, "proj-app", {}, log.append)
+
+    assert got is None, got
+    assert log == ["voiced: Slack holds the name proj-app and lists no channel for it"], log
 
 
 def test_a_sync_reports_a_mapped_channel_that_slipped_outside_the_prefix(tmp_path):

@@ -1109,13 +1109,31 @@ def check_channel_names(mapping, client):
 
     The client is the one source of live channel names, handed in by the caller; no token is read here. A listing Slack
     refuses yields one line naming the error, never an empty pass over a list the check never read. The listing asks
-    for public channels only, the type the shipped manifest covers: it grants `channels:read` and no `groups:read`, and
-    a project channel is always created public (#2767).
+    for public channels only, the type the shipped manifest covers: it grants `channels:read` and no `groups:read`
+    (#2767). The rule reads every project channel because `_ensure_channel` creates each one with `is_private` false;
+    a channel converted to private later is Slack's act, and that channel leaves this list.
     """
     listing = client.api("conversations.list?types=public_channel&limit=1000")
     if not listing.get("ok"):
         return [f"voiced: cannot list channels to check their names: {listing.get('error')}"]
     return channel_name_violations(mapping, listing.get("channels") or [])
+
+
+def _listed_channel(client, name):
+    """The channel called `name` in Slack's list: the public type first, then the private one (#2767).
+
+    A `name_taken` error can name a private channel the bot can see, and a `public_channel` listing omits it. The
+    second read asks for both types, which Slack refuses when the app grants no `groups:read`; a fresh install then
+    searches the public list alone, and the caller reports that line.
+    """
+    for types in ("public_channel", "public_channel,private_channel"):
+        listing = client.api(f"conversations.list?types={types}&limit=1000")
+        if not listing.get("ok"):
+            continue
+        found = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
+        if found:
+            return found
+    return None
 
 
 def _ensure_channel(client, name, channels, log):
@@ -1127,8 +1145,7 @@ def _ensure_channel(client, name, channels, log):
     if got.get("ok"):
         channel = got.get("channel") or {}
     elif got.get("error") == "name_taken":
-        listing = client.api("conversations.list?types=public_channel&limit=1000")
-        channel = next((c for c in listing.get("channels") or [] if c.get("name") == name), None)
+        channel = _listed_channel(client, name)
         if not channel:
             log(f"voiced: Slack holds the name {name} and lists no channel for it")
             return None
