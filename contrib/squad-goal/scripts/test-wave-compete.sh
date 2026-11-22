@@ -55,24 +55,42 @@ child 772 g772; r=$(en 772); [ "$(sha $W)" = "$($G -C "$T/c772" rev-parse HEAD)"
 # The competing gate takes the lock and its two slots and holds them. The landing that starts meanwhile queues for the
 # lock and must hold no slot while it waits (ADR-0163, ADR-0164). The hold ends on the suite's own release, never on a bare
 # sleep: under load a fixed hold ran out before the queue was read, and the case counted a holder that had already gone (#2759).
-# The loop's own bound is only a safety net for a suite that dies before the release; no verdict turns on it.
+# WAVE_COMPETE_EARLY_RELEASE=<seconds> reproduces #2759: the competing gate then holds a bare fixed timer, the pre-fix shape,
+# and the load-slow read finds the holder gone. The default, event-held run must stay green.
 rel=$T/comp.release
-bash "$T/s/gate.sh" sh -c 'i=0; while [ ! -e "$1" ] && [ "$i" -lt 2400 ]; do sleep 0.05; i=$((i+1)); done' sh "$rel" >/dev/null 2>&1 & comp=$!
+comp=
+release_gate() { : > "$rel" 2>/dev/null || true; }
+drop_comp() { release_gate; [ -n "$comp" ] && kill "$comp" 2>/dev/null; }
+trap drop_comp EXIT   # an earlier assertion failure still lets the gate go, so it never outlives this case
+hold=${WAVE_COMPETE_EARLY_RELEASE:-0}
+bash "$T/s/gate.sh" sh -c 'rel=$1; fixed=$2
+  if [ "$fixed" != 0 ]; then sleep "$fixed"; exit 0; fi
+  i=0; while [ ! -e "$rel" ] && [ "$i" -lt 2400 ]; do sleep 0.05; i=$((i+1)); done' sh "$rel" "$hold" >/dev/null 2>&1 & comp=$!
 for _ in $(seq 1 100); do [ -d "$T/st/locks/gate" ] && [ "$(occ)" = 2 ] && break; sleep 0.05; done
 held_before=$(occ)
 t0=$(date +%s); ( land ) > "$T/land.out" 2>&1 & lp=$!
 clog=$T/st/wave-check-wave_run-77.log   # the tip check's own output, where the gate's wait line goes
-for _ in $(seq 1 200); do /usr/bin/grep -q 'serial: waiting for lock gate' "$clog" 2>/dev/null && break; sleep 0.05; done
-queued=$(/usr/bin/grep -c 'serial: waiting for lock gate' "$clog" 2>/dev/null)
-# A load-slow observation is modelled, so the repro of #2759 runs on any machine: the case must not turn on how long this read
-# takes. The competing gate holds until the release below, so a slow read cannot find it gone.
+# The wait is the event itself: block until the landing names its wait for the lock gate. The bound below is only a guard for
+# a wedged landing, and it reports a distinct failure; the case never counts a queue that never formed (#2759).
+i=0
+while ! /usr/bin/grep -q 'serial: waiting for lock' "$clog" 2>/dev/null; do
+  kill -0 "$lp" 2>/dev/null || break    # the landing ended: the wait line will never come
+  sleep 0.05; i=$((i+1)); [ "$i" -ge 1200 ] && break   # 60 s: is this landing wedged?
+done
+queued=0
+/usr/bin/grep -q 'serial: waiting for lock' "$clog" 2>/dev/null && queued=$(/usr/bin/grep -c 'serial: waiting for lock' "$clog")
+# A load-slow observation is modelled here: the case must not turn on how long this read takes.
 [ -n "${WAVE_COMPETE_OBSERVE_DELAY:-}" ] && sleep "$WAVE_COMPETE_OBSERVE_DELAY"
 held_wait=$(occ)
-: > "$rel"   # the waiting landing ends on this event: the competing gate lets go of the lock and its slots here (#2759)
-[ "$held_before" = 2 ] && [ "$queued" = 1 ] && [ "$held_wait" = 2 ] \
-  && ok "the landing queued behind the competing gate holds no worker slot" \
-  || ko "queued landing: before $held_before, queued $queued, while waiting $held_wait"
-wait "$lp"; lrc=$?; wait "$comp"; el=$(( $(date +%s) - t0 ))
+release_gate   # the waiting landing ends on this event: the competing gate lets go of the lock and its slots here (#2759)
+if [ "$queued" = 0 ]; then
+  ko "the landing never named its wait for the lock gate (log: '$(cat "$clog" 2>/dev/null)')"
+else
+  [ "$held_before" = 2 ] && [ "$queued" = 1 ] && [ "$held_wait" = 2 ] \
+    && ok "the landing queued behind the competing gate holds no worker slot" \
+    || ko "queued landing: before $held_before, queued $queued, while waiting $held_wait"
+fi
+wait "$lp"; lrc=$?; wait "$comp"; comp=; trap - EXIT; el=$(( $(date +%s) - t0 ))
 [ "$lrc" = 0 ] && ok "the landing pass succeeds" || ko "landing exit $lrc: '$(cat "$T/land.out")'"
 [ "$el" -lt 60 ] && ok "both children land inside the deadline (${el}s)" || ko "the landing took ${el}s"
 $O merge-base --is-ancestor "$($G -C "$T/c771" rev-parse HEAD)" "$(sha dev)" && $O merge-base --is-ancestor "$($G -C "$T/c772" rev-parse HEAD)" "$(sha dev)" \
