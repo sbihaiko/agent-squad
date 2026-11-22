@@ -204,10 +204,22 @@ def test_each_delivered_message_reaches_the_policy(tmp_path):
 
 def test_a_delivered_message_is_fast_for_the_next_poll(tmp_path):
     # The message the poller just read is the channel's last activity, so the decision it carries plans the next poll
-    # one fast interval away and never at the slow interval of an empty channel.
-    conn = FakeConnector([message("100.000100")])
+    # one fast interval away and never at the slow interval of an empty channel. Its `ts` is the epoch of the read, as
+    # the connector writes it, so the message's own time is the anchor.
+    conn = FakeConnector([message(f"{NOW.timestamp():.6f}")])
     (_, decision), = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
     assert decision.next_poll == NOW + timedelta(minutes=1)
+
+
+def test_each_message_plans_its_next_poll_from_its_own_ts(tmp_path):
+    # A page read late holds messages of different ages. Each decision plans from its message's own `ts`: an old message
+    # plans the slow interval after quiet_after and a fresh one the fast interval. The tick's clock is never the
+    # activity, and no delivered message turns the thread window on.
+    old = f"{NOW.timestamp() - 1200:.6f}"           # twenty minutes before the read: past quiet_after
+    fresh = f"{NOW.timestamp() - 120:.6f}"          # two minutes before the read: inside it
+    conn = FakeConnector([message(old), message(fresh)])
+    got = poller(conn, tmp_path / "checkpoint.json").poll(WS, CH)
+    assert [d.next_poll - NOW for _, d in got] == [timedelta(minutes=10), timedelta(minutes=1)]
 
 
 def test_an_own_message_is_not_delivered_and_never_moves_the_checkpoint(tmp_path):
