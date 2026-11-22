@@ -22,13 +22,13 @@ own="!$d/promote-credential.sh"                    # the gh token, read by this 
 g() { /usr/bin/git -C "$W" -c credential.helper= -c "credential.helper=$own" -c "credential.helper=$cred" "$@"; }   # `=` resets the inherited helpers
 no() { echo "promote-main: $*" >&2; exit 1; }
 # (#2702) The promotion pass emits one release event when main moves: `prod_release`, which a subscribed channel announces.
-# The record holds the event id and the items the release carries, and `voiced` reads it. A record that cannot be written costs
-# the announcement alone: main already moved, so it never changes this exit code.
+# The record holds the event id, the items the release carries, and the stage `S1` that announces them (#2703), and `voiced`
+# reads it. A record that cannot be written costs the announcement alone: main already moved, so it never changes this exit code.
 emit_release() {  # <event> <key> <from> <to>
   local event=$1 key=$2 args=() l out
   while IFS= read -r l; do [ -n "$l" ] && args+=(--item "$l"); done <<< "$(g log --no-merges --format='%h %s' "$3..$4" 2>/dev/null)"
   [ ${#args[@]} -gt 0 ] || args=(--item "$4")
-  out=$(python3 "$d/../../voice/release_events.py" emit --event "$event" --key "$key" "${args[@]}" 2>&1) \
+  out=$(python3 "$d/../../voice/release_events.py" emit --event "$event" --key "$key" --stage S1 "${args[@]}" 2>&1) \
     || { echo "release: $event not emitted: $(printf '%s' "$out" | tail -1)" >&2; return 0; }
   echo "release: $out"
 }

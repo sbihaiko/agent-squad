@@ -1,6 +1,7 @@
 """The release events the promotion pass and a project's deploy step emit, and `voiced` reads (issue #2702).
 
-usage: python3 contrib/voice/release_events.py emit --event <id> --item <text> [--item <text>...] [--key <key>] [--state DIR]
+usage: python3 contrib/voice/release_events.py emit --event <id> --item <text> [--item <text>...] [--key <key>]
+                                                    [--stage S1] [--state DIR]
        python3 contrib/voice/release_events.py read [--state DIR]
 
 The promotion pass emits `stg_release` when the `dev` to `stg` pull request merges, and `prod_release` when `main` moves.
@@ -14,7 +15,11 @@ One event is one JSON line in `$VOICE_STATE/release-events.jsonl` (`--state` nam
   again over one release announces it once. Without `--key`, the key is the event id and a digest of its items, so two
   emissions of the same content still make one record;
 - `items`: the list of items the release carries, one line of text each;
-- `ts`: when the event was emitted, in ISO 8601 UTC.
+- `ts`: when the event was emitted, in ISO 8601 UTC;
+- `stage`: the delivery stage that emitted the event, `S1` unless `--stage` names another. The promotion pass tags its
+  records `S1`, the stage that delivers the `owned` announcement (story 71). `voiced` announces a record of stage `S1`
+  alone, so a record of a later stage waits for its own path. A record an older pass wrote names no stage, and it is
+  read as `S1`, so a record already on disk keeps its notice.
 
 The write appends the whole line under one exclusive lock and fsyncs it, so a reader sees a whole record or none. A line
 this build cannot read is skipped and the records around it stay readable. `voiced` reads the same file through
@@ -29,6 +34,7 @@ import sys
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 RECORD = "release-events.jsonl"
+DEFAULT_STAGE = "S1"      # the stage that delivers the owned release announcement; a record that names none is read as this
 
 
 def path(state_dir=None):
@@ -66,11 +72,14 @@ def _digest(items):
     return hashlib.sha1("\n".join(items).encode("utf-8")).hexdigest()[:12]
 
 
-def emit(event, items, key=None, state_dir=None):
-    """Append one event record, unless its key is already recorded. Returns `(record, created)`."""
+def emit(event, items, key=None, state_dir=None, stage=None):
+    """Append one event record, unless its key is already recorded. Returns `(record, created)`.
+
+    `stage` names the delivery stage of the emit; a caller that names none writes `S1`, the stage that announces it."""
     items = list(items)
     key = key or f"{event}:{_digest(items)}"
     record = {"id": event, "key": key, "items": items,
+              "stage": str(stage) if stage else DEFAULT_STAGE,
               "ts": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
     target = path(state_dir)
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -91,11 +100,11 @@ def emit(event, items, key=None, state_dir=None):
 
 def _args(argv):
     """The `emit` and `read` shapes, read by hand so the command needs no module path."""
-    opts = {"event": None, "key": None, "state": None, "items": []}
+    opts = {"event": None, "key": None, "state": None, "stage": None, "items": []}
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--event", "--key", "--item", "--state") and i + 1 < len(argv):
+        if a in ("--event", "--key", "--item", "--state", "--stage") and i + 1 < len(argv):
             if a == "--item":
                 opts["items"].append(argv[i + 1])
             else:
@@ -118,7 +127,8 @@ def main(argv):
     if not opts["event"] or not opts["items"]:
         print("release_events: emit needs --event and at least one --item", file=sys.stderr)
         return 2
-    record, created = emit(opts["event"], opts["items"], key=opts["key"], state_dir=opts["state"])
+    record, created = emit(opts["event"], opts["items"], key=opts["key"], state_dir=opts["state"],
+                           stage=opts["stage"])
     state = "already emitted" if not created else "emitted"
     print(f"event {record['id']} {state}: {len(record['items'])} item(s), key {record['key']}")
     return 0

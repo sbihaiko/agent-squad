@@ -48,6 +48,27 @@ def test_the_record_holds_the_event_id_and_the_items(tmp_path):
     assert got[0]["ts"], "the record carries the time it was emitted"
 
 
+def test_the_record_names_the_stage_that_emitted_it(tmp_path):
+    """#2703: the record carries the stage that announces it, `S1` by default and the named stage otherwise."""
+    rel = load("release_events", MODULE)
+    default, _ = rel.emit("stg_release", ["a1b2c3 Merge the fix"], key="stg_release:a1b2c3", state_dir=str(tmp_path))
+    later, _ = rel.emit("stg_release", ["d4e5f6 Land the doc"], key="stg_release:d4e5f6", state_dir=str(tmp_path),
+                        stage="S4")
+    assert default["stage"] == "S1"
+    assert later["stage"] == "S4"
+    assert [row["stage"] for row in lines(tmp_path)] == ["S1", "S4"]
+
+
+def test_the_command_tags_the_stage_it_is_given(tmp_path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    env["VOICE_STATE"] = str(tmp_path)
+    r = subprocess.run([sys.executable, str(MODULE), "emit", "--event", "stg_release", "--key", "stg_release:88bb",
+                        "--stage", "S4", "--item", "88bb Deploy and e2e green"],
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0, r.stderr
+    assert [row["stage"] for row in lines(tmp_path)] == ["S4"]
+
+
 def test_a_second_emission_of_one_key_writes_no_second_record(tmp_path):
     rel = load("release_events", MODULE)
     first, created = rel.emit("prod_release", ["a1b2c3 Ship"], key="prod_release:a1b2c3", state_dir=str(tmp_path))

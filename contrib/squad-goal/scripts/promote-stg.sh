@@ -94,13 +94,14 @@ say() {  # sha, reason: one line per tip and reason
   echo "$(date -u +%FT%TZ) promote-stg: $1 $2" >> "$log"; }
 refuse() { say "$1" "$2"; echo "promote-stg: $2" >&2; exit 1; }   # the one reason, on the log line and stderr
 # (#2702) The promotion pass emits one release event when stg moves: `stg_release`, which a subscribed channel announces. The
-# record holds the event id and the items the release carries, and `voiced` reads it. A record that cannot be written costs the
-# announcement alone: the promotion already happened, so it never changes this exit code.
+# record holds the event id, the items the release carries, and the stage `S1` that announces them (#2703), and `voiced` reads
+# it. A record that cannot be written costs the announcement alone: the promotion already happened, so it never changes this
+# exit code.
 emit_release() {  # <event> <key> <from> <to>
   local event=$1 key=$2 args=() l out
   while IFS= read -r l; do [ -n "$l" ] && args+=(--item "$l"); done <<< "$(g log --no-merges --format='%h %s' "$3..$4" 2>/dev/null)"
   [ ${#args[@]} -gt 0 ] || args=(--item "$4")
-  out=$(python3 "$d/../../voice/release_events.py" emit --event "$event" --key "$key" "${args[@]}" 2>&1) \
+  out=$(python3 "$d/../../voice/release_events.py" emit --event "$event" --key "$key" --stage S1 "${args[@]}" 2>&1) \
     || { echo "release: $event not emitted: $(printf '%s' "$out" | tail -1)" >&2; return 0; }
   echo "release: $out"
 }
