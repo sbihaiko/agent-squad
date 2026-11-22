@@ -360,6 +360,64 @@ def test_a_save_reads_the_committed_diff_from_the_synced_worktree(hub, tmp_path,
         == "Shipped to STG: {items}."   # the landing stays in dev until the owner's save replaces it
 
 
+def test_a_save_after_a_later_landing_lands_the_owners_committed_file(hub, tmp_path, monkeypatch):
+    """A landing in dev changes `slack.yaml` after the last save, and the owner then saves the document the hub's
+    worktree still holds. The save must land the owner's document: a diff read from the file as it stood before the
+    sync would call the save unchanged and leave the later landing in place (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    mine = copy.deepcopy(COMMITTED)
+    mine["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, confirm=True)
+    assert "err" not in out, out
+    later = clone(tmp_path, origin, "other-checkout")
+    theirs = copy.deepcopy(mine)
+    theirs["events"][0]["template"] = "Shipped to STG: {items}."
+    (later / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(theirs, sort_keys=False))
+    git(later, "add", "--", "docs/squad/slack.yaml")
+    git(later, "commit", "-q", "-m", "a later landing that changes the Slack file")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, new_local=new_l, confirm=True)
+    assert "err" not in out, out
+    assert out.get("sha"), out   # a diff read before the sync calls this save local-only and drops the owner's document
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == mine
+    entry = json.loads(hub.slack_registry_path().read_text())[str(derived / "docs" / "squad" / "slack.yaml")]
+    assert entry["sha"] == out["sha"] and entry["committed"] is True, entry
+    assert git(origin, "rev-parse", "dev") == out["sha"]
+
+
+def test_a_dirty_derived_worktree_refuses_the_save_with_no_file_changed(hub, tmp_path, monkeypatch):
+    """A derived worktree that carries uncommitted work cannot land a save. The save refuses before it writes either
+    file, so a refused save never leaves the local file rewritten and the committed change unlanded (issue #2763)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    wt, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin)
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    derived = tmp_path / "state" / "slack-worktree"
+    mine = copy.deepcopy(COMMITTED)
+    mine["project"]["language"] = "pt-BR"
+    out, c, loc = saved(hub, tmp_path, new_committed=mine, confirm=True)
+    assert "err" not in out, out
+    edited = copy.deepcopy(mine)
+    edited["events"][0]["template"] = "Hand edit: {items}."
+    (derived / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(edited, sort_keys=False))
+    assert git(derived, "status", "--porcelain") != ""
+    new_l = copy.deepcopy(LOCAL)
+    new_l["workspaces"][0]["label"] = "client-b"
+    out, c, loc = saved(hub, tmp_path, new_committed=edited, new_local=new_l, confirm=True)
+    assert "err" in out and "uncommitted work" in out["err"], out
+    assert yaml.safe_load(loc.read_text())["workspaces"][0]["label"] == "client-a"
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == edited
+    assert git(origin, "rev-parse", "dev") == git(derived, "rev-parse", "HEAD")   # no new land
+
+
 def test_a_named_worktree_the_hub_did_not_create_is_never_advanced(hub, tmp_path, monkeypatch):
     """The hub advances only the worktree it derives for itself. A worktree the owner names by hand keeps its HEAD: the
     save refuses a worktree that stands behind origin/dev rather than resetting it (issue #2763)."""
