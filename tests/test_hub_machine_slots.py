@@ -350,7 +350,7 @@ try {
   const page = task.page("p1");
   for (const width of [1000, 900, 1440]) {
     await page.cdp("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
-    await page.goto(URL);
+    await page.goto(URL, { timeout: 90000 });   // 15 s is the default, and a loaded machine commits slower (#2709)
     await page.evaluate(RENDER_SLOTS, [FIXTURE, width]);
     out[width] = await page.evaluate(MEASURE_SLOTS);
     await page.screenshot({ path: SHOT_DIR + "/slots-" + width + ".png" });
@@ -682,6 +682,7 @@ def test_the_in_use_bar_keeps_its_gap_before_the_cap_field_at_an_intermediate_wi
             assert row["use_overflow"] is False, (vw, row)
 
 
+@pytest.mark.heavy   # three real renders: the call is over 1 s even on an idle machine
 @pytest.mark.skipif(shutil.which("ego-browser") is None, reason="ego-browser is needed to render the Machine slots group")
 def test_no_machine_slots_label_overlaps_its_bar_and_the_gate_label_wraps_to_two_lines(hub, tmp_path):
     """The rendered check beside the browser-free model: the same rules, measured on a real render."""
