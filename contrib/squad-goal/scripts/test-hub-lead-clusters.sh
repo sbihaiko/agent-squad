@@ -14,7 +14,8 @@ from datetime import UTC, datetime, timedelta
 now = datetime(2026, 11, 4, tzinfo=UTC)
 spec = importlib.util.spec_from_file_location("board_leadtime", os.environ["LT_SRC"])
 lt = importlib.util.module_from_spec(spec); spec.loader.exec_module(lt)
-page = pathlib.Path(os.environ["HUB_SRC"]).read_text()
+# hub.py loads its theme modules into one namespace (#2742): the page source is hub.py plus every theme file.
+page = "".join(q.read_text() for q in [pathlib.Path(os.environ["HUB_SRC"])] + sorted(pathlib.Path(os.environ["HUB_SRC"]).parent.glob("hub_theme_*.py")))
 block = re.search(r"// flow-charts:\n(.*?)// flow-charts:end", page, re.S).group(1)
 
 def card(n, closed, hours, columns=None):

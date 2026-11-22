@@ -76,9 +76,11 @@ if assigns.get(name, 0) != 1 or [src for src, _ in loops] != [name]:
     sys.exit(1)
 sys.exit(0)
 PY
-grep -q 'budget_fact(_hist.history_path' "$here/hub.py" \
+# The hub is one program: hub.py compiles its hub_theme_*.py modules into its own namespace (#2742), so the facts and
+# the card are read across the entry point and every theme module.
+grep -q 'budget_fact(_hist.history_path' "$here"/hub.py "$here"/hub_theme_*.py \
   && ok "the Monitor facts carry the GraphQL points" || ko "the Monitor facts do not carry the GraphQL points"
-! grep -q 'instTile("GraphQL"' "$here/hub.py" \
+! grep -q 'instTile("GraphQL"' "$here"/hub.py "$here"/hub_theme_*.py \
   && ok "the card draws no GraphQL tile (removed by the owner)" || ko "the card draws a GraphQL tile the owner removed"
 
 # (#1394) A record that closed before the card's last moves is re-read: the Status clock can lag the move it stamps, so a
