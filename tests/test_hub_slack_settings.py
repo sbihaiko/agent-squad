@@ -123,6 +123,17 @@ def test_a_person_role_is_manager_or_colleague(ctx):
     assert not saved_file(ctx).exists()
 
 
+def test_the_hub_editor_refuses_prod_in_a_role_deploy_and_names_deploy(ctx):
+    got = save(ctx, roles=[{"id": "manager", "deploy": ["stg", "prod"]}], confirm=True)
+    assert "roles[0].deploy" in got.get("err", "")
+    assert not saved_file(ctx).exists()
+
+
+def test_the_hub_editor_accepts_a_role_deploy_without_prod(ctx):
+    got = save(ctx, roles=[{"id": "manager", "deploy": ["stg"]}], confirm=True)
+    assert "err" not in got
+
+
 @pytest.mark.parametrize("bad", [
     {"prefix": "two\nlines"},
     {"prefix": ""},
