@@ -251,6 +251,102 @@ def dev_tip(checkout):
     return sha, text
 
 
+def _rows(value):
+    """The mappings of a list, so a file whose shape is wrong still yields the rows it can name."""
+    return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def project_documents_at_start(projects):
+    """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
+
+    A tip that cannot be read, or a revision that breaks a rule, contributes nothing: the refresh that follows reports
+    it, and this start opens only the sockets it can justify.
+    """
+    docs = {}
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if not repo:
+            continue
+        try:
+            _, text = dev_tip((entry.get("checkout") or "").strip())
+        except TipUnreadable:
+            continue
+        out = []
+        doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
+        if doc is not None and not out and not slackpolicy.validate(doc, {}):
+            docs[repo] = doc
+    return docs
+
+
+def project_documents(state, projects):
+    """The active revision of each project: repository -> document; a project with no active revision contributes none."""
+    docs = {}
+    for entry in projects or ():
+        repo = str((entry or {}).get("repo") or "").strip()
+        if not repo:
+            continue
+        revision = (state.active_revision(repo) or {}).get("revision")
+        if isinstance(revision, dict):
+            docs[repo] = revision
+    return docs
+
+
+def app_keychains(documents):
+    """app id -> {"bot", "app"}: the Keychain entry names of each app an owned workspace names.
+
+    One entry per app id, so two projects that name one app yield one entry and one socket. The app id keys the entry
+    and the Keychain entry names are its values, so an id never becomes a Keychain name.
+    """
+    apps = {}
+    for repo in sorted(documents or {}):
+        doc = documents[repo] or {}
+        declared = {str(app.get("id")): app for app in _rows(doc.get("apps")) if app.get("id")}
+        for ws in _rows(doc.get("workspaces")):
+            if str(ws.get("class") or "") != "owned":
+                continue
+            app_id = str(ws.get("app") or "").strip()
+            if not app_id or app_id in apps:
+                continue
+            entry = (declared.get(app_id) or {}).get("keychain")
+            entry = entry if isinstance(entry, dict) else {}
+            apps[app_id] = {"bot": str(entry.get("bot") or "").strip(),
+                            "app": str(entry.get("app") or "").strip()}
+    return apps
+
+
+def app_tokens(specs, read=None):
+    """app id -> {"bot": token, "app": token}, each read from the Keychain entry its name points to.
+
+    The file holds only the entry names, so a token value never enters it. `read` is the one Keychain reader, injected
+    so a test proves the names that are read.
+    """
+    read = read or keychain.read_secret
+    return {app_id: {"bot": read(spec["bot"]), "app": read(spec["app"])} for app_id, spec in (specs or {}).items()}
+
+
+def channel_claims(documents):
+    """channel id -> the projects that name it, in sorted project order."""
+    claims = {}
+    for repo in sorted(documents or {}):
+        for ws in _rows((documents[repo] or {}).get("workspaces")):
+            for channel in _rows(ws.get("channels")):
+                cid = str(channel.get("id") or "").strip()
+                if cid:
+                    claims.setdefault(cid, []).append(repo)
+    return claims
+
+
+def channel_claim_refusals(documents):
+    """One line per channel id that two or more projects claim; the line names both projects and the channel id."""
+    claims = channel_claims(documents)
+    lines = []
+    for cid in sorted(claims):
+        repos = claims[cid]
+        if len(repos) > 1:
+            lines.append(f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused")
+    return lines
+
+
 class SlackClient:
     """The daemon's one Slack call path with the bot token, injected so a test passes a fake and no token is printed."""
 
@@ -909,6 +1005,7 @@ class Daemon:
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
+        self._channel_conflicts = set()   # each refused channel claim, so one conflict is not one DM per poll
 
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
@@ -926,7 +1023,39 @@ class Daemon:
             if not repo:
                 continue
             results.append(self.refresh_one(repo, entry, local_docs, local_defects))
+        self.refuse_channel_claims(projects)
         return results
+
+    def refuse_channel_claims(self, projects=None):
+        """Refuse every channel id two projects claim: one line and one DM that name both projects and the id.
+
+        The claim is read across the projects' active revisions, so a file edit alone never widens one project's reach.
+        A conflict already told is not told again on the next poll.
+        """
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        lines = channel_claim_refusals(project_documents(self.state, projects))
+        for line in lines:
+            if line in self._channel_conflicts:
+                continue
+            self._channel_conflicts.add(line)
+            self.log(line)
+            self.notice_channel_conflict(line)
+        return lines
+
+    def notice_channel_conflict(self, line):
+        """One DM to the owner about a channel id two projects claim; a refused DM is a log line, never a lost refusal."""
+        if self.client is None or not self.owner:
+            return False
+        try:
+            got = self.client.api("chat.postMessage", {"channel": self.owner, "text": line}, post=True)
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a daemon that stops answering
+            self.log(f"voiced: the channel conflict notice was not sent: {type(x).__name__}")
+            return False
+        if not got.get("ok"):
+            self.log(f"voiced: the channel conflict notice was refused: {got.get('error')}")
+            return False
+        return True
 
     def local_documents(self, projects):
         """Each project's local Slack file read once: `(file name, document)` by repository, and the defects of reading it.
@@ -1397,21 +1526,27 @@ async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
         await asyncio.sleep(interval)
 
 
-async def serve(daemon, app_token, connect=None, open_connection=None, stop=None):
-    """Hear Slack and answer the outboxes at once: the connection loop runs beside two watchers.
+async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
+    """Hear Slack and answer the outboxes at once: one Socket Mode connection per app, beside two watchers.
 
-    The outbox watcher and the Slack-file watcher are tasks of the same loop, so an answer the session appends is posted
-    while the socket is open and a moved dev tip is read while the daemon answers. All stop together, and the watchers
-    are cancelled with the connection loop.
+    `apps` is one app token, or a mapping of app id to app token for several apps. One connection runs per app, so two
+    projects that name one app share one socket. The outbox watcher and the Slack-file watcher are tasks of the same
+    loop, so an answer the session appends is posted while a socket is open and a moved dev tip is read while the daemon
+    answers. All stop together, and the watchers are cancelled with the connection loops.
     """
+    if isinstance(apps, str):
+        apps = {"app": apps}
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
+    hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
+               for token in apps.values()]
     try:
-        await hear(daemon, app_token, connect=connect, open_connection=open_connection, stop=stop)
+        await asyncio.gather(*hearing)
     finally:
-        for task in (outboxes, configs):
+        tasks = (outboxes, configs, *hearing)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(outboxes, configs, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def hear(daemon, app_token, connect=None, open_connection=None, stop=None):
@@ -1512,13 +1647,18 @@ def main(argv):
         print(f"voiced: another daemon holds {state_dir}; this start stands aside", file=sys.stderr)
         lock.close()
         return 1
+    projects = hub_projects()
+    specs = app_keychains(project_documents_at_start(projects))
+    if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
+        specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
-        bot = keychain.read_secret(keychain.BOT_TOKEN)
-        app = keychain.read_secret(keychain.APP_TOKEN)
         key = keychain.read_secret(keychain.GEMINI_KEY)
+        tokens = app_tokens(specs)
     except keychain.SecretMissing as x:
         print(f"voiced: Keychain entry missing: {x}", file=sys.stderr)
         return 1
+    bot = next(iter(tokens.values()))["bot"]
+    apps = {app_id: entry["app"] for app_id, entry in tokens.items()}
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
@@ -1526,7 +1666,7 @@ def main(argv):
                     synthesizer=lambda script: spoken_clip(key, script),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title))
     try:
-        asyncio.run(serve(daemon, app))
+        asyncio.run(serve(daemon, apps))
     except KeyboardInterrupt:
         return 0
     return 0

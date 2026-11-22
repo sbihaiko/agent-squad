@@ -1718,3 +1718,111 @@ def test_a_legacy_record_of_another_repository_is_never_adopted(tmp_path):
 
     assert state.active_revision("a/b") is None
     assert Path(state.slack_path("a/b")).exists() is False
+
+
+# --- one Socket Mode connection per app across projects (#2686, SPEC #2682 stories 6 and 7)
+
+# Two project revisions that name one app, each with its own channel. Written as data so the expectation never comes
+# from the loader.
+SLACK_APP_A = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0PROJ0001", "name": "proj-acme-app", "mode": "listen+speak"}],
+    }],
+}
+
+SLACK_APP_B = {
+    "version": 1,
+    "apps": [{"id": "hal9k", "keychain": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}],
+    "workspaces": [{
+        "id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0OTHER001", "name": "proj-acme-other", "mode": "listen+speak"}],
+    }],
+}
+
+
+def test_two_projects_that_name_one_app_open_one_socket(tmp_path):
+    """Criterion 1 and story 7: two projects on one app share one socket, so Slack sees one connection."""
+    mod = voiced()
+    apps = mod.app_keychains({"acme/app": SLACK_APP_A, "acme/other": SLACK_APP_B})
+    assert apps == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}
+
+    stop = asyncio.Event()
+    opened = []
+
+    def connect(url, **kw):
+        socket = FakeWebSocket([], stop)
+        opened.append(socket)
+        return socket
+
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"", log=lambda line: None)
+    asyncio.run(mod.serve(daemon, {app_id: "xapp-" + app_id for app_id in apps},
+                          connect=connect, open_connection=lambda: {"url": "wss://fake"}, stop=stop))
+
+    assert len(opened) == 1, "two projects that name one app opened two sockets"
+
+
+def test_the_app_id_stays_separate_from_the_keychain_entry_names():
+    """Criterion 2: the app id keys the entry; the Keychain entry names are its values, never the id."""
+    mod = voiced()
+    apps = mod.app_keychains({"acme/app": SLACK_APP_A})
+    assert apps == {"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}
+    assert "hal9k" not in (apps["hal9k"]["bot"], apps["hal9k"]["app"])
+
+
+def test_voiced_reads_both_token_entries_by_name():
+    """Criterion 3: the bot and app tokens come from the Keychain entry names, never from a value in the file."""
+    mod = voiced()
+    reads = []
+
+    def read(name):
+        reads.append(name)
+        return "value-of-" + name
+
+    got = mod.app_tokens({"hal9k": {"bot": "agent-squad-slack-bot", "app": "agent-squad-slack-app"}}, read=read)
+
+    assert reads == ["agent-squad-slack-bot", "agent-squad-slack-app"]
+    assert got == {"hal9k": {"bot": "value-of-agent-squad-slack-bot", "app": "value-of-agent-squad-slack-app"}}
+    assert "xoxb-" not in json.dumps(SLACK_APP_A) and "xapp-" not in json.dumps(SLACK_APP_A)
+
+
+def test_two_projects_that_claim_one_channel_id_are_refused(tmp_path):
+    """Criteria 4 and 5: the refusal names both projects and the channel id, in a line and in one DM."""
+    mod = voiced()
+    client = FakeClient()
+    lines = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lines.append, client=client)
+    shared = {"version": 1, "workspaces": [{
+        "id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+        "channels": [{"id": "C0SHARED01", "name": "shared"}],
+    }]}
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": shared})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": shared})
+
+    got = daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}])
+
+    assert got == ["voiced: acme/app and acme/other claim the channel C0SHARED01; refused"]
+    assert any("acme/app" in line and "acme/other" in line and "C0SHARED01" in line for line in lines), lines
+    posts = client.posts()
+    assert len(posts) == 1, client.calls
+    assert "C0SHARED01" in posts[0]["text"]
+    assert "acme/app" in posts[0]["text"] and "acme/other" in posts[0]["text"]
+
+
+def test_two_projects_on_one_app_with_distinct_channels_are_not_refused(tmp_path):
+    """Criterion 6: the fake SlackClient sees no refusal when each project claims its own channel."""
+    mod = voiced()
+    client = FakeClient()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
+                        transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=lambda line: None, client=client)
+    daemon.state.save_active_revision("acme/app", {"repo": "acme/app", "sha": "1" * 12, "revision": SLACK_APP_A})
+    daemon.state.save_active_revision("acme/other", {"repo": "acme/other", "sha": "2" * 12, "revision": SLACK_APP_B})
+
+    assert daemon.refuse_channel_claims([{"repo": "acme/app"}, {"repo": "acme/other"}]) == []
+    assert client.posts() == []
