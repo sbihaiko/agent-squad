@@ -16,6 +16,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py owed  <owner>/<repo> <run>            "<sha>\t<wave>\t<n>" for each issue the run still owes
        issue_ledger.py landed <key> <ref> <run|branch> <sha>  the landing pass put the issue's work in the base: prints recorded|duplicate|floor
        issue_ledger.py landed <owner>/<repo>                 "<ref>\t<n>" for each issue a landing pass put in the base
+       issue_ledger.py standing <owner>/<repo>               "<n>" for each issue whose newest landing no later requeue undid
        issue_ledger.py requeue <key> <run> <head>            the run requeued the issue's child on this head: prints recorded|duplicate|floor
        issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
        issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
@@ -56,11 +57,13 @@ may not wait for the lock (`wait` false) is `locked`. `read <key> episodes` give
 `open_episodes` reads every issue's open episodes in one pass over the state directory, for a reader that needs the whole
 queue and never one read per child, and keeps that pass until one of the ledger files changes (#1746).
 
-A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` for a pushed work branch): the issue's
+A `landed` fact is the landing pass's own record (`wave.sh` for a wave, `branchland.sh` and `ffland.sh` for a pushed work branch): the issue's
 work is in the base. It is keyed by the run that landed it (`kind` run) or by the branch a branchland pass landed (`kind`
 branch), with the branch and the sha. Rule R reads it instead of a run's land heads (#691, #695): a landing is delivered work
 only when a landing pass wrote the fact. A `requeue` fact holds the head a run requeued the issue's child on, so the pass
-that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6).
+that requeued it is not tried again on the same head (the old auto/requeued-<run>-<child> marker, ADR-0149 rule 6). A landing
+stands while no requeue fact is newer than it: `standing` lists those issues, and the frontier skips them as landed, publish
+pending (#2756).
 
 A `board` fact is one card write of a writer (ADR-0164): `{run, column, instant, state, req, by}`. Its identity is the run and
 the column, and its instant is the event's own time, set once when the event is first recorded; `by` is the writer's name, so
@@ -670,6 +673,15 @@ def landings(repo):   # -> {n: {(ref, kind)}}: the landings each issue of the re
             for n, rec in repo_files(repo)}
 
 
+def standing(repo):   # -> [n]: each issue whose newest landing fact is newer than its newest requeue fact (#2756)
+    def newest(facts): return max((f["ts"] for f in (facts or {}).values() if isinstance(f, dict) and isinstance(f.get("ts"), (int, float))), default=None)
+    out = []
+    for n, rec in repo_files(repo):
+        land, req = newest(rec.get("landed")), newest(rec.get("requeued"))
+        if land is not None and (req is None or land > req): out.append(n)
+    return sorted(out, key=int)
+
+
 def legacy(key, led):   # -> (counter or None, [{run, key, why}] or None, frozen): the old auto/ files of one ledger, read only to be compared
     o, r, n = parse(key)
     if os.environ.get("SG_REPO", f"{o}/{r}") != f"{o}/{r}": return None, None, False
@@ -724,6 +736,9 @@ def main(argv):
             for ref, n in ((ref, n) for n, facts in sorted(landings(key).items(), key=lambda kv: int(kv[0]))
                            for ref in sorted(f for f, _ in facts)):
                 print(f"{ref}\t{n}")
+            return 0
+        if op == "standing" and "#" not in key:
+            for n in standing(key): print(n)
             return 0
         parse(key)
         if op == "read":

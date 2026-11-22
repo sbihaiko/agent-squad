@@ -972,6 +972,18 @@ r=$(run)
 [ "$(marked 781)" = 1 ] && ok "L2: a Refs line in the base with no ledger landing does not hold the issue" || ko "L2: #781 marked=$(marked 781): '$r'"
 case "$r" in *"#781: landed"*) ko "L2: the frontier names #781 landed from a Refs line: '$r'";; *) ok "L2: the frontier names no landing the ledger lacks";; esac
 
+# L3 (#2756): a requeue fact newer than the landing fact undoes the landing. #791 landed and its run requeued it later, so the
+#   frontier dispatches it. #792 was requeued and then landed, so its landing stands and the frontier holds it.
+scene requeued
+issues '[{"number":791,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":792,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+L="$(dirname "$src")/issue_ledger.py"
+python3 "$L" landed 'o/r#791' run-a run aaaa >/dev/null; python3 "$L" requeue 'o/r#791' run-b bbbb >/dev/null
+python3 "$L" requeue 'o/r#792' run-c cccc >/dev/null; python3 "$L" landed 'o/r#792' run-d run dddd >/dev/null
+r=$(run)
+[ "$(marked 791)" = 1 ] && ok "L3: a requeue after the landing makes the issue work again" || ko "L3: #791 marked=$(marked 791): '$r'"
+[ "$(marked 792)" = 0 ] && ok "L3: a landing after the requeue still holds the issue" || ko "L3: #792 marked=$(marked 792): '$r'"
+case "$r" in *"FRONTIER skip #792: landed, publish pending"*) ok "L3: the frontier names #792 landed, publish pending";; *) ko "L3: no landed line for #792: '$r'";; esac
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
