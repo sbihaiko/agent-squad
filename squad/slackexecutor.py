@@ -24,9 +24,9 @@ A request in a `guest` channel never reaches an action: the policy gives it the 
 it there, so `squad/slackproposal.py` can offer it to the owner before any work starts (story 61).
 
 The `loop_control` action (#2705) runs no loop file of its own: it calls the hub loop switch the caller supplies, with
-the hub's own action, so a role holder's resume or drain passes the hub's state rule and the hub's audit (ADR-0162).
-The reply is the copy of the state the hub names in its answer. The hub loop switch has no pause action, and a drain is
-terminal, so a pause is refused at the arguments and never applied as a drain.
+the hub's own action, so a role holder's pause, resume or drain passes the hub's state rule and the hub's audit
+(ADR-0162). The hub loop switch has no pause action, so a pause is the hub's drain. The reply names the state the hub
+reports in its answer; only a body that names no state uses the copy of the action the hub applied.
 
 The module reads no clock and calls no network: the caller supplies the status, log, work, investigation and board
 sources and the hub loop switch, because those answers come from the repository, the board, the project's own log and
@@ -62,16 +62,15 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 _ACTION_ARGUMENT = {REQUEST_WORK: ("title",), REQUEST_INVESTIGATION: ("question",),
                     APPROVE_AND_MOVE: ("card", "to")}
 # The hub's loop switch is the one write path (ADR-0162): a Slack state maps to the hub's own action, and the hub applies
-# the state rule, the audit and the supervisor. A resume is a start and a drain is a drain. The hub switch has no pause
-# action, and a drain is terminal, so a pause is refused: a pause must never be applied as a drain.
-LOOP_STATES = {"resume": "start", "drain": "drain"}
-# The reply of each hub action, so an answer reports the state the hub applied, never one the executor guessed.
+# the state rule, the audit and the supervisor. A resume is a start, and a drain is a drain. The hub switch has no pause
+# action, so a pause is a drain (the owner's ruling on #2705).
+LOOP_STATES = {"pause": "drain", "resume": "start", "drain": "drain"}
+# The reply of a hub action, used only when the hub's 200 body names no state, so an answer never states a change the hub
+# did not report.
 LOOP_REPLY = {
     "start": "The loop starts again: no new dispatch waits on a drain.",
     "drain": "The loop drains: it dispatches nothing new and stops when the live runs and gates finish.",
 }
-# The reply of a state the hub names that this executor has no copy for, so the answer still follows the hub's body.
-LOOP_REPLY_OTHER = "The hub reports the loop state {state}: it applied no change to dispatch."
 
 
 class Request(NamedTuple):
@@ -144,7 +143,11 @@ def check(request, decision, line, project, listed=None):
 
     `listed` is the set of `slack.yaml` shas the hub registry lists (#2695), and the line names the revision its decision
     came from. A request on a revision no save lists grants nothing. None leaves the check out of force, as it is on a
-    machine that names no registry."""
+    machine that names no registry.
+
+    The no-user refusal is loop-only on purpose. `loop_control` writes the loop switch, whose audit names the person who
+    asked, so the hub needs the asker and the action is refused when the line names none. Every other action takes its
+    actor from the role of the decision and writes no audit of its own, so a user-less line still runs it."""
     line = line or {}
     if listed is not None:
         revision = str(line.get("revision") or "")
@@ -172,16 +175,11 @@ def check(request, decision, line, project, listed=None):
         return Refusal("proposal", "a request in a guest channel becomes a proposal to the owner: no action runs "
                                    "before the owner approves it (squad/slackproposal.py)")
     allowed = _ACTION_ARGUMENTS.get(request.action, frozenset())
-    # The state is checked first, so one request that names both a bad state and an extra key reports the state that
-    # decides the action does not apply, and the caller fixes the reading in one round-trip.
-    if request.action == LOOP_CONTROL:
-        state = request.arguments.get("state")
-        if state == "pause":
-            return Refusal("arguments", "the loop_control action cannot pause: the hub loop switch has no pause action "
-                                        "and a drain is terminal, so a pause is refused and never applied as a drain")
-        if state not in LOOP_STATES:
-            return Refusal("arguments", "the loop_control action takes the state resume or drain, and the request "
-                                        f"names {state!r}")
+    # One state check, before the extra-key and missing-key checks: one request that names both a bad state and an extra
+    # key reports the state, which decides that the action does not apply, so the caller fixes it in one round-trip.
+    if request.action == LOOP_CONTROL and request.arguments.get("state") not in LOOP_STATES:
+        return Refusal("arguments", "the loop_control action takes the state pause, resume or drain, and the request "
+                                    f"names {request.arguments.get('state')!r}")
     extra = sorted(set(request.arguments) - set(allowed))
     if extra:
         takes = f"takes only {', '.join(sorted(allowed))}" if allowed else "takes no argument"
@@ -190,9 +188,6 @@ def check(request, decision, line, project, listed=None):
                if not str(request.arguments.get(name) or "").strip()]
     if missing:
         return Refusal("arguments", f"the {request.action} action needs one non-empty {', '.join(missing)}")
-    if request.action == LOOP_CONTROL and request.arguments.get("state") not in LOOP_STATES:
-        return Refusal("arguments", f"the loop_control action takes the state pause, resume or drain, and the request "
-                                    f"names {request.arguments.get('state')!r}")
     if not getattr(decision, "reply", None):
         return Refusal("reply", "the decision names no reply path, so no action runs in this channel")
     return None
@@ -218,8 +213,12 @@ def scrub(text, guest=()):
 
 def _loop_control(state, who, loop):
     """One `loop_control` action through the hub loop switch, whose `(code, body)` answer it returns as a reply text or
-    the one `Refusal` the hub gave. The switch is the caller's: the hub owns the state rule, the audit and the
-    supervisor (ADR-0162), and the executor writes no loop file of its own."""
+    the one `Refusal` the hub gave.
+
+    `who` is the Slack user id of the inbox line, because the hub records the person who asked in its audit. The hub's
+    route takes the login of its own access answer as that name, and this build maps no Slack user id to a hub login, so
+    the audit names the Slack user id as it came from Slack. The switch is the caller's: the hub owns the state rule,
+    the audit and the supervisor (ADR-0162), and the executor writes no loop file of its own."""
     action = LOOP_STATES[state]
     code, body = loop(action, who)
     # The hub's answer is read defensively: a body that is not one mapping refuses the action with the hub's answer and
@@ -227,10 +226,13 @@ def _loop_control(state, who, loop):
     body = body if isinstance(body, dict) else {}
     if code != 200:
         return Refusal("hub", str(body.get("reason") or body.get("err") or f"the hub refused {action} with {code}"))
-    # The reply follows the hub's own answer: the state it names in the body, else the action it applied. A hub that
-    # applies no change is answered with its own state, never with the copy of the state the caller asked for.
-    applied = str(body.get("state") or body.get("action") or action)
-    return LOOP_REPLY.get(applied) or LOOP_REPLY_OTHER.format(state=applied)
+    # The reply names the state the hub's own body reports, verbatim, so an answer never states a change the hub did not
+    # report. Only a body that names no state falls back to the copy of the action the hub applied.
+    named = str(body.get("state") or "").strip()
+    if named:
+        return f"The loop is now {named}."
+    applied = str(body.get("action") or action)
+    return LOOP_REPLY.get(applied) or f"The hub accepted the {action} action."
 
 
 def execute(request, decision, line, project, status=None, logs=None, guest=(), work=None, investigate=None,
