@@ -253,6 +253,15 @@ def test_the_writer_records_the_ts_of_each_draft_in_the_own_list(tmp_path):
     assert own.values() == ("900.000900",)
 
 
+# --- a channel post takes its own connector path ------------------------------------------------------------------
+
+def test_the_channel_post_path_names_the_channel_and_the_text_alone():
+    """An announcement answers no question, so its connector call carries no thread. The hook keeps the writer's own
+    shape and always emits `thread_ts`; this path drops it, instead of sending an empty thread to the tool."""
+    post = W.Draft(W.DRAFT_WORD, CH, "", W.compose("Iara", BODY), "Iara")
+    assert W.channel_post(post) == {"channel": CH, "text": W.compose("Iara", BODY)}
+
+
 # --- the JSON text of a result is read too -----------------------------------------------------------------------
 
 def test_a_result_given_as_json_text_records_its_ts(tmp_path):
