@@ -6,6 +6,8 @@ goes through the `PreToolUse` hook and carries the persona mark. Every id, `ts` 
 import asyncio
 import copy
 
+import pytest
+
 from squad import slackannounce as A
 from squad import slackwriter as W
 
@@ -90,14 +92,16 @@ class FakeConnector:
 
 def deliver(draft, connector):
     """One draft through the writer's `PreToolUse` hook, then to the connector when the hook allows it. The model's own
-    copy of the text is wrong on purpose: the hook decides the exact text."""
+    copy of the text is wrong on purpose: the hook decides the exact text. The call itself comes from the writer's
+    channel-post path, so the connector receives no thread for an announcement."""
     hook = W.pre_write_tool_use(draft)
     call = {"tool": draft.tool, "channel": draft.channel, "text": "a copy the model wrote"}
     answer = asyncio.run(hook({"tool_name": f"mcp__slack__slack_{call['tool']}", "tool_input": call}, "t1", None))
     out = answer.get("hookSpecificOutput") or {}
     if out.get("permissionDecision") != "allow":
         return out
-    connector(draft.tool, out["updatedInput"])
+    assert out["updatedInput"] == {"channel": draft.channel, "thread_ts": "", "text": draft.text}, out
+    connector(draft.tool, W.channel_post(draft))
     return out
 
 
@@ -184,9 +188,14 @@ def test_a_listen_channel_gets_no_announcement():
     assert got == [], "a listen channel never receives a post"
 
 
-def test_a_channel_whose_event_has_no_template_gets_nothing():
+def test_a_subscription_to_an_event_with_no_template_in_either_place_has_nothing_to_post():
+    """Story 71 gives each subscribed event its own template, and the ticket names the event's template or the channel
+    override as the only two sources (#2715). A subscription to an event that neither place gives a template has no text
+    to post, so the channel gets nothing. This is not a rule about templates in general: a channel that names a
+    template still gets its draft."""
     got = drafts(STG, committed__events=[])
-    assert got == [], "a channel with no template for the event has nothing to announce"
+    assert got == [], "the subscription names an event with no template in either place"
+    assert [d.channel for d in drafts(STG)] == [GENERAL], "the same channel still gets its draft from the event template"
 
 
 # --- 5. the draft goes through the write hook -----------------------------------------------------------------------
@@ -196,8 +205,20 @@ def test_the_draft_goes_through_the_write_hook_and_the_connector_gets_the_decide
     connector = FakeConnector()
     out = deliver(d, connector)
     assert out.get("permissionDecision") == "allow", out
+    assert out["updatedInput"] == {"channel": GENERAL, "thread_ts": "", "text": d.text}, \
+        "the hook keeps the writer's shape: updatedInput always carries thread_ts"
     assert connector.calls == [(W.DRAFT_WORD, {"channel": GENERAL, "text": d.text})], connector.calls
-    assert "thread_ts" not in connector.calls[0][1], "a channel post omits thread_ts, as main emits it"
+
+
+def test_the_connector_call_of_an_announcement_takes_the_channel_post_path():
+    """An announcement is a channel post: the connector receives the channel and the decided text, and no thread. It
+    never receives the empty `thread_ts` the hook carries, because a tool that reads a thread would read `''` as one."""
+    d = drafts(STG)[0]
+    assert W.channel_post(d) == {"channel": GENERAL, "text": d.text}
+    hook = W.pre_write_tool_use(d)
+    answer = asyncio.run(hook({"tool_name": f"mcp__slack__slack_{W.DRAFT_WORD}",
+                               "tool_input": {"channel": GENERAL, "text": "a copy"}}, "t1", None))
+    assert answer["hookSpecificOutput"]["updatedInput"]["thread_ts"] == "", "the hook keeps main's shape"
 
 
 def test_the_hook_denies_a_thread_on_a_channel_post():
@@ -221,19 +242,33 @@ def test_the_hook_denies_an_announcement_the_connector_tries_to_redirect():
 
 # --- 6. a fake connector proves each rule ---------------------------------------------------------------------------
 
-def test_a_fake_connector_receives_each_rule():
-    """The six rules read through the one connector the session talks to: one call per subscribed channel, each with
-    the decided text, and no call for a channel that does not subscribe."""
+_CHANNELS = "local__workspaces__0__channels"
+RULES = [
+    ("channel override", STG,
+     {_CHANNELS: [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "announce": ["stg_release"],
+                   "templates": {"stg_release": "No ar em STG ({items})."}}]},
+     [(GENERAL, "*Iara's Msg*\n_No ar em STG (a1b2c3 Merge the fix, d4e5f6 Land the doc)._")]),
+    ("numeric key", {"id": "2702", "items": ["x"]},
+     {"committed__events": [{"id": "2702", "template": "Event {items}."}],
+      _CHANNELS: [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "announce": ["2702"],
+                   "templates": {2702: "Override {items}."}}]},
+     [(GENERAL, "*Iara's Msg*\n_Override x._")]),
+    ("no template", STG, {"committed__events": []}, []),
+    ("listen mode", STG, {_CHANNELS: [{"id": GENERAL, "mode": "listen", "announce": ["stg_release"]}]}, []),
+    ("no persona", STG, {"committed__personas": []}, []),
+    ("unsubscribed", STG, {_CHANNELS: [{"id": GENERAL, "mode": "listen+speak", "speak": "draft"}]}, []),
+]
+
+
+@pytest.mark.parametrize("name,record,over,expected", RULES, ids=[rule[0] for rule in RULES])
+def test_a_fake_connector_receives_each_rule(name, record, over, expected):
+    """Each acceptance rule read through the one connector the session talks to: the call's channel and text, and no
+    call at all for the rules that grant nothing."""
     connector = FakeConnector()
-    for record in (STG, PROD):
-        for d in drafts(record):
-            deliver(d, connector)
-    calls = [(tool, args["channel"], args["text"]) for tool, args in connector.calls]
-    assert calls == [
-        (W.DRAFT_WORD, GENERAL, "*Iara's Msg*\n_Subiu para STG: a1b2c3 Merge the fix, d4e5f6 Land the doc._"),
-        (W.DRAFT_WORD, SUPPORT, "*Iara's Msg*\n_Publicado em PROD: 99aa Ship the release._"),
-    ], calls
-    assert all(channel != QUIET for _, channel, _ in calls), "a channel that does not subscribe gets no call"
+    for d in drafts(record, **over):
+        deliver(d, connector)
+    assert all(tool == W.DRAFT_WORD for tool, _ in connector.calls), (name, connector.calls)
+    assert [(args["channel"], args["text"]) for _, args in connector.calls] == expected, (name, connector.calls)
 
 
 def test_a_fake_connector_receives_a_committed_channel_and_its_local_override():
@@ -298,6 +333,48 @@ def test_a_local_channel_override_keeps_the_committed_templates_it_does_not_name
     got_prod = drafts(PROD, committed__workspaces=committed_ws, local__workspaces=local_ws)
     assert [body(d) for d in got_stg] == ["Local STG: a1b2c3 Merge the fix, d4e5f6 Land the doc."]
     assert [body(d) for d in got_prod] == ["Committed PROD: 99aa Ship the release."], "the kept committed template"
+
+
+def test_a_local_announce_list_adds_to_the_committed_one():
+    """A local channel row that names another event keeps the events the committed row lists, so a local
+    `['prod_release']` never drops a committed `['stg_release']`."""
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft",
+                                   "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "channels": [{"id": GENERAL, "announce": ["prod_release"]}]}]
+    got_stg = drafts(STG, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    got_prod = drafts(PROD, committed__workspaces=committed_ws, local__workspaces=local_ws)
+    assert [d.channel for d in got_stg] == [GENERAL], "the committed event stays announced"
+    assert [d.channel for d in got_prod] == [GENERAL], "the local event is announced too"
+    assert body(got_prod[0]) == "Publicado em PROD: 99aa Ship the release."
+
+
+def test_a_local_channel_persona_wins_over_the_committed_one():
+    """A local channel row that names another persona sets that channel's mark (`slackpolicy.effective_persona`)."""
+    committed_ws = [{"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+                     "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "persona": "iara",
+                                   "announce": ["stg_release"]}]}]
+    local_ws = [{"id": "T0CLIENT01", "channels": [{"id": GENERAL, "persona": "lia"}]}]
+    got = drafts(STG, committed__workspaces=committed_ws, local__workspaces=local_ws,
+                 committed__personas=[{"id": "iara", "name": "Iara", "voice": "Sulafat", "tone": "Warm."},
+                                      {"id": "lia", "name": "Lia", "voice": "Kore", "tone": "Direct."}])
+    assert [d.text.splitlines()[0] for d in got] == ["*Lia's Msg*"], got
+
+
+def test_the_same_channel_id_under_two_guest_workspaces_gets_one_draft_each():
+    """The dedup key is (workspace id, channel id): a second workspace's override is never dropped because the first
+    workspace names the same channel id."""
+    local_ws = [
+        {"id": "T0CLIENT01", "class": "guest", "persona": "iara",
+         "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "announce": ["stg_release"]}]},
+        {"id": "T0CLIENT02", "class": "guest", "persona": "iara",
+         "channels": [{"id": GENERAL, "mode": "listen+speak", "speak": "draft", "announce": ["stg_release"],
+                       "templates": {"stg_release": "Second: {items}."}}]},
+    ]
+    got = drafts(STG, local__workspaces=local_ws)
+    assert [d.channel for d in got] == [GENERAL, GENERAL], "each guest workspace gets its own draft"
+    assert [body(d) for d in got] == ["Subiu para STG: a1b2c3 Merge the fix, d4e5f6 Land the doc.",
+                                      "Second: a1b2c3 Merge the fix, d4e5f6 Land the doc."], got
 
 
 def test_a_local_workspace_row_never_demotes_a_committed_guest_workspace():
