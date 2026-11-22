@@ -292,8 +292,11 @@ git -C "${SG_CHECKOUT:-.}" log --format='%ct%x09%s' "origin/${SG_LAND_BRANCH:-de
 # issue's landing fact in the ledger, and the issue is still open because the publish has not closed it yet. Every landing
 # pass writes that fact: `wave.sh`, `branchland.sh`, and the hand landing `ffland.sh`. A `Refs #N` line in the base proves a
 # commit, never a delivery, so the commit bodies are not read (#2756). A requeue fact newer than the landing undoes it, so a
-# requeued issue is work again. A ledger that cannot be read lands nothing, and the walk goes on as before.
-landed=" $(python3 "$here/issue_ledger.py" standing "$SG_REPO" 2>/dev/null | tr '\n' ' ') "
+# requeued issue is work again. A landing read that fails is a defect, not an empty set: an empty set would send every
+# landed, publish-pending issue out again, so the pass names the failure and dispatches nothing.
+standing=$(python3 "$here/issue_ledger.py" standing "$SG_REPO" 2>"$F/standing.err"); st_rc=$?
+[ "$st_rc" -eq 0 ] || { echo "FRONTIER the issue ledger's landing read failed (rc $st_rc: $(tail -1 "$F/standing.err" | cut -c1-200)); a defect, not no landing: nothing dispatched this pass"; exit 0; }
+landed=" $(printf '%s\n' "$standing" | tr '\n' ' ') "
 closers=" $(python3 "$here/specstall.py" closers "$F/issues.json" "$F/dev-subjects" 2>/dev/null | tr '\n' ' ')"   # a ticket that closes its spec ranks before ordinary work (#1962)
 while IFS=$'\x1f' read -r _rank w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r --arg cl "$closers " '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[(.number as $m | if ($cl | contains(" \($m) ")) then 0 else 1 end),([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0

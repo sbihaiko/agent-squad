@@ -132,6 +132,24 @@ r=$(SG_WAVE_TIP_GATES="[ ! -e bad2757c ] || exit 1; exit 0" SG_WAVE_CHILD_GATES=
 [ $rc != 0 ] && case "$r" in *"WAVE CHECK RED $W217: #27573 broke the wave tip and cannot leave it (a rebase conflict)"*) true;; *) false;; esac \
   && ok "W2757: a conflict in the drop of the child's older commit takes the cannot-leave-it path" || ko "W2757: conflict: exit $rc: '$r'"
 [ "$($O rev-parse dev)" = "$D217" ] && ok "W2757: the conflicted eviction lands nothing in dev" || ko "W2757: dev moved after the conflicted eviction: '$r'"
+# Across passes: pass 1 evicts the two-commit child and its trimmed tip is unproven, so nothing is pushed. Pass 2 clones the
+# wave again and drops the evicted child from the run's marker: every commit of it, not the red one only. Its tip is green,
+# and the wave lands with the sibling and without the evicted child.
+W218=wave/run-218; start2 run-218 >/dev/null
+child 27580 g27580 "origin/$W218"; en2 run-218 27580 >/dev/null
+child 27581 g27581 "origin/$W218"
+(cd "$T/c27581" && echo bad > bad2757p && $G add bad2757p && $G -c user.email=a@b -c user.name=t commit -q -m "more work 27581 (Refs #27581)")
+en2 run-218 27581 >/dev/null
+printf 'run-218\n' > "$T/st/auto/disp-27581"; rm -f "$T/green2757p"
+TIP2757P="[ ! -e bad2757p ] || exit 1; [ -e $T/green2757p ] && exit 0; exit 4"
+C2757P='/usr/bin/git diff --name-only "$SG_WAVE_CHILD_FROM" "$SG_WAVE_CHILD_TO" | /usr/bin/grep -qx bad2757p && exit 1; exit 0'
+r=$(SG_WAVE_TIP_GATES="$TIP2757P" SG_WAVE_CHILD_GATES="$C2757P" land2 run-218 2>&1); rc=$?
+case "$r" in *"WAVE WAIT $W218"*unproven*) ok "W2757: pass 1 evicts the child and holds the trimmed tip as unproven";; *) ko "W2757: two passes: pass 1: exit $rc: '$r'";; esac
+: > "$T/green2757p"
+r=$(SG_WAVE_TIP_GATES="$TIP2757P" SG_WAVE_CHILD_GATES="$C2757P" land2 run-218 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e dev:g27580 2>/dev/null && ok "W2757: pass 2 lands the sibling" || ko "W2757: two passes: pass 2: exit $rc: '$r'"
+$O cat-file -e dev:g27581 2>/dev/null && ko "W2757: pass 2 landed the older commit of the evicted child: '$r'" || ok "W2757: pass 2 keeps the older commit of the evicted child out of dev"
+$O cat-file -e dev:bad2757p 2>/dev/null && ko "W2757: pass 2 landed the red commit of the evicted child: '$r'" || ok "W2757: pass 2 keeps the red commit of the evicted child out of dev"
 # N (#2217): a run that ends owner-only freezes its issue once, and a run that ends does-not-reproduce freezes it at this build.
 # A failed run with no class (a gate reason) is counted as before and freezes nothing. The stub keeps the labels and the
 # comments written, so the freeze reads back what stands.

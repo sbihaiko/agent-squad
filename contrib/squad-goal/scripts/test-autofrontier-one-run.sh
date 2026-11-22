@@ -940,8 +940,8 @@ r=$(run)
 [ "$(marked 1760)" = 1 ] && ok "B2: an older Todo write on the same card cannot resurrect over the read either" || ko "B2: #1760 not dispatched: '$r'"
 
 # L (#2416): an issue whose landing is in the base and whose publish is pending is no work. A hand landing (`ffland.sh`)
-# puts the commits in dev and leaves the issue open: the publish closes it. The frontier reads the base's own commits -- the
-# `Refs #N` line every landing carries -- and dispatches no run for an issue the base already carries.
+# puts the commits in dev, records the issue's landing fact in the ledger, and leaves the issue open: the publish closes it.
+# The frontier reads that landing fact (`issue_ledger.py standing`, #2756) and dispatches no run for an issue that landed.
 scene landed
 issues '[{"number":771,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":772,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 git init -q "$d/wk"
@@ -983,6 +983,17 @@ r=$(run)
 [ "$(marked 791)" = 1 ] && ok "L3: a requeue after the landing makes the issue work again" || ko "L3: #791 marked=$(marked 791): '$r'"
 [ "$(marked 792)" = 0 ] && ok "L3: a landing after the requeue still holds the issue" || ko "L3: #792 marked=$(marked 792): '$r'"
 case "$r" in *"FRONTIER skip #792: landed, publish pending"*) ok "L3: the frontier names #792 landed, publish pending";; *) ko "L3: no landed line for #792: '$r'";; esac
+
+# L4 (#2756): the landing read fails closed. A `standing` call that exits non-zero is a defect, not an empty set: an empty set
+#   would send every landed, publish-pending issue out again. The pass names the failure once and dispatches nothing.
+scene standingfails
+issues '[{"number":801,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+mv "$T/scripts/issue_ledger.py" "$T/scripts/issue_ledger-real.py"
+printf 'import os, sys\nif __name__ == "__main__" and sys.argv[1:2] == ["standing"]: print("standing: stub failure", file=sys.stderr); sys.exit(1)\n_p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "issue_ledger-real.py")\nexec(compile(open(_p).read(), _p, "exec"))\n' > "$T/scripts/issue_ledger.py"   # an importer gets the real module; only the standing call fails
+r=$(run)
+mv "$T/scripts/issue_ledger-real.py" "$T/scripts/issue_ledger.py"
+[ "$(marked 801)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "L4: a failed landing read dispatches nothing" || ko "L4: #801 marked=$(marked 801), $(lines "$LAUNCHLOG") launch(es): '$r'"
+case "$r" in *"FRONTIER the issue ledger's landing read failed"*"nothing dispatched this pass"*) ok "L4: the pass names the failed landing read";; *) ko "L4: no line names the failed landing read: '$r'";; esac
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
