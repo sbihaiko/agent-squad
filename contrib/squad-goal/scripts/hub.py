@@ -2314,9 +2314,16 @@ def _slack_siblings(local):
         if isinstance(doc, dict): out.append((other.name, doc))
     return out
 
-def _slack_defect_texts(P, committed, local, local_name, others):
-    try: return [str(d) for d in P.validate(committed=committed, local=local, others=others, local_name=local_name)]
-    except Exception: return []
+def _slack_defects(P, committed, local, local_name, others):
+    """Every defect of the two documents, as the policy module names them. A module that raises answers its own
+    exception to the caller, which names it: a failed check never passes for a clean file."""
+    return list(P.validate(committed=committed, local=local, others=others, local_name=local_name))
+
+
+def _slack_new_defects(before, after):
+    """The defects the edit added, by full identity of file, key and reason: a pre-existing defect stays visible."""
+    seen = {(d.file, d.key, d.reason) for d in before}
+    return [d for d in after if (d.file, d.key, d.reason) not in seen]
 
 def _slack_rows_at(doc, path):
     """The row a path names: `["workspaces", i, "channels", j]`. A missing row answers None, never an exception."""
@@ -2344,9 +2351,11 @@ def _slack_ws_class(doc, index):
     ws = _slack_rows_at(doc, ["workspaces", index])
     return str(ws.get("class", "owned")) if isinstance(ws, dict) else ""
 
-def _slack_permit(committed, local, doc, path, field):
+def _slack_permit(P, documents, doc, path, field, value):
     """(ok, error): an editor field belongs to the document its row lives in, and a guest field belongs to a guest
-    channel alone. The key the error names is the one the owner edited."""
+    channel alone. The class is read from the document the path names, never from the other file at the same index.
+    The key the error names is the one the owner edited, and the policy module decides the value (ADR-0177)."""
+    committed, local = documents["committed"], documents["local"]
     key = _slack_key(path)
     if path[:1] != ["workspaces"]:
         return False, "workspaces: an editor path starts at workspaces"
@@ -2356,17 +2365,30 @@ def _slack_permit(committed, local, doc, path, field):
                 return False, f"{_slack_doc_name(doc, committed, local)}: {key}: {field} belongs to a workspace"
             if field not in SLACK_CH_FIELDS + SLACK_GUEST_FIELDS and not field.startswith("poll."):
                 return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown field {field!r}"
-            if (field in SLACK_GUEST_FIELDS or field.startswith("poll.")) and _slack_ws_class(
-                    committed if doc == "committed" else local, path[1]) != "guest":
-                return False, f"{_slack_doc_name(doc, committed, local)}: {key}: {field} belongs to a guest channel"
             if field.startswith("poll.") and field.split(".", 1)[1] not in SLACK_POLL_FIELDS:
                 return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown poll field {field.split('.', 1)[1]!r}"
-            return True, None
+            if field in SLACK_GUEST_FIELDS or field.startswith("poll."):
+                cls = _slack_ws_class(documents[doc], path[1])
+                if not cls:
+                    return False, f"{_slack_doc_name(doc, committed, local)}: {key}: the workspace does not exist"
+                if cls != "guest":
+                    return False, f"{_slack_doc_name(doc, committed, local)}: {key}: {field} belongs to a guest channel"
+                if doc != "local":
+                    return False, f"{_slack_doc_name(doc, committed, local)}: {key}: the guest channel belongs in the local file"
+            return _slack_value(P, documents, doc, path, field, value, committed, local)
         if len(path) == 3 and field not in SLACK_WS_FIELDS:
             return False, f"{_slack_doc_name(doc, committed, local)}: {key}: unknown field {field!r}"
-    return True, None
+    return _slack_value(P, documents, doc, path, field, value, committed, local)
 
-def _slack_place(op, docs, local_name):
+
+def _slack_value(P, documents, doc, path, field, value, committed, local):
+    """The policy module's answer for one value: (True, None), or (False, the refusal it names)."""
+    hit = P.validate_field(documents, doc, path, field, value)
+    if not hit:
+        return True, None
+    return False, f"{_slack_doc_name(doc, committed, local)}: {hit[0]}: {hit[1]}"
+
+def _slack_place(P, op, docs, local_name):
     """Apply one operation to the two documents, and answer an error when the class places the row elsewhere or the
     operation breaks a policy rule. Returns (error, changed)."""
     kind, doc = op.get("kind"), op.get("doc")
@@ -2410,22 +2432,27 @@ def _slack_place(op, docs, local_name):
     if field == "class":
         row = _slack_rows_at(target, path[:-1])
         if not isinstance(row, dict):
-            return "the edited workspace does not exist", False
+            return f"{_slack_doc_name(doc, None, local_name)}: {_slack_key(path)}: the workspace does not exist", False
+        hit = P.validate_field(docs, doc, path, field, value)
+        if hit:
+            return f"{_slack_doc_name(doc, None, local_name)}: {hit[0]}: {hit[1]}", False
         cls = str(value)
-        if cls not in ("owned", "guest"):
-            return f"{_slack_doc_name(doc, None, local_name)}: workspaces[].class: the class is owned or guest", False
         if doc == "committed" and cls == "guest":
+            rows = target.get("workspaces")
             ws = _slack_rows_at(target, ["workspaces", path[1]])
-            docs["committed"]["workspaces"].pop(path[1])
+            if not isinstance(rows, list) or not isinstance(path[1], int) or not isinstance(ws, dict) \
+                    or not 0 <= path[1] < len(rows):
+                return f"slack.yaml: {_slack_key(path)}: the workspace does not exist", False
+            rows.pop(path[1])
             ws.pop("app", None)
             ws["class"] = "guest"
             docs["local"].setdefault("workspaces", []).append(ws)
             return None, True
         if doc == "local" and cls == "owned":
-            return f"{local_name}: {_slack_key(path)}: {slack_policy().GUEST_TEAM_REASON}", False
+            return f"{local_name}: {_slack_key(path)}: {P.GUEST_TEAM_REASON}", False
         row["class"] = cls
         return None, True
-    ok, err = _slack_permit(docs["committed"], docs["local"], doc, path, field)
+    ok, err = _slack_permit(P, docs, doc, path, field, value)
     if not ok: return err, False
     row = _slack_rows_at(target, path[:-1])
     if not isinstance(row, dict):
@@ -2457,17 +2484,30 @@ def slack_docs_edit(body, committed=None, local=None):
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     others = _slack_siblings(local)
-    before = _slack_defect_texts(P, docs["committed"], docs["local"], local_name, others)
+    try:
+        before = _slack_defects(P, docs["committed"], docs["local"], local_name, others)
+    except Exception as e:
+        return {"err": f"the Slack rules module answered {type(e).__name__}: {e}"}
     draft = {"committed": yaml.safe_load(yaml.safe_dump(docs["committed"])),
              "local": yaml.safe_load(yaml.safe_dump(docs["local"]))}
-    err, changed = _slack_place(op, draft, local_name)
+    err, changed = _slack_place(P, op, draft, local_name)
     if err: return {"err": err, "committed": docs["committed"], "local": docs["local"]}
-    after = _slack_defect_texts(P, draft["committed"], draft["local"], local_name, others)
-    new = [d for d in after if d not in before]
-    if new:
-        second = next((d for d in new if getattr(P, "SECOND_GUEST_REASON", None) and
-                       d.rsplit(": ", 1)[-1] == P.SECOND_GUEST_REASON), None)
-        return {"err": f"One guest Slack workspace at a time: {second}" if second else new[0], "defects": new,
+    try:
+        after = _slack_defects(P, draft["committed"], draft["local"], local_name, others)
+    except Exception as e:
+        return {"err": f"the Slack rules module answered {type(e).__name__}: {e}"}
+    # The save path writes both documents the editor answers with, so every defect either file carries blocks the edit.
+    # A new defect is blocking wherever it lands, and a pre-existing one stays blocking when it names our own files:
+    # comparing texts alone would let an edit through while the documents stay invalid (ADR-0177 decision 4).
+    ours = {"slack.yaml", local_name}
+    new = _slack_new_defects(before, after)
+    held = [d for d in after if d.file in ours]
+    blocking = new + [d for d in held if d not in new]
+    if blocking:
+        second = next((d for d in blocking if getattr(P, "SECOND_GUEST_REASON", None)
+                       and d.reason == P.SECOND_GUEST_REASON), None)
+        return {"err": f"One guest Slack workspace at a time: {second}" if second else str(blocking[0]),
+                "defects": [str(d) for d in blocking],
                 "committed": docs["committed"], "local": docs["local"]}
     return {"committed": draft["committed"], "local": draft["local"], "err": None, "defects": [],
             "documents": {"committed": draft["committed"], "local": draft["local"]}}

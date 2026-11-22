@@ -138,9 +138,11 @@ def test_the_owner_edits_a_channel_mode_language_persona_roles_and_announce(hub,
 
 
 def test_the_owner_edits_the_guest_fields_of_a_guest_channel(hub, tmp_path):
-    """Criterion 3: `speak`, `transcribe`, `voice_reply`, `poll` and `draft_for` are written on the guest channel."""
+    """Criterion 3: `speak`, `transcribe`, `voice_reply`, every `poll.<subfield>` and `draft_for` are written on the
+    guest channel. The dotted poll paths are the ones the renderer emits, so the subfield path is what this test holds."""
     cases = (("speak", "draft"), ("transcribe", "local"), ("voice_reply", True),
-             ("poll", {"mode": "two_state", "fast": "1m", "slow": "10m", "quiet_after": "10m", "thread_open": "30m"}),
+             ("poll.mode", "two_state"), ("poll.fast", "2m"), ("poll.slow", "15m"),
+             ("poll.quiet_after", "12m"), ("poll.thread_open", "45m"),
              ("draft_for", ["U0CLIENT02"]))
     committed, local = None, None
     for field, value in cases:
@@ -150,8 +152,68 @@ def test_the_owner_edits_the_guest_fields_of_a_guest_channel(hub, tmp_path):
         assert out["err"] is None, (field, out)
         committed, local = out["committed"], out["local"]
         ch = local["workspaces"][0]["channels"][0]
-        assert ch[field] == value, (field, ch)
+        if field.startswith("poll."):
+            assert ch["poll"][field.split(".", 1)[1]] == value, (field, ch)
+        else:
+            assert ch[field] == value, (field, ch)
     assert ch["speak"] == "draft" and ch["voice_reply"] is True
+    assert ch["poll"] == {"mode": "two_state", "fast": "2m", "slow": "15m",
+                          "quiet_after": "12m", "thread_open": "45m"}, ch["poll"]
+    assert ch["draft_for"] == ["U0CLIENT02"], ch
+
+
+def test_a_whole_poll_mapping_is_still_written_on_the_guest_channel(hub, tmp_path):
+    """Criterion 3, the older shape: one `poll` mapping is still accepted, so a page that posts the whole schedule keeps
+    working beside the dotted paths."""
+    poll = {"mode": "two_state", "fast": "1m", "slow": "10m", "quiet_after": "10m", "thread_open": "30m"}
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "local",
+                               "path": ["workspaces", 0, "channels", 0, "poll"], "value": poll})
+    assert out["err"] is None, out
+    assert out["local"]["workspaces"][0]["channels"][0]["poll"] == poll, out["local"]
+
+
+def test_a_guest_field_reads_the_class_of_the_document_the_path_names(hub, tmp_path):
+    """Criterion 3: the guest class comes from the row the path names, never from the other file at the same index. A
+    guest row that sits in the committed file is misplaced, so the editor refuses its guest field and names it."""
+    committed = {"workspaces": [{"id": "T1", "class": "guest", "channels": [{"id": "C1"}]}]}
+    local = {"workspaces": [{"id": "T2", "class": "owned", "channels": [{"id": "C2"}]}]}
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed",
+                               "path": ["workspaces", 0, "channels", 0, "speak"], "value": "draft"},
+               committed=committed, local=local)
+    assert out["err"] and "guest channel" in out["err"], out
+    assert "speak" not in out["committed"]["workspaces"][0]["channels"][0], out["committed"]
+
+
+def test_a_field_value_outside_its_choices_is_refused_and_names_the_key(hub, tmp_path):
+    """Criterion 2: a value the renderer never offers is refused by the policy module, and the key is named."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed",
+                               "path": ["workspaces", 0, "channels", 0, "mode"], "value": "bogus"})
+    assert out["err"] and "workspaces[0].channels[0].mode" in out["err"], out
+    assert out["committed"]["workspaces"][0]["channels"][0]["mode"] == "listen+speak", out["committed"]
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed",
+                               "path": ["workspaces", 0, "channels", 0, "language"], "value": "xx-YY"})
+    assert out["err"] and "workspaces[0].channels[0].language" in out["err"], out
+
+
+def test_a_pre_existing_defect_on_the_returned_documents_refuses_the_edit(hub, tmp_path):
+    """Criterion 5: the save path writes the documents the editor answers with, so a pre-existing defect in either file
+    refuses the edit. A defect that the edit leaves untouched is still blocking, not only a new one."""
+    committed = {"workspaces": [{"id": "T0CLIENT01", "label": "x", "class": "owned", "channels": []}]}
+    local = {"version": 1, "workspaces": [{"id": "T0CLIENT01", "class": "guest", "channels": []}]}
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["workspaces", 0, "label"],
+                               "value": "y"}, committed=committed, local=local)
+    assert out["err"], out
+    assert "guest team id" in out["err"], out
+    assert out["committed"]["workspaces"][0]["label"] == "x", out["committed"]
+
+
+def test_a_class_move_with_no_committed_workspace_is_refused_by_name(hub, tmp_path):
+    """Criterion 4: a request that names the committed file but carries no workspace there answers a named refusal,
+    never a crash from the move."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["workspaces", 0, "class"],
+                               "value": "guest"}, committed={},
+               local={"workspaces": [{"id": "T1", "class": "owned", "channels": []}]})
+    assert out["err"] and "does not exist" in out["err"], out
 
 
 def test_a_guest_field_on_an_owned_channel_is_refused_and_names_the_key(hub, tmp_path):
