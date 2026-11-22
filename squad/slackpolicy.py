@@ -20,10 +20,6 @@ from typing import NamedTuple
 
 import yaml
 
-from .slackexecutor import ACTIONS as EXECUTOR_ACTIONS
-
-# The actions a role may list are the ones the executor runs: one vocabulary, never a copy (issue #2699).
-ROLE_ACTIONS = tuple(sorted(EXECUTOR_ACTIONS))
 COMMITTED = Path("docs") / "squad" / "slack.yaml"
 LOCAL_SUFFIX = "slack.local.yaml"       # a file whose name ends in this suffix is refused by the commit guard
 ADR_DIR = Path(__file__).resolve().parent.parent / "docs" / "adr"
@@ -141,10 +137,11 @@ def _roles(file, doc, out):
                 if str(env).strip().lower() == "prod":
                     out.append(_defect(file, f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
         if isinstance(role.get("actions"), (list, tuple)):
+            actions = role_actions()
             for j, action in enumerate(role["actions"]):
-                if str(action) not in ROLE_ACTIONS:
+                if str(action) not in actions:
                     out.append(_defect(file, f"roles[{i}].actions[{j}]",
-                                       f"action {action!r} is not one of {', '.join(ROLE_ACTIONS)}"))
+                                       f"action {action!r} is not one of {', '.join(actions)}"))
 
 
 def _members(file, doc, out, local):
@@ -640,8 +637,11 @@ def poll_interval(now, channel, thread_state):
 
 
 def role_actions():
-    """The actions a role may list, in name order: the executor runs them, and the editor offers them (issue #2699)."""
-    return ROLE_ACTIONS
+    """The actions a role may list, in name order: the executor runs them, and the editor offers them (issue #2699).
+    The import runs here, not at module import, so `squad.slackexecutor` imports this module first without a cycle
+    (#2747). One vocabulary, never a copy."""
+    from .slackexecutor import ACTIONS
+    return tuple(sorted(ACTIONS))
 
 
 def rows(value):

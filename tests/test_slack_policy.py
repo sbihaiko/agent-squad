@@ -8,6 +8,9 @@ key named `secret` are refused; a `send_grant` outside the local file, or withou
 normalizes; the new ADR names the one home of the rules.
 """
 import copy
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -173,6 +176,18 @@ def test_the_role_actions_are_the_executor_actions():
     """One list, never a copy: the policy module answers the vocabulary the executor runs."""
     from squad import slackexecutor
     assert set(S.role_actions()) == set(slackexecutor.ACTIONS)
+
+
+def test_each_module_imports_first_in_a_fresh_interpreter():
+    """Each module imports alone, in either order (#2747). The policy asks the executor for the action list, and the
+    executor asks the policy for `decide`. A top-level import on both sides makes the pair import in one order only:
+    `tests/test_slack_executor.py` imports the executor first and fails to collect. This test starts one interpreter per
+    module, so no earlier import hides the cycle."""
+    root = Path(__file__).resolve().parents[1]
+    for name in ("squad.slackexecutor", "squad.slackpolicy"):
+        out = subprocess.run([sys.executable, "-c", f"import {name}"], cwd=root, capture_output=True, text=True,
+                             timeout=20)
+        assert out.returncode == 0, f"{name} does not import alone: {out.stderr}"
 
 
 def test_a_member_value_that_is_not_a_user_id_is_refused():
