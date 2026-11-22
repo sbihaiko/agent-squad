@@ -314,7 +314,8 @@ def test_the_second_guest_refusal_keeps_the_mockup_sentence(hub, tmp_path, monke
 
     class NoSecond:
         def __getattr__(self, name):
-            if name == "SECOND_GUEST_REASON": raise AttributeError(name)
+            if name == "SECOND_GUEST_REASON":
+                raise AttributeError(name)
             return getattr(real, name)
 
     monkeypatch.setattr(hub, "slack_policy", lambda: NoSecond())
