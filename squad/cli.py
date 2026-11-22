@@ -121,6 +121,12 @@ def parser():
     cs.add_parser("init", help="create the file with only the keys changed so far")
     c = cs.add_parser("show", help="print every setting with its value, unit and source layer")
     c.add_argument("--defaults", help="agent defaults file (default config/agent-defaults.yaml)")
+    sl = sub.add_parser("slack", help="the project's Slack files: the committed slack.yaml and the profile's slack.local.yaml")
+    sls = sl.add_subparsers(dest="slack_cmd", required=True)
+    c = sls.add_parser("check", help="read both files, name the failing key in each message, and exit 1 on a defect")
+    c.add_argument("--target", default=".", help="the project directory (default: the current one)")
+    c.add_argument("--profile", help="the profile folder holding <project>.slack.local.yaml (default: SG_PROFILES_DIR)")
+    c.add_argument("--project", help="the project name of the local file (default: SG_PROJECT, else the target folder name)")
     tn = sub.add_parser("tailnet", help="print the tailscale serve command for the hub, or check the hub is not on Funnel")
     tns = tn.add_subparsers(dest="tailnet_cmd", required=True)
     c = tns.add_parser("serve-command", help="print the tailscale serve command for the hub port; starts nothing")
@@ -212,6 +218,8 @@ def main(argv=None):
                                       + (["--proxy", a.proxy] if a.proxy else []) + (["--dry-run"] if a.dry_run else []))
         if a.cmd == "config":
             return _config(a)
+        if a.cmd == "slack":
+            return _slack(a)
         if a.cmd == "tailnet":
             return _tailnet(a)
         return asyncio.run(_run(a) if a.cmd == "run" else _resume(a))
@@ -230,6 +238,19 @@ def _new_node(a):
     except scaffold.ScaffoldError as e:
         return _fail(str(e))
     print(json.dumps(node, indent=2))
+    return 0
+
+
+def _slack(a):
+    """`squad slack check`: one `fail:` line per defect, each naming the file and the key a person fixes (ADR-0177)."""
+    from squad import slackpolicy
+    defects = slackpolicy.check(a.target, a.profile, a.project)
+    for d in defects:
+        print(f"fail: {d}")
+    if defects:
+        print(f"slack check: {len(defects)} defect(s); fix the key each line names")
+        return 1
+    print("slack check: ok")
     return 0
 
 

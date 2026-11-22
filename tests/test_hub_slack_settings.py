@@ -111,6 +111,12 @@ def test_the_file_holds_only_the_settings_and_no_token(ctx):
     assert set(json.loads(saved_file(ctx).read_text())) <= set(ctx["hub"].SLACK_DEFAULT)
 
 
+def test_a_value_in_token_format_is_refused_and_the_key_is_named(ctx):
+    got = save(ctx, channels=[chan(name="#xoxb-1234567890")], confirm=True)
+    assert "channels[0].name" in got["err"] and "xoxb-" in got["err"]
+    assert not saved_file(ctx).exists()
+
+
 def test_a_person_role_is_manager_or_colleague(ctx):
     got = save(ctx, people=[{"name": "Example Person", "role": "Admin"}], confirm=True)
     assert got["err"] == "role is Manager or Colleague"
