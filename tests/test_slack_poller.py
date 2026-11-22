@@ -47,15 +47,18 @@ class FakeConnector:
     one post. A channel read returns the messages that stand alone, and a thread read returns the thread's root and its
     replies, as the connector does."""
 
-    def __init__(self, messages=()):
+    def __init__(self, messages=(), fail_threads=False):
         self.messages = list(messages)
         self.reads = []
         self.thread_reads = []
         self.posts = []
+        self.fail_threads = fail_threads          # a transient connector error on every thread read
 
     def read(self, channel, oldest=None, limit=100, thread_ts=None):
         if thread_ts is not None:
             self.thread_reads.append({"channel": channel, "thread_ts": thread_ts, "limit": limit})
+            if self.fail_threads:
+                return {"ok": False, "error": "rate_limited"}
             page = [m for m in self.messages if m["ts"] == thread_ts or m.get("thread_ts") == thread_ts]
         else:
             self.reads.append({"channel": channel, "oldest": oldest, "limit": limit})
@@ -253,6 +256,72 @@ def test_a_quiet_thread_is_no_longer_reread(tmp_path):
     assert len(conn.thread_reads) == 1        # one last read collects a reply that arrived before it closed
     p.poll(WS, CH)
     assert len(conn.thread_reads) == 1        # quiet: the thread is never reread again
+
+
+def test_a_thread_recorded_without_last_at_is_reread_not_dropped(tmp_path):
+    path = tmp_path / "threads.json"
+    # A writer stored the cursor only. The thread is still one where the agent replied, so the poller must reread it.
+    path.write_text(json.dumps({CH: {THREAD: {"cursor": "100.000100"}}}))
+    threads = P.RepliedThreads(path)
+    assert THREAD in threads.open_threads(CH)
+    conn = FakeConnector([message(THREAD, text="question"),
+                          message("100.001200", text="the late reply", thread_ts=THREAD)])
+    got = poller(conn, tmp_path / "checkpoint.json", threads=threads).poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.000100", "100.001200"]
+
+
+def test_activity_in_a_thread_refreshes_its_quiet_clock(tmp_path):
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    conn = FakeConnector([message(THREAD, text="question"),
+                          message("100.001200", user=OWNER, text="*Iara's Msg*\n_still here_", thread_ts=THREAD)])
+    clock = [NOW + timedelta(minutes=31)]
+    p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
+                 owner=(OWNER,), threads=threads)
+    threads.record(CH, THREAD, at=NOW, ts="100.001100")
+    p.poll(WS, CH)                              # an own reply moves the thread's activity to now
+    clock[0] = NOW + timedelta(minutes=45)      # fourteen minutes later, not yet quiet
+    p.poll(WS, CH)
+    assert len(conn.thread_reads) == 2
+
+
+def test_a_failed_thread_read_leaves_the_thread_open(tmp_path):
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    conn = FakeConnector([message(THREAD, text="question")], fail_threads=True)
+    clock = [NOW + timedelta(minutes=31)]
+    p = P.Poller(conn.read, P.Checkpoint(tmp_path / "checkpoint.json"), COMMITTED, LOCAL, lambda: clock[0],
+                 threads=threads)
+    P.Checkpoint(tmp_path / "checkpoint.json").advance(CH, "100.000100")
+    threads.record(CH, THREAD, at=NOW, ts="100.000900")
+    assert p.poll(WS, CH) == []
+    assert THREAD in threads.open_threads(CH)   # a failed read never closes the thread
+    conn.fail_threads = False
+    clock[0] = NOW + timedelta(minutes=45)
+    conn.messages.append(message("100.001200", text="the late reply", thread_ts=THREAD))
+    assert [m["ts"] for m, _ in p.poll(WS, CH)] == ["100.001200"]
+
+
+def test_an_own_reply_in_a_thread_is_never_delivered(tmp_path):
+    threads = P.RepliedThreads(tmp_path / "threads.json")
+    conn = FakeConnector([message(THREAD, text="question"),
+                          message("100.001200", user=OWNER, text=f"*Iara's Msg*\n_answer_\n\n{FOOTER}",
+                                  thread_ts=THREAD),
+                          message("100.001300", text="thanks", thread_ts=THREAD)])
+    p = poller(conn, tmp_path / "checkpoint.json", owner=(OWNER,), footers=(FOOTER,), threads=threads)
+    P.Checkpoint(tmp_path / "checkpoint.json").advance(CH, "100.000100")
+    threads.record(CH, THREAD, at=NOW, ts="100.000100")
+    got = p.poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.001300"]
+    assert conn.thread_reads == [{"channel": CH, "thread_ts": THREAD, "limit": 100}]
+
+
+def test_a_persona_marked_post_the_read_returns_never_moves_the_checkpoint(tmp_path):
+    own = P.OwnTs(tmp_path / "own.json")
+    path = tmp_path / "checkpoint.json"
+    conn = FakeConnector([message("100.000100"), message("100.000500", user=OWNER, text="*Iara's Msg*\n_hi_")])
+    got = poller(conn, path, own=own, owner=(OWNER,)).poll(WS, CH)
+    assert [m["ts"] for m, _ in got] == ["100.000100"]
+    assert own.has("100.000500")               # the poller records the own post it observed
+    assert P.Checkpoint(path).get(CH) == "100.000100"
 
 
 # --- the acceptance test -------------------------------------------------------------------------------------------

@@ -86,6 +86,20 @@ def messages_of(response):
     return [m for m in response if isinstance(m, dict) and m.get("ts") is not None]
 
 
+def read_failed(response):
+    """True when a tool result reports a failed read or is not a page: a mapping with `ok` false or with no `messages`
+    list, or text the reader cannot parse. `messages_of` reads a failure as an empty page, so a caller that must not lose
+    a thread asks this first."""
+    if isinstance(response, str):
+        try:
+            response = json.loads(response)
+        except ValueError:
+            return True
+    if isinstance(response, dict):
+        return response.get("ok") is False or not isinstance(response.get("messages"), list)
+    return not isinstance(response, list)
+
+
 def _stamp(ts):
     try:
         return float(ts)
@@ -250,19 +264,25 @@ class RepliedThreads:
         return True
 
     def open_threads(self, channel):
-        """The open threads of a channel as `{thread_ts: {"cursor": text or None, "last_at": datetime}}`."""
+        """The open threads of a channel as `{thread_ts: {"cursor": text or None, "last_at": datetime or None}}`. An
+        entry without a readable `last_at` takes its cursor time, and None when the cursor is unreadable too, so a thread
+        a writer stored with a cursor only is still reread."""
         out = {}
         for thread_ts, entry in (self.load().get(str(channel)) or {}).items():
+            entry = entry if isinstance(entry, dict) else {}
+            cursor = entry.get("cursor")
             try:
                 last_at = datetime.fromisoformat(entry["last_at"])
             except (KeyError, TypeError, ValueError):
-                continue
-            out[str(thread_ts)] = {"cursor": entry.get("cursor"), "last_at": last_at}
+                stamp = _stamp(cursor)
+                last_at = datetime.fromtimestamp(stamp) if stamp is not None else None
+            out[str(thread_ts)] = {"cursor": cursor, "last_at": last_at}
         return out
 
     def last_at(self, channel):
         """The last activity of the channel's open threads, as the caller's clock value, or None."""
-        stamps = [entry["last_at"] for entry in self.open_threads(channel).values()]
+        stamps = [entry["last_at"] for entry in self.open_threads(channel).values()
+                  if entry["last_at"] is not None]
         return max(stamps) if stamps else None
 
 
@@ -399,12 +419,23 @@ class Poller:
         owner account, whatever the connector footer says."""
         return own_message(message, _own_ts(self.own), self.owner, self.marks, self.footers)
 
+    def _remember_own(self, page):
+        """Record the `ts` of each message the poller reads and classifies as own in the `OwnTs` store, when the caller
+        supplies one, so a reply the writer never recorded is never delivered back to the agent."""
+        add = getattr(self.own, "add", None)
+        if not callable(add):
+            return
+        for message in page:
+            if self.is_own(message):
+                add(message.get("ts"))
+
     def poll(self, workspace, channel):
         """Read one page, store the cursor at its newest `ts` that is not an own post, reread each open thread, and
         return `(message, decision)` for each new message. A message at or before the cursor, and an own message, never
         returns. A page with no new message ends the walk of the channel for this tick."""
         oldest = self.checkpoint.get(channel)
         page = messages_of(self.connect(**self.read_request(workspace, channel)))
+        self._remember_own(page)
         own = _own_ts(self.own)
         self.checkpoint.record_page(channel, page, own)
         now = self.now()
@@ -414,7 +445,8 @@ class Poller:
 
     def _reread_threads(self, workspace, channel, now):
         """Reread each open thread where the agent replied. A message newer than the thread's cursor reaches the policy;
-        a thread with no new message closes once it has been quiet for `thread_open`, after one last read."""
+        a thread with no new message closes once it has been quiet for `thread_open`, after one last read. A failed read
+        leaves the thread open with no cursor or activity change, so a transient error never loses a reply."""
         if self.threads is None:
             return []
         row = _channel_row(self.committed, self.local, workspace, channel)
@@ -422,17 +454,21 @@ class Poller:
         quiet = _duration(poll.get("thread_open"), _duration(_THREAD_OPEN_DEFAULT, 1800.0))
         pairs = []
         for thread_ts, state in sorted(self.threads.open_threads(channel).items()):
-            page = messages_of(self.connect(channel=str(channel), thread_ts=thread_ts, limit=self.limit))
+            response = self.connect(channel=str(channel), thread_ts=thread_ts, limit=self.limit)
+            if read_failed(response):
+                continue
+            page = messages_of(response)
+            self._remember_own(page)
             new = [m for m in page if _newer(m.get("ts"), state["cursor"]) and not self.is_own(m)]
             newest = newest_ts(page)
-            if new:
+            last_at = state["last_at"]
+            if new or (newest is not None and _newer(newest, state["cursor"])):
                 self.threads.record(channel, thread_ts, at=now, ts=newest)
+                last_at = now
+            if last_at is not None and (now - last_at).total_seconds() > quiet:
+                self.threads.close(channel, thread_ts)
+            if new:
                 pairs += [(m, slackpolicy.decide(self.committed, self.local,
                                                  event_of(m, workspace, channel, _own_ts(self.own)), now))
                           for m in new]
-            else:
-                if newest is not None and _newer(newest, state["cursor"]):
-                    self.threads.record(channel, thread_ts, ts=newest)
-                if (now - state["last_at"]).total_seconds() > quiet:
-                    self.threads.close(channel, thread_ts)
         return pairs
