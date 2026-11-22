@@ -540,7 +540,7 @@ def effective(committed, local, workspace, channel=None):
     is None for a workspace row, which resolves in the workspace, project order. The persona is a `Persona` row or None."""
     committed, local = committed or {}, local or {}
     return (_effective_language(committed, local, workspace, channel),
-            _effective_persona(committed, local, workspace, channel))
+            effective_persona(committed, local, workspace, channel))
 
 
 def decide(committed, local, event, now, thread_state=None):
