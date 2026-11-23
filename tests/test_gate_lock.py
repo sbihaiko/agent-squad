@@ -92,6 +92,8 @@ def _signal_group(proc, sig):
         os.killpg(proc.pid, sig)
     except ProcessLookupError:
         pass
+    except PermissionError:   # macOS answers EPERM for a group whose last members are zombies: nothing live is left to end
+        pass
 
 
 def _tree(tmp_path):

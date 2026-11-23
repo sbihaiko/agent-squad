@@ -102,8 +102,9 @@ class CallResult:
 class ScriptedAdapter:
     """An offline adapter. `script` maps a node name, or `node@entry`, to a list of steps used in order.
 
-    A step is a dict (output, spend, turns, stop_reason, subagents, usage, delay, error, effect) or a callable
-    taking the CallRequest. `effect(req)` may touch files in req.workspace. The last step of a list repeats
+    A step is a dict (output, spend, turns, stop_reason, subagents, usage, delay, until, error, effect) or a callable
+    taking the CallRequest. `until` is a predicate the call waits on before it answers, so a test orders two calls by
+    the work one of them observes instead of by a wall-clock delay; it stops waiting after `until_cap` seconds (60). `effect(req)` may touch files in req.workspace. The last step of a list repeats
     when `repeat_last` is set; otherwise an exhausted script is a test defect and raises.
     """
 
@@ -134,6 +135,10 @@ class ScriptedAdapter:
             return step
         if step.get("delay"):
             await anyio.sleep(step["delay"])
+        if step.get("until"):
+            with anyio.move_on_after(step.get("until_cap", 60)):
+                while not step["until"]():
+                    await anyio.sleep(0.05)
         if step.get("error"):
             raise AdapterError(step["error"], served=step.get("served", True), spend=step.get("spend"), usage=step.get("usage"),
                                spend_source=step.get("spend_source"))

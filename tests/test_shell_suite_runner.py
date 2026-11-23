@@ -131,7 +131,7 @@ def collect(*args):
 @pytest.mark.heavy
 def test_the_real_runner_makes_one_test_per_suite():
     out = collect("tests/test_shell_suites.py")
-    ids = [line for line in out.splitlines() if "::" in line]
+    ids = [line for line in out.splitlines() if "::test_shell_suite[" in line]   # the module's other tests are no suites
     assert len(ids) == len(list(SCRIPTS.glob("test-*.sh")))
 
 
