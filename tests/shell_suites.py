@@ -1,7 +1,8 @@
 """The shell-suite runner's seam: find each `test-*.sh` beside the scripts, run one, and say why it failed.
 
 `contrib/squad-goal/scripts/shell-suites.sh` runs the same files. Each suite runs the way it does there: every inherited
-`SG_*` and `SERIAL_*` variable cleared and `HOME` at its own temp dir, so the live loop's state never reaches an assertion.
+`SG_*`, `SERIAL_*` and `PYTEST_*` variable cleared and `HOME` at its own temp dir, so neither the live loop's state nor this
+pytest session's setting reaches an assertion (#2787).
 
 The measured run time of each suite sits in that suite's own header, `# seconds: <n>`, and
 `python3 -m tests.measure_shell_suites --write` writes it. A suite writes only its own line, so two branches that each add a
@@ -121,12 +122,17 @@ def end_group(pgid):
 # with all five cleared.
 GIT_HOOK_LOCATION = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
 GIT_LOCATION = GIT_HOOK_LOCATION + ("GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY")
+# A suite is a guest of this pytest session, never of its pytest settings: `_no_host_pytest_plugins` sets
+# PYTEST_DISABLE_PLUGIN_AUTOLOAD for every test that starts a nested pytest, and a battery of the suite then runs `-n`, which
+# needs xdist autoloaded, so the option becomes a usage error and the gate reddens for a reason the suite never set up
+# (#2787). Every inherited PYTEST_* name is cleared, as the gate's own knobs are.
+PYTEST_SESSION = "PYTEST_"
 
 
 def _run(suite, timeout=None, extra_env=None):
     timeout = timeout_for(suite) if timeout is None else timeout
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("SG_", "SERIAL_")) and k not in GIT_LOCATION}   # the gate exports its lock bounds (#755)
+           if not k.startswith(("SG_", "SERIAL_", PYTEST_SESSION)) and k not in GIT_LOCATION}   # the gate exports its lock bounds (#755)
     if extra_env:
         env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:
@@ -147,7 +153,7 @@ def _run(suite, timeout=None, extra_env=None):
         return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
 
 def run(suite, timeout=None, extra_env=None):
-    """Run one suite the way `problem` does -- every inherited `SG_*` and `SERIAL_*` cleared and `HOME` in its own temp dir -- and hand back
+    """Run one suite the way `problem` does -- every inherited `SG_*`, `SERIAL_*` and `PYTEST_*` cleared and `HOME` in its own temp dir -- and hand back
     its result, so a module reads the run by this one seam instead of spawning the suite with the ambient environment. `extra_env`
     names a variable to set on purpose (a lock the gate would hand down), so a caller can prove the suite survives it. A caller
     that names no `timeout` gets `timeout_for(suite)`: the suite's own measure, never a hand-tuned wall bound (#736)."""

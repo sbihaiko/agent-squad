@@ -44,6 +44,16 @@ def test_a_clean_tree_exits_zero(tmp_path):
     assert "test-a.sh" in p.stdout and "test-b.sh" in p.stdout
 
 
+def test_a_callers_pytest_settings_never_reach_a_suite(tmp_path):
+    """#2787: the same clear the Python runner makes (tests/shell_suites.py). A suite holds a battery that runs `pytest -n`,
+    so an inherited PYTEST_DISABLE_PLUGIN_AUTOLOAD drops xdist and turns the option into a usage error."""
+    d = _tree(tmp_path, {"test-a.sh": 'echo "auto=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-unset} add=${PYTEST_ADDOPTS:-unset}"'})
+    p = _run("bash", str(d / "shell-suites.sh"), cwd=tmp_path,
+             env={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_ADDOPTS": "--maxfail=1"})
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "auto=unset add=unset" in p.stdout, p.stdout
+
+
 def test_a_broken_suite_exits_non_zero_and_every_failure_is_named(tmp_path):
     d = _tree(tmp_path, {"test-a.sh": "exit 1", "test-b.sh": "echo ok b", "test-c.sh": "echo FAIL c; exit 3"})
     p = _run("bash", str(d / "shell-suites.sh"), cwd=tmp_path)

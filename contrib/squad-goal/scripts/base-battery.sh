@@ -37,8 +37,12 @@
 sg_battery_run() {
   local py=$1 base=$2 workers=$3 files line rc= stage=${5:-fast} narrow=${6:-no} scope why="the selector named no test file" \
         out= defs= prefix="the selection is empty: " needed=
-  "$py" -m ruff check squad tests && "$py" -m mypy squad || return
-  if [ "$4" = yes ]; then files=$("$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
+  # (#2787) The battery reads its own options: a caller's pytest settings never change what it proves. A host's
+  # PYTEST_DISABLE_PLUGIN_AUTOLOAD would drop xdist and turn the `-n` below into a usage error, PYTEST_ADDOPTS would add
+  # options the gate never named, and PYTEST_PLUGINS would load a plugin of its own. Every leg starts with those cleared.
+  local nopy; nopy=$(compgen -e | /usr/bin/grep -E '^PYTEST_' | sed 's/^/-u /' | tr '\n' ' ')
+  env $nopy "$py" -m ruff check squad tests && env $nopy "$py" -m mypy squad || return
+  if [ "$4" = yes ]; then files=$(env $nopy "$py" -m squad.testselect --stage "$stage" --base "$base") || files="all: the selector failed"
   else files="all: SG_TEST_SELECT=no"; fi
   case $files in none:*) why=${files#none: }; files=;; esac
   case $files in skip:*) needed=${files#skip: }; files=; why=$needed; prefix="the change needs no test: ";; esac
@@ -67,9 +71,9 @@ sg_battery_run() {
   # the inherited scope file, and the gate's line then named `delta` for a full battery.
   local nogate; nogate=$(compgen -e | /usr/bin/grep -E '^(GATE_|SG_GATE_FULL_)' | sed 's/^/-u /' | tr '\n' ' ')
   if [ -n "$out" ]; then
-    env $nogate "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    env $nogate $nopy "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
   else
-    env $nogate "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
+    env $nogate $nopy "$py" -m pytest -p no:deepeval -n "${SQUAD_GATE_WORKERS:-$workers}" -m 'not heavy' "$@" || rc=$?
   fi
   # (#1557, #1726) The serial 2 s line the CI complete tier enforces is proved on the calls that need it and on no others.
   # Under xdist the guard records an unmarked call at or over the project line and does not fail it; those calls and only
@@ -81,7 +85,7 @@ sg_battery_run() {
     if [ -n "$defs" ]; then
       set -- $defs
       echo "serial line: $(printf '%s ' "$@")run once more, serially, at the project line"
-      env $nogate "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
+      env $nogate $nopy "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
     fi
   fi
   set +f

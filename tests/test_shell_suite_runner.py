@@ -241,6 +241,17 @@ def test_the_gate_knobs_never_reach_a_suite(tmp_path, monkeypatch):
     assert "hold=unset try=unset" in shell_suites.run(suite).stdout
 
 
+def test_this_pytest_sessions_settings_never_reach_a_suite(tmp_path, monkeypatch):
+    """#2787: the suite runs inside this pytest session, and the session sets PYTEST_DISABLE_PLUGIN_AUTOLOAD on every test
+    that starts a nested pytest. A suite's own battery runs `pytest -n`, which needs xdist autoloaded, so the inherited
+    variable turns the tool's option into a usage error and the gate reddens for a reason the suite never set up."""
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--maxfail=1")
+    suite = write_suite(tmp_path, "test-env.sh", 'echo "auto=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-unset}'
+                                                ' add=${PYTEST_ADDOPTS:-unset}"\n')
+    assert "auto=unset add=unset" in shell_suites.run(suite).stdout
+
+
 def _alive(pid):
     try:
         os.kill(pid, 0)

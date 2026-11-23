@@ -86,10 +86,12 @@ def code_stub(tmp_path, codes, sleep=0, fix_child=None):
     return str(p)
 
 
-def base_stub(tmp_path):
-    """A review command that logs `<child> <head> <base>` and approves: the argv carries the base it read."""
+def base_stub(tmp_path, slow=None, sleep=0.6):
+    """A review command that logs `<child> <head> <base>` and approves: the argv carries the base it read. `slow` names one
+    child whose reading waits `sleep` seconds, so a sibling's reading ends and its merge lands while this one still runs."""
+    guard = f'[ "$2" = "{slow}" ] && sleep {sleep}\n' if slow else ""
     p = tmp_path / "review.sh"
-    p.write_text(f'#!/bin/sh\necho "$2 $(git rev-parse HEAD) $5" >> "{tmp_path}/review.log"\nexit 0\n')
+    p.write_text(f'#!/bin/sh\n{guard}echo "$2 $(git rev-parse HEAD) $5" >> "{tmp_path}/review.log"\nexit 0\n')
     p.chmod(0o755)
     return str(p)
 
@@ -252,13 +254,14 @@ async def test_a_resume_reviews_the_same_head_against_the_same_base(tmp_path):
     """The `{base}` of a review is the point the child's branch was cut from, read the same way by the run and its resume.
     Read as the target's head at review time, it moves with the timing of an earlier sibling's merge."""
     repo = sibling_repo(tmp_path / "t")
-    stub = gated(base_stub(tmp_path))
+    stub = gated(base_stub(tmp_path, slow=B))
     eng = make(tmp_path, two_children(), tweak=stub, target=repo)
     eng.dispatch.prune = lambda: None
     assert (await eng.run()).verdict == "completed"
     events = read(tmp_path / "record.jsonl")
-    # The cut drops the second child's review and all after it. A passed child is reviewed as it passes (#1520), so that review
-    # can come before the first landing: the cut is at the review, never at a landing.
+    # The cut is at the second child's review and drops it and all after it. The second child's review waits, so the first
+    # child's review ends first and its merge lands before that review: the record holds the first landing and no round for
+    # the second child. The other order is a race the engine never promises, since the two reviews run beside each other.
     cut = next(i for i, e in enumerate(events) if e["event"] == "gate_result" and e.get("node") == B)
     (tmp_path / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events[:cut]))
     first = [ln.split() for ln in (tmp_path / "review.log").read_text().splitlines() if ln.split()[0] == B]
