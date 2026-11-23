@@ -518,7 +518,7 @@ class BoardBinding:
                 r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=limit)
             except subprocess.TimeoutExpired:   # a hung call is one failed read: never retried, raised so the pass releases its lock
                 _log_call(a, "failed")
-                raise RuntimeError(f"gh api passed its {limit:g}s deadline (ADR-0051)") from None
+                raise RuntimeError(f"the call passed its {limit:g}s deadline (ADR-0051)") from None
             if not r.returncode: _log_call(a, "done" if write else "answer"); return r.stdout
             _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             full = r.stderr.strip()   # read whole: gh puts the URL first, and the cause can sit past any cut (#2319)
