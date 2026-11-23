@@ -49,6 +49,9 @@ caller names `bug`, and only the binding knows which field and option carry it (
 """
 import json, os, pathlib, re, subprocess, sys, time, urllib.parse
 
+# The bound a whole paginated items read already ran under (`rows()`); every gh call without its own deadline takes it (#2798).
+ROWS_SECONDS = 120
+
 def _canonical(name):
     """The canonical column one spelling names, through board_columns' one alias map (#2315): a board the live migration
     has not renamed yet answers `Landing`, and every reader sees `Batching`. A name the map does not hold comes back as
@@ -448,6 +451,8 @@ class BoardBinding:
         self.st.mkdir(parents=True, exist_ok=True)
         self.attempts = max(1, int(self._num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent (#96)
         self.backoff = max(0.0, self._num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
+        # (#2798, ADR-0051) A call whose caller names no deadline still has one: the bound `rows()` already reads with.
+        self.call_seconds = max(1.0, self._num("SG_GH_CALL_SECONDS", str(ROWS_SECONDS)))
         self.settle_seconds = max(0.0, self._num("SG_BOARD_SETTLE_SECONDS", "60"))   # the sleep budget for a new card to reach the read (#403)
         self.server_error = re.compile(r"\bHTTP 5\d\d\b")
         # #2319: a network error that a second try can pass. A connect that never reached the server (`dial tcp`, a
@@ -501,13 +506,19 @@ class BoardBinding:
 
     def _call(self, a, inp=None, timeout=None):
         """One gh api call, with the server-error retry: the argv as the caller built it."""
-        err, write, limit = "", _is_write(a), self.timeout or timeout
+        # (#2798) The shorter of the caller's and the binding's deadline wins; with neither, the binding's default.
+        err, write = "", _is_write(a)
+        limit = min([t for t in (timeout, self.timeout) if t] or [self.call_seconds])
         start = time.monotonic()
         for k in range(self.attempts):
             pause = self.backoff * (2 ** (k - 1)) if k and self.backoff else 0.0
             if k and limit and time.monotonic() - start + pause >= limit: break   # no retry past the caller's deadline (ADR-0051)
             if pause: time.sleep(pause)
-            r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=limit)
+            try:
+                r = self.run(["gh", "api", *a], input=inp, capture_output=True, text=True, timeout=limit)
+            except subprocess.TimeoutExpired:   # a hung call is one failed read: never retried, raised so the pass releases its lock
+                _log_call(a, "failed")
+                raise RuntimeError(f"gh api passed its {limit:g}s deadline (ADR-0051)") from None
             if not r.returncode: _log_call(a, "done" if write else "answer"); return r.stdout
             _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             full = r.stderr.strip()   # read whole: gh puts the URL first, and the cause can sit past any cut (#2319)
@@ -905,7 +916,7 @@ class BoardBinding:
         """The state one issue carries, "" when the carrier carries no card for it or no Status on it."""
         return self.read_all().get(str(issue), "")
 
-    def rows(self, jq, *, fields=True, kind=False, tries=False, timeout=120):
+    def rows(self, jq, *, fields=True, kind=False, tries=False, timeout=None):
         """One paginated items read at the carrier, projected by the caller's jq program. The reach is the
         binding's, so a reader that needs more than the state (the pane, with its titles and labels) asks
         here and holds no call of its own. A read the carrier refuses raises, and the caller keeps its last rows."""
