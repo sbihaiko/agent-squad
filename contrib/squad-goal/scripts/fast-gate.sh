@@ -311,7 +311,7 @@ bounded() {  # <seconds> <command...>: 124 says the deadline stopped it and its 
 nogate=$(compgen -e | /usr/bin/grep -E '^(GATE_|SG_GATE_FULL_)' | sed 's/^/-u /' | tr '\n' ' ')
 for try in 1 2; do
   lg=$log; [ $try = 1 ] || lg=${log%.log}-retry.log
-  bounded "$(left)" bash -c "$fastcmd" > "$lg" 2>&1; rc=$?; widen
+  bounded "$(left)" bash -c "$fastcmd" > "$lg" 2>&1; rc=$?; stopb=$bound; [ "${latched:-0}" = 1 ] && stopb=$fbound; widen
   [ "$rc" = 0 ] && break
   tail -n 5 "$lg"
   c=$(classify "$lg" "$rc"); cls=${c%% *}; detail=${c#* }
@@ -319,11 +319,11 @@ for try in 1 2; do
     case $cls in
       absent)
         case $detail in ruff*) r=- n="ruff mypy pytest";; mypy*) r=ruff n="mypy pytest";; *) r="ruff mypy" n=pytest;; esac
-        verdict unproven "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline ($lg)"; exit 4;;
+        verdict unproven "$detail" "$r" "$n"; echo "fast-gate: $cls: $detail; the battery passed its ${stopb}s deadline ($lg)"; exit 4;;
       lint|type|collection|pytest)
         case $cls in lint) r=ruff n="mypy pytest";; type) r="ruff mypy" n=pytest;; *) r="ruff mypy pytest" n=-;; esac
         verdict fail "$detail" "$r" "$n"
-        echo "fast-gate: $cls: $detail; the battery passed its ${bound}s deadline with the defect already reported ($lg)"; exit 1;;
+        echo "fast-gate: $cls: $detail; the battery passed its ${stopb}s deadline with the defect already reported ($lg)"; exit 1;;
       *)
         # (#1839) A battery the gate's own ceiling ended answers on the ceiling: the one line names the bound and the tree it killed.
         if [ "$gate_max" = 1 ]; then
@@ -331,9 +331,9 @@ for try in 1 2; do
           [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
           echo "fast-gate: gate max: the gate passed its ${maxb}s ceiling ($maxname) and killed the battery's tree (${BTREE:-unknown}); unproven (exit 4) ($lg)"; exit 4
         fi
-        verdict unproven "bounded: the battery passed its ${bound}s deadline and named no defect" unknown unknown
+        verdict unproven "bounded: the battery passed its ${stopb}s deadline and named no defect" unknown unknown
         [ -z "$memokey" ] || bmemo_store "$memokey" "$lg"
-        echo "fast-gate: bounded: the battery passed its ${bound}s deadline and named no defect, so the gate does not pass ($lg)"; exit 4;;
+        echo "fast-gate: bounded: the battery passed its ${stopb}s deadline and named no defect, so the gate does not pass ($lg)"; exit 4;;
     esac
   fi
   case $cls in
