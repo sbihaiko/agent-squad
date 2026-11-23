@@ -13,6 +13,7 @@ SUITE = ROOT / "contrib" / "squad-goal" / "scripts" / "test-live-check.sh"
 
 
 @pytest.mark.heavy
+@pytest.mark.slow(reason="runs the live-check shell suite, a real script whose wall time is the machine's")
 def test_the_live_check_suite_leaves_no_holder_behind():
     done = subprocess.run(["bash", str(SUITE)], capture_output=True, text=True, timeout=180, check=False)
     assert done.returncode == 0, f"the suite failed:\n{done.stdout[-2000:]}{done.stderr[-1000:]}"
