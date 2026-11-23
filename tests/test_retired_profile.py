@@ -27,6 +27,7 @@ def test_address_seam_accepts_a_retired_profile():
 
 
 @pytest.mark.heavy
+@pytest.mark.slow(reason="runs the address shell suite, a real script whose wall time is the machine's")
 def test_the_address_suite_runs_without_the_loops_exported_defaults(monkeypatch):
     """env.sh exports its own defaults (SG_WAVE_GATES, SG_FRONTIER_SKIP_LABELS, SG_RUN_REVIEW), and a gate the live loop
     runs inherits them, so a profile's `:=` default lost to the loop's value where the suite proves it wins (#864). The

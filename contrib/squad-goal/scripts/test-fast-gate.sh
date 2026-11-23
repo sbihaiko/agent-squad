@@ -736,14 +736,21 @@ fbcase 1500 "a row from before the wall field measures finish minus start"
 # The `full` stands 3 s before the rewrite, so the watchdogs' looks (1 s in fast-gate, 2 s in gate.sh) read it under load too.
 vstub fullthendelta 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep 3; printf "delta\n" > "$GATE_SCOPE_FILE"; sleep 8; exit 0'
 fbst=$T/fbst; mkdir -p "$fbst"   # its own state: a red an earlier case left on this tree would stand over these attempts
-s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=30 vfg fullthendelta); rc=$?; el=$(( $(date +%s) - s0 ))
+s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=5 SG_GATE_FULL_BOUND_SECONDS=30 vfg fullthendelta); rc=$?; el=$(( $(date +%s) - s0 ))
 [ $rc = 0 ] && [ "$el" -ge 11 ] && ok "2379 a full battery runs past the delta bound to the full bound, and a later delta never shortens it (${el}s)" \
   || ko "2379 full battery past the delta bound: rc $rc in ${el}s, last '$(last "$out")'"
 [ "$(tail -n 1 "$fbst/gate-history" | cut -f7)" = full ] && ok "2379 the history records the full scope the gate latched" || ko "2379 latched scope: '$(tail -n 1 "$fbst/gate-history" 2>/dev/null)'"
 vstub fullhang 'printf "full\n" > "$GATE_SCOPE_FILE"; sleep $HANG_NAP'
-s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=4 vfg fullhang); rc=$?; el=$(( $(date +%s) - s0 ))
-[ $rc = 4 ] && [ "$el" -ge 3 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in *"bounded"*" 4s "*|*"bounded"*" its 4s"*) true;; *) false;; esac \
+s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=5 SG_GATE_FULL_BOUND_SECONDS=9 vfg fullhang); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -ge 8 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in *"bounded"*" 9s "*|*"bounded"*" its 9s"*) true;; *) false;; esac \
   && ok "2379 a full battery past its full bound is bounded and the line names the full bound (${el}s)" || ko "2379 full hang: rc $rc in ${el}s, last '$(last "$out")'"
+# (#2379) A scope named after the delta stop belongs to no stop: the battery ignores TERM and writes `full` inside the grace, so
+# the gate still reports the delta bound it stopped at, never the full one.
+vstub latefull 'trap "" TERM; sleep 1.5; printf "full\n" > "$GATE_SCOPE_FILE"; sleep 30'
+s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=4 vfg latefull); rc=$?; el=$(( $(date +%s) - s0 ))
+[ $rc = 4 ] && [ "$el" -lt 5 ] && case "$(last "$out")" in *"its 1s deadline"*) true;; *) false;; esac \
+  && ok "2379 a scope named after the delta stop never relabels the stop (${el}s)" \
+  || ko "2379 a late scope relabelled the stop: rc $rc in ${el}s, last '$(last "$out")'"
 pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "2379 the full battery's tree survived its bound" || ok "2379 the full bound kills the battery's tree"
 # A caller that hands its own clock and no full clock (a proof) is never widened: the full scope keeps the caller's deadline.
 s0=$(date +%s); out=$(cd "$R" && SG_STATE="$fbst" SG_SERIAL_HELD=gate GATE_DEADLINE_EPOCH=$(( $(date +%s) + 2 )) SG_GATE_FULL_BOUND_SECONDS=30 \
