@@ -133,9 +133,15 @@ hold() {  # <reason> <output file>: the pass stops with no day marker, so a late
   echo "daysuites: held: $1; no day marker is written, the next cycle retries"
   exit 75
 }
+# (#2798) A suite holds the gate lock for less than a landing's tip check waits for it (SG_TIP_LOCK_WAIT, wave.sh), so a
+# landing queued behind a day suite always gets the lock: priority orders waiters and never preempts a holder. The hold is
+# two thirds of that wait, and a SG_DAYSUITES_SUITE_HOLD at or over the wait is cut to it.
+tipwait=${SG_TIP_LOCK_WAIT:-900}; suitehold=${SG_DAYSUITES_SUITE_HOLD:-$(( tipwait * 2 / 3 ))}
+[ "$suitehold" -lt "$tipwait" ] 2>/dev/null || suitehold=$(( tipwait * 2 / 3 ))
+[ "$suitehold" -ge 1 ] || suitehold=1
 run_suite() {  # <suite path> <output file> <name>: one suite under the gate lock and one slot; sets rc
   SERIAL_WAIT_SECONDS=${SG_DAYSUITES_LOCK_WAIT:-900} \
-  SERIAL_HOLD_SECONDS=${SG_DAYSUITES_SUITE_HOLD:-1800} \
+  SERIAL_HOLD_SECONDS=$suitehold \
   SERIAL_POLL_SECONDS=${SERIAL_POLL_SECONDS:-3} \
     bash "$here/serial.sh" gate bash "$0" --suite "$1" > "$2" 2>&1
   rc=$?
@@ -145,6 +151,8 @@ run_suite() {  # <suite path> <output file> <name>: one suite under the gate loc
   # Held, never a red: serial.sh's own bound line, or the slot line the --suite run wrote, names the resource that was not free.
   /usr/bin/grep -qE '^serial: waited [0-9]+s for lock|^daysuites: held: no caps\.gates slot' "$2" \
     && hold "the gate lock or its slot was not free for $3" "$2"
+  # (#2798) serial.sh stops its command at the hold and exits 75 with no line: the suite was cut short, never red.
+  [ "$rc" = 75 ] && hold "$3 passed its ${suitehold}s gate-lock hold" "$2"
   return 0
 }
 # (#2417, ADR-0164) A red under a load at its start over the saturation line is the load's and not the code's, so the suite

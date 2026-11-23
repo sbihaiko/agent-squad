@@ -1446,7 +1446,7 @@ wave_check() {
     # SG_SERIAL_PRIORITY=1 (#1858): the tip check is the landing's gate, the delivery that ends the run, so the gate lock queues
     # it ahead of every child's fast gate that waits for the same lock (ADR-0164). The wait it still spends in the queue is gate
     # wait, named in its log, and it never counts as run time: the gate's own clock starts when it holds the lock and its slots.
-    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 SG_GATE_SLOT_COUNT=${SG_TIP_GATE_SLOTS:-1} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" SG_GATE_CALLER=tip && eval "$tipgate") >"$clog" 2>&1; rc=$?
+    (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-${SG_TIP_LOCK_WAIT:-900}} SG_SERIAL_PRIORITY=1 SG_GATE_SLOT_COUNT=${SG_TIP_GATE_SLOTS:-1} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${w#wave/}" SG_GATE_CALLER=tip && eval "$tipgate") >"$clog" 2>&1; rc=$?
     oc=
     [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null
     # 3: the check ran no verdict, and the log stays: the landing that waits has to leave the cause and its trace for the
@@ -2582,7 +2582,7 @@ land_batch() {
       of=$(mktemp "${TMPDIR:-/tmp}/wave-tip-outcome.XXXXXX" 2>/dev/null) || of=
       clog="$SG_STATE/wave-check-batch.log"; touch "$SG_STATE/locks/single-wland/round" 2>/dev/null
       gating "$(printf '%s\n' "$bcards" | awk 'NF && !seen[$0]++')"   # the cards of every wave in the batch stand in Testing while its gate waits or runs (ADR-0170)
-      (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-900} SG_SERIAL_PRIORITY=1 SG_GATE_SLOT_COUNT=${SG_TIP_GATE_SLOTS:-1} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
+      (cd "$S" && export SERIAL_WAIT_SECONDS=${SERIAL_WAIT_SECONDS:-${SG_TIP_LOCK_WAIT:-900}} SG_SERIAL_PRIORITY=1 SG_GATE_SLOT_COUNT=${SG_TIP_GATE_SLOTS:-1} GATE_OUTCOME_FILE="$of" GATE_OUTCOME_READ_FILE="$of" SG_GATE_WAVE="${rs[0]}" SG_GATE_CALLER=tip SG_GATE_BATCH="${#rs[@]}:$ids" && eval "$tipgate") >"$clog" 2>&1; rc=$?
       oc=; [ -z "$of" ] || IFS=$'\t' read -r oc _ _ _ < "$of" 2>/dev/null; rm -f "$of"
       # (#2330) A check that measured nothing makes the batch wait: a skip (73) that names a hold, or a bounded wait that ran out
       # (75) and says so. The batch keeps its queue, pushes nothing and runs no gate per run. A 73 or 75 with no such line is the
