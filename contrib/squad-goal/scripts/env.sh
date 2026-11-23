@@ -10,6 +10,10 @@
 # env.sh resolves itself with BASH_SOURCE and the seam uses bash builtins, so another shell is refused here, by name (#761).
 [ -n "${BASH_VERSION:-}" ] || { echo "env.sh: source it from bash (bash -c '. env.sh; ...'), not from ${ZSH_NAME:-this shell}" >&2; return 2 2>/dev/null || exit 2; }
 SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
+# (#2798, ADR-0051) A git network call has a deadline: a transfer under GIT_HTTP_LOW_SPEED_LIMIT bytes/s for
+# SG_GIT_STALL_SECONDS fails, so a fetch or push from a GitHub that stopped answering ends and its pass releases its lock.
+# The bound reads the transfer itself (a stall), never a total time, so a slow but moving fetch still finishes (wtclean.sh).
+export GIT_HTTP_LOW_SPEED_LIMIT=${GIT_HTTP_LOW_SPEED_LIMIT:-1000} GIT_HTTP_LOW_SPEED_TIME=${GIT_HTTP_LOW_SPEED_TIME:-${SG_GIT_STALL_SECONDS:-60}}
 export SG_MOVE_BY=loop   # a card move a loop script makes carries its dispatch context in the board record (#861)
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.

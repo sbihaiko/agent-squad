@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 5
+# seconds: 3
 # (#2798, ADR-0051) A loop script's git network call has a deadline: env.sh bounds a stalled transfer with git's own
 # low-speed bound (GIT_HTTP_LOW_SPEED_LIMIT bytes/s over GIT_HTTP_LOW_SPEED_TIME seconds, SG_GIT_STALL_SECONDS), so a
 # fetch from a GitHub that stops answering fails and its pass releases its lock, instead of waiting for hours.
