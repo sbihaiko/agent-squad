@@ -182,3 +182,42 @@ def test_no_retry_starts_past_the_callers_deadline(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="i/o timeout"):
         seam(tmp_path, gh)._call(["/user/1/projectsV2/5/items"], timeout=50)
     assert len(calls) == 2
+
+
+def test_a_call_with_no_caller_deadline_still_has_one(tmp_path):
+    """#2798, ADR-0051: a read whose caller names no deadline gets the binding's default, never an unbounded wait."""
+    seen = []
+
+    def gh(cmd, input=None, timeout=None, **kw):
+        seen.append(timeout)
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    seam(tmp_path, gh)._call(["/user/1/projectsV2/5/items"])
+    assert seen and all(t and t > 0 for t in seen)
+
+
+def test_a_call_past_its_deadline_raises_a_read_failure_and_is_not_retried(tmp_path):
+    """#2798: a gh call that outlives its deadline is one failed read, raised as RuntimeError, so its pass releases its lock."""
+    calls = []
+
+    def gh(cmd, input=None, timeout=None, **kw):
+        calls.append(cmd)
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    with pytest.raises(RuntimeError, match="deadline"):
+        seam(tmp_path, gh)._call(["/user/1/projectsV2/5/items"], timeout=5)
+    assert len(calls) == 1
+
+
+def test_the_shorter_of_the_caller_and_binding_deadlines_wins(tmp_path):
+    """#2798: a caller cut short passes its own deadline, and a longer binding default never overrides it."""
+    seen = []
+
+    def gh(cmd, input=None, timeout=None, **kw):
+        seen.append(timeout)
+        return subprocess.CompletedProcess(cmd, 0, "[]", "")
+
+    b = seam(tmp_path, gh)
+    b.timeout = 300
+    b._call(["/user/1/projectsV2/5/items"], timeout=7)
+    assert seen == [7]
