@@ -198,6 +198,18 @@ $G -q '^home=' "$T/ran.log" && ! $G -qxF "home=$HOME" "$T/ran.log" && ok "the su
 $G -qxF "base=$want" "$T/ran.log" && ok "the suite keeps the caller's Python user site" \
   || ko "the suite lost the caller's Python user site ($want): $(cat "$T/ran.log")"
 
+# 11) (#2798) A day suite holds the gate lock for less than a landing waits for it: the hold is derived from the landing's lock
+# wait (SG_TIP_LOCK_WAIT) and stays under it, even when SG_DAYSUITES_SUITE_HOLD names more. A suite stopped at that hold is held,
+# never a red: the pass files no bug and spends no day marker.
+newworld; tree=$T/w11; mktree "$tree"
+suite "$tree" test-slow.sh 'echo "$0" >> "$RUNLOG"; sleep 30; exit 0'
+commit "$tree"; : > "$T/ran.log"; : > "$T/gh.log"
+s0=$(date +%s); out=$(run "$tree" SG_TIP_LOCK_WAIT=3 SG_DAYSUITES_SUITE_HOLD=60); rc=$?; el=$(( $(date +%s) - s0 ))
+[ "$rc" = 75 ] && ok "2798 a suite past its gate-lock hold holds the pass (exit 75)" || ko "2798 a suite past its hold exited $rc in ${el}s: $out"
+[ "$el" -lt 20 ] && ok "2798 the hold stays under the landing's lock wait, whatever the suite hold names (${el}s)" || ko "2798 the pass held the lock ${el}s"
+[ "$(filed)" = 0 ] && ok "2798 a suite stopped at its hold files no bug" || ko "2798 a held suite filed $(filed) bugs"
+[ -z "$(/bin/ls -A "$ST/auto" 2>/dev/null | $G '^daysuites-2')" ] && ok "2798 a held suite spends no day marker" || ko "2798 a held suite spent the day marker"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "daysuites: every case green"
 exit "$fail"
