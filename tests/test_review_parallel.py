@@ -86,6 +86,16 @@ def code_stub(tmp_path, codes, sleep=0, fix_child=None):
     return str(p)
 
 
+def landed(tmp_path, child):
+    """A predicate for a scripted step's `until`: true once the record holds `child`'s landing."""
+    def seen():
+        try:
+            return any(e.get("event") == "land" and e.get("node") == child for e in read(tmp_path / "record.jsonl"))
+        except (OSError, ValueError):   # no record yet, or a line still being written
+            return False
+    return seen
+
+
 def base_stub(tmp_path, repo, a_pace=0.0):
     """A review command that logs `<child> <head> <base>` and approves: the argv carries the base it read. A's reading takes
     `a_pace` seconds. B's reading waits until A's merge has written `a.txt` into the target, so A's landing precedes B's
@@ -382,7 +392,7 @@ async def test_a_passed_child_is_reviewed_and_landed_before_a_slow_sibling_ends(
     """#1520: a child that passes is reviewed and merged as soon as its reading ends, not after its slow sibling settles."""
     repo = sibling_repo(tmp_path / "t")
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), A: writer("a.txt"),
-                          B: {**writer("b.txt"), "delay": 1.5}},
+                          B: {**writer("b.txt"), "until": landed(tmp_path, A)}},
                tweak=gated(code_stub(tmp_path, [0])), target=repo)
     assert (await eng.run()).verdict == "completed"
     order = record_order(tmp_path)
@@ -395,7 +405,7 @@ async def test_a_passed_child_is_reviewed_and_landed_before_a_slow_sibling_ends(
 async def test_a_slow_child_passed_last_is_reviewed_and_landed_before_a_fast_sibling_ends_in_reverse_order(tmp_path):
     """#1520, the reverse case: the slow child is A, the fast child is B; the review order follows completion, not request order."""
     repo = sibling_repo(tmp_path / "t")
-    eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), A: {**writer("a.txt"), "delay": 1.5},
+    eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), A: {**writer("a.txt"), "until": landed(tmp_path, B)},
                           B: writer("b.txt")},
                tweak=gated(code_stub(tmp_path, [0])), target=repo)
     assert (await eng.run()).verdict == "completed"
