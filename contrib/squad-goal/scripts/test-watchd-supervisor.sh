@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 2.68
+# seconds: 22.09
 # A dead supervisor is not a stopped loop (#959). A `start` while an orphaned lane still runs refuses and names the lane,
 # and a `reload` on a supervisor that died relights the loop. A deliberate `stop` leaves it down, as it did.
 # Offline: a temp skill with a stub env.sh and stub lanes that sleep in short steps, so no child outlives its lane.

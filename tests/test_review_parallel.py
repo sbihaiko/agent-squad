@@ -86,10 +86,14 @@ def code_stub(tmp_path, codes, sleep=0, fix_child=None):
     return str(p)
 
 
-def base_stub(tmp_path):
-    """A review command that logs `<child> <head> <base>` and approves: the argv carries the base it read."""
+def base_stub(tmp_path, repo, a_pace=0.0):
+    """A review command that logs `<child> <head> <base>` and approves: the argv carries the base it read. A's reading takes
+    `a_pace` seconds. B's reading waits until A's merge has written `a.txt` into the target, so A's landing precedes B's
+    reading whatever the runner's pace; the bound only ends a run whose merge never came."""
+    guard = f'[ "$2" = "{A}" ] && sleep {a_pace}\n'
+    guard += (f'[ "$2" = "{B}" ] && {{ i=0; while [ ! -f "{repo}/a.txt" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done; }}\n')
     p = tmp_path / "review.sh"
-    p.write_text(f'#!/bin/sh\necho "$2 $(git rev-parse HEAD) $5" >> "{tmp_path}/review.log"\nexit 0\n')
+    p.write_text(f'#!/bin/sh\n{guard}echo "$2 $(git rev-parse HEAD) $5" >> "{tmp_path}/review.log"\nexit 0\n')
     p.chmod(0o755)
     return str(p)
 
@@ -248,17 +252,19 @@ async def test_a_pause_cancels_a_review_still_retrying(tmp_path, monkeypatch, st
 
 @pytest.mark.anyio
 @pytest.mark.heavy
-async def test_a_resume_reviews_the_same_head_against_the_same_base(tmp_path):
+@pytest.mark.parametrize("a_pace", [0.0, 1.5], ids=["idle", "loaded"])
+async def test_a_resume_reviews_the_same_head_against_the_same_base(tmp_path, a_pace):
     """The `{base}` of a review is the point the child's branch was cut from, read the same way by the run and its resume.
     Read as the target's head at review time, it moves with the timing of an earlier sibling's merge."""
     repo = sibling_repo(tmp_path / "t")
-    stub = gated(base_stub(tmp_path))
+    stub = gated(base_stub(tmp_path, repo, a_pace=a_pace))
     eng = make(tmp_path, two_children(), tweak=stub, target=repo)
     eng.dispatch.prune = lambda: None
     assert (await eng.run()).verdict == "completed"
     events = read(tmp_path / "record.jsonl")
-    # The cut drops the second child's review and all after it. A passed child is reviewed as it passes (#1520), so that review
-    # can come before the first landing: the cut is at the review, never at a landing.
+    # The cut is at the second child's review and drops it and all after it. The second child's review waits, so the first
+    # child's review ends first and its merge lands before that review: the record holds the first landing and no round for
+    # the second child. The other order is a race the engine never promises, since the two reviews run beside each other.
     cut = next(i for i, e in enumerate(events) if e["event"] == "gate_result" and e.get("node") == B)
     (tmp_path / "record.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events[:cut]))
     first = [ln.split() for ln in (tmp_path / "review.log").read_text().splitlines() if ln.split()[0] == B]

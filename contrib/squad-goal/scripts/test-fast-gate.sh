@@ -187,9 +187,9 @@ case "$retryline" in *heavy_cap_seconds*) ko "the serial retry lifts the 2 s lin
 /usr/bin/grep -qE 'SG_GATE_WORKERS:=[0-9]+' "$d/env.sh" && ok "env.sh holds the default worker count" || ko "env.sh: no numeric SG_GATE_WORKERS default"
 # (#646) The base battery's pytest runs over the selection the selector answers for the base. A stub python logs each call's argv
 # on one line and answers squad.testselect from $T/select.out, so each pytest line is compared exactly, never by one word.
-printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*)\n    case "$*" in *" -n "*) for s in $SLOW_IDS; do echo "SLOW-UNMARKED (deferred to the serial run): $s took 9.0 s, at or over the heavy line; the serial run enforces it"; done;; esac\n    [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
+printf '#!/bin/bash\necho "$*" >> "%s/argv.log"\necho "$*|${PYTEST_DISABLE_PLUGIN_AUTOLOAD-}:${PYTEST_ADDOPTS-}" >> "%s/pytest-env.log"\ncase "$*" in\n  *squad.testselect*) cat "%s/select.out" 2>/dev/null;;\n  *pytest*)\n    case "$*" in *" -n "*) for s in $SLOW_IDS; do echo "SLOW-UNMARKED (deferred to the serial run): $s took 9.0 s, at or over the heavy line; the serial run enforces it"; done;; esac\n    [ "$PY_FAIL" = 1 ] && { echo "FAILED tests/test_a.py::test_one - boom"; exit 1; };;\nesac\nexit 0\n' "$T" "$T" "$T" > "$T/selpy"; chmod +x "$T/selpy"
 printf '#!/bin/bash\necho "$*" >> "%s/retry.log"\n' "$T" > "$T/retry.sh"
-selrun() { rm -f "$T/argv.log" "$T/retry.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS_CHILD=3 SG_FAST_RETRY_CMD="bash $T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
+selrun() { rm -f "$T/argv.log" "$T/retry.log" "$T/pytest-env.log" "$SG_STATE/gate-status"; (cd "$R" && env -u SG_TEST_SELECT -u SG_FAST_CMD SG_FAST_BASE=dev SG_GATE_PY="$T/selpy" SG_GATE_WORKERS_CHILD=3 SG_FAST_RETRY_CMD="bash $T/retry.sh" "$@" bash "$d/fast-gate.sh" 2>&1); }
 PYTEST_OPTS='-p no:deepeval -n 3 -m not heavy'
 printf 'tests/test_a.py\ntests/test_b.py\n' > "$T/select.out"
 out=$(selrun); rc=$?
@@ -204,6 +204,13 @@ out=$(SLOW_IDS="tests/test_a.py::test_one" selrun); rc=$?
 [ $rc = 0 ] && [ "$(/usr/bin/grep -- '-m pytest' "$T/argv.log" | tail -n 1)" = "-m pytest $SERIAL_OPTS tests/test_a.py::test_one" ] \
   && [ "$(/usr/bin/grep -c -- '-m pytest' "$T/argv.log")" = 2 ] \
   && ok "1726 only the recorded call runs once more, serially, at the line" || ko "1726 serial rerun: rc $rc: '$(cat "$T/argv.log" 2>&1)' $out"
+# (#2787) A battery reads its own options, never the caller's pytest settings. A host's PYTEST_DISABLE_PLUGIN_AUTOLOAD drops
+# xdist, so the battery's `-n` below would be a usage error; PYTEST_ADDOPTS would add an option the gate never named. A stub
+# python writes both beside each argv, so every pytest leg proves they were cleared before it.
+out=$(PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTEST_ADDOPTS="--maxfail=1" selrun); rc=$?
+pl=$(/usr/bin/grep -- '-m pytest' "$T/pytest-env.log" 2>/dev/null | /usr/bin/sed 's/.*|//' | /usr/bin/sort -u)
+[ $rc = 0 ] && [ -n "$pl" ] && [ "$pl" = ":" ] \
+  && ok "2787 a battery clears the caller's pytest settings from every pytest leg" || ko "2787 pytest settings: rc $rc, '$pl' '$(cat "$T/pytest-env.log" 2>&1)' $out"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 # (#2085, ADR-0169 rule 4) A child's gate is bounded (ADR-0163) and waits behind its siblings' gates, so it never widens to
