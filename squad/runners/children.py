@@ -304,9 +304,10 @@ class Children:
         `by` is the bound that set the entry (`run_deadline`, `node_deadline`, `wave_ceiling`) while it is the one in
         force, and None when the child's own deadline is. The caller records `by` unchanged, so a call_start names the
         bound that shortened it and never re-labels a run or node deadline the wave ceiling (#2840). The entry's bound is
-        compared with the child's own, never a second time from `ctx.limit_by` alone: a tie keeps the label."""
+        compared with the child's own, never a second time from `ctx.limit_by` alone: only a bound strictly below the
+        child's own deadline keeps the label, and a tie is the child's own deadline."""
         own, left = d["deadline"] * self.e.scale, ctx.dl_at - self.e.clock()
-        if left <= own:
+        if left < own:      # a tie is the child's own deadline, so the call carries no bound label
             return left, getattr(ctx, "limit_by", None)
         return own, None
 

@@ -214,9 +214,8 @@ async def test_no_ceiling_file_leaves_the_call_limit_as_it_was(tmp_path):
     assert (await eng.run()).verdict == "completed"
     start = call_starts(tmp_path / "r", "a")[0]
     assert start["limit"] == pytest.approx(7200, abs=1) and "limit_by" not in start
-    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl")
-            if e["event"] == "diagnostic" and e["source"] == "wave_ceiling"]
-    assert len(lost) == 1 and lost[0]["payload"]["path"] == str(tmp_path / "absent")    # the lost bound is on the record
+    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl") if e["event"] == "wave_ceiling_lost"]
+    assert len(lost) == 1 and lost[0]["path"] == str(tmp_path / "absent")    # the lost bound is a first-class event
 
 
 async def test_a_spent_wave_ceiling_ends_the_call_as_a_deadline_without_a_call(tmp_path):
@@ -276,6 +275,22 @@ def test_a_run_scope_below_a_larger_node_deadline_is_named_run_deadline(tmp_path
     eng = Engine(from_doc(long_doc()), ScriptedAdapter({}), tmp_path / "r", options={"wave_ceiling": str(ceiling)})
     seconds, by = eng._call_deadline({"deadline": 7200}, Scope(None, eng.clock() + 1800))
     assert by == "run_deadline" and 0 < seconds <= 1800
+
+
+async def test_a_child_own_deadline_of_7200_under_a_run_bound_of_1800_is_run_deadline(tmp_path):
+    """#2840: a child keeps the run's 1800 s bound, not its own 7200 s deadline, and the call names `run_deadline`.
+    A graph cannot carry this shape: the graph refuses a node deadline above the run's (squad/graph.py:221), and the
+    envelope refuses a child deadline above its dispatch node (squad/envelope.py:156). So the dispatch helper is read
+    with the run's 1800 s as the entry bound, and a direct Engine records the option the start carries."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    ceiling.write_text(f"{int(time.time()) + 3600}\n")
+    eng = Engine(from_doc(long_doc()), ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}}), tmp_path / "r",
+                 options={"wave_ceiling": str(ceiling)}, clock=lambda: 1000.0)
+    assert (await eng.run()).verdict == "completed"
+    assert record.read(tmp_path / "r" / "record.jsonl")[0]["engine_options"]["wave_ceiling"] == str(ceiling)
+    ctx = SimpleNamespace(dl_at=2800.0, limit_by="run_deadline")
+    seconds, by = eng.runs.bound(ctx, {"deadline": 7200})
+    assert seconds == 1800 and by == "run_deadline" and by != "wave_ceiling"
 
 
 @pytest.mark.heavy
@@ -342,10 +357,18 @@ async def test_a_child_already_running_ends_at_the_ceiling_written_under_it(tmp_
     assert e["elapsed"] < 1.0    # not the adapter's 5 s answer: the ceiling ended the call
 
 
-def test_a_child_bound_equal_to_its_own_deadline_keeps_the_bound_that_set_it(tmp_path):
-    """#2840: the entry's bound and the child's own deadline can be the same second. The label follows the bound the
-    dispatch chose, so a node or run deadline at the child's own deadline still names itself and is never dropped."""
+def test_a_child_bound_equal_to_its_own_deadline_is_its_own_deadline(tmp_path):
+    """#2840: the entry's bound and the child's own deadline can be the same second. A tie means the child's own
+    deadline is the limit, so the call carries no label and never claims a run, node or wave bound shortened it."""
     eng = Engine(from_doc(long_doc()), ScriptedAdapter({}), tmp_path / "r", clock=lambda: 1000.0)
     ctx = SimpleNamespace(dl_at=2800.0, limit_by="node_deadline")
     seconds, by = eng.runs.bound(ctx, {"deadline": 1800})
-    assert seconds == 1800 and by == "node_deadline"
+    assert seconds == 1800 and by is None
+
+
+def test_a_child_bound_below_its_own_deadline_keeps_the_bound_that_set_it(tmp_path):
+    """#2840: when the entry bound is strictly below the child's own deadline, the bound that set it stays on the call."""
+    eng = Engine(from_doc(long_doc()), ScriptedAdapter({}), tmp_path / "r", clock=lambda: 1000.0)
+    ctx = SimpleNamespace(dl_at=2799.0, limit_by="run_deadline")
+    seconds, by = eng.runs.bound(ctx, {"deadline": 1800})
+    assert seconds == 1799 and by == "run_deadline"

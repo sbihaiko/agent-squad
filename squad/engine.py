@@ -223,7 +223,8 @@ class Engine:
 
     def wave_ceiling_epoch(self, notify=False):
         """The absolute epoch the loop wrote as the wave's age cap, or None with no ceiling option. `notify` writes one
-        event when the run names a ceiling file that is missing or unreadable: a run that lost its bound says so (#2840)."""
+        first-class `wave_ceiling_lost` event when the run names a ceiling file that is missing or unreadable: the lost
+        bound is on the record as an event, not a passing diagnostic (#2840)."""
         path = (self.record.events[0].get("engine_options") or {}).get(WAVE_CEILING) if self.record.events else None
         path = path or self.options.get(WAVE_CEILING)   # a resume reads the file the start recorded (ADR-0106)
         if not path:
@@ -233,8 +234,8 @@ class Engine:
         except (OSError, ValueError, IndexError) as x:
             if notify and not self._ceiling_missing:
                 self._ceiling_missing = True
-                self.record.append("diagnostic", source="wave_ceiling", node=None, entry=None,
-                                   payload={"path": str(path), "error": str(x)[:200]})
+                self.record.append("wave_ceiling_lost", source="wave_ceiling", node=None, entry=None,
+                                   path=str(path), error=str(x)[:200])
             return None
 
     def wave_ceiling_at(self, notify=False):
