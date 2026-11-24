@@ -65,7 +65,7 @@ def operator_calls(runs=None, src="both"):
     folder = transcript_folder(os.path.realpath(co)) if co else None
     if folder is None:
         return []
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
         (OU,) = load_squad(roots, ("operator_usage",))
     except Exception as e:
@@ -273,7 +273,7 @@ def adapter_errors():
         try: folders += [p for p in sorted(pathlib.Path(d).glob("run-*")) if p.is_dir()]
         except OSError: continue
     out["runs"] = len(folders)
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
         (AC,) = load_squad(roots, ("adapter_classes",))
         out["classes"] = AC.aggregate(folders)
@@ -293,7 +293,7 @@ def delivery():
         try: folders += [p for p in sorted(pathlib.Path(d).glob("run-*")) if p.is_dir()]
         except OSError: continue
     out = {"err": None, "state": str(STATE), "runs": len(folders)}
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
         (DM,) = load_squad(roots, ("delivery_metrics",))
         out.update(DM.compute(STATE, folders))

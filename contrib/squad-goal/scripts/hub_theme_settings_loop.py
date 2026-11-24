@@ -383,7 +383,7 @@ def loop_mark_killed(run, checkout=None):
     """Give a run stop-now ended its verdict at once, through squad.killed (the one writer), so it never reads live again.
     False when it could not be written: the run then still reads not live, since its process is gone."""
     try:
-        (K,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), checkout or CHECKOUT, __file__), ("killed",))
+        (K,) = load_squad(squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), checkout or CHECKOUT, __file__), ("killed",))
         K.mark_killed(loop_record(run, checkout).parent, "killed/stop-now")
         return True
     except Exception as e:

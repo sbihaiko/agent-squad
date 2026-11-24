@@ -596,7 +596,7 @@ def plugin_squad():
     """The agent-squad `squad` package a host profile's hub reads its settings through: SG_SQUAD when it names one, else the
     install path the plugin registry records, as env.sh and launch.py already resolve it (#871). Empty when neither answers,
     so a hub with no package refuses every tailnet request as before. Rule layer: one registry read, no hub state."""
-    if os.environ.get("SG_SQUAD"): return os.environ["SG_SQUAD"]
+    if SQUAD_ROOT: return SQUAD_ROOT
     try:
         registry = pathlib.Path.home() / ".claude" / "plugins" / "installed_plugins.json"
         return json.loads(registry.read_text())["plugins"][PLUGIN_ID][0]["installPath"]
@@ -608,7 +608,7 @@ def tailnet_roots():
     answers for the hub's own code; then the profile's roots; then the agent-squad package the plugin install holds, so a host
     profile whose tree and checkout both hold no squad package still reads its own project file (#871)."""
     roots = [str(pathlib.Path(__file__).resolve().parents[3]),
-             *squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), plugin_squad()]
+             *squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), plugin_squad()]
     return [r for i, r in enumerate(roots) if r and r not in roots[:i]]
 
 _SEAM = {}

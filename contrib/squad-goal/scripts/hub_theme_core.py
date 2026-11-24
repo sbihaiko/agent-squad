@@ -37,6 +37,10 @@ PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], 
 _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": PROJECT_NO}   # the environment the hub was loaded in, kept for the seam
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
+# The profile's own squad package root, read once at import. hubmux.py pins SG_SQUAD around the hub's import and
+# restores the shell's after it, so a request-time read of SG_SQUAD found the hub process's own value and the hub of a
+# host profile resolved no `squad` package (#2820). The request path passes this value to squad_roots, never the env's.
+SQUAD_ROOT = os.environ.get("SG_SQUAD", "")
 PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
 # The profile this hub was loaded under, read once. hubmux.py pins the profile environment around the hub's import
 # and restores the shell's after it, so a read at request time found no SG_PROFILE and every session route answered
@@ -581,7 +585,7 @@ def procs_mod():
     """squad/procs.py, the one process reader (#1508). The tree this file sits in answers first, as caps.sh reads it: an
     SG_SQUAD checkout behind this change holds an older procs.py with no snapshot, and every table would read empty."""
     own = str(pathlib.Path(__file__).resolve().parents[3])
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     (PR,) = load_squad([own, *[r for r in roots if r != own]] if (pathlib.Path(own) / "squad" / "procs.py").is_file() else roots, ("procs",))
     return PR
 
@@ -651,9 +655,10 @@ def gone_badge(b):
     return {**b, "text": b["text"] + " · no process"}
 
 def squad_roots(sg_squad, sg_checkout, checkout, here):
-    """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
-    hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
-    Rule layer: no hub state, no I/O."""
+    """Where the squad package may live, in order, each once: the SG_SQUAD the caller names first (the hub passes
+    SQUAD_ROOT, the value its profile file set at import; hubmux.py pins it there, #2820), then SG_CHECKOUT, the
+    profile's checkout as the hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3];
+    the live copy under ~/.claude has none). Rule layer: no hub state, no I/O."""
     out = []
     for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
         if r and r not in out: out.append(r)
@@ -746,12 +751,12 @@ def load_squad(roots, names=("caps", "run_caps")):
 
 def liveness():
     """squad/run_liveness.py, the one reader of a run's liveness, from the roots the hub resolves every squad module from."""
-    (RL,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("run_liveness",))
+    (RL,) = load_squad(squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("run_liveness",))
     return RL
 
 def reaper():
     """squad/reap.py, whose `run_live` is the one predicate that says a held run has a live process (#1661), from the same roots."""
-    (R,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("reap",))
+    (R,) = load_squad(squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("reap",))
     return R
 
 CAPS_LOGGED = set()
@@ -767,7 +772,7 @@ def loop_caps():
     then shows plain counts, never a guessed ceiling.
     `per_run` is the other pair, read by squad/run_caps.py from the graph the engine resolves (or the newest live run's own);
     it is named in the tooltip and never merged into the machine-wide pair. None when no graph reads."""
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
         C, RC = load_squad(roots)
         co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd

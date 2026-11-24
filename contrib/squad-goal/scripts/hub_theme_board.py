@@ -482,7 +482,7 @@ def live_work_lines(items, state=None, checkout=None, procs=None, now=None, argv
             rows.append({"kind": "stopped", "id": f"stopped-{lane}", "icon": "run", "age": None, "red": True,
                          "text": f"{lane} stopped", "title": f"the loop's {lane}.sh lane names pid {pid}, which is not alive"})
     try:
-        (HHg,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("handhold",))
+        (HHg,) = load_squad(squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("handhold",))
         gated.update(HHg.gates(state=base))   # a hand gate in flight names its issue (#2563)
     except Exception as e:
         log_once(f"hub: the hand gates are unknown: {type(e).__name__}: {' '.join(str(e).split())}")
