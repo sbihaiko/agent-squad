@@ -389,7 +389,7 @@ def test_a_pick_at_phone_width_keeps_the_keyboard_focus_in_the_detail_pane(hub, 
     assert tree["focused"] == ["tree"], "a picked row that still has a box keeps the focus"
 
 
-def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
+def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_keeps_one_tile(hub, tmp_path):
     page = hub.PAGE
     assert re.search(r"\.slttop:not\(\.sltshow\) \.sltdetail\{display:none\}", page), \
         "the phone shows the tree until the first selection"
@@ -397,8 +397,8 @@ def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_ke
         "the phone folds the tree after the first selection"
     assert not re.search(r":not\(\.sltshow\) \.sltcol\{display:none\}", page), \
         "the tree is never hidden before a selection"
-    assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
-        "the phone keeps two tiles"
+    assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:1fr\}", page), \
+        "the phone keeps one tile"
     assert re.search(r"@container \(min-width:701px\)\{#sbody \.slttop\.sltshow \.sltcol\{display:block\}\}", page), \
         "a wide panel keeps the tree beside the detail through every selection"
 
@@ -448,3 +448,81 @@ def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash
     html = render(hub, read(hub, tmp_path, committed=committed))
     assert "<svg class=sltkind" in _item(html, "w0.c2"), _item(html, "w0.c2")   # the DM channel
     assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "w0.c0")
+
+
+# ---------------------------------------------------------------- the detail pane's width and type (#2841)
+
+def _rule(page, head):
+    """The one CSS rule body whose selector starts with `head`, so a test reads the declaration it names."""
+    m = re.search(re.escape(head) + r"\{([^}]*)\}", page)
+    assert m, f"no rule starts with {head!r}"
+    return m.group(1)
+
+
+def _token(css, name):
+    m = re.search(r"--" + re.escape(name) + r":(\d+)px", css)
+    assert m, f"the tokens name no {name}"
+    return int(m.group(1))
+
+
+def test_at_a_desktop_width_the_now_tiles_fill_one_row(hub, tmp_path):
+    """At 1440 px a channel shows its five Now tiles in one row and a workspace its four (mockup, #2841). The pane's own
+    grid must outrank the generic two-column `.now`, so the rule carries both ids."""
+    page = hub.PAGE
+    assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(5,minmax\(0,1fr\)\)", page), \
+        "the channel's five tiles take one row"
+    assert re.search(r"#tab-set #sbody \.sltn4\{grid-template-columns:repeat\(4,minmax\(0,1fr\)\)", page), \
+        "the workspace's four tiles take one row"
+    channel = render(hub, read(hub, tmp_path), sel="w0.c0")
+    assert "now sltnow sltn5" in channel, "a five-tile block names five columns"
+    workspace = render(hub, read(hub, tmp_path), sel="w0")
+    assert "now sltnow sltn4" in workspace, "a four-tile block names four columns"
+
+
+def test_a_folded_detail_keeps_three_tiles_and_a_phone_one(hub, tmp_path):
+    """A panel under 700 px has no room for five tiles: three keep every label whole. A phone shows one tile a row."""
+    page = hub.PAGE
+    assert re.search(r"@container \(max-width:700px\)\{[^@]*#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(3,minmax\(0,1fr\)\)", page), \
+        "a folded detail keeps three tiles"
+    assert re.search(r"@media \(max-width:600px\)\{[^@]*#tab-set #sbody \.sltnow\{grid-template-columns:1fr\}", page), \
+        "a phone keeps one tile"
+
+
+def test_a_tile_value_breaks_between_words_and_never_inside_one(hub):
+    """`overflow-wrap:anywhere` cuts a word at the pane's edge; the pane's own rule breaks between words alone (#2841)."""
+    rule = _rule(hub.PAGE, "#tab-set #sbody .sltnow .tile .tv")
+    assert "overflow-wrap:break-word" in rule, rule
+    assert "anywhere" not in rule, rule
+    assert "hyphens:none" in rule or "word-break:normal" in rule, rule
+
+
+def test_the_node_title_is_the_largest_text_of_the_detail_pane(hub):
+    """The title names a token the tokens define, and it is larger than the tile value and every body line (#2841)."""
+    page = hub.PAGE
+    assert "var(--fs-title)" not in page, "the title names a size the tokens never define"
+    rule = _rule(page, "#sbody .slth")
+    assert "font-size:var(--fs-display)" in rule, rule
+    assert "font-size:var(--fs-heading)" in _rule(page, "#tab-set #lbody .tile .tv"), "the largest tile value is a heading"
+    tokens = (ROOT / "contrib" / "squad-goal" / "scripts" / "web-tokens.css").read_text()
+    assert _token(tokens, "fs-display") > _token(tokens, "fs-heading") > _token(tokens, "fs-body") > _token(tokens, "fs-caption")
+
+
+def test_the_tile_label_is_muted_and_its_value_bold(hub):
+    """The label is a muted caption and the value is bold, as the mockup draws them (#2841)."""
+    page = hub.PAGE
+    assert re.search(r"#tab-set #sbody \.sltnow \.tile \.tk\{[^}]*color:var\(--mute\)", page), "the label is muted"
+    rule = _rule(page, "#tab-set #sbody .sltnow .tile .tv")
+    assert "font-weight:600" in rule, rule
+
+
+def test_a_project_level_value_is_never_green(hub, tmp_path):
+    """A count of the whole project is a fact, not a passing state: every project tile stays neutral (mockup, #2841)."""
+    root = tree(hub, tmp_path)["root"]
+    assert root["now"], "the project node carries its Now tiles"
+    assert [t["tone"] for t in root["now"]] == ["neutral"] * len(root["now"]), root["now"]
+
+
+def test_the_edit_button_of_the_personas_table_stays_on_one_line(hub):
+    """A stacked Personas row at a narrow panel keeps `Edit` on one line (#2841)."""
+    assert re.search(r"#sbody \.slt2 (?:td )?button\{white-space:nowrap\}", hub.PAGE), \
+        "the table's buttons never wrap"
