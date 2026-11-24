@@ -45,6 +45,10 @@ from squad.runners.types import Scope as Scope
 # spent ids and the hours windows stay the resuming invocation's: they are facts of the moment, and the record states the
 # chain each call had.
 CHAIN_ORDER = "model_order"
+# The engine option that names the wave ceiling file (#2840), and the time a call leaves before that ceiling so its work
+# can still enter the wave: the entry's gates and push run after the call ends.
+WAVE_CEILING = "wave_ceiling"
+WAVE_ENTRY_RESERVE_SECONDS = 300
 
 
 def _signals_recorded(fn):
@@ -203,10 +207,28 @@ class Engine:
         return self.limits.get("no_progress_seconds", session.NO_PROGRESS_SECONDS) * self.scale
 
     def _call_deadline(self, node, sc):
+        """(seconds, reason) of one call: the node deadline, the project's per-call ceiling, the run scope and the wave
+        ceiling. `reason` is `wave_ceiling` when the wave ceiling is the bound, else None."""
         own = node.get("deadline", self.run_cfg["deadline"])     # null run deadline: no run limit, the node's own deadline is the cap
         own = math.inf if own is None else own * self.scale
         own = min(own, self.limits.get("deadline_seconds", math.inf) * self.scale)    # the project's per-call ceiling
-        return min(own, sc.deadline_at - self.clock())
+        return self.wave_bound(min(own, sc.deadline_at - self.clock()))
+
+    def wave_bound(self, own):
+        """(seconds, reason): `own` seconds, or the time left to the wave ceiling when that is less (#2840). The engine
+        option `wave_ceiling` names a file that holds one absolute epoch, the wave's age cap; the loop writes it when it
+        cuts the wave and removes it with the wave. The time left keeps an entry reserve, so a call that ends at the bound
+        can still enter its wave. Zero or less is a spent deadline. No option, no file or an unreadable file: no ceiling."""
+        path = (self.record.events[0].get("engine_options") or {}).get(WAVE_CEILING) if self.record.events else None
+        path = path or self.options.get(WAVE_CEILING)   # a resume reads the file the start recorded (ADR-0106)
+        if not path:
+            return own, None
+        try:
+            epoch = float(Path(path).read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            return own, None
+        left = epoch - self.wall() - WAVE_ENTRY_RESERVE_SECONDS
+        return (left, "wave_ceiling") if left < own else (own, None)
 
     # ------------------------------------------------------------ the walk
     LEAVES = ("agent", "gate", "action", "wait")

@@ -6,9 +6,9 @@ from squad import actions, git
 
 class ActionRunner:
     async def run(self, ctx, node, entry, sc):
-        deadline = ctx.call_deadline(node, sc)
+        deadline, bound_by = ctx.call_deadline(node, sc)
         if deadline <= 0:
-            return ctx.finish(node, entry, sc, "deadline", ["deadline", "run_deadline"])
+            return ctx.finish(node, entry, sc, "deadline", ["deadline", bound_by or "run_deadline"])
         logical, eff = node.get("workspace"), node["effect"]
         path, t0 = ctx.workspace_path(logical, sc.item), ctx.clock()
         branch = actions.branch_name(ctx.run_id, logical or "target", sc.item)

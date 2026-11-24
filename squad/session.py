@@ -295,7 +295,7 @@ async def _ends_before_silence(done, pulse, window):
 
 
 async def run_call(source, deadline, make_request, *, chain, adapter, record, budget, clock, wall,
-                   registry=None, prepare=None, on_deadline=None, on_cancel=None, no_progress=NO_PROGRESS_SECONDS):
+                   registry=None, prepare=None, on_deadline=None, on_cancel=None, no_progress=NO_PROGRESS_SECONDS, limit_by=None):
     """Reserve from `source()`, run the call, settle once. `make_request(res)` builds the CallRequest.
 
     `chain` is the ordered models this call may answer on, already led by its pick and with the spent and hours-closed
@@ -306,6 +306,8 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     `on_deadline(res, elapsed)` and `on_cancel(res, elapsed)` write the caller's event after the settle.
     `no_progress` is the silence, in seconds, one call may keep: the adapter beats the pulse on each message it reads, and a
     call with no beat for that long ends as `no_progress` (#1289). The node deadline is checked first and still wins.
+    `limit_by` names the bound that set `deadline` when it is not the call's own deadline (`wave_ceiling`, #2840); the
+    `call_start` event records it beside the limit.
     """
     res = source()
     if res is None:
@@ -325,7 +327,7 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     ids = modelreg.chain_ids(chain, registry)
     record.append("call_start", node=req.node, entry=req.entry, item=req.item, session=req.session_id,
                   pid=os.getpid(), limit=None if deadline == math.inf else deadline, started_at=wall(),
-                  chain=ids, chain_id=modelreg.chain_sha256(ids))
+                  chain=ids, chain_id=modelreg.chain_sha256(ids), **({"limit_by": limit_by} if limit_by else {}))
 
     async def runner():
         try:

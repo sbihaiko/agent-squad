@@ -824,7 +824,11 @@ class DispatchRunner:
         d.current = (node, entry, sc)
         async with anyio.create_task_group() as reviews:
             try:
-                seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale), reviews)
+                # The children's bound: the run scope, the node deadline and the wave ceiling, read by the engine helper
+                # `_call_deadline` reads too (#2840). A child's fix round is not bound by it: the review pauses the age cap.
+                now = ctx.clock()
+                bound, by = ctx.wave_bound(min(sc.deadline_at - now, node["deadline"] * ctx.scale))
+                seen = await ctx.runs.run_of(node, ent, pe, sc, now + bound, reviews, limit_by=by)
                 owed = await d.land(node, entry, sc, seen)
             except Exception as x:  # noqa: BLE001 - a task group wraps its body's exception: hand the run the one it raised
                 reviews.cancel_scope.cancel()

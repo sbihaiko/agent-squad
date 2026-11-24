@@ -4,7 +4,7 @@ An option may name nodes and may lower a run-block value. It never sets a node's
 """
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
-OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "model_ctx", "keep_children", "fix_run")
+OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "model_ctx", "keep_children", "fix_run", "wave_ceiling")
 TIERS = ("trivial", "medium", "large")
 
 
@@ -49,6 +49,8 @@ def resolve(graph, options):
         raise OptionError("keep_children must be true or false")
     if "fix_run" in opts and not isinstance(opts["fix_run"], bool):
         raise OptionError("fix_run must be true or false")
+    if "wave_ceiling" in opts and not (isinstance(opts["wave_ceiling"], str) and opts["wave_ceiling"]):
+        raise OptionError("wave_ceiling must name the file that holds the wave's ceiling epoch")
     if "expect_graph_hash" in opts and opts["expect_graph_hash"] != graph.hash:
         raise OptionError(f"graph hash mismatch: expected {opts['expect_graph_hash']}, the loaded graph is {graph.hash}. Nothing ran")
     return opts, cfg

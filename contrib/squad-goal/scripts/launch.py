@@ -393,7 +393,15 @@ keep = ["--keep-children"] if _issue_child_request(req_text) and _names_option("
 # The fix mark is `SG_RUN_TARGET` (a run on the kept worktree, childfix.sh) or `SG_FIX_RUN` (a round on a pushed branch,
 # branchfixpass.sh). It is recorded at run start, so a resume reads it again; the build was probed for it above.
 fix = ["--fix-run"] if fix_run else []
-proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + fix + [
+# A run that cuts a wave names its wave ceiling (#2840): wave.sh writes one epoch, the wave's age cap, in
+# $SG_STATE/auto/wave-ceiling-<run>, and the engine ends a child's call before it, so a child never runs past the cap that
+# requeues it. The file is named before the run exists, so the launcher names the run too (the run id format of
+# squad/record.py). A squad that has no such option gets neither flag, and its runs are named as before.
+ceil = []
+if _issue_child_request(req_text) and _names_option("wave_ceiling"):
+    rname = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
+    ceil = ["--name", rname, "--wave-ceiling", str(state / "auto" / f"wave-ceiling-{rname}")]
+proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + fix + ceil + [
                         "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + (["--model-ctx", ",".join(f"{m}={w}" for m, w in ctxs.items())] if ctxs else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),
