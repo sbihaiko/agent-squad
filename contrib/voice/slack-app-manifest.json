@@ -20,6 +20,8 @@
         "channels:history",
         "channels:manage",
         "channels:read",
+        "groups:history",
+        "groups:read",
         "chat:write",
         "chat:write.customize",
         "files:read",
@@ -37,7 +39,8 @@
       "bot_events": [
         "message.im",
         "app_mention",
-        "message.channels"
+        "message.channels",
+        "message.groups"
       ]
     },
     "interactivity": {

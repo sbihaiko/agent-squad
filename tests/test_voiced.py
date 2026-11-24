@@ -560,9 +560,10 @@ class ScopedClient:
     omits every channel marked `is_private`, as Slack does.
     """
 
-    def __init__(self, listing=(), taken=False, extra_scopes=()):
+    def __init__(self, listing=(), taken=False, extra_scopes=(), missing_scopes=()):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        self.granted = set(manifest["oauth_config"]["scopes"]["bot"]) | set(extra_scopes)
+        # `missing_scopes` models an install made before the manifest granted them (#2816): Slack keeps the old grant.
+        self.granted = (set(manifest["oauth_config"]["scopes"]["bot"]) | set(extra_scopes)) - set(missing_scopes)
         self.listing = list(listing)
         self.taken = taken
         self.calls = []
@@ -631,12 +632,13 @@ def test_a_taken_name_held_by_a_private_channel_is_found_when_the_app_may_read_i
 
 
 def test_a_taken_name_a_fresh_install_cannot_read_is_reported_by_its_own_line():
-    """#2767: the shipped manifest grants no `groups:read`, so a name held by a private channel stays out of reach.
+    """#2767: an install made before #2816 grants no `groups:read`, so a name held by a private channel stays out of reach.
     The daemon names that plainly, in one line of its own, and never as the `missing_scope` refusal. The line names
     the scope that would reach the channel, so a maintainer sees the fix. The fallback keeps its order: the public
     listing first, the private one second, and the refusal of that second one is what the line reports."""
     mod = voiced()
-    client = ScopedClient(listing=[{"id": "C0PRIV", "name": "proj-app", "is_private": True}], taken=True)
+    client = ScopedClient(listing=[{"id": "C0PRIV", "name": "proj-app", "is_private": True}], taken=True,
+                          missing_scopes=("groups:read",))
     log = []
 
     got = mod._ensure_channel(client, "proj-app", {}, log.append)
