@@ -107,4 +107,8 @@ awk -v s=$((now - 400)) 'BEGIN{f[5]=s; f[18]="300"; for(i=1;i<=23;i++) printf "%
 printf '%s\t%s\t300\t1\t1\t0\ttest-x.sh\t-\n' "$((now - 50))" "$((now - 50))" > "$T/st/child-suite-history"
 expired run-l && ko "L: a gate wait spent the age cap" || ok "L: a gate and a suite wait do not spend the age cap"
 
+# M (#2840): the ceiling file the engine reads carries the same pause this check subtracts, so the engine's bound and the
+# wave's expiry rest on one epoch. `expired` writes it, and run-b's finished 700 s round pauses run-b's ceiling too.
+[ "$(cat "$T/st/auto/wave-ceiling-run-b" 2>/dev/null)" = "$(( now - 1500 + 1000 + 700 ))" ] && ok "M: the ceiling file carries the cap and the pause" || ko "M: the ceiling of a paused wave is '$(cat "$T/st/auto/wave-ceiling-run-b" 2>&1)', not the cap and the pause"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-wavepause: all checks green" || { echo "test-wavepause: failed"; exit 1; }

@@ -20,12 +20,17 @@ now=$(date +%s)
 echo "wave/run-live" > "$T/st/auto/wave-run-live"
 echo pass > "$T/st/auto/wave-recut-run-live"
 printf '%s\n' "$now" > "$T/st/auto/wave-entry-run-live"
+printf '%s\n' "$(( now + 7200 ))" > "$T/st/auto/wave-ceiling-run-live"
 # an unlisted run: no line names it and no folder works it, so its wave can never land.
 echo "wave/run-old" > "$T/st/auto/wave-run-old"
+printf '%s\n' "$(( now + 7200 ))" > "$T/st/auto/wave-ceiling-run-old"
 o=$(pass)
 [ -e "$T/st/auto/wave-entry-run-live" ] && ok "the entry clock of a run the listing names stays" || ko "the entry clock of a live run went: $o"
 [ -e "$T/st/auto/wave-recut-run-live" ] && ok "the recut marker of a run the listing names stays" || ko "the recut marker of a live run went: $o"
 [ -e "$T/st/auto/wave-run-live" ] && ok "the wave of a listed run stays" || ko "the wave of a live run went: $o"
+[ -e "$T/st/auto/wave-ceiling-run-live" ] && ok "the ceiling of a run the listing names stays" || ko "the ceiling of a live run went: $o"
 [ ! -e "$T/st/auto/wave-run-old" ] && ok "the wave marker of an unlisted run is dropped" || ko "the wave marker of an unlisted run stayed: $o"
+[ ! -e "$T/st/auto/wave-ceiling-run-old" ] && ok "the ceiling of an unlisted run is dropped with its wave" || ko "the ceiling of an unlisted run stayed: $o"
 /usr/bin/grep -q 'WAVE-DROPPED wave-run-old' "$T/st/cycle.log" && ok "the pass names the marker it dropped" || ko "the drop is unnamed: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'WAVE-DROPPED wave-ceiling-run-old' "$T/st/cycle.log" && ok "the pass names the ceiling it dropped" || ko "the ceiling drop is unnamed: $(cat "$T/st/cycle.log" 2>/dev/null)"
 exit $fail
