@@ -1523,7 +1523,9 @@ function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
 function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
- const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.defects||[]).map(d=>`<p class="mx err sltdef" role=status>${esc(d)}</p>`).join("");
+ const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note,
+  defects=dnote?`<p class="mx err sltdef" role=status>${esc(dnote)}</p>`
+   :(n.defects||[]).map(d=>`<p class="mx err sltdef" role=status>${esc(d)}</p>`).join("");   /* a defect shows in plain words (#2842) */
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
@@ -1554,10 +1556,12 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
   return (cs.length?cs:[{kind:"read",value:""}]).map((c,i)=>`<div class=slsetrow data-slrow="${slA(r.key)}">`
    +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(n,r,c)}</span>${slTag(r.file)}</div>`).join("")
   +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
+/* A tone becomes a class token only from a fixed set: an unknown tone is neutral, never a token of its own (#2842). */
+const slTTone=t=>t==="err"||t==="warn"?t:"neutral";
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
- +(slT.guest_slot?`<p class="sltguest ${slA(slT.guest_slot.tone||"neutral")}">${esc(slT.guest_slot.line||"")}</p>`:"")
+ +(slT.guest_slot?`<p class="sltguest ${slTTone(slT.guest_slot.tone)}">${esc(slT.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
  +`<div class=sltdetail>${slTDetail()}</div></div>`}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
