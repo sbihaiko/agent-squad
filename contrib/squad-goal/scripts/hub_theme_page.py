@@ -1531,12 +1531,12 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA(c.label||row.label||f)}"`,v=slTSettingVal(n,row,c);
+ at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c);
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
- if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} ${lab}${v?" checked":""}> ${esc(c.label||f)}</label>`;
- if(c.kind==="select")return `<select class=slsetctl ${at} ${lab}>`+(c.options||[]).map(slTOpt)
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} aria-label="${lab}"${v?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl ${at} aria-label="${lab}">`+(c.options||[]).map(slTOpt)
   .map(o=>`<option value="${slA(o.value)}"${o.value===String(v)?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
- return `<input type=text class=slsetctl ${at} ${lab} value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
+ return `<input type=text class=slsetctl ${at} aria-label="${lab}" value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
 function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
  return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
  +rows.map(r=>{const cs=r.controls||[];
