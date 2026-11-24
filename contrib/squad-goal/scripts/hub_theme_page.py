@@ -440,7 +440,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-title);color:var(--fg);overflow-wrap:anywhere}
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+#sbody .now.sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}   /* the tree's tiles flow with the pane; `#tab-set .now` would hold them two across */
 #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
 #sbody .sltback{display:none;margin:0 0 8px}
@@ -466,7 +466,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
 #sbody .slperm th{font-size:var(--fs-caption);font-weight:400;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
-#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+/* A pane with room keeps each header on one line; a phone's pane wraps it, so the last column is never cut (#2826). */
+@media (min-width:601px){#tab-set #sbody .slperm th{white-space:nowrap}}
+/* A narrow pane never splits a role id down the middle: `break-word` keeps each word whole and wraps only between them,
+   so the auto layout gives a column its widest word (SPEC 2682 #2826). */
+#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:break-word}
+#sbody .slperm td.role{white-space:nowrap}
 #sbody .slperm td.no{color:var(--mute)}
 #sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
 #sbody .slpvnow{margin-top:8px}
@@ -1558,10 +1563,10 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
 /* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
 /* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
    decision are the hub's; the view draws them and asks the one read route for a preview, which posts nothing. */
-let slSnd=null;   // the last sender preview: its channel node, its sender and its answer
+let slSnd=null,slPvAutoId=null;   // the last sender preview: its channel node, its sender and its answer; the node asked first
 const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:`member:${u}`,t:u})),{v:"stranger",t:"someone with no membership"},{v:"bot",t:"a bot"}];
 function slTPerms(n){const p=n.permissions;if(!p)return "";
- const rows=(p.roles||[]).map(r=>`<tr><td class=${r.accepted?"yes":"no"}>${r.accepted?"yes":"no"}</td><td>${esc(r.id)}</td><td>${esc((r.actions||[]).join(", ")||"none")}</td><td>${esc((r.members||[]).join(", ")||"none")}</td></tr>`).join("");
+ const rows=(p.roles||[]).map(r=>`<tr><td class=${r.accepted?"yes":"no"}>${r.accepted?"yes":"no"}</td><td class=role>${esc(r.id)}</td><td>${esc((r.actions||[]).join(", ")||"none")}</td><td>${esc((r.members||[]).join(", ")||"none")}</td></tr>`).join("");
  const count=`${p.eligible} distinct ${p.eligible===1?"person":"people"} eligible`;
  return `<div class=setblk data-blk=perm data-theme=slk><h3 class=blkh id=slperm tabindex="-1">Permissions</h3>`
  +`<table class=slperm aria-label="Permissions of this channel"><thead><tr><th scope=col>Accepted</th><th scope=col>Role</th><th scope=col>May ask for</th><th scope=col>Members (user ids)</th></tr></thead><tbody>${rows}</tbody></table>`
@@ -1571,9 +1576,13 @@ function slTPreview(n){const p=n.permissions;if(!p||!n.ref)return "";
  const opts=senders.map(s=>`<option value="${slA(s.v)}"${s.v===cur?" selected":""}>${esc(s.t)}</option>`).join("");
  const got=slSnd&&slSnd.node===n.id&&slSnd.sender===cur?slSnd.data:null;
  const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
- const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id?`<p class=m>Reading the decision.</p>`:"");
+ const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:`<p class=m>Reading the decision.</p>`;
+ /* The section shows its answer the moment the channel opens, not only after a pick: the detail asks the first
+    sender once per node. The ask is a browser effect, so the renderer stays one pure string (SPEC 2682 #2826). */
+ if(!got&&slPvAutoId!==n.id){slPvAutoId=n.id;if(typeof document!=="undefined"&&document.getElementById)slPvAuto(n,senders[0].v)}
  return `<div class=setblk data-blk=preview data-theme=slk><h3 class=blkh>Try a sender</h3><div class=slpvbox>`
  +`<label class=slf><span>Sender</span><select data-slp-sender="${slA(n.id)}" aria-label="Sender">${opts}</select></label>${out}</div></div>`}
+function slPvAuto(n,sender){if(slTsel===n.id)slPvAsk(n.id,sender)}
 async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
  const q=new URLSearchParams({workspace:n.ref.workspace,channel:n.ref.channel});
  if(sender.startsWith("member:"))q.set("user",sender.slice(7));
