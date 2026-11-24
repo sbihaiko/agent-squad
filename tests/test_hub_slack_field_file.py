@@ -153,12 +153,13 @@ def test_an_edit_reaches_the_right_row_after_the_channel_list_changes_order(hub,
     committed["workspaces"][0]["channels"].reverse()
     local = copy.deepcopy(OVERLAY)
     local["workspaces"][0]["channels"].reverse()
-    out = field(hub, tmp_path, "C0ALERT001", "mode", "listen", committed=committed, local=local)
+    out = field(hub, tmp_path, "C0ALERT001", "mode", "listen+speak", committed=committed, local=local)
     assert out["err"] is None, out
     assert [c["id"] for c in out["committed"]["workspaces"][0]["channels"]] == ["C0ALERT001", "C0PROJ0001"]
-    assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["mode"] == "listen"
-    assert channel_row(out["committed"], "T0TEAM0001", "C0PROJ0001").get("mode") is None
-    assert out["local"] == OVERLAY, out["local"]   # a presentation field never touches the local overlay
+    assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["mode"] == "listen+speak"
+    want_c, want_l = expected(committed, local, edit=lambda c, l: channel_row(
+        c, "T0TEAM0001", "C0ALERT001").update(mode="listen+speak"))
+    assert (out["committed"], out["local"]) == (want_c, want_l)   # one row changed, and no order moved
 
 
 def test_an_unknown_channel_id_is_refused(hub, tmp_path):
@@ -255,7 +256,7 @@ def test_each_field_row_names_its_own_file_on_a_slack_connect_channel(hub, tmp_p
     assert rows["mode"]["file"] == "slack.yaml" and rows["mode"]["doc"] == "committed", rows["mode"]
     assert rows["delivery"]["file"] == "4.slack.local.yaml" and rows["delivery"]["doc"] == "local", rows["delivery"]
     assert rows["draft_for"]["doc"] == "local" and rows["watch"]["doc"] == "local" and rows["audio"]["doc"] == "local"
-    assert [c["field"] for c in rows["delivery"]["controls"]] == ["send_grant"], rows["delivery"]
+    assert [c["field"] for c in rows["delivery"]["controls"]] == ["speak", "send_grant"], rows["delivery"]
 
 
 def test_an_owned_channel_offers_no_delivery_row(hub, tmp_path):

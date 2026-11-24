@@ -444,7 +444,16 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
 #sbody .sltback{display:none;margin:0 0 8px}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
+/* The channel settings of the tree detail (#2844): one row per setting, the controls, and the file that owns the row. */
+#sbody .slsetrow{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .slsetrow .slsetk{color:var(--mute);min-width:0;overflow-wrap:anywhere}
+#sbody .slsetc{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
+#sbody .slsetc .slsetctl{max-width:260px;min-width:0}
+#sbody .slsetc input[type=text].slsetctl{width:220px}
+#sbody .slsetrow .slfile{justify-self:end;margin-left:0}
+#sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute)}
+#sbody .slsetval{color:var(--fg)}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1500,7 +1509,32 @@ function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTSettings(n)}
+/* The channel settings of the detail pane (#2844): one row per field, and the row names the file it writes in a chip.
+   The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and the
+   field, never the row's place in a list, so the save writes the row that carries the id. */
+const slTOpt=o=>typeof o==="string"?{value:o,label:o}
+ :{value:String((o||{}).value==null?"":o.value),label:String((o||{}).label==null?(o||{}).value:o.label)};
+function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(el&&el.value!==undefined?el.value:"");
+ return {kind:"field",channel:String(ch),field:String(field),value:v}}
+function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),doc=slDocsCur()[row.doc];
+ if(doc)for(const w of Array.isArray(doc.workspaces)?doc.workspaces:[])for(const x of Array.isArray(w&&w.channels)?w.channels:[])
+  if(x&&String(x.id)===ch){const v=f.indexOf("poll.")===0?(x.poll||{})[f.slice(5)]:x[f];
+   return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
+ return c.value===undefined||c.value===null?"":String(c.value)}
+function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
+ at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA((row.label||f)+": "+f)}"`,v=slTSettingVal(n,row,c);
+ if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} ${lab}${v?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl ${at} ${lab}>`+(c.options||[]).map(slTOpt)
+  .map(o=>`<option value="${slA(o.value)}"${o.value===String(v)?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
+ return `<input type=text class=slsetctl ${at} ${lab} value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
+function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
+ return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
+ +rows.map(r=>{const cs=r.controls||[];
+  return (cs.length?cs:[{kind:"read",value:""}]).map((c,i)=>`<div class=slsetrow data-slrow="${slA(r.key)}">`
+   +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(n,r,c)}</span>${slTag(r.file)}</div>`).join("")
+  +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
@@ -1671,6 +1705,7 @@ async function slPost(confirm){try{const r=await fetch("/api/slack/files",{metho
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
+ if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
  if(dt.slef&&slDocs){const[f,id]=dt.slef.split(":");if(slPersonaSet(slDocs,id,f,e.target.value)){slD=null;slMsg="";slPOpen=id;slPreviewRefresh()}return}
  if(dt.sldefault!==undefined&&slDocs){slDefaultSet(slDocs,e.target.value);slD=null;slMsg="";slPreviewRefresh();return}
  if(dt.slow&&slDocs){const[file,wi]=String(dt.slow).split(":");if(slOverrideSet(slDocs,file,+wi,null,e.target.value)){slD=null;slMsg="";slPreviewRefresh()}return}
