@@ -1533,13 +1533,13 @@ function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
    default (ADR-0137). */
 const slTOpt=o=>typeof o==="string"?{value:o,label:o}
  :{value:String((o||{}).value==null?"":o.value),label:String((o||{}).label==null?(o||{}).value:o.label)};
-function slTSettingCtl(row,c){const f=String(c.field||""),lab=`aria-label="${slA(c.label||row.label||f)}"`,
+function slTSettingCtl(row,c){const f=String(c.field||""),lab=slA(c.label||row.label||f),
  v=c.value===undefined||c.value===null?"":String(c.value);
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
- if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${lab}${c.value?" checked":""}> ${esc(c.label||f)}</label>`;
- if(c.kind==="select")return `<select class=slsetctl ${lab}>`+(c.options||[]).map(slTOpt)
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl aria-label="${lab}"${c.value?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl aria-label="${lab}">`+(c.options||[]).map(slTOpt)
   .map(o=>`<option value="${slA(o.value)}"${o.value===v?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
- return `<input type=text class=slsetctl ${lab} value="${slA(v)}"${c.default?` placeholder="default: ${slA(c.default)}"`:""}>`}
+ return `<input type=text class=slsetctl aria-label="${lab}" value="${slA(v)}"${c.default?` placeholder="default: ${slA(c.default)}"`:""}>`}
 function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
  return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
  +rows.map(r=>{const cs=r.controls||[];
