@@ -346,7 +346,59 @@ def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
 
 def test_at_600_px_the_tree_collapses_after_a_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
     page = hub.PAGE
-    assert re.search(r"@media ?\(max-width: ?600px\)\{[\s\S]*?\.slttop:not\(\.sltshow\) \.sltcol\{display:none\}",
+    assert re.search(r"@media ?\(max-width: ?600px\)\{[\s\S]*?\.slttop\.sltpicked:not\(\.sltshow\) \.sltcol\{display:none\}",
                      page), "the phone hides the tree after a selection"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
         "the phone keeps two tiles"
+
+
+def test_arrow_left_collapses_a_never_toggled_node(hub, tmp_path):
+    """A node the owner never toggled is open; its first ArrowLeft collapses it, never leaves it open."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='w0';"
+            "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
+            "console.log(JSON.stringify({open:slTOpen(slTNode('w0'))}))")
+    assert json.loads(_node(body)) == {"open": False}
+
+
+def test_a_selection_at_phone_width_keeps_focus_out_of_body(hub, tmp_path):
+    """At phone width the tree item is hidden; a selection moves focus to the visible Show-the-tree control, not BODY."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='p';"
+            "const back={id:'back',offsetParent:{},focus(){document.active='back'}};"
+            "const hidden={id:'slt_w0',offsetParent:null,focus(){document.active='slt_w0'}};"
+            "const document={active:'BODY',getElementById:id=>id==='slt_w0'?hidden:null,"
+            "querySelector:s=>s==='[data-slt-tree]'?back:null,querySelectorAll:()=>[]};"
+            "slTPick('w0');"
+            "console.log(JSON.stringify({active:document.active}))")
+    assert json.loads(_node(body)) == {"active": "back"}
+
+
+def test_the_phone_shows_the_tree_until_the_first_selection(hub):
+    page = hub.PAGE
+    assert re.search(r"\.slttop\.sltpicked:not\(\.sltshow\) \.sltcol\{display:none\}", page), \
+        "the phone hides the tree only after a selection"
+    assert re.search(r"\.slttop:not\(\.sltpicked\) \.sltdetail\{display:none\}", page), \
+        "the phone shows no detail before a selection"
+
+
+def test_the_now_tiles_fit_one_row_on_a_desktop(hub, tmp_path):
+    assert re.search(r"@container \(min-width:520px\)\{#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(var\(--tiles", hub.PAGE), \
+        "the tiles take one column each, as many as the node shows"
+    html = render(hub, read(hub, tmp_path), sel="w0.c0")
+    assert 'style="--tiles:5"' in html, "a channel shows five tiles"
+
+
+def test_a_node_title_is_the_largest_text_in_the_detail_pane(hub):
+    m = re.search(r"#sbody \.slth\{[^}]*font-size:(var\(--fs-[a-z]+\)|\d+px)", hub.PAGE)
+    assert m and m.group(1) in ("var(--fs-heading)", "var(--fs-display)", "20px"), m
+
+
+def test_a_tile_label_is_muted_and_its_value_bold(hub):
+    assert re.search(r"#tab-set #sbody \.tile \.tk\{[^}]*color:var\(--mute\)", hub.PAGE), "the tile label is muted"
+    assert re.search(r"#tab-set #sbody \.tile \.tv\{[^}]*font-weight:600", hub.PAGE), "the tile value is bold"
+
+
+def test_the_no_one_badge_is_amber(hub, tmp_path):
+    html = render(hub, read(hub, tmp_path))
+    assert re.search(r'<span class="sltb warn">no one</span>', html), "the no one badge is warn, not err"

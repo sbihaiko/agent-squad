@@ -306,7 +306,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "err", "noone"))
+        badges.append(_slack_badge("no one", "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -320,8 +320,12 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
-    return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
-            "badges": badges, "now": now,
+    note = ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets no reply."
+            if not members and announcement else
+            "No member holds a role this channel accepts, so a message is read as data and gets no reply." if not members else "")
+    chat = P.channel_class(ws, merged) == "guest" or _slack_text(ws.get("class")) == "guest"
+    return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "chat": chat,
+            "badges": badges, "now": now, "note": note,
             "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
 
 def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held, refused_keys, defects):
@@ -336,7 +340,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     resolution = P.resolution(committed_doc, local_doc, ws)
     persona = resolution["persona"]
     slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
-    now = [_slack_tile("Class", caption, class_, "warn" if refused else "neutral"),
+    now = [_slack_tile("Class", caption, f"from {group['file']}", "warn" if refused else "neutral"),
            _slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
                        "neutral" if persona else "warn"),
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
@@ -344,11 +348,13 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
     named = [str(d) for d in defects if d.file == group["file"]
              and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    refusals = [_slack_text(d.reason)[:1].upper() + _slack_text(d.reason)[1:] for d in defects if d.file == group["file"]
+                and str(d.key).startswith(f"workspaces[{group['index']}]")]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused)
                 for k, ch in enumerate(group["channels"])]
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
     return {"id": node_id, "level": 2, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
-            "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
+            "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named, "refusals": refusals,
             "children": channels,
             "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": class_,
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
@@ -407,7 +413,7 @@ def slack_tree(committed=None, local=None):
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
     now = [] if empty else [
         _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
-                    tone="ok" if groups else "warn"),
+                    tone="warn" if len(guest_nodes) > 1 else "ok" if groups else "warn"),
         _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="ok" if speak else "warn"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
                     else f"{len(personas)} · no default", tone="ok" if personas else "warn"),

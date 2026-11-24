@@ -415,17 +415,17 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel on the left, the selected node's Now block on
    the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its whole text in the
    tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay in view. */
-#sbody .slttop{display:grid;grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:16px;align-items:start}
+#sbody{container-type:inline-size}#sbody .slttop{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}@container (min-width:720px){#sbody .slttop{grid-template-columns:minmax(220px,340px) minmax(0,1fr)}}
 #sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
 #sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
-#sbody .sltguest b{color:var(--fg)}
+#sbody .sltguest b{color:var(--fg)}#sbody .sltguest.alert{color:var(--err);border-color:var(--err)}#sbody .sltguest.alert b{color:var(--err)}
 #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
 #sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
-#sbody .slti:hover{background:var(--inset)}
-#sbody .slti.lv2{padding-left:20px}#sbody .slti.lv3{padding-left:36px}
+#sbody .slti:hover{background-color:var(--inset)}
+#sbody .slti.lv2{padding-left:24px;background-image:linear-gradient(var(--line),var(--line));background-size:1px 100%;background-position:12px 0;background-repeat:no-repeat}#sbody .slti.lv3{padding-left:44px;background-image:linear-gradient(var(--line),var(--line)),linear-gradient(var(--line),var(--line));background-size:1px 100%,1px 100%;background-position:12px 0,28px 0;background-repeat:no-repeat}#sbody .sltnote{margin:10px 0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--inset);color:var(--fg);font-size:var(--fs-caption)}#sbody .sltempty{border:1px dashed var(--line);border-radius:var(--radius-md);padding:12px}#sbody [data-slpopen]{white-space:nowrap}
 #sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
 #sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
-#sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
+#sbody .sltarrow{flex:0 0 14px;display:inline-flex;color:var(--mute)}#sbody .sltkind{display:inline-flex;color:var(--mute)}
 #sbody .sltkind{flex:0 0 auto;color:var(--mute)}
 #sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto}
@@ -437,14 +437,14 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
 #sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
-#sbody .slth{margin:6px 0 2px;font-size:var(--fs-title);color:var(--fg);overflow-wrap:anywhere}
+#sbody .slth{margin:6px 0 2px;font-size:20px;font-weight:600;color:var(--fg);overflow-wrap:normal}
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+#sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}@container (min-width:520px){#tab-set #sbody .sltnow{grid-template-columns:repeat(var(--tiles,4),minmax(0,1fr))}}#tab-set #sbody .tile .tk{display:block;color:var(--mute);font-weight:400;overflow-wrap:normal}#tab-set #sbody .tile .tv{display:block;color:var(--fg);font-weight:600;overflow-wrap:normal;word-break:normal}#tab-set #sbody .tile.warn .tv{color:var(--warn)}#tab-set #sbody .tile.err .tv{color:var(--err)}#tab-set #sbody .sltnow.proj .tile.warn{border-color:var(--warn)}
 #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
 #sbody .sltback{display:none;margin:0 0 8px}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop.sltpicked:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop:not(.sltpicked) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1453,7 +1453,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel, with the selected node's state in a Now
    block of tiles. The hub answers every value from the policy module; the view constructs, binds and moves the focus,
    and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow keys, Home and End. */
-let slT=null,slTsel="p",slTopen={},slTF="",slTshow=false;
+let slT=null,slTsel="p",slTopen={},slTF="",slTshow=false,slTpicked=false;
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);return slT&&find(slT.root)};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
 const slTPath=id=>{const path=[];const find=(n,acc)=>{if(n.id===id){path.push(...acc,n);return true}
@@ -1468,11 +1468,11 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
  if(key==="ArrowRight"){if(!n.kids)return null;if(!n.open)return {focus:cur,toggle:cur};const k=f[i+1];return k&&k.parent===cur?{focus:k.id}:null}
  if(key==="ArrowLeft"){if(n.kids&&n.open)return {focus:cur,toggle:cur};return n.parent?{focus:n.parent}:null}
  return null}
-function slTGo(r){if(!r)return;if(r.toggle)slTopen[r.toggle]=!slTopen[r.toggle];if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
-function slTPick(id){slTsel=id;slTF=id;slTshow=false;slRender()}
+function slTGo(r){if(!r)return;if(r.toggle){const n=slTNode(r.toggle);if(n)slTopen[r.toggle]=!slTOpen(n)}if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slTpicked=true;slRender()}
+function slTPick(id){slTsel=id;slTF=id;slTshow=false;slTpicked=true;slRender()}
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
 function slTBack(){slTshow=true;slRender();const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slt_"+slTsel);if(el&&el.focus)el.focus()}
-function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;const el=document.getElementById("slt_"+id);if(el&&el.focus)el.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree
+function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;let el=document.getElementById("slt_"+id);if(el&&el.offsetParent===null)el=document.querySelector("[data-slt-tree]");if(el&&el.focus)el.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree
 function slSetup(kind){const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slwsclass]");
  if(el){el.value=kind;if(el.scrollIntoView)el.scrollIntoView({block:"center"});el.focus()}else{slMsg="!The workspace editor opens when the Slack files are readable.";slRender()}}
 function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)return;
@@ -1482,29 +1482,32 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
 const slTBadge=b=>`<span class="sltb ${esc(b.tone||"neutral")}">${esc(b.text)}</span>`;
+const slTIcon=d=>`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const SL_ICON={project:"M2.5 7L8 2.5 13.5 7v6.5h-11z",workspace:"M3 3h10v10H3z M3 6.5h10",hash:"M6 2.5L5 13.5 M11 2.5L10 13.5 M3 6h10 M2.5 10h10",chat:"M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"};
+const slTKindIcon=n=>slTIcon(n.kind==="channel"?(n.chat?SL_ICON.chat:SL_ICON.hash):n.kind==="workspace"?SL_ICON.workspace:SL_ICON.project);
 function slTItem(n,cur){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
  const label=[n.name].concat((n.badges||[]).map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
- +`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span><span class=sltkind aria-hidden=true>${n.kind==="channel"?"#":n.kind==="workspace"?"▣":"⌂"}</span>`
+ +`<span class=sltarrow aria-hidden=true>${kids?slTIcon(open?"M4 6l4 4 4-4":"M6 4l4 4-4 4"):""}</span><span class=sltkind aria-hidden=true>${slTKindIcon(n)}</span>`
  +`<span class=sltname title="${slA(n.name)}">${esc(n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></div>`}
 function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
- return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow">${tiles.join("")}</div></div>`:""}
+ return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow${n.kind==="project"?" proj":""}" style="--tiles:${tiles.length}">${tiles.join("")}</div></div>`:""}
 function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
  +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
 function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
- const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.defects||[]).map(d=>`<p class="mx err" role=status>${esc(d)}</p>`).join("");
+ const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.refusals||n.defects||[]).map(d=>`<p class="mx err" role=status>${esc(d)}</p>`).join("");
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+(n.note?`<p class=sltnote>${esc(n.note)}</p>`:"")}
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
- return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
- +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
+ return `<div class="slttop${slTpicked?" sltpicked":""}${slTshow?" sltshow":""}"><div class=sltcol>`
+ +(slT.guest_slot?`<p class="sltguest${slT.guest_slot.count>1?" alert":""}">${esc(slT.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
  +`<div class=sltdetail>${slTDetail()}</div></div>`}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
