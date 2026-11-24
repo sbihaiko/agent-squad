@@ -238,6 +238,19 @@ def test_the_guest_slot_names_the_project_that_holds_it(hub, tmp_path):
     assert out["guest_slot"] == {"held": "client-a", "count": 1, "line": "Guest slot 1 of 1 · client-a"}, out["guest_slot"]
 
 
+def test_a_workspace_tile_names_its_class_a_file_tile_and_the_detail_carries_class_and_id(hub, tmp_path):
+    """The Class tile keeps the class value, a File tile names the file the workspace row lives in, and the detail sub
+    line carries both the class and the workspace id, so the owned or guest status is never unclear."""
+    root = tree(hub, tmp_path)["root"]
+    team = tiles(by_name(root, "team"))
+    assert team["Class"] == {"key": "Class", "value": "owned", "sub": "", "tone": "neutral"}, team["Class"]
+    assert team["File"]["value"] == "slack.yaml", team["File"]
+    guest = by_name(root, "client-a")
+    assert tiles(guest)["Class"]["value"] == "guest", tiles(guest)["Class"]
+    assert tiles(guest)["File"]["value"] == "t.slack.local.yaml", tiles(guest)["File"]
+    assert guest["detail"]["sub"] == "guest · T0CLIENT01", guest["detail"]
+
+
 def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
     out = read(hub, tmp_path, committed={}, local={})["tree"]
     project = out["root"]["children"][0]
