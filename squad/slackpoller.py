@@ -498,13 +498,15 @@ def checkpoint_hook(checkpoint, server=DEFAULT_SERVER, own=()):
 
 def event_of(message, workspace, channel, own=()):
     """The policy event of one read message. A bot message and an external message are flagged, and so is a message whose
-    `ts` is in the own-post list. A thread reply carries its `thread_ts`."""
+    `ts` is in the own-post list. A thread reply carries its `thread_ts`. The text travels too, because a leading
+    `@<name>` addresses the message to a persona (issue #2819)."""
     ts = str(message.get("ts"))
     return {
         "kind": "message",
         "workspace": workspace,
         "channel": channel,
         "user": message.get("user") or message.get("bot_id") or "",
+        "text": str(message.get("text") or ""),
         "bot": bool(message.get("bot_id") or message.get("subtype") == "bot_message"),
         "external": bool(message.get("is_external") or message.get("external")),
         "own": ts in {str(o) for o in own},

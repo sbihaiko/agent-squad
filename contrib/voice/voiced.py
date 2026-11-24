@@ -1227,6 +1227,24 @@ class Daemon:
             return slackpolicy.DEFAULT_LANGUAGE, None
         return slackpolicy.identity(active["revision"], active.get("local") or {}, channel)
 
+    def addressed_persona(self, channel, thread_ts):
+        """The persona a message addressed, when the daemon answers it: the inbox record of the question names the
+        persona the policy chose, and the project's active revision holds its row. A line with no such record, or a
+        revision with no such persona, answers under the channel persona (issue #2819)."""
+        if thread_ts is None:
+            return None
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if not active or not active.get("revision"):
+            return None
+        for record in read_lines(self.state.inbox_for(channel)):
+            if str(record.get("ts")) == str(thread_ts) and record.get("persona"):
+                row = slackpolicy.persona_named(active["revision"], active.get("local") or {},
+                                                str(record["persona"]))
+                if row is not None:
+                    return row
+        return None
+
     def download_clip(self, channel, url):
         """One clip's bytes, fetched with the token of the app that serves its channel."""
         app = self.app_of(channel)
@@ -1534,16 +1552,18 @@ class Daemon:
         sources.append((None, self.state.outbox_path))
         return sources
 
-    def post_text(self, channel, thread_ts, text):
+    def post_text(self, channel, thread_ts, text, persona=None):
         """Post the readable answer in its channel under the persona name; True and its ts when Slack accepts it.
 
-        The `username` is the channel persona's, so each channel sees the right identity. A channel with no persona
-        sends no name and the bot posts as the app, as it did before the persona existed."""
+        The `username` is the persona of `persona` when the caller names one, else the channel persona's, so an answer
+        to an addressed message carries the addressed persona. A channel with no persona sends no name and the bot
+        posts as the app, as it did before the persona existed."""
         client = self.client_for(channel)
         if client is None:
             return False, None
         payload = {"channel": channel, "text": text}
-        persona = self.identity_for(channel)[1]
+        if persona is None:
+            persona = self.identity_for(channel)[1]
         if persona is not None and persona.name:
             payload["username"] = persona.name     # the scope `chat:write.customize` is what lets Slack accept it
         if thread_ts:
@@ -1666,7 +1686,7 @@ class Daemon:
             return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
-        persona = self.identity_for(cid)[1]
+        persona = self.addressed_persona(cid, thread) or self.identity_for(cid)[1]
         voice = persona.voice if persona is not None and persona.voice else None
         tone = persona.tone if persona is not None and persona.tone else None
         posted = self.state.posted().get(digest) if digest else None
@@ -1675,7 +1695,7 @@ class Daemon:
         speaking = asyncio.create_task(asyncio.to_thread(self.synth_clip, first, voice, tone)) \
             if (first and self.synthesizer and "first" not in done) else None
         if posted is None:
-            ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text)
+            ok, ts = await asyncio.to_thread(self.post_text, cid, thread, text, persona)
             if not ok:
                 if speaking is not None:
                     await asyncio.gather(speaking, return_exceptions=True)
@@ -1795,13 +1815,14 @@ class Daemon:
         return True
 
     def policy_event(self, event, committed):
-        """One socket event as the policy event the decision takes: its workspace, channel, caller, and the flags that
-        mark a bot, a Slack Connect user and the daemon's own post."""
+        """One socket event as the policy event the decision takes: its workspace, channel, caller, text, and the flags
+        that mark a bot, a Slack Connect user and the daemon's own post."""
         workspace = self.workspace_of(event, committed)
         return {"kind": "message",
                 "workspace": workspace,
                 "channel": str(event.get("channel") or ""),
                 "user": str(event.get("user") or event.get("bot_id") or ""),
+                "text": str(event.get("text") or ""),
                 "bot": bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
                 "external": bool(event.get("is_ext_shared_channel") or event.get("is_external")
                                  or event.get("external")

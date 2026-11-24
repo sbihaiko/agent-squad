@@ -605,7 +605,7 @@ def slack_files_post(body):
 # id in the committed file and a second guest workspace, and returns the documents the save path (#2694) then writes.
 # The view holds no rule (ADR-0137) and the policy module holds the refusal text (ADR-0177).
 SLACK_WS_FIELDS = ("id", "label", "class", "app", "language", "persona")
-SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announce")
+SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announce", "reply")
 # The roles and members editor (#2699): a role carries its id, its actions and its deploy list, and it lives in the
 # committed file; a member carries its Slack workspace, channel, role and user ids, and it lives in the local file
 # alone (ADR-0177). The file a row lives in is a placement rule here; the value's own rule stays in the policy module,
