@@ -443,7 +443,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);font-weight:600;line-height:1.25;color:var(--fg);overflow-wrap:anywhere}   /* the node title is the largest text of the pane (#2841) */
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#tab-set #sbody .sltnow{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841); both ids outrank the generic two-column `.now` */
+#tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
+#tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
 #tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}   /* a workspace and the project carry four tiles: one row (#2841) */
 #tab-set #sbody .sltnow .tile .tk{color:var(--mute)}   /* the label is a muted caption (#2841) */
 #tab-set #sbody .sltnow .tile .tv{font-size:var(--fs-body);font-weight:600;line-height:1.3;overflow-wrap:break-word;word-break:normal;hyphens:none}   /* the value is bold and breaks between words alone (#2841) */
@@ -511,7 +512,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
 #sbody .slt2 .nw{white-space:nowrap}   /* a voice, a mode, a language tag or a persona id never breaks inside the word */
-#sbody .slt2 td button{white-space:nowrap}   /* the Personas table's Edit button stays on one line when the row stacks (#2841) */
+#sbody .slt2 td button{white-space:nowrap;justify-self:start;min-width:0}   /* the Personas table's Edit button stays on one line and inside its cell when the row stacks (#2841) */
 @media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked

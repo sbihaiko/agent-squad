@@ -469,10 +469,12 @@ def test_at_a_desktop_width_the_now_tiles_fill_one_row(hub, tmp_path):
     """At 1440 px a channel shows its five Now tiles in one row and a workspace its four (mockup, #2841). The pane's own
     grid must outrank the generic two-column `.now`, so the rule carries both ids."""
     page = hub.PAGE
-    assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(5,minmax\(0,1fr\)\)", page), \
+    assert re.search(r"#tab-set #sbody \.sltn5\{grid-template-columns:repeat\(5,minmax\(0,1fr\)\)", page), \
         "the channel's five tiles take one row"
     assert re.search(r"#tab-set #sbody \.sltn4\{grid-template-columns:repeat\(4,minmax\(0,1fr\)\)", page), \
         "the workspace's four tiles take one row"
+    assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(auto-fit,minmax\(120px,1fr\)\)", page), \
+        "a count the block does not name still fills one row"
     channel = render(hub, read(hub, tmp_path), sel="w0.c0")
     assert "now sltnow sltn5" in channel, "a five-tile block names five columns"
     workspace = render(hub, read(hub, tmp_path), sel="w0")
@@ -496,15 +498,26 @@ def test_a_tile_value_breaks_between_words_and_never_inside_one(hub):
     assert "hyphens:none" in rule or "word-break:normal" in rule, rule
 
 
+def _sized(size_rule):
+    """The token a `font-size:var(--X)` declaration names, so a test compares sizes the tokens define, not their spelling."""
+    m = re.search(r"font-size:var\(--([a-z-]+)\)", size_rule)
+    assert m, f"no font-size token in {size_rule!r}"
+    return m.group(1)
+
+
 def test_the_node_title_is_the_largest_text_of_the_detail_pane(hub):
-    """The title names a token the tokens define, and it is larger than the tile value and every body line (#2841)."""
+    """The title names a token the tokens define and resolves to a size larger than the pane's own tile value, so it is
+    the largest text of the detail pane (#2841). The comparison reads only `#sbody` rules, so a settings-pane selector
+    cannot stand in for the detail pane's value."""
     page = hub.PAGE
-    assert "var(--fs-title)" not in page, "the title names a size the tokens never define"
-    rule = _rule(page, "#sbody .slth")
-    assert "font-size:var(--fs-display)" in rule, rule
-    assert "font-size:var(--fs-heading)" in _rule(page, "#tab-set #lbody .tile .tv"), "the largest tile value is a heading"
+    assert "var(--fs-title)" not in page, "no pane rule names a size the tokens never define"
+    title_size = _sized(_rule(page, "#sbody .slth"))
+    value_size = _sized(_rule(page, "#tab-set #sbody .sltnow .tile .tv"))
     tokens = (ROOT / "contrib" / "squad-goal" / "scripts" / "web-tokens.css").read_text()
     assert _token(tokens, "fs-display") > _token(tokens, "fs-heading") > _token(tokens, "fs-body") > _token(tokens, "fs-caption")
+    assert title_size == "fs-display", title_size
+    assert _token(tokens, title_size) > _token(tokens, value_size), \
+        f"the title {title_size} must be larger than the tile value {value_size}"
 
 
 def test_the_tile_label_is_muted_and_its_value_bold(hub):
@@ -523,6 +536,9 @@ def test_a_project_level_value_is_never_green(hub, tmp_path):
 
 
 def test_the_edit_button_of_the_personas_table_stays_on_one_line(hub):
-    """A stacked Personas row at a narrow panel keeps `Edit` on one line (#2841)."""
-    assert re.search(r"#sbody \.slt2 (?:td )?button\{white-space:nowrap\}", hub.PAGE), \
-        "the table's buttons never wrap"
+    """A stacked Personas row at a narrow panel keeps `Edit` on one line and inside its own cell, so neither the word nor
+    the button is cut (#2841)."""
+    rule = _rule(hub.PAGE, "#sbody .slt2 td button")
+    assert "white-space:nowrap" in rule, rule
+    assert "justify-self:start" in rule, rule
+    assert "min-width:0" in rule, rule
