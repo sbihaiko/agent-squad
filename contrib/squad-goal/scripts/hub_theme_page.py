@@ -415,35 +415,43 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel on the left, the selected node's Now block on
    the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its whole text in the
    tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay in view. */
-#sbody .slttop{display:grid;grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:16px;align-items:start}
-#sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
-#sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
-#sbody .sltguest b{color:var(--fg)}
-#sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
-#sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
-#sbody .slti:hover{background:var(--inset)}
-#sbody .slti.lv2{padding-left:20px}#sbody .slti.lv3{padding-left:36px}
-#sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
-#sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
-#sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
-#sbody .sltkind{flex:0 0 auto;color:var(--mute)}
-#sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto}
-#sbody .sltb{padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
-#sbody .sltb.err{color:var(--err);border-color:var(--err)}
-#sbody .sltb.warn{color:var(--warn);border-color:var(--tint-warn-line)}
-#sbody .sltb.muted{color:var(--mute)}
-#sbody .sltdetail{min-width:0}
-#sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
-#sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
-#sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
-#sbody .slth{margin:6px 0 2px;font-size:var(--fs-title);color:var(--fg);overflow-wrap:anywhere}
-#sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
-#sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-#sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
-#sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
-#sbody .sltback{display:none;margin:0 0 8px}
+#tab-set #sbody .slttop{display:grid;grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:16px;align-items:start}
+#tab-set #sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
+#tab-set #sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
+#tab-set #sbody .sltguest b{color:var(--fg)}
+#tab-set #sbody .sltguest.err{color:var(--err);border-color:var(--err)}
+#tab-set #sbody .mx.err{color:var(--err)}
+#tab-set #sbody .sltnow .tile .tk{color:var(--mute);font-weight:400}
+#tab-set #sbody .sltnow .tile .tv{font-weight:600}
+#tab-set #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
+#tab-set #sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
+#tab-set #sbody .slti:hover{background:var(--inset)}
+#tab-set #sbody .slti.lv2{padding-left:20px}#tab-set #sbody .slti.lv3{padding-left:36px}
+#tab-set #sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
+#tab-set #sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
+#tab-set #sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
+#tab-set #sbody .sltkind{flex:0 0 auto;color:var(--mute)}
+#tab-set #sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tab-set #sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto}
+#tab-set #sbody .sltb{padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
+#tab-set #sbody .sltb.err{color:var(--err);border-color:var(--err)}
+#tab-set #sbody .sltb.warn{color:var(--warn);border-color:var(--tint-warn-line)}
+#tab-set #sbody .sltb.muted{color:var(--mute)}
+#tab-set #sbody .sltdetail{min-width:0}
+#tab-set #sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
+#tab-set #sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
+#tab-set #sbody .sltcrumb button:hover{color:var(--fg)}#tab-set #sbody .sltcrumb .sp{color:var(--mute)}
+#tab-set #sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);color:var(--fg);overflow-wrap:anywhere}
+#tab-set #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
+#tab-set #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
+#tab-set #sbody .sltdetail{container-type:inline-size}
+#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}
+@container (min-width:540px){#tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(0,1fr))}}
+#tab-set #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
+#tab-set #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+#tab-set #sbody .sltback{display:none;margin:0 0 8px}
+@media (max-width:1100px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .sltcol{border-right:0;padding-right:0}}
+#tab-set #sbody button[data-slopen]{white-space:nowrap}
 @media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
@@ -1453,7 +1461,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel, with the selected node's state in a Now
    block of tiles. The hub answers every value from the policy module; the view constructs, binds and moves the focus,
    and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow keys, Home and End. */
-let slT=null,slTsel="p",slTopen={},slTF="",slTshow=false;
+let slT=null,slTsel="p",slTopen={},slTF="",slTshow=true;
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);return slT&&find(slT.root)};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
 const slTPath=id=>{const path=[];const find=(n,acc)=>{if(n.id===id){path.push(...acc,n);return true}
@@ -1468,11 +1476,11 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
  if(key==="ArrowRight"){if(!n.kids)return null;if(!n.open)return {focus:cur,toggle:cur};const k=f[i+1];return k&&k.parent===cur?{focus:k.id}:null}
  if(key==="ArrowLeft"){if(n.kids&&n.open)return {focus:cur,toggle:cur};return n.parent?{focus:n.parent}:null}
  return null}
-function slTGo(r){if(!r)return;if(r.toggle)slTopen[r.toggle]=!slTopen[r.toggle];if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
+function slTGo(r){if(!r)return;if(r.toggle){const n=slTNode(r.toggle);slTopen[r.toggle]=!(n&&slTOpen(n))}if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slRender()}
 function slTPick(id){slTsel=id;slTF=id;slTshow=false;slRender()}
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
 function slTBack(){slTshow=true;slRender();const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slt_"+slTsel);if(el&&el.focus)el.focus()}
-function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;const el=document.getElementById("slt_"+id);if(el&&el.focus)el.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree
+function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;let el=document.getElementById("slt_"+id);if(!el||el.offsetParent===null)el=document.getElementById("sltdetail");if(el&&el.focus)el.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree
 function slSetup(kind){const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slwsclass]");
  if(el){el.value=kind;if(el.scrollIntoView)el.scrollIntoView({block:"center"});el.focus()}else{slMsg="!The workspace editor opens when the Slack files are readable.";slRender()}}
 function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)return;
@@ -1504,9 +1512,9 @@ function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
- +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
+ +(slT.guest_slot?`<p class="sltguest${slT.guest_slot.count>1?" err":""}">${esc(slT.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
- +`<div class=sltdetail>${slTDetail()}</div></div>`}
+ +`<div class=sltdetail id=sltdetail tabindex=-1>${slTDetail()}</div></div>`}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}

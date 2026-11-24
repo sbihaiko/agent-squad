@@ -306,7 +306,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "err", "noone"))
+        badges.append(_slack_badge("no one", "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -336,13 +336,13 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     resolution = P.resolution(committed_doc, local_doc, ws)
     persona = resolution["persona"]
     slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
-    now = [_slack_tile("Class", caption, class_, "warn" if refused else "neutral"),
+    now = [_slack_tile("Class", caption, f"from {group['file']}", "warn" if refused else "neutral"),
            _slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
                        "neutral" if persona else "warn"),
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
            _slack_tile("Guest slot", slot, "one guest workspace per machine",
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
-    named = [str(d) for d in defects if d.file == group["file"]
+    named = [d.reason for d in defects if d.file == group["file"]
              and str(d.key).startswith(f"workspaces[{group['index']}]")]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused)
                 for k, ch in enumerate(group["channels"])]
@@ -407,12 +407,12 @@ def slack_tree(committed=None, local=None):
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
     now = [] if empty else [
         _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
-                    tone="ok" if groups else "warn"),
-        _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="ok" if speak else "warn"),
+                    tone="warn" if len(guest_nodes) > 1 else "neutral"),
+        _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="neutral" if speak else "warn"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
-                    else f"{len(personas)} · no default", tone="ok" if personas else "warn"),
+                    else f"{len(personas)} · no default", tone="neutral" if personas else "warn"),
         _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe",
-                    tone="ok" if events else "warn")]
+                    tone="neutral" if events else "warn")]
     root = {"id": "p", "level": 1, "kind": "project", "name": label, "state": "empty" if empty else "ok",
             "badges": [_slack_badge("no Slack", "muted")] if empty else
                       ([_slack_badge(default_name)] if default_name else []),

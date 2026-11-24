@@ -271,8 +271,8 @@ def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
         assert now["Reply"]["value"] == P.reply_label(ch, decision), (name, now["Reply"], decision.reply)
         assert now["A member's message"]["value"] == P.destination_label(decision), (name, decision.kind)
     assert [b["text"] for b in by_name(root, "client-b")["badges"]] == ["guest", "refused"]
-    assert by_name(root, "client-b")["defects"] == [str(d) for d in P.validate(committed, local,
-                                                                               local_name="t.slack.local.yaml")
+    assert by_name(root, "client-b")["defects"] == [d.reason for d in P.validate(committed, local,
+                                                                                 local_name="t.slack.local.yaml")
                                                     if d.reason == P.SECOND_GUEST_REASON]
 
 
@@ -350,3 +350,62 @@ def test_at_600_px_the_tree_collapses_after_a_selection_and_the_now_block_keeps_
                      page), "the phone hides the tree after a selection"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
         "the phone keeps two tiles"
+
+
+def test_arrowleft_collapses_a_node_that_was_never_toggled(hub, tmp_path):
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='w0';slTopen={{}};"
+            "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
+            "console.log(JSON.stringify({open:slTOpen(slTNode('w0'))}))")
+    assert json.loads(_node(body)) == {"open": False}
+
+
+def test_a_selection_at_phone_width_moves_focus_to_the_detail_pane_not_body(hub, tmp_path):
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='p';"
+            "const FOC=[];const EL={slt_w0:{offsetParent:null,focus(){FOC.push('slt_w0')}},"
+            "sltdetail:{offsetParent:{},focus(){FOC.push('sltdetail')}}};"
+            "globalThis.document={getElementById:id=>EL[id]||null,querySelectorAll:()=>[]};"
+            "slTPick('w0');console.log(JSON.stringify(FOC))")
+    assert json.loads(_node(body)) == ["sltdetail"]
+
+
+def test_the_no_one_badge_is_amber(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    badge = next(b for b in by_name(tree(hub, tmp_path, local=local)["root"], "#support")["badges"] if b["text"] == "no one")
+    assert badge["tone"] == "warn", badge
+
+
+def test_a_refused_workspace_defect_names_no_raw_key(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest", "channels": []})
+    refused = by_name(tree(hub, tmp_path, local=local)["root"], "client-b")
+    assert refused["defects"] and not any("workspaces[" in d for d in refused["defects"]), refused["defects"]
+
+
+def test_the_class_tile_names_its_source_file_not_the_class(hub, tmp_path):
+    team = tiles(by_name(tree(hub, tmp_path)["root"], "team"))
+    assert team["Class"]["sub"] == "from slack.yaml", team["Class"]
+
+
+def test_two_guest_workspaces_raise_a_red_alert_and_a_project_warning(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest", "channels": []})
+    t = tree(hub, tmp_path, local=local)
+    html = render(hub, read(hub, tmp_path, local=local))
+    assert 'class="sltguest err"' in html, "the top line is a red alert"
+    assert tiles(t["root"])["Workspaces"]["tone"] == "warn", tiles(t["root"])["Workspaces"]
+
+
+def test_project_level_values_are_white_not_green(hub, tmp_path):
+    root = tree(hub, tmp_path)["root"]
+    assert all(t["tone"] != "ok" for t in root["now"]), [t["tone"] for t in root["now"]]
+
+
+def test_the_tile_label_is_muted_and_the_tile_value_is_bold(hub, tmp_path):
+    page = hub.PAGE
+    label = re.search(r"#sbody \.sltnow \.tile \.tk\{[^}]*\}", page).group(0)
+    value = re.search(r"#sbody \.sltnow \.tile \.tv\{[^}]*\}", page).group(0)
+    assert "color:var(--mute)" in label and "font-weight:600" not in label, label
+    assert "font-weight:600" in value, value
