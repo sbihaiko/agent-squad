@@ -476,7 +476,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltjump{margin:0 0 8px;font-size:var(--fs-caption)}
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
-#sbody .slperm th{font-size:var(--fs-caption);font-weight:500;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
+#sbody .slperm th{font-size:var(--fs-caption);font-weight:400;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
 #sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
 #sbody .slperm td.no{color:var(--mute)}
 #sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
