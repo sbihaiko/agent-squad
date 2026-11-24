@@ -448,11 +448,27 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
 #sbody .slperm th{font-size:var(--fs-caption);font-weight:400;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
-#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:break-word}
 #sbody .slperm td.no{color:var(--mute)}
 #sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
 #sbody .slpvnow{margin-top:8px}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
+/* The value choices of a tree node (#2845): one row per setting, its label, the controls and their inherited or default
+   value. A narrow pane puts the controls under the label, so no select is cut and the phone keeps a 44px touch target. */
+#sbody .slsetrow{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr);gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .slsetrow .slsetk{color:var(--mute);min-width:0;overflow-wrap:anywhere}
+#sbody .slsetc{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
+#sbody .slsetc .slsetctl{max-width:260px;min-width:0}
+#sbody .slsetc input[type=text].slsetctl{width:220px}
+#sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute);overflow-wrap:anywhere}
+#sbody .slsetval{color:var(--fg);overflow-wrap:anywhere}
+/* #2845: under 700 px of Settings column the tree and the detail take one row each, so a value control keeps the pane's
+   width and no select, note or Now tile is cut. The tree stays whole above the selected node's detail. */
+@container (max-width:700px){
+#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}
+#tab-set #sbody .sltcol{border-right:0;padding-right:0}
+#tab-set #sbody .slsetc .slsetctl{width:100%;max-width:320px}
+}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slsetc .slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetctl{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1511,7 +1527,25 @@ function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTPerms(n)+slTPreview(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTSettings(n)+slTPerms(n)+slTPreview(n)}
+/* The value choices of the tree's detail pane (#2845): the hub hands each control its stored value, its choices and, for
+   a poll field, the policy's default. The view only sorts a choice list and draws the rows; it holds no rule and no
+   default (ADR-0137). */
+const slTOpt=o=>typeof o==="string"?{value:o,label:o}
+ :{value:String((o||{}).value==null?"":o.value),label:String((o||{}).label==null?(o||{}).value:o.label)};
+function slTSettingCtl(row,c){const f=String(c.field||""),lab=slA(c.label||row.label||f),
+ v=c.value===undefined||c.value===null?"":String(c.value);
+ if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl aria-label="${lab}"${c.value?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl aria-label="${lab}">`+(c.options||[]).map(slTOpt)
+  .map(o=>`<option value="${slA(o.value)}"${o.value===v?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
+ return `<input type=text class=slsetctl aria-label="${lab}" value="${slA(v)}"${c.default?` placeholder="default: ${slA(c.default)}"`:""}>`}
+function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
+ return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
+ +rows.map(r=>{const cs=r.controls||[];
+  return (cs.length?cs:[{kind:"read",value:""}]).map(c=>`<div class=slsetrow data-slrow="${slA(r.key)}">`
+   +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(r,c)}</span></div>`).join("")
+  +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
 /* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
    decision are the hub's; the view draws them and asks the one read route for a preview, which posts nothing. */
 let slSnd=null;   // the last sender preview: its channel node, its sender and its answer
@@ -1560,7 +1594,10 @@ const slDocName=d=>d==="local"?((slR&&slR.files&&slR.files.local)||"slack.local.
 const slDocsCur=()=>slDocs||slSavedDocs||{committed:{},local:{}};
 const slWs=d=>{const doc=slDocsCur()[d]||{};const list=Array.isArray(doc.workspaces)?doc.workspaces:(doc.workspaces=[]);return list};
 const slList=(d,k)=>((slDocsCur()[d]||{})[k]||[]).map(x=>x&&x.id).filter(Boolean);
-const slLang=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+["pt-BR","en-US","es-ES"].map(x=>`<option value="${x}"${x===cur?" selected":""}>${x}</option>`).join("");
+const slLang=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+(((slR&&slR.languages)||[]).map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(x)}</option>`).join(""));   // the policy's languages (#2845)
+const slPollDef=(mode,name)=>((((slR&&slR.poll_defaults)||{})[mode]||{})[name]||"");
+const slPollPh=(mode,name)=>{const v=slPollDef(mode,name);return v?"default: "+v:""};   // the policy's poll default (#2845)
+const slPollMode=()=>(slR&&slR.poll_default_mode)||"";   // the policy's default poll mode (#2845)
 const slPersona=cur=>`<option value=""${cur?"":" selected"}>inherit</option>`+slList("committed","personas").map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(x)}</option>`).join("");
 const slF=(attr,label,ctl)=>`<label class=slf><span>${esc(label)}</span>${ctl.replace("data-sle=",`data-sle="${attr}"`).replace('aria-label="Slack field"',`aria-label="${slA(label)}"`)}</label>`;
 const slInput=(attr,label,value,ph)=>slF(attr,label,`<input type=text data-sle= aria-label="Slack field" value="${slA(value||"")}"${ph?` placeholder="${slA(ph)}"`:""}>`);
@@ -1584,14 +1621,14 @@ const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=
   h+=slF(at("speak"),"Answer as",`<select data-sle= aria-label="Slack field">${slOpts(SL_SPEAK,c.speak||"draft")}</select>`)
   +slF(at("transcribe"),"Transcribe a clip",`<select data-sle= aria-label="Slack field">${slOpts(SL_TR,c.transcribe||"off")}</select>`)
   +slCheck(at("voice_reply"),"Voice reply",!!c.voice_reply)
-  +slF(at("poll.mode"),"Poll mode",`<select data-sle= aria-label="Slack field">${slOpts(SL_PMOD,poll.mode||"two_state")}</select>`);
-  h+=((poll.mode||"two_state")==="exponential")
-   ?slInput(at("poll.floor"),"Floor",poll.floor,"5m")+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling,"1h")
-    +slInput(at("poll.factor"),"Factor",poll.factor,"2")+slInput(at("poll.idle_window"),"Idle window",poll.idle_window,"15m")
-   :slInput(at("poll.fast"),"Fast",poll.fast,"1m")+slInput(at("poll.slow"),"Slow",poll.slow,"10m")
-    +slInput(at("poll.quiet_after"),"Quiet after",poll.quiet_after,"10m");
-  h+=slInput(at("poll.thread_open"),"Thread open",poll.thread_open,"30m")+slInput(at("draft_for"),"Draft for",(c.draft_for||[]).join(", "))
-   +`<p class="slsched m">${esc(`${poll.fast||"1m"} after a message · ${poll.slow||"10m"} after ${poll.quiet_after||"10m"} quiet`)}</p>`;
+  +slF(at("poll.mode"),"Poll mode",`<select data-sle= aria-label="Slack field">${slOpts(SL_PMOD,poll.mode||slPollMode())}</select>`);
+  const pm=poll.mode||slPollMode();
+  h+=(pm==="exponential")
+   ?slInput(at("poll.floor"),"Floor",poll.floor,slPollPh(pm,"floor"))+slInput(at("poll.ceiling"),"Ceiling",poll.ceiling,slPollPh(pm,"ceiling"))
+    +slInput(at("poll.factor"),"Factor",poll.factor,slPollPh(pm,"factor"))+slInput(at("poll.idle_window"),"Idle window",poll.idle_window,slPollPh(pm,"idle_window"))
+   :slInput(at("poll.fast"),"Fast",poll.fast,slPollPh(pm,"fast"))+slInput(at("poll.slow"),"Slow",poll.slow,slPollPh(pm,"slow"))
+    +slInput(at("poll.quiet_after"),"Quiet after",poll.quiet_after,slPollPh(pm,"quiet_after"));
+  h+=slInput(at("poll.thread_open"),"Thread open",poll.thread_open,slPollPh(pm,"thread_open"))+slInput(at("draft_for"),"Draft for",(c.draft_for||[]).join(", "));
  }
  return h+`<span class=slact><button data-slrmch="${d}:${i}:${j}">Remove channel</button></span></div>`};
 const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
@@ -1658,7 +1695,7 @@ function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",s
    const guest=w.class==="guest",heads=slEditHeads(guest);
    s+=`<table class=slt2><thead><tr>${heads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`;
    s+=chans.map((c,j)=>{const ck=`${key}:${j}`,p=c.poll||{},
-    pollTxt=p.mode==="exponential"?`exp · ${p.floor||"?"} → ${p.ceiling||"?"}`:(p.fast||p.slow)?`${p.fast||"1m"} → ${p.slow||"10m"}`:"two_state";
+    pollTxt=p.mode==="exponential"?`exp · ${p.floor||"?"} → ${p.ceiling||"?"}`:(p.fast||p.slow)?`${p.fast||"?"} → ${p.slow||"?"}`:(slPollMode()||"two_state");   // a named value alone: the default is the policy's (#2845)
     return `<tr><td data-l="Channel">#${esc(c.name||c.id)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode||"listen")}</span></td>`
     +`<td data-l="Language"><span class=nw>${esc(c.language||"inherit")}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"inherit")}</span></td>`
     +(guest?`<td data-l="Answers"><span class=nw>${esc(c.speak||"draft")}</span></td><td data-l="Polling"><span class=nw>${esc(pollTxt)}</span></td>`:"")
