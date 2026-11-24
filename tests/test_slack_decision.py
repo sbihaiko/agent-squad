@@ -226,3 +226,13 @@ def test_an_unknown_channel_and_an_own_message_are_ignored():
     assert (unknown.kind, unknown.reply) == ("ignore", None)
     assert decide(message(own=True)).kind == "ignore"
     assert decide(message(kind="reaction")).kind == "ignore"
+
+
+def test_a_decision_carries_the_environments_the_role_lists_for_deploy():
+    """S5 (#2724): the executor reads the role's deploy environments from the decision, so the policy module resolves
+    them once, from the same role row that gives the actions. A role that lists none carries an empty tuple."""
+    committed, local = files()
+    committed["roles"][0]["deploy"] = ["stg", "stage"]
+    assert S.decide(committed, local, message(), NOW).deploy == ("stg", "stage")
+    committed["roles"][0].pop("deploy")
+    assert S.decide(committed, local, message(), NOW).deploy == ()

@@ -13,7 +13,7 @@ so the caller appends it beside the messages of people with no role. A success r
 names (`bot`, `draft` or `send`) and the answer text; a decision with no reply path, like a `listen` channel, runs
 nothing.
 
-The six actions are the whole set. `status` and `logs` answer with the project the channel owns; `logs` masks every
+The seven actions are the whole set. `status` and `logs` answer with the project the channel owns; `logs` masks every
 secret and drops every guest line, so a client's text never reaches the reply (story 42). `request_work` starts an
 issue or a run, and `request_investigation` starts an investigation or a spike: both pass the caller's text as one
 argument to the source the caller supplies, so the text is a request inside the role's actions and never an instruction
@@ -31,9 +31,15 @@ map of Slack user id to hub login and a request the map does not resolve is refu
 the state the hub reports in its answer; a body that names no state uses the copy of the action the hub itself reports,
 and a body that names neither is a refusal.
 
+The `deploy` action (#2724) runs the command the project identity declares, for the environment the identity declares.
+The requester never supplies the command, and user text never sets the environment: a named environment is accepted
+only when it is the identity's own. A role that lists the environment is the owner's standing grant for it, and a role
+that does not list it is refused. A deploy to `prod` is refused by name, whether the request names it or the identity
+declares it, because production stays with the owner.
+
 The module reads no clock and calls no network: the caller supplies the status, log, work, investigation and board
-sources and the hub loop switch, because those answers come from the repository, the board, the project's own log and
-the project's own work path, and the loop is the hub's to write.
+sources, the hub loop switch and the deploy source, because those answers come from the repository, the board, the
+project's own log, the project's own work path and its ratified deploy command, and the loop is the hub's to write.
 
 Guards: `tests/test_slack_executor.py`, `tests/test_approve_and_move.py`.
 """
@@ -50,16 +56,20 @@ REQUEST_WORK = "request_work"
 REQUEST_INVESTIGATION = "request_investigation"
 APPROVE_AND_MOVE = "approve_and_move"
 LOOP_CONTROL = "loop_control"
-ACTIONS = frozenset((STATUS, LOGS, REQUEST_WORK, REQUEST_INVESTIGATION, APPROVE_AND_MOVE, LOOP_CONTROL))
+DEPLOY = "deploy"
+ACTIONS = frozenset((STATUS, LOGS, REQUEST_WORK, REQUEST_INVESTIGATION, APPROVE_AND_MOVE, LOOP_CONTROL, DEPLOY))
 REQUEST_FIELDS = ("action", "arguments", "project", "channel", "source")
 # The arguments each action takes. `status` and `logs` take none: they answer for the project the caller already named.
 # Each request action takes the one text it acts on, and no other key, so a request never carries a grant or a setting.
 # `approve_and_move` takes the card and the column, and no other key, so a request never names a spec or a breakdown.
 # `loop_control` takes one `state`, the change the role holder asks for.
+# `deploy` takes at most the one `environment` the requester names: the executor only accepts the environment the project
+# identity declares, and the requester never names the command (SPEC 2682 S5, #2724).
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     STATUS: frozenset(), LOGS: frozenset(),
     REQUEST_WORK: frozenset(("title",)), REQUEST_INVESTIGATION: frozenset(("question",)),
     APPROVE_AND_MOVE: frozenset(("card", "to")), LOOP_CONTROL: frozenset({"state"}),
+    DEPLOY: frozenset({"environment"}),
 }
 # The arguments an action cannot act without, so a request with nothing to act on starts nothing.
 _ACTION_ARGUMENT = {REQUEST_WORK: ("title",), REQUEST_INVESTIGATION: ("question",),
@@ -71,6 +81,9 @@ LOOP_STATES = {"pause": "drain", "resume": "start", "drain": "drain"}
 # The states the executor refuses by name, before the map above. Stop-now kills the live runs and the gates, so no Slack
 # request reaches it whatever a role lists: the owner alone stops the loop there (ADR-0162).
 FORBIDDEN_STATES = frozenset({"stop-now"})
+# A deploy request never reaches production, whatever the role lists and whatever the project identity declares: the
+# owner alone deploys there (SPEC 2682 S5, #2724).
+FORBIDDEN_ENVIRONMENTS = frozenset({"prod"})
 # The fallback reply of a hub action, used only when the hub's 200 body names the action it applied and no state. The
 # reply names the hub's state whenever the body carries one, so an answer never states a change the hub did not report.
 LOOP_REPLY = {
@@ -149,10 +162,38 @@ def hub_login(line, logins):
     return str((logins or {}).get(user) or "")
 
 
-def check(request, decision, line, project, listed=None, logins=None):
+def _deploy_check(request, decision, identity):
+    """The one `Refusal` of a `deploy` request, or None. The environment and the command come from the project identity,
+    never from the request: a named environment is accepted only when it is the one the identity declares, and the
+    request never names the command, which the arguments check already refuses. A deploy to `prod` is refused by name,
+    whether the request names it or the identity declares it, so production stays with the owner. The role must list the
+    environment the identity declares; a role that does not is refused at the grant (#2724)."""
+    named = str(request.arguments.get("environment") or "").strip()
+    if named.lower() in FORBIDDEN_ENVIRONMENTS:
+        return Refusal("environment", f"a deploy to {named.lower()} is refused: production stays with the owner")
+    environment, command = S.deploy_target(identity)
+    if not environment:
+        return Refusal("environment", "the project identity declares no deploy environment, and user text never sets it")
+    if environment.lower() in FORBIDDEN_ENVIRONMENTS:
+        return Refusal("environment", f"the project identity declares {environment!r}, and a deploy there is refused: "
+                                      "production stays with the owner")
+    if not command:
+        return Refusal("command", "the project identity declares no deploy command, and the requester never supplies one")
+    if named and named != environment:
+        return Refusal("environment", f"the request names environment {named!r}, and the project identity declares "
+                                      f"{environment!r}: user text never sets the environment")
+    if environment not in tuple(getattr(decision, "deploy", ()) or ()):
+        return Refusal("grant", f"the role {decision.role!r} does not list environment {environment!r}")
+    return None
+
+
+def check(request, decision, line, project, listed=None, logins=None, identity=None):
     """The one `Refusal` of a request against its decision and its inbox line, or None when every check passes. The
-    checks run in one order: revision, identity, project, channel, action, grant, the proposal kind, arguments, and the
-    reply path of the decision.
+    checks run in one order: revision, identity, project, channel, action, grant, the proposal kind, arguments, the
+    deploy rules, and the reply path of the decision.
+
+    `identity` is the project row `slackpolicy.project_identity` returns: the `deploy` action reads its environment and
+    its command from it, never from the request (#2724).
 
     `listed` is the set of `slack.yaml` shas the hub registry lists (#2695), and the line names the revision its decision
     came from. A request on a revision no save lists grants nothing. None leaves the check out of force, as it is on a
@@ -212,6 +253,10 @@ def check(request, decision, line, project, listed=None, logins=None):
                if not str(request.arguments.get(name) or "").strip()]
     if missing:
         return Refusal("arguments", f"the {request.action} action needs one non-empty {', '.join(missing)}")
+    if request.action == DEPLOY:
+        refusal = _deploy_check(request, decision, identity)
+        if refusal is not None:
+            return refusal
     if not getattr(decision, "reply", None):
         return Refusal("reply", "the decision names no reply path, so no action runs in this channel")
     return None
@@ -262,7 +307,7 @@ def _loop_control(state, who, loop):
 
 
 def execute(request, decision, line, project, status=None, logs=None, guest=(), work=None, investigate=None,
-            listed=None, board=None, loop=None, logins=None):
+            listed=None, board=None, loop=None, logins=None, identity=None, deploy=None):
     """One request through every check, then its action. The action runs only when `check` returns None and its source
     is there; a refusal returns its data record and no reply. The reply carries the path the decision names, the
     channel of the line, and the answer text.
@@ -273,11 +318,12 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
     answers the card and takes the approval and the move of `approve_and_move`; its rules live in `slackboard`.
     `loop` is the hub loop switch: it takes the hub action and the asker's hub login, and answers the hub's
     `(code, body)`. `logins` maps a Slack user id to that hub login, and `loop_control` is refused when it resolves
-    none."""
-    refusal = check(request, decision, line, project, listed, logins)
+    none. `identity` is the project row, and `deploy` answers `(project, environment, command)` with the environment and
+    the command the identity declares, never ones the requester supplies (#2724)."""
+    refusal = check(request, decision, line, project, listed, logins, identity)
     sources = ((STATUS, status, "status"), (LOGS, logs, "logs"), (REQUEST_WORK, work, "work"),
                (REQUEST_INVESTIGATION, investigate, "investigation"), (APPROVE_AND_MOVE, board, "board"),
-               (LOOP_CONTROL, loop, "loop switch"))
+               (LOOP_CONTROL, loop, "loop switch"), (DEPLOY, deploy, "deploy"))
     for action, source, name in sources:
         if refusal is None and request.action == action and source is None:
             refusal = Refusal("source", f"the {action} action needs a {name} source")
@@ -299,6 +345,9 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
         text = _loop_control(str(request.arguments["state"]), hub_login(line, logins), loop)
         if isinstance(text, Refusal):
             return Outcome(False, None, data_record(line, text))
+    elif request.action == DEPLOY:
+        environment, command = S.deploy_target(identity)
+        text = deploy(project, environment, command)
     else:
         # An action this build adds with no branch here is a refusal, never a call into the last source.
         return Outcome(False, None, data_record(line, Refusal("action", f"the {request.action!r} action has no handler "
