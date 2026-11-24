@@ -48,3 +48,11 @@ workspaces:
     announce:
     - stg_release
     - prod_release
+  - id: C0CKUATLG67
+    name: hal-guest-sandbox
+    mode: listen
+    language: pt-BR
+    persona: hal
+    roles:
+    - viewer
+    - maintainer
