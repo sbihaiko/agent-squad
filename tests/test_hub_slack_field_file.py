@@ -142,7 +142,8 @@ def test_an_edit_names_its_channel_by_id_and_writes_the_row_that_carries_that_id
     assert out["err"] is None, out
     assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["mode"] == "listen+speak"
     assert channel_row(out["committed"], "T0TEAM0001", "C0PROJ0001")["mode"] == "listen+speak"
-    want_c, want_l = expected(edit=lambda c, l: channel_row(c, "T0TEAM0001", "C0ALERT001").update(mode="listen+speak"))
+    want_c, want_l = expected(edit=lambda c, loc: channel_row(
+        c, "T0TEAM0001", "C0ALERT001").update(mode="listen+speak"))
     assert (out["committed"], out["local"]) == (want_c, want_l)
 
 
@@ -157,7 +158,7 @@ def test_an_edit_reaches_the_right_row_after_the_channel_list_changes_order(hub,
     assert out["err"] is None, out
     assert [c["id"] for c in out["committed"]["workspaces"][0]["channels"]] == ["C0ALERT001", "C0PROJ0001"]
     assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["mode"] == "listen+speak"
-    want_c, want_l = expected(committed, local, edit=lambda c, l: channel_row(
+    want_c, want_l = expected(committed, local, edit=lambda c, loc: channel_row(
         c, "T0TEAM0001", "C0ALERT001").update(mode="listen+speak"))
     assert (out["committed"], out["local"]) == (want_c, want_l)   # one row changed, and no order moved
 
