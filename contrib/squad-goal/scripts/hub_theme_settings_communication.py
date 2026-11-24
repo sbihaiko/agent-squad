@@ -424,19 +424,6 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
         notes.append(f"{user} holds {' and '.join(names)}. The policy takes {taken}.")
     members = list(dict.fromkeys(P.resolved_members(local_doc, ws_id, ch_id, accepted)))
     return {"roles": roles, "eligible": len(members), "notes": notes, "members": members}
-def _slack_channel_note(merged, members, announcement):
-    """One plain sentence under the Now tiles, naming how a message resolves. A channel with no eligible member says so,
-    and a listen channel names the proposal path; a channel that speaks and has a member needs no note. Every phrase is
-    the policy's meaning, drawn by the view (ADR-0137)."""
-    if not members:
-        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
-                "no reply.") if announcement else \
-               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
-    if _slack_text(merged.get("mode") or "listen") == "listen":
-        return ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
-                "nothing is posted here.")
-    return ""
-
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -475,7 +462,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
-    note = _slack_channel_note(merged, members, announcement)
+    note = P.channel_note(merged, members, announcement)
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
@@ -574,8 +561,12 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
            _slack_tile("Guest slot", slot, "one guest workspace per machine",
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
-    named = [str(d.reason) for d in defects if d.file == group["file"]
-             and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    named_diags = [d for d in defects if d.file == group["file"]
+                   and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    # `defects` serializes each policy diagnostic whole, key and reason; the detail pane shows the reason alone, in
+    # plain words, in the error style (#2842).
+    named = [str(d) for d in named_diags]
+    defect_note = " ".join(str(d.reason) for d in named_diags)
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
@@ -583,7 +574,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
-            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}",
+            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
                                "account with the persona mark; the bot never joins it." if class_ == "guest" else ""}}
 
