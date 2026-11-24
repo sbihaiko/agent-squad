@@ -64,9 +64,20 @@ def tool_word(name, server=DEFAULT_SERVER):
     return tool[len(f"{server}_"):] if tool.startswith(f"{server}_") else tool
 
 
+def connector_word(name, server=DEFAULT_SERVER):
+    """The word of a Slack connector tool, whatever its MCP server: the claude.ai connector names its server
+    `claude_ai_Slack`, so `mcp__claude_ai_Slack__slack_read_channel` and `mcp__slack__slack_read_channel` both give
+    `read_channel` (#2854). None for a tool that is no Slack tool."""
+    word = tool_word(str(name or ""), server)
+    if word is not None:
+        return word
+    tail = str(name or "").rsplit("__", 1)[-1]
+    return tail[len("slack_"):] if tail.startswith("slack_") else None
+
+
 def read_denial(name, server=DEFAULT_SERVER):
     """None when the tool is one of the connector's read tools, else the reason the hook denies it."""
-    tool = tool_word(str(name or ""), server)
+    tool = connector_word(str(name or ""), server)
     if tool is not None:
         words = tool.split("_")
         if words and words[0] in READ_VERBS and not WRITE_VERBS.intersection(words):

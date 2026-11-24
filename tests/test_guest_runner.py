@@ -147,6 +147,38 @@ def test_session_is_one_fresh_claude_print_call_under_the_sandbox(tmp_path):
     assert "guestrunner" in post and " post " in post and str(runner.state_root) in post
 
 
+def test_a_poll_session_loads_the_user_settings_that_hold_the_connector(tmp_path):
+    """#2854: the CLI loads the claude.ai Slack connector only when its settings sources include the user's, so a poll
+    session that asks for no settings source holds no Slack read tool."""
+    argv = G.session_argv({"channel": CH, "limit": 100}, WS, tmp_path, tmp_path / "checkpoint.json")
+    assert argv[argv.index("--setting-sources") + 1] == "user"
+
+
+def test_session_answer_with_an_error_key_is_a_failed_poll_never_an_empty_page(tmp_path):
+    """#2854: an answer that carries an error is a failed poll. Read as an empty page, it hides the failure as
+    `decisions=0`."""
+    def session(result, **outer):
+        stdout = json.dumps({"type": "result", **outer, "result": result})
+        return lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    with pytest.raises(G.SessionFailed):
+        G.run_session(["claude"], tmp_path, session(json.dumps({"error": "no such channel"})))
+    with pytest.raises(G.SessionFailed):
+        G.run_session(["claude"], tmp_path, session("the connector call failed", is_error=True))
+
+
+def test_a_fenced_json_answer_reads_as_the_bare_one(tmp_path):
+    """#2854: a model that wraps its answer in a code fence still returns the page of the channel."""
+    page = [{"ts": "1900000000.000100", "text": SECRET}]
+    def session(text):
+        stdout = json.dumps({"type": "result", "result": text})
+        return lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    bare = json.dumps({"messages": page})
+    assert G.run_session(["claude"], tmp_path, session(bare)) == page
+    assert G.run_session(["claude"], tmp_path, session(f"```json\n{bare}\n```")) == page
+
+
 def test_session_selects_the_workspace_by_team_id(tmp_path):
     launches = []
     runner = make_runner(tmp_path, fake_session(FakeConnector([]), launches))

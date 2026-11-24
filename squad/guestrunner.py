@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -83,12 +84,13 @@ def hook_settings(checkpoint_path):
 
 
 def session_argv(request, team_id, repo, checkpoint_path, wrapper=WRAPPER):
-    """The argv of one poll's session: one print-mode call with no persisted session, no resume and no continue."""
+    """The argv of one poll's session: one print-mode call with no persisted session, no resume and no continue. Its
+    settings sources are the user's, because the CLI loads the claude.ai Slack connector only from them (#2854)."""
     return [wrapper, "-p", poll_prompt(request, team_id),
             "--permission-mode", "bypassPermissions",
             "--no-session-persistence",
             "--settings", hook_settings(checkpoint_path),
-            "--setting-sources", "",
+            "--setting-sources", "user",
             "--output-format", "json",
             "--add-dir", str(repo)]
 
@@ -98,16 +100,38 @@ def _env():
     return {**os.environ, **sandbox.sdk_cli_env(), "PYTHONPATH": path}
 
 
+FENCE = re.compile(r"\A\s*```[a-zA-Z]*\s*\n?(.*?)\n?\s*```\s*\Z", re.S)
+
+
+def session_answer(answer):
+    """The JSON answer of one session. An answer wrapped in a code fence reads as the bare one, so a model that fences
+    its JSON still returns a page (#2854)."""
+    text = answer if isinstance(answer, str) else ""
+    fenced = FENCE.match(text)
+    return json.loads(fenced.group(1) if fenced else text)
+
+
 def run_session(argv, folder, runner=subprocess.run, env=None):
-    """Run one session and return the page it read. A non-zero exit or an unreadable result raises `SessionFailed`, and
-    a session past its deadline raises `subprocess.TimeoutExpired` after the runner kills it."""
+    """Run one session and return the page it read. A non-zero exit, an answer that carries an error, or an unreadable
+    result raises `SessionFailed`, so a failed poll never reads as an empty page. A session past its deadline raises
+    `subprocess.TimeoutExpired` after the runner kills it."""
     done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
     if done.returncode != 0:
         raise SessionFailed(f"exit {done.returncode}")
     try:
-        result = json.loads(json.loads(done.stdout)["result"])
-    except (ValueError, KeyError, TypeError) as e:
+        outer = json.loads(done.stdout)
+    except (ValueError, TypeError) as e:
         raise SessionFailed("no page in the result") from e
+    if not isinstance(outer, dict) or outer.get("is_error") or outer.get("error"):
+        raise SessionFailed("the session answered an error")
+    try:
+        result = session_answer(outer.get("result"))
+    except (ValueError, TypeError) as e:
+        raise SessionFailed("no page in the result") from e
+    if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
+        raise SessionFailed("the session answered an error")
+    if P.read_failed(result):
+        raise SessionFailed("no page in the result")
     return P.messages_of(result)
 
 
