@@ -653,14 +653,15 @@ def childcc_fixture(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     src = ROOT / "contrib" / "squad-goal" / "scripts"
-    for f in ("childcc.py", "issue_state.py", "child_issues.py", "issue_ledger.py", "board_columns.py", "board-definition.json"):
+    for f in ("childcc.py", "issue_state.py", "child_issues.py", "issue_ledger.py", "board_columns.py", "board-definition.json",
+              "render_owed.py", "ghread.py", "drainpolicy.py"):   # childcc.py reads the issue body for its render check (#2833)
         (scripts / f).write_text((src / f).read_text())
     (scripts / "board.sh").write_text("#!/bin/bash\nexit 0\n")
     (scripts / "childreview.sh").write_text(f"#!/bin/bash\necho reviewed >> {tmp_path}/reviews\n")
     (scripts / "wave.sh").write_text("#!/bin/bash\necho 'WAVE HOLD: no review yet'; exit 1\n")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
-    (bin_ / "gh").write_text("#!/bin/bash\ncase \"$*\" in *'-q .state'*) echo open;; esac\n")
+    (bin_ / "gh").write_text("#!/bin/bash\ncase \"$*\" in *'-q .state'*) echo open;; *graphql*) echo '{\"data\": {\"repository\": {}}}';; esac\n")
     for f in (*scripts.glob("*.sh"), bin_ / "gh"):
         f.chmod(0o755)
     st = tmp_path / "st"

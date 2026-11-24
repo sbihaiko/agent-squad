@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 58.00
+# seconds: 40.35
 # Regression test for the run lifecycle of a wave (#375, ADR-0145 rules 8, 9, 10 and 12): the production launch cuts the
 # run's wave branch, the production child-completion pass makes a finished child enter it, and the production completion of
 # a finished run lands the wave its children are in.
@@ -26,7 +26,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/base-battery.sh" "$d/columnlimit.sh" "$d/board_columns.py" "$d/board-definition.json" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359); wave.sh sources its battery and the Testing limit (#2439)
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/modelreg.py" "$d/liveholds.py" "$d/registry.json" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/drainpolicy.py" "$d/issue_state.py" "$d/issue_ledger.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$d/basecheck.sh" "$d/base-battery.sh" "$d/columnlimit.sh" "$d/board_columns.py" "$d/board-definition.json" "$d/render_owed.py" "$d/ghread.py" "$T/s/" 2>/dev/null   # childcc.py names the claimed card through board_columns.py (#1359); wave.sh sources its battery and the Testing limit (#2439)
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
@@ -68,6 +68,7 @@ cat > "$T/bin/gh" <<GH
 case "\$*" in
   *"-X PATCH"*) echo "\$*" >> "$T/gh.log";;
   *"-q .state"*) echo open;;
+  *"graphql"*) echo '{"data": {"repository": {}}}';;   # no issue holds an after image here, so no child owes a render (#2833)
   *"/fields?"*) echo 7;;
   *"/items?"*) printf '%s\t%s\n' "\$(cat "$T/issue" 2>/dev/null || echo 65)" "\$(cat "$T/card" 2>/dev/null || echo Todo)";;
 esac

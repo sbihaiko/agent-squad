@@ -17,7 +17,7 @@ def _mod():
 
 def _render(wt, name="screen.png"):
     d = wt / ".scratch" / "renders"
-    d.mkdir(parents=True, exist_ok=True)
+    (d / name).parent.mkdir(parents=True, exist_ok=True)
     (d / name).write_bytes(b"\x89PNG\r\n")
 
 
@@ -102,7 +102,7 @@ def test_the_review_is_a_changes_review_in_the_shipped_shape_with_a_repro(tmp_pa
     shape = subprocess.run([sys.executable, str(MOD.parent / "revformat.py"), str(review)], capture_output=True, text=True)
     assert shape.returncode == 0, shape.stdout + shape.stderr
     assert text.splitlines()[0] == "VERDICT: CHANGES"
-    blocking = [l for l in text.splitlines() if l.startswith("- ")]
+    blocking = [line for line in text.splitlines() if line.startswith("- ")]
     assert len(blocking) == 1
     assert "repro: " in blocking[0]
     assert ".scratch/renders/" in blocking[0]

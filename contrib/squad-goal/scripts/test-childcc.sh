@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 17.10
+# seconds: 31.23
 # Regression test for childcc.py (stub gh + board, no network). usage: bash test-childcc.sh [path/to/childcc.py]
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB SG_CHILDCC_BUDGET   # the old-vocabulary cases and the one-child passes need them unset; a caller that exports them must not turn the suite red
@@ -10,8 +10,9 @@ cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 a="$*"
 case $a in
-  *"graphql"*) cat "$GH_ISSUES_OPEN";;   # the open-issue list the pass reads once for a loop defect (#596)
-  *"-q .body"*) [[ $a =~ issues/([0-9]+) ]]; cat "$GH_BODIES/body-${BASH_REMATCH[1]}" 2>/dev/null; exit 0;;   # the issue body the render check reads (#2833); none is an empty body
+  *"graphql"*) if [[ $a =~ i([0-9]+):\ issue\(number ]] && [ -e "$GH_BODIES/body-${BASH_REMATCH[1]}" ]; then   # one issue's body, which the render check reads (#2833)
+      python3 -c 'import json,sys; print(json.dumps({"data": {"repository": {"i" + sys.argv[1]: {"number": int(sys.argv[1]), "state": "OPEN", "body": open(sys.argv[2]).read()}}}}))' "${BASH_REMATCH[1]}" "$GH_BODIES/body-${BASH_REMATCH[1]}"
+    else cat "$GH_ISSUES_OPEN"; fi;;   # the open-issue list the pass reads once for a loop defect (#596)
   *"-q .state"*) [ -e "$GH_STATE_FAIL" ] && { echo "HTTP 403: rate limit" >&2; exit 1; }; echo "${GH_STATE:-open}";;   # a failed read is no answer (#848)
   *"POST"*"/sub_issues"*) echo "link $a $(cat)" >> "$GH_LOG";;   # the body names the child by its id, which is its number here
   *"/sub_issues"*) sed -n 's/^link .*"sub_issue_id": *\([0-9]*\).*/\1/p' "$GH_LOG" 2>/dev/null;;   # the sub-issues read carries each child linked so far: a read that never carried a link cost the backoff, 7 s a pass (#597)
