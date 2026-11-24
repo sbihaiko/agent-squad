@@ -8,7 +8,6 @@ table, and the save writes `project.persona` only in the rows that read "writes 
 The seams under test are the hub's own reads, `slack_tree` and `slack_clients_preview`, its save `slack_clients_save`,
 and the theme's renderer run in node. No browser runs here. Every id and name is a neutral placeholder.
 """
-import copy
 import importlib.util
 import json
 import pathlib
