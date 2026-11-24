@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 3.55
+# seconds: 12.13
 # Regression test for #93: a loop child run starts inside its own issue worktree, so the engine commits the target the land
 # reads (ADR-0106 rule 4: a linked worktree the run owns, holding the run folder). Offline: the suite stubs caffeinate and
 # uv and uses a throwaway checkout with a real linked worktree; the stub records the command it was handed and makes the

@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 4.19
+# seconds: 14.23
 # A refuted probe's refutation is retried by the loop itself (#888). The janitor's rule O is the only caller of `wave.sh fail`,
 # and it reads a run once (auto/counted-<run>). The real janitor drives the real wave.sh here; only gh, the board and
 # `squad premise-check` are stand-ins:

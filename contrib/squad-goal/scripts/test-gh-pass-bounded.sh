@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 3.40
+# seconds: 12.85
 # Regression test for #45 (the loop stays under the GitHub user rate limit): a pass over N candidates costs a number of
 # GitHub requests that does not grow with N. usage: bash test-gh-pass-bounded.sh
 #

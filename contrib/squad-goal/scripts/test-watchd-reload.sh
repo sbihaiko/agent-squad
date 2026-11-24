@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 3.37
+# seconds: 5.96
 # `watchd.sh reload` (#873) takes a new plugin install without a stop and start: SIGHUP to the supervisor, which ends the
 # fast and comment lanes at their pass boundary, re-reads env.sh so SG_SQUAD names the install the registry names now, and
 # starts them again. A live run in the supervisor's group survives, and watch.log names the old and the new install once.

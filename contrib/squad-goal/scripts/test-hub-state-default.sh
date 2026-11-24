@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.20
+# seconds: 1.80
 # Regression test for #135: hub.py reads its state directory tolerantly -- $SG_STATE when the runner exports it, else the
 # state directory the seam (address.sh) names under the runner's home -- so a runner that exports no SG_STATE imports the hub
 # instead of dying with KeyError: 'SG_STATE' (no network, no server). usage: bash test-hub-state-default.sh [path/to/hub.py]

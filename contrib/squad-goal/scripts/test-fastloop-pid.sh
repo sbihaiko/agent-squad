@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.05
+# seconds: 0.21
 # The fast lane keeps its pid file: watch.sh reads the file to know the lane is up, and a missing file made the cycle run childcc inline (#513).
 # Offline: stub steps beside a copy of fastloop.sh, a 0.2 s beat, and an alarm so a hung loop cannot run on.
 # usage: bash test-fastloop-pid.sh [scripts dir]

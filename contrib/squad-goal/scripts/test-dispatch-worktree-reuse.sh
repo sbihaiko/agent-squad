@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 1.96
+# seconds: 9.07
 # Regression test for redispatching a clean issue worktree (#65).
 export SG_MIN_FREE_GB=0   # the dispatchers pin their disk floor: the real volume must not stop a fixture pass (#792); a case that tests the stop sets its own
 export SG_NIGHTLY_OFF=1   # the dispatch hold reads the wall clock: the nightly hour must not hold a fixture pass (#2397); a case that tests the hold sets its own hour

@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 2.21
+# seconds: 12.86
 # One ledger file per issue (#673): issue_ledger.py is the one writer of $SG_STATE/state/<owner>__<repo>__<n>.json, under a
 # lock per issue. Two writers at once each get their own count and no write is lost; a missing file reads as todo.
 # usage: bash test-issue-ledger.sh [scripts dir]
