@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# seconds: 0.11
+# seconds: 0.74
 # tm logs a timed step by the step it runs: `bash single.sh <name>` by <name>, `bash <script>` and `<script>` by the script name (#1745).
 S="$(cd "$(dirname "$0")" && pwd)"
 fail=0

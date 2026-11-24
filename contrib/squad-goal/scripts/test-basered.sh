@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.36
+# seconds: 1.25
 # Regression test for the base-red dispatch hold (#2056): two full landing or tip checks in a row, on two different trees,
 # red at the same test, say the base carries that red. The frontier then holds every dispatch, one bug owns the red, and
 # the bug lane goes on. A green full check after the red, or the close of its bug, lifts the hold. An unproven check

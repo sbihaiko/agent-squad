@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 4.65
+# seconds: 13.72
 # Regression test for #2418: a test-only wave delivers its issue when the issue asks for a test change, and keeps it open
 # otherwise. A wave that changes test files only used to close no issue (#533) whether or not the issue asked for a test
 # change: the run landed, the issue stayed open in Todo, and the loop dispatched it again.
