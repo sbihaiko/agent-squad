@@ -24,6 +24,7 @@ def env(tmp_path):
     """A home with a stub `grok` on PATH that writes one credit line into `$HOME/.grok/logs/unified.jsonl`."""
     home = tmp_path / "home"
     (home / ".grok" / "logs").mkdir(parents=True)
+    (home / ".grok" / "auth.json").write_text('{"session": "stub"}')   # a signed-in CLI home (#2849)
     log = home / ".grok" / "logs" / "unified.jsonl"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -74,6 +75,18 @@ def test_a_running_refresh_is_never_started_twice(env):
     out = subprocess.run(["bash", str(REFRESH), "--ttl", "0"], env=e, capture_output=True, text=True, timeout=60)
     assert "skip" in out.stdout.lower(), out.stdout + out.stderr
     assert not (home / "grok-starts").exists()
+
+
+@pytest.mark.macos_bound   # would start a TUI in a pty, which only the loop host has (ADR-0139)
+def test_a_home_with_no_grok_session_starts_no_cli(env):
+    """A throwaway hub runs under a temporary HOME with no grok session: a start there makes the CLI open a device
+    sign-in page in the browser (#2849). The script skips and names the reason instead."""
+    e, home, log = env
+    (home / ".grok" / "auth.json").unlink()
+    out = run(env, "--ttl", "0")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert out.stdout.startswith("skip:") and "session" in out.stdout, out.stdout + out.stderr
+    assert not (home / "grok-starts").exists(), out.stdout + out.stderr
 
 
 def test_the_hub_module_never_opens_a_pseudo_terminal_itself():
