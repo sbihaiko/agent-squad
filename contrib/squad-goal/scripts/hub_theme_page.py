@@ -462,6 +462,15 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
 @media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
+#sbody .sltjump{margin:0 0 8px;font-size:var(--fs-caption)}
+#sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
+#sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
+#sbody .slperm th{font-size:var(--fs-caption);font-weight:500;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
+#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+#sbody .slperm td.no{color:var(--mute)}
+#sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
+#sbody .slpvnow{margin-top:8px}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1497,6 +1506,8 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
   if(e.target&&e.target.closest&&e.target.closest(".sltarrow")&&n&&n.children&&n.children.length){slTGo({focus:id,toggle:id});return}slTPick(id)});
  for(const el of document.querySelectorAll("[data-slt-setup]"))el.addEventListener("click",()=>slSetup(el.getAttribute("data-slt-setup")));
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
+ for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
+ for(const el of document.querySelectorAll("[data-slt-perm]"))el.addEventListener("click",e=>{e.preventDefault();slPermGo()});
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
 const slTBadge=b=>`<span class="sltb ${esc(b.tone||"neutral")}">${esc(b.text)}</span>`;
 function slTItem(n,cur){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
@@ -1515,9 +1526,10 @@ function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
  const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.defects||[]).map(d=>`<p class="mx err" role=status>${esc(d)}</p>`).join("");
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
+ +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTSettings(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTPerms(n)+slTPreview(n)+slTSettings(n)}
 /* The channel settings of the detail pane (#2844): one row per field, and the row names the file it writes in a chip.
    The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and the
    field, never the row's place in a list, so the save writes the row that carries the id. */
@@ -1543,6 +1555,34 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
   return (cs.length?cs:[{kind:"read",value:""}]).map((c,i)=>`<div class=slsetrow data-slrow="${slA(r.key)}">`
    +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(n,r,c)}</span>${slTag(r.file)}</div>`).join("")
   +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
+/* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
+/* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
+   decision are the hub's; the view draws them and asks the one read route for a preview, which posts nothing. */
+let slSnd=null;   // the last sender preview: its channel node, its sender and its answer
+const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:`member:${u}`,t:u})),{v:"stranger",t:"someone with no membership"},{v:"bot",t:"a bot"}];
+function slTPerms(n){const p=n.permissions;if(!p)return "";
+ const rows=(p.roles||[]).map(r=>`<tr><td class=${r.accepted?"yes":"no"}>${r.accepted?"yes":"no"}</td><td>${esc(r.id)}</td><td>${esc((r.actions||[]).join(", ")||"none")}</td><td>${esc((r.members||[]).join(", ")||"none")}</td></tr>`).join("");
+ const count=`${p.eligible} distinct ${p.eligible===1?"person":"people"} eligible`;
+ return `<div class=setblk data-blk=perm data-theme=slk><h3 class=blkh id=slperm tabindex="-1">Permissions</h3>`
+ +`<table class=slperm aria-label="Permissions of this channel"><thead><tr><th scope=col>Accepted</th><th scope=col>Role</th><th scope=col>May ask for</th><th scope=col>Members (user ids)</th></tr></thead><tbody>${rows}</tbody></table>`
+ +`<p class=m>${esc(count)}</p>${(p.notes||[]).map(x=>`<p class=m>${esc(x)}</p>`).join("")}</div>`}
+function slTPreview(n){const p=n.permissions;if(!p||!n.ref)return "";
+ const senders=slPvSenders(n),cur=slSnd&&slSnd.node===n.id?slSnd.sender:senders[0].v;
+ const opts=senders.map(s=>`<option value="${slA(s.v)}"${s.v===cur?" selected":""}>${esc(s.t)}</option>`).join("");
+ const got=slSnd&&slSnd.node===n.id&&slSnd.sender===cur?slSnd.data:null;
+ const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
+ const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id?`<p class=m>Reading the decision.</p>`:"");
+ return `<div class=setblk data-blk=preview data-theme=slk><h3 class=blkh>Try a sender</h3><div class=slpvbox>`
+ +`<label class=slf><span>Sender</span><select data-slp-sender="${slA(n.id)}" aria-label="Sender">${opts}</select></label>${out}</div></div>`}
+async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
+ const q=new URLSearchParams({workspace:n.ref.workspace,channel:n.ref.channel});
+ if(sender.startsWith("member:"))q.set("user",sender.slice(7));
+ if(sender==="bot")q.set("bot","1");
+ slSnd={node:id,sender,data:null};slPvShow();
+ let data;try{data=await (await fetch("/api/slack/decide?"+q)).json()}catch(e){data={err:"The preview did not answer."}}
+ if(slSnd&&slSnd.node===id&&slSnd.sender===sender){slSnd={node:id,sender,data};slPvShow()}}
+function slPvShow(){slRender();const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slp-sender]");if(el&&el.focus)el.focus()}
+function slPermGo(){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slperm");if(!el)return;if(el.scrollIntoView)el.scrollIntoView({block:"start"});if(el.focus)el.focus()}
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
