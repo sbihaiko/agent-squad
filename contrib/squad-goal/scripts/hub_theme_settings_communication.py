@@ -302,6 +302,7 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
         users = [str(u) for row in own if _slack_text(row.get("role")) == rid for u in row.get("users") or ()]
         roles.append({"id": rid, "actions": [_slack_text(a) for a in role.get("actions") or ()],
                       "accepted": rid in accepted, "members": users})
+    now = dt.datetime.now(dt.UTC)
     held = {}
     for row in own:
         role = _slack_text(row.get("role"))
@@ -311,11 +312,17 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
             names = held.setdefault(str(user), [])
             if role not in names:
                 names.append(role)
-    notes = [f"{user} holds {' and '.join(names)}. The policy takes {names[0]}, the first membership in the file."
-             for user, names in held.items() if len(names) > 1]
-    people = list(dict.fromkeys(str(u) for row in own for u in row.get("users") or ()))
-    return {"roles": roles, "eligible": len(set(P.resolved_members(local_doc, ws_id, ch_id, accepted))),
-            "notes": notes, "members": people}
+    notes = []
+    for user, names in held.items():
+        if len(names) < 2:
+            continue
+        # The membership the policy takes comes from `decide`, the same resolution that answers a message, never from
+        # a local list order (AC4).
+        taken = P.decide(committed_doc, local_doc, {"workspace": ws_id, "channel": ch_id, "user": user,
+                                                    "kind": "message"}, now).role or names[0]
+        notes.append(f"{user} holds {' and '.join(names)}. The policy takes {taken}.")
+    members = list(dict.fromkeys(P.resolved_members(local_doc, ws_id, ch_id, accepted)))
+    return {"roles": roles, "eligible": len(members), "notes": notes, "members": members}
 
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
@@ -549,10 +556,15 @@ def _slack_refused_keys(P, defects):
 
 def slack_decide(query, committed=None, local=None):
     """GET /api/slack/decide: the sender preview of one channel. It runs `decide` on one message event built from the
-    query (`workspace`, `channel`, `user`, and the flags `bot` and `own`) and returns the answer as text. It posts
-    nothing. A refused workspace reads `not read` in every field, because the policy never reads it."""
+    query (`workspace`, `channel`, `user`, `sender_type`, and the `own` flag) and returns the answer as text. It posts
+    nothing. A refused workspace reads `not read` in every field, because the policy never reads it; an unknown
+    workspace or channel reads `unknown`. The route binds the sender to the channel's own resolved members: a
+    `member` must be one of them, a `stranger` must not be, and a `bot` posts as itself. It loads and validates the
+    two documents once per request."""
     not_read = {"err": None, "decision": "not read", "role": "not read", "actions": "not read", "reply": "not read",
                 "mark": "not read", "language": "not read"}
+    unknown = {"err": None, "decision": "unknown", "role": "unknown", "actions": "unknown", "reply": "unknown",
+               "mark": "unknown", "language": "unknown"}
     if committed is None and local is None:
         try:
             committed, local = slack_yaml_paths()
@@ -569,16 +581,30 @@ def slack_decide(query, committed=None, local=None):
     ws_id, ch_id = str(query.get("workspace") or ""), str(query.get("channel") or "")
     groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
     group = next((g for g in groups if g["id"] == ws_id), None)
-    if group is not None and (group["file"], group["index"]) in refused_keys:
+    if group is None:
+        return dict(unknown, err=f"unknown workspace {ws_id!r}")
+    if (group["file"], group["index"]) in refused_keys:
         return not_read
-    merged = _slack_tree_channel_row(group, ch_id) if group is not None else {}
+    if not any(str(ch["id"]) == ch_id for ch in group["channels"]):
+        return dict(unknown, err=f"unknown channel {ch_id!r} in workspace {ws_id!r}")
+    merged = _slack_tree_channel_row(group, ch_id)
+    members = list(dict.fromkeys(P.resolved_members(local_doc, ws_id, ch_id, merged.get("roles") or ())))
+    sender_type, user = str(query.get("sender_type") or ""), str(query.get("user") or "")
+    if sender_type not in ("member", "stranger", "bot"):
+        return {"err": "sender_type must be member, stranger or bot"}
+    if sender_type == "member" and user not in members:
+        return {"err": f"the user {user!r} holds no accepted role in this channel"}
+    if sender_type == "stranger" and user in members:
+        return {"err": f"the user {user!r} is a member of this channel"}
+    if sender_type == "bot" and user and user not in members:
+        return {"err": f"the bot posts as a member, and {user!r} is none"}
     decision = P.decide(committed_doc, local_doc,
-                        {"workspace": ws_id, "channel": ch_id, "user": str(query.get("user") or ""),
-                         "kind": "message", "bot": _slack_flag(query.get("bot")), "own": _slack_flag(query.get("own"))},
+                        {"workspace": ws_id, "channel": ch_id, "user": user, "kind": "message",
+                         "bot": sender_type == "bot", "own": _slack_flag(query.get("own"))},
                         dt.datetime.now(dt.UTC))
     return {"err": None, "decision": decision.kind, "role": decision.role or "none",
             "actions": ", ".join(decision.actions) or "none", "reply": P.reply_label(merged, decision),
-            "mark": (P.mark(decision.persona) if decision.mark else "") or "none",
+            "mark": P.mark(decision.persona) or "none",
             "language": decision.language}
 
 def slack_overview(committed=None, local=None):

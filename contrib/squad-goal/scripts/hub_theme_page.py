@@ -1593,7 +1593,7 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
 /* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
    decision are the hub's; the view draws them and asks the one read route for a preview, which posts nothing. */
 let slSnd=null;   // the last sender preview: its channel node, its sender and its answer
-const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:`member:${u}`,t:u})),{v:"stranger",t:"someone with no membership"},{v:"bot",t:"a bot"}];
+const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:u,t:u,kind:"member"})),{v:"stranger",t:"someone with no membership",kind:"stranger"},{v:"bot",t:"a bot",kind:"bot"}];
 function slTPerms(n){const p=n.permissions;if(!p)return "";
  const rows=(p.roles||[]).map(r=>`<tr><td class=${r.accepted?"yes":"no"}>${r.accepted?"yes":"no"}</td><td>${esc(r.id)}</td><td>${esc((r.actions||[]).join(", ")||"none")}</td><td>${esc((r.members||[]).join(", ")||"none")}</td></tr>`).join("");
  const count=`${p.eligible} distinct ${p.eligible===1?"person":"people"} eligible`;
@@ -1601,22 +1601,23 @@ function slTPerms(n){const p=n.permissions;if(!p)return "";
  +`<table class=slperm aria-label="Permissions of this channel"><thead><tr><th scope=col>Accepted</th><th scope=col>Role</th><th scope=col>May ask for</th><th scope=col>Members (user ids)</th></tr></thead><tbody>${rows}</tbody></table>`
  +`<p class=m>${esc(count)}</p>${(p.notes||[]).map(x=>`<p class=m>${esc(x)}</p>`).join("")}</div>`}
 function slTPreview(n){const p=n.permissions;if(!p||!n.ref)return "";
- const senders=slPvSenders(n),cur=slSnd&&slSnd.node===n.id?slSnd.sender:senders[0].v;
+ const senders=slPvSenders(n),known=!!(slSnd&&slSnd.node===n.id&&senders.some(s=>s.v===slSnd.sender));
+ const cur=known?slSnd.sender:senders[0].v;   // a sender the channel no longer offers falls back to its first option
  const opts=senders.map(s=>`<option value="${slA(s.v)}"${s.v===cur?" selected":""}>${esc(s.t)}</option>`).join("");
  const got=slSnd&&slSnd.node===n.id&&slSnd.sender===cur?slSnd.data:null;
  const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
- const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id?`<p class=m>Reading the decision.</p>`:"");
+ const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id&&slSnd.sender===cur?`<p class=m>Reading the decision.</p>`:"");
  return `<div class=setblk data-blk=preview data-theme=slk><h3 class=blkh>Try a sender</h3><div class=slpvbox>`
  +`<label class=slf><span>Sender</span><select data-slp-sender="${slA(n.id)}" aria-label="Sender">${opts}</select></label>${out}</div></div>`}
 async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
- const q=new URLSearchParams({workspace:n.ref.workspace,channel:n.ref.channel});
- if(sender.startsWith("member:"))q.set("user",sender.slice(7));
- if(sender==="bot")q.set("bot","1");
+ const kind=(slPvSenders(n).find(s=>s.v===sender)||{kind:"stranger"}).kind;
+ const q=new URLSearchParams({workspace:n.ref.workspace,channel:n.ref.channel,sender_type:kind});
+ if(kind==="member")q.set("user",sender);
  slSnd={node:id,sender,data:null};slPvShow();
  let data;try{data=await (await fetch("/api/slack/decide?"+q)).json()}catch(e){data={err:"The preview did not answer."}}
  if(slSnd&&slSnd.node===id&&slSnd.sender===sender){slSnd={node:id,sender,data};slPvShow()}}
 function slPvShow(){slRender();const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slp-sender]");if(el&&el.focus)el.focus()}
-function slPermGo(){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slperm");if(!el)return;if(el.scrollIntoView)el.scrollIntoView({block:"start"});if(el.focus)el.focus()}
+function slPermGo(){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slperm");if(!el)return;if(el.focus)el.focus({preventScroll:true});const r=el.getBoundingClientRect?el.getBoundingClientRect():null;const vh=globalThis.innerHeight||0;if(el.scrollIntoView&&(!r||r.top<0||r.bottom>vh))el.scrollIntoView({block:"start"})}
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
  const walk=(n,more)=>{out.push(slTItem(n,cur,more));if(!slTOpen(n))return;const kids=n.children||[];
   kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};walk(slT.root,[]);
