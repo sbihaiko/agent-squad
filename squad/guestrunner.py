@@ -3,7 +3,9 @@
 A tick fires every minute. It reads the profile's Slack files, asks the poll schedule which channels are due, and starts
 one session per due channel. Each session runs under `claude-sandboxed.sh`, with the read hook (`slackpoller.
 pre_read_tool_use`) and the checkpoint hook (`slackpoller.checkpoint_hook`) as command hooks. The session reads one page
-of its channel in the workspace named by `team_id`, and the runner takes that page into one `Poller` poll.
+of its channel in the workspace named by `team_id`, and the runner takes that page into one `Poller` poll. The
+`PostToolUse` hook keeps the page its read tool returned, so the runner reads that page and the session's final answer is
+only a fallback (#2855).
 
 A shadow poll (the default) records each decision in the shadow record and makes no write call. A session that passes
 its deadline is killed, its channel stays due, and the next tick polls it again. The runner logs one line per poll: the
@@ -50,6 +52,22 @@ class SessionFailed(Exception):
     """A session exited non-zero, or its result holds no page. The reason names no message text."""
 
 
+def shape_of(value):
+    """The shape of a page the runner could not read: keys, types and counts only, never a value (#2859). The runner
+    log names why a page was not read, so the shape reaches the log and no message text ever does."""
+    if isinstance(value, dict):
+        for key in ("messages", "content"):
+            if key in value:
+                return f"{key}: {shape_of(value[key])}"
+        return "mapping with keys " + (",".join(sorted(str(key) for key in value)) or "none")
+    if isinstance(value, list):
+        kinds = sorted({type(item).__name__ for item in value})
+        return f"list of {len(value)} of " + (",".join(kinds) or "nothing")
+    if isinstance(value, str):
+        return "text"
+    return type(value).__name__
+
+
 class _CursorBeforeSession(P.Checkpoint):
     """The cursor as the poll found it. The session's checkpoint hook has already moved the file, so the poll reads the
     value stored before the session, and the page is not delivered twice."""
@@ -73,23 +91,80 @@ def poll_prompt(request, team_id):
             'Reply with JSON only: {"messages": [...]}, holding the messages of the page as the tool returned them.')
 
 
-def hook_settings(checkpoint_path):
+PAGE_NAME = "page.json"     # the page a read tool returned, kept in the session folder until the poll reads it
+
+
+def page_path(folder):
+    """The file that holds the page of one session while the poll reads it (#2855)."""
+    return Path(folder) / PAGE_NAME
+
+
+def write_page(path, messages):
+    """Keep the page one read tool returned, as one atomic write (ADR-0030)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps({"messages": list(messages)}) + "\n")
+
+
+def read_page(path):
+    """The page a read tool returned to one session, or None when the session kept none."""
+    try:
+        doc = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    page = doc.get("messages") if isinstance(doc, dict) else None
+    return page if isinstance(page, list) else None
+
+
+def discard_page(path):
+    """Delete the kept page and every atomic-write temp of it, because both hold message text (story 42)."""
+    path = Path(path)
+    for kept in [path, *path.parent.glob(f".{path.name}.*")]:
+        kept.unlink(missing_ok=True)
+
+
+PAGE_TOOL = "read_channel"  # the connector's tool that reads one page of a channel
+
+
+def page_hook(checkpoint, page=None, channel=None):
+    """The `PostToolUse` hook of one poll: it moves the checkpoint, and it keeps the page the channel read returned, so
+    the runner reads the page the connector sent and never the model's reformatted answer (#2855). Another tool, a read
+    of another channel, or a result the reader cannot understand writes no page, and the answer stays the fallback."""
+    record = P.checkpoint_hook(checkpoint)
+
+    async def hook(input_data, tool_use_id, context):
+        reply = await record(input_data, tool_use_id, context)
+        if page is None or P.connector_word(input_data.get("tool_name")) != PAGE_TOOL:
+            return reply
+        args = input_data.get("tool_input") or {}
+        found = args.get("channel_id") or args.get("channel")
+        if channel is not None and str(found) != str(channel):
+            return reply
+        response = input_data.get("tool_response")
+        if not P.read_failed(response):
+            write_page(page, P.messages_of(response))
+        return reply
+    return hook
+
+
+def hook_settings(checkpoint_path, page=None, channel=None):
     base = [sys.executable, "-m", "squad.guestrunner", "hook"]
     pre = shlex.join([*base, "pre"])
-    post = shlex.join([*base, "post", str(checkpoint_path)])
+    extra = [str(page or ""), str(channel or "")] if page is not None or channel is not None else []
+    post = shlex.join([*base, "post", str(checkpoint_path), *extra])
     return json.dumps({"hooks": {
         "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": pre, "timeout": HOOK_TIMEOUT}]}],
         "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": post, "timeout": HOOK_TIMEOUT}]}],
     }})
 
 
-def session_argv(request, team_id, repo, checkpoint_path, wrapper=WRAPPER):
+def session_argv(request, team_id, repo, checkpoint_path, page=None, wrapper=WRAPPER):
     """The argv of one poll's session: one print-mode call with no persisted session, no resume and no continue. Its
     settings sources are the user's, because the CLI loads the claude.ai Slack connector only from them (#2854)."""
     return [wrapper, "-p", poll_prompt(request, team_id),
             "--permission-mode", "bypassPermissions",
             "--no-session-persistence",
-            "--settings", hook_settings(checkpoint_path),
+            "--settings", hook_settings(checkpoint_path, page, request.get("channel")),
             "--setting-sources", "user",
             "--output-format", "json",
             "--add-dir", str(repo)]
@@ -112,26 +187,37 @@ def session_answer(answer):
 
 
 def run_session(argv, folder, runner=subprocess.run, env=None):
-    """Run one session and return the page it read. A non-zero exit, an answer that carries an error, or an unreadable
-    result raises `SessionFailed`, so a failed poll never reads as an empty page. A session past its deadline raises
-    `subprocess.TimeoutExpired` after the runner kills it."""
-    done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
-    if done.returncode != 0:
-        raise SessionFailed(f"exit {done.returncode}")
+    """Run one session and return the page it read. The page the read tool returned, kept by the `PostToolUse` hook, wins
+    over the session's final answer: the model reformats the page and the shape of its answer varies (#2855). A non-zero
+    exit, an answer that carries an error, or an unreadable result raises `SessionFailed`, so a failed poll never reads as
+    an empty page. A session past its deadline raises `subprocess.TimeoutExpired` after the runner kills it. The kept page
+    holds message text, so it is deleted whatever the outcome (story 42)."""
+    page = page_path(folder)
+    discard_page(page)
+    kept = None
+    try:
+        done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
+        if done.returncode != 0:
+            raise SessionFailed(f"exit {done.returncode}")
+        kept = read_page(page)
+    finally:
+        discard_page(page)
+    if kept is not None:
+        return kept
     try:
         outer = json.loads(done.stdout)
     except (ValueError, TypeError) as e:
-        raise SessionFailed("no page in the result") from e
+        raise SessionFailed("no page in the result: the CLI answer is not JSON") from e
     if not isinstance(outer, dict) or outer.get("is_error") or outer.get("error"):
         raise SessionFailed("the session answered an error")
     try:
         result = session_answer(outer.get("result"))
     except (ValueError, TypeError) as e:
-        raise SessionFailed("no page in the result") from e
+        raise SessionFailed(f"no page in the result: the answer is not JSON ({shape_of(outer.get('result'))})") from e
     if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
         raise SessionFailed("the session answered an error")
     if P.read_failed(result):
-        raise SessionFailed("no page in the result")
+        raise SessionFailed(f"no page in the result: {shape_of(result)}")
     return P.messages_of(result)
 
 
@@ -170,7 +256,7 @@ class GuestRunner:
         cursor = _CursorBeforeSession(state.checkpoint_path(), channel, P.Checkpoint(state.checkpoint_path()).get(channel))
 
         def connect(**request):
-            argv = session_argv(request, workspace, self.root, state.checkpoint_path())
+            argv = session_argv(request, workspace, self.root, state.checkpoint_path(), page_path(folder))
             return {"ok": True, "messages": run_session(argv, folder, self.runner, _env())}
 
         poller = P.Poller(connect, cursor, committed, local, lambda: now, limit=LIMIT,
@@ -210,7 +296,9 @@ def hook_main(argv, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr):
         if argv[0] == "pre":
             hook = P.pre_read_tool_use()
         elif argv[0] == "post":
-            hook = P.checkpoint_hook(P.Checkpoint(argv[1]))
+            page = argv[2] if len(argv) > 2 and argv[2] else None
+            channel = argv[3] if len(argv) > 3 and argv[3] else None
+            hook = page_hook(P.Checkpoint(argv[1]), page, channel)
         else:
             raise ValueError(f"no guest poll hook {argv[0]!r}")
         reply = asyncio.run(hook(data, data.get("tool_use_id"), None))
@@ -305,9 +393,11 @@ def main(argv=None):
     hook = sub.add_parser("hook")
     hook.add_argument("kind", choices=["pre", "post"])
     hook.add_argument("checkpoint", nargs="?", default="")
+    hook.add_argument("page", nargs="?", default="")
+    hook.add_argument("channel", nargs="?", default="")
     args = parser.parse_args(argv)
     if args.cmd == "hook":
-        return hook_main([args.kind, args.checkpoint])
+        return hook_main([args.kind, args.checkpoint, args.page, args.channel])
     state = Path(args.state) if args.state else gueststate.default_root()
     if args.cmd == "stop":
         try:

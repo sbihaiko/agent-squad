@@ -496,14 +496,12 @@ def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects
     speak = sum(1 for merged, g in rows if P.can_speak(merged))
     subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
-    now = [] if empty else [
-        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
-                    tone="ok" if groups else "warn"),
-        _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="ok" if speak else "warn"),
+    now = [] if empty else [   # a project count is a fact, never a passing state: every project tile stays neutral (#2841)
+        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest"),
+        _slack_tile("Channels", f"{len(rows)} · {speak} speak"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
-                    else f"{len(personas)} · no default", tone="ok" if personas else "warn"),
-        _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe",
-                    tone="ok" if events else "warn")]
+                    else f"{len(personas)} · no default"),
+        _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe")]
     root = {"id": "p", "level": 1, "kind": "project", "name": label, "state": "empty" if empty else "ok",
             "badges": [_slack_badge("no Slack", "muted")] if empty else
                       ([_slack_badge(default_name)] if default_name else []),

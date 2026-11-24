@@ -440,10 +440,14 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
 #sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
-#sbody .slth{margin:6px 0 2px;font-size:var(--fs-title);color:var(--fg);overflow-wrap:anywhere}
+#sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);font-weight:600;line-height:1.25;color:var(--fg);overflow-wrap:anywhere}   /* the node title is the largest text of the pane (#2841) */
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+#tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
+#tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
+#tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}   /* a workspace and the project carry four tiles: one row (#2841) */
+#tab-set #sbody .sltnow .tile .tk{color:var(--mute)}   /* the label is a muted caption (#2841) */
+#tab-set #sbody .sltnow .tile .tv{font-size:var(--fs-body);font-weight:600;line-height:1.3;overflow-wrap:break-word;word-break:normal;hyphens:none}   /* the value is bold and breaks between words alone (#2841) */
 #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
 #sbody .sltback{display:none;margin:0 0 8px}
@@ -462,12 +466,13 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    clears it, so a wide panel keeps both columns. A row stacks its label over its control below 560px, so the chip and
    the control keep their room in a narrow pane. */
 @container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltdetail{display:none}
- #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+ #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}
+ #tab-set #sbody .sltnow{grid-template-columns:repeat(3,minmax(0,1fr))}#tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}}   /* a folded detail keeps three tiles, so every label stays whole; a four-tile block still fills one row (#2841) */
 @container (min-width:701px){#sbody .slttop.sltshow .sltcol{display:block}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltcol{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltcol{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:1fr}#tab-set #sbody .sltn4{grid-template-columns:1fr}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -507,6 +512,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slt2 th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
 #sbody .slt2 .nw{white-space:nowrap}   /* a voice, a mode, a language tag or a persona id never breaks inside the word */
+#sbody .slt2 td button{white-space:nowrap;justify-self:start;min-width:0}   /* the Personas table's Edit button stays on one line and inside its cell when the row stacks (#2841) */
 @media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
@@ -1533,7 +1539,8 @@ function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.childre
  +slTGuides(more||[])+`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span>${slTGlyph(n)}`
  +`<span class=sltname title="${slA(n.name)}">${esc(n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></div>`}
 function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
- return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow">${tiles.join("")}</div></div>`:""}
+ const cols=Math.min(tiles.length,5);   // the tile count names the row's columns: five for a channel, four for a workspace (#2841)
+ return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow sltn${cols}">${tiles.join("")}</div></div>`:""}
 function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
