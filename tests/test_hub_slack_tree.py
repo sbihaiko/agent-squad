@@ -627,6 +627,13 @@ def test_a_reply_with_no_persona_shows_the_policy_mark_and_no_empty_name(hub, tm
     assert "'s Msg" not in json.dumps(got), got
 
 
+def test_the_tree_page_links_the_permissions_section_and_offers_the_sender_preview(hub):
+    assert 'id=slperm tabindex="-1">Permissions' in hub.PAGE
+    assert 'href="#slperm" data-slt-perm' in hub.PAGE
+    assert "<h3 class=blkh>Try a sender</h3>" in hub.PAGE
+    assert '"/api/slack/decide?"' in hub.PAGE
+
+
 def test_a_refused_guest_workspace_reads_not_read_in_the_preview(hub, tmp_path):
     local = json.loads(json.dumps(LOCAL))
     local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
