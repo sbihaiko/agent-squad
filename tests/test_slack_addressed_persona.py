@@ -99,6 +99,11 @@ def test_a_native_mention_of_the_bot_gets_the_default_persona_of_the_channel():
     assert d.persona.id == "hal"
 
 
+def test_a_quoted_reply_that_addresses_a_persona_still_addresses_it():
+    d = decide(owned("> @Iara check the quote"))
+    assert (d.persona.id, d.persona.name) == ("iara", "Iara")
+
+
 def test_the_address_rule_holds_in_a_guest_channel():
     d = decide(guest("@HAL9K status"))
     assert d.kind == "proposal"

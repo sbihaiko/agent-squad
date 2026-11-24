@@ -607,8 +607,12 @@ def persona_named(committed, local, name):
 def addressed(committed, local, text):
     """The persona a leading `@<name>` of a message names, or None. The match ignores case, and only a persona the
     project declares answers, so a name no persona declares reads as no address. The longest declared name wins, so a
-    name with a space still matches. A native mention (`<@U...>`) is no address: the message keeps the channel persona."""
+    name with a space still matches. A native mention (`<@U...>`) is no address: the message keeps the channel persona.
+    A leading Slack quote marker (`>` and its run) is stripped first, so a quoted reply that addresses a persona still
+    addresses it."""
     body = str(text or "").lstrip()
+    while body.startswith(">"):
+        body = body[1:].lstrip()
     if not body.startswith("@"):
         return None
     rest = body[1:]
