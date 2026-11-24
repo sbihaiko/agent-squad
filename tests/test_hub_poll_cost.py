@@ -166,6 +166,52 @@ def test_two_profiler_reads_inside_one_sampler_interval_build_once(served, hub, 
         f"two reads inside one sampler interval built the profiler view {len(prof_calls)} times, with a build of {cost} s")
 
 
+def test_two_profiler_serves_on_the_real_clock_build_once_and_again_past_the_window(hub, monkeypatch):
+    """AC 1 of #2848 through `profiler_served`'s own default clock, with no `now` passed and the module clock injected.
+
+    The stamp is read from the same clock as the window comparison, after the build, so a build that outlasts the window
+    still serves the read that asks right after it, and the read past the window builds again. A stamp and a comparison
+    on two clocks cannot pass both halves: a mismatched stamp rebuilds at the first read, and a mismatch on the other side
+    never rebuilds past the window."""
+    clock = [1000.0]
+    built = []
+    switch = pathlib.Path(tempfile.mkdtemp()) / "profiler.json"
+    switch.write_text('{"on": true}')
+    monkeypatch.setattr(hub, "POLL_CLOCK", lambda: clock[0])
+    monkeypatch.setattr(hub, "PROFILER_SWITCH", switch)
+    monkeypatch.setattr(hub, "_PROF_KEPT", {})
+    window = hub.PROF_ON_SECS
+
+    def slow_view(*a, **k):
+        built.append(1)
+        clock[0] += window * 2.5   # a build longer than the window it is kept for
+        return {"tree": []}
+
+    monkeypatch.setattr(hub, "profiler_view", slow_view)
+
+    class _Caller:
+        allowed, tailnet, reason = True, False, ""
+
+    hub.profiler_served(_Caller(), 3600, None, None)   # no `now`: the real default path
+    hub.profiler_served(_Caller(), 3600, None, None)
+    assert len(built) == 1, f"two reads inside one window built the view {len(built)} times"
+    clock[0] += window + 1.0   # a read past the window, counted from the stamp
+    hub.profiler_served(_Caller(), 3600, None, None)
+    assert len(built) == 2, "a read past the window served the old view"
+
+
+def test_the_profiler_cadence_is_the_sampler_interval_above_the_page_floor(hub):
+    """AC 2 of #2848: the page cadence is the sampler interval, never a literal and never under the page floor.
+
+    A slower sampler sets the cadence exactly; a faster one is held at the floor, which is a page cadence and never a
+    sampler tick, so the page can never poll the profiler faster than the sampler reads."""
+    assert hub.prof_poll_secs(hub.PAGE_PROF_FLOOR_S) == hub.PAGE_PROF_FLOOR_S
+    assert hub.prof_poll_secs(hub.PAGE_PROF_FLOOR_S + 3.0) == hub.PAGE_PROF_FLOOR_S + 3.0
+    assert hub.prof_poll_secs(0.5) == hub.PAGE_PROF_FLOOR_S
+    assert hub.PROF_POLL_SECS == hub.prof_poll_secs(hub.PROFILER_SECS)
+    assert hub.PROF_POLL_SECS >= hub.PROFILER_SECS
+
+
 def test_the_loop_page_polls_the_profiler_no_faster_than_the_sampler_reads(hub):
     """AC 2 of #2848: the Loop page takes its profiler cadence from the sampler's own interval, never from a literal."""
     assert hub.PROF_POLL_SECS >= hub.PROFILER_SECS, (

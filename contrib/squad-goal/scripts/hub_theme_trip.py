@@ -450,12 +450,12 @@ def profiler_served(a, w=None, sw=None, ww=None, now=None):
     on = profiler_on()                                                  # write follows a grant that can move inside a window
     window = PROF_ON_SECS if on else PROF_OFF_SECS
     key = (w, sw, ww, on)
-    now = POLL_CLOCK() if now is None else now
+    clock = POLL_CLOCK if now is None else (lambda: now)   # one clock for the stamp and its comparison (#2848)
     with _PROF_LOCK:
         at, answer = _PROF_KEPT.get(key, (None, None))
-        if at is not None and now - at < window: return answer
+        if at is not None and clock() - at < window: return answer
         answer = profiler_view(a, w, sw, ww)
-        _PROF_KEPT[key] = (POLL_CLOCK(), answer)   # the stamp is the instant the answer existed: a build longer than the window would otherwise let the read that waited for it build again (#2848)
+        _PROF_KEPT[key] = (clock(), answer)   # the stamp is the instant the answer existed: a build longer than the window would otherwise let the read that waited for it build again (#2848)
         return answer
 
 def profiler_view(a, w=None, sw=None, ww=None):
