@@ -448,12 +448,20 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slsetrow{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
 #sbody .slsetrow .slsetk{color:var(--mute);min-width:0;overflow-wrap:anywhere}
 #sbody .slsetc{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0}
-#sbody .slsetc .slsetctl{max-width:260px;min-width:0}
-#sbody .slsetc input[type=text].slsetctl{width:220px}
+#sbody .slsetc .slsetctl{max-width:100%;min-width:0}
+#sbody .slsetc input[type=text].slsetctl{width:100%;max-width:260px}
 #sbody .slsetrow .slfile{justify-self:end;margin-left:0}
 #sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slsetval{color:var(--fg)}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}}
+/* A panel narrower than 700px has no room for the tree and the detail side by side: the tree alone shows until a pick,
+   then the detail alone with its back button, the phone's own rule at the panel's width (#2844). A row stacks its label
+   over its control below 560px, so the chip and the control keep their room in a narrow pane. */
+@container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltcol{display:none}
+ #sbody .slttop.sltshow .sltdetail{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+@container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
+ #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
+ #sbody .slsetc input[type=text].slsetctl{max-width:none}}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1523,7 +1531,7 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA((row.label||f)+": "+f)}"`,v=slTSettingVal(n,row,c);
+ at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA(c.label||row.label||f)}"`,v=slTSettingVal(n,row,c);
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
  if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} ${lab}${v?" checked":""}> ${esc(c.label||f)}</label>`;
  if(c.kind==="select")return `<select class=slsetctl ${at} ${lab}>`+(c.options||[]).map(slTOpt)
