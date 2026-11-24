@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.95
+# seconds: 1.60
 # A run that recorded its verdict is over, and no deferral marker of it survives the pass (#945).
 # childcc writes auto/ccdefer-<run>-<child> for a child its run never reviewed, and the wave reads that run's marker as a wait
 # that is still owed: after the run recorded a verdict the marker names a wait that can never end, so watch.sh prints
@@ -60,7 +60,7 @@ o=$(run)
 # 120 s. A deferral counter kept in that name restarts at one before it can reach its bound, so the wait never ends. The
 # counter has its own name (auto/dwait-<run>-<child>) that the janitor never removes; this case runs BOTH scripts over one
 # state dir and proves the janitor's drop cannot kill the count.
-cp "$here/childcc.py" "$here/child_issues.py" "$here/revformat.py" "$T/s/"
+cp "$here/childcc.py" "$here/child_issues.py" "$here/revformat.py" "$here/render_owed.py" "$here/ghread.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/ccwave.calls\n[ "$1" = expired ] && exit 1\n[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }\necho "WAVE HOLD #$3: the wave base is not the review base"\nexit 1\n' "$T" > "$T/s/wave.sh"; chmod +x "$T/s/wave.sh"
 rd="$T/co/runs/run-f"; mkdir -p "$rd/ws/target-c"; printf 'CHILD — no issue named here:\n' > "$rd/request.txt"
 d="$rd/ws/target-c"; /usr/bin/git -C "$d" init -q -b dev; /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one

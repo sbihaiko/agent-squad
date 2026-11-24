@@ -1,16 +1,18 @@
 #!/bin/bash
-# seconds: 17.10
+# seconds: 31.23
 # Regression test for childcc.py (stub gh + board, no network). usage: bash test-childcc.sh [path/to/childcc.py]
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB SG_CHILDCC_BUDGET   # the old-vocabulary cases and the one-child passes need them unset; a caller that exports them must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/drainpolicy.py" "$(dirname "$src")/revformat.py" "$(dirname "$src")/board_columns.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/drainpolicy.py" "$(dirname "$src")/revformat.py" "$(dirname "$src")/board_columns.py" "$(dirname "$src")/render_owed.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 a="$*"
 case $a in
-  *"graphql"*) cat "$GH_ISSUES_OPEN";;   # the open-issue list the pass reads once for a loop defect (#596)
+  *"graphql"*) if [[ $a =~ i([0-9]+):\ issue\(number ]] && [ -e "$GH_BODIES/body-${BASH_REMATCH[1]}" ]; then   # one issue's body, which the render check reads (#2833)
+      python3 -c 'import json,sys; print(json.dumps({"data": {"repository": {"i" + sys.argv[1]: {"number": int(sys.argv[1]), "state": "OPEN", "body": open(sys.argv[2]).read()}}}}))' "${BASH_REMATCH[1]}" "$GH_BODIES/body-${BASH_REMATCH[1]}"
+    else cat "$GH_ISSUES_OPEN"; fi;;   # the open-issue list the pass reads once for a loop defect (#596)
   *"-q .state"*) [ -e "$GH_STATE_FAIL" ] && { echo "HTTP 403: rate limit" >&2; exit 1; }; echo "${GH_STATE:-open}";;   # a failed read is no answer (#848)
   *"POST"*"/sub_issues"*) echo "link $a $(cat)" >> "$GH_LOG";;   # the body names the child by its id, which is its number here
   *"/sub_issues"*) sed -n 's/^link .*"sub_issue_id": *\([0-9]*\).*/\1/p' "$GH_LOG" 2>/dev/null;;   # the sub-issues read carries each child linked so far: a read that never carried a link cost the backoff, 7 s a pass (#597)
@@ -47,7 +49,7 @@ run_def citedown c "GitHub issue #5311. The body says the old fix is issue #5398
 run_def citednone c "Fix the bug the ticket describes; issue #5397 is its history." pass; req citednone "5321"
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
 export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
-export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing 5106:Doing 5107:Doing"
+export GH_BODIES=$T GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export GH_STATE_FAIL=$T/gh.statefail SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Closed 4:In_Progress 5101:Todo 5104:Code_Complete 5105:Doing 5106:Doing 5107:Doing"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -787,6 +789,30 @@ unprun unp 5110 unproven; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass unp);
 unprun flr 5111 fail; : > "$WAVE_CALLS"; rm -f "$T/moves"; out=$(lpass flr); rc=$?
 [ "$(ent flr 5111)" = 0 ] && [ ! -e "$T/st/auto/cc-flr-c" ] && ok "a child whose gate ended fail never enters its wave" || ko "failed child entered: waves '$(cat "$WAVE_CALLS")', out $out"
 /usr/bin/grep -q ' 5111$' "$T/moves" 2>/dev/null && ko "a failed child moved to Code Complete" || ok "a failed child moves no card"
+# A child of an issue whose body holds an "after" image owes a render (#2833): its worktree holds a PNG under
+# .scratch/renders/, or it does not enter. The check reads that evidence, never the child's status word, so a child that
+# answers `pass` with no render is held too. The refusal is a CHANGES review with one Blocking finding and a repro, which
+# starts one fix run; the issue gets one comment per tip that names the missing render, and the card keeps its column.
+export GH_NUMS="5110:Doing 5111:Doing 5120:Doing 5121:Doing 5122:Doing 5123:Doing"
+printf '## Before\n\n![before](https://x.test/b.png)\n\n## After\n\n![after](https://x.test/a.png)\n' > "$T/body-5120"
+cp "$T/body-5120" "$T/body-5121"; cp "$T/body-5120" "$T/body-5123"
+printf '## Before\n\n![before](https://x.test/b.png)\n\nThe page shows one row per run.\n' > "$T/body-5122"
+unprun aft 5120 unproven; : > "$WAVE_CALLS"; : > "$T/fix.calls"; rm -f "$T/moves"; out=$(lpass aft); rc=$?; out2=$(lpass aft)
+[ "$(ent aft 5120)" = 0 ] && [ ! -e "$T/st/auto/cc-aft-c" ] && ok "2833 an after image with no render evidence never enters its wave" || ko "2833 the child with no render entered: waves '$(cat "$WAVE_CALLS")', out $out"
+[ "$(/usr/bin/grep -c '^aft 5120 ' "$T/fix.calls")" = 1 ] && ok "2833 the missing render starts one fix run" || ko "2833 fix runs: '$(cat "$T/fix.calls")', out $out $out2"
+k=$(/usr/bin/git -C "$T/co/runs/aft/ws/target-c" symbolic-ref --quiet --short HEAD | tr / _); h=$(/usr/bin/git -C "$T/co/runs/aft/ws/target-c" rev-parse HEAD)
+[ "$(python3 "$T/revformat.py" --classify "$T/st/review-$k.md" "$T/st/review-$k.sha" "$h")" = changes ] && /usr/bin/grep -q 'repro: .*\.scratch/renders' "$T/st/review-$k.md" && /usr/bin/grep -q 'test-hub-e2e.py' "$T/st/review-$k.md" \
+  && ok "2833 the refusal is a CHANGES review with one Blocking finding and a repro" || ko "2833 the review: $(cat "$T/st/review-$k.md" 2>/dev/null)"
+[ "$(ls "$T/st/cq" | /usr/bin/grep -c '#5120-render-')" = 1 ] && /usr/bin/grep -q '\.scratch/renders/' "$T"/st/cq/*#5120-render-* && ok "2833 the issue gets one comment per tip that names the missing render" || ko "2833 render comments: $(ls "$T/st/cq")"
+/usr/bin/grep -q ' 5120$' "$T/moves" 2>/dev/null && ko "2833 the held child moved its card: $(cat "$T/moves")" || ok "2833 the held child's card keeps its column"
+[ "$rc" = 3 ] && ok "2833 the held child holds its wave" || ko "2833 a pass with a held render exited $rc"
+unprun aev 5121 unproven; mkdir -p "$T/co/runs/aev/ws/target-c/.scratch/renders"; printf 'png' > "$T/co/runs/aev/ws/target-c/.scratch/renders/page.png"
+: > "$WAVE_CALLS"; : > "$T/fix.calls"; out=$(lpass aev)
+[ "$(ent aev 5121)" = 1 ] && [ -e "$T/st/auto/cc-aev-c" ] && ! /usr/bin/grep -q '^aev ' "$T/fix.calls" && ok "2833 an after image with a render under .scratch/renders/ enters" || ko "2833 the rendered child did not enter: waves '$(cat "$WAVE_CALLS")', out $out"
+unprun anb 5122 unproven; : > "$WAVE_CALLS"; : > "$T/fix.calls"; out=$(lpass anb)
+[ "$(ent anb 5122)" = 1 ] && [ -e "$T/st/auto/cc-anb-c" ] && ok "2833 an unproven child of an issue with no after image enters as before" || ko "2833 the before-only child did not enter: waves '$(cat "$WAVE_CALLS")', out $out"
+unprun apa 5123 pass; : > "$WAVE_CALLS"; : > "$T/fix.calls"; out=$(lpass apa)
+[ "$(ent apa 5123)" = 0 ] && [ ! -e "$T/st/auto/cc-apa-c" ] && [ "$(/usr/bin/grep -c '^apa 5123 ' "$T/fix.calls")" = 1 ] && ok "2833 a child that answers pass with no render never enters" || ko "2833 the pass child with no render: waves '$(cat "$WAVE_CALLS")', fix '$(cat "$T/fix.calls")', out $out"
 # A bare `loop-bug` is a full drain (#1980): it stops the child entry as well. This replaces owner answer B1, which let a
 # bare loop-bug stop nothing; the contradiction is named for #2041.
 cat > "$T/issues-open.json" <<'JSON'

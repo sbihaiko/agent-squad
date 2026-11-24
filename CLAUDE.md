@@ -43,7 +43,8 @@ This file and the ADRs are never ledgers: no dates, counts, statuses, issue numb
 - **Browser work goes through ego-browser, never headless Chrome:** one private task space per goal, never the owner's default profile. ego-browser runs several goals at once, so no lock bounds it. Guard: `tests/test_browser_bounds.py`.
 - **A task whose issue or parent spec carries before and after images ends with a qualitative visual inspection.**
   Render each changed screen through ego-browser, compare it with the "after" image, judge hierarchy, alignment, spacing, wrapping, overlap, cut text and contrast, fix every defect and render again.
-  Attach the final renders to the issue. The task is not done while a render has an open defect. Guard: none yet; a draft.
+  Save the final renders as PNGs under `.scratch/renders/` in the worktree, and attach them to the issue. The task is not done while a render has an open defect.
+  A child of an issue whose body holds an "after" image does not enter its wave while that folder holds no PNG (`contrib/squad-goal/scripts/render_owed.py`). Guard: `tests/test_render_owed.py`, `contrib/squad-goal/scripts/test-childcc.sh`.
 - **Setup writes rules and pointers into `CLAUDE.md`; facts that change go to memory.** Guard: `tests/test_setup.py`.
 - **The operator session's tool set and kernel bound are proven by one real-CLI probe, `contrib/voice/operator_probe.py`, which runs every call through `contrib/squad-goal/scripts/claude-sandboxed.sh`; a denial that does not hold fails it.** Guard: `tests/test_operator_probe.py`.
 - **Every rule names its guard.** A rule with no guard is a draft ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: `tests/test_setup.py` runs `squad setup --check` on this file.

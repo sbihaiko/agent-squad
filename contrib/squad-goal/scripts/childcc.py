@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """A child that finished with outcome pass moves its issue to Batching (called by watch.sh every loop).
 A child that finished with outcome unproven is a finished child too (ADR-0164): its work is done and the proof could not
-finish, so it enters its wave, and the entry records the obligation the tree still owes. A child with outcome fail, or a
-child whose own landing failed, never enters: a measured red holds delivery.
+finish, so it enters its wave. Its entry carries a proof obligation only when a gate wrote one (wave.sh names it on the entry
+line); the child's own `unproven` word settles nothing. A child with outcome fail, or a child whose own landing failed, never
+enters: a measured red holds delivery.
+A child of an issue whose body holds an "after" image owes a render (#2833, render_owed.py): while its worktree holds no PNG
+under .scratch/renders/, it does not enter. The pass writes the loop's CHANGES review in its review file, so the fix round
+below starts, and queues one issue comment per tip that names the missing render; the card keeps its column. The check reads
+that evidence, never the child's status word, so a child that answers `pass` with no render is held too.
 A child of a run that cut a wave enters it first (#375, ADR-0145 rules 9 and 12): `wave.sh enter <run> <issue>` runs in the
 child's own worktree, is the only route into the wave branch, and its entry is what moves the card; a child that did not
 enter has no card to move, its issue went back to the queue. A run that cut no wave keeps the direct move, unless it was dispatched
@@ -263,7 +268,7 @@ def machine_hold(cause):   # a machine-wide hold clears by itself, so it never c
     # and no failed dispatch is counted against it (#1344).
     return any(s in cause for s in ("the gate lock is held", "the gate slots (caps.gates) are full",
                                     "the local gates were inconclusive", "no review slot this pass",
-                                    "for one rebase round, not requeued"))
+                                    "for one rebase round, not requeued", "its issue body could not be read"))
 def moved_tip(rd, child, d, rnd):   # the tip a review read, when the child stands past it (#808); False when no head was read or the tip is not there
     head = str((rnd or {}).get("head") or "")
     return bool(head) and head_of(child_worktree(rd, child, d)) not in ("", head)
@@ -273,6 +278,50 @@ def logged(key, line):   # a line printed once per change of its text: a pass th
     except (OSError, ValueError): last = {}
     if last.get(key) == line: return
     last[key] = line; f.write_text(json.dumps(last)); print(line, flush=True)
+def render_hold(rd, child, n, wt, fx):
+    """The render check before the entry (#2833): None when the child owes no render, else enter()'s answer. A child of an
+    issue whose body holds an "after" image, with no PNG under .scratch/renders/ in its worktree, gets the loop's CHANGES
+    review at its head and one fix round. The review file it replaces is kept beside it and put back once the render is
+    there, so a run's own approval survives the round; a render review left with no kept file is removed, so the next
+    review reads the head afresh. A body that cannot be read holds the child for this pass, as a machine hold."""
+    import render_owed   # read only here: a fixture that copies this script with no sibling never reaches a wave entry
+    os.environ.setdefault("SG_GH_PASS", "childcc")
+    try:
+        import ghread   # the one GitHub door (ADR-0277), beside this script
+        r = ghread.read(f"repos/{repo}/issues/{n}")
+    except Exception as x: r = None; why = f"{type(x).__name__}: {x}"
+    if r is None or not r.is_answer or not isinstance(r.answer, dict):
+        why = why if r is None else (r.message or r.detail or "no issue in the answer")
+        HOLDS.add(f"{rd.name} {child}")
+        return False, f"CHILD RENDER HOLD #{n} ({rd.name} {child}): its issue body could not be read ({str(why).strip()[:200]})", False
+    body = r.answer.get("body") or ""
+    md, sha = review_paths(wt); kmd, ksha = md.with_name(md.name + ".prerender"), sha.with_name(sha.name + ".prerender")
+    try: mine = md.is_file() and render_owed.TAG in md.read_text(errors="replace")
+    except OSError: mine = False
+    if not render_owed.render_owed(body, wt):
+        if mine:
+            if kmd.exists(): os.replace(kmd, md); ksha.exists() and os.replace(ksha, sha)
+            else: md.unlink(missing_ok=True); sha.unlink(missing_ok=True)
+        else: kmd.unlink(missing_ok=True); ksha.unlink(missing_ok=True)
+        (A / f"render-{rd.name}-{child}").unlink(missing_ok=True)   # the render is there: the card may move again
+        return None
+    head = head_of(wt)
+    if not mine and md.is_file():
+        os.replace(md, kmd)
+        if sha.is_file(): os.replace(sha, ksha)
+    md.write_text(render_owed.render_review()); sha.write_text(head + "\n")
+    tk = A / f"render-{rd.name}-{child}"   # the tip the last render comment named; while it exists the card keeps its column
+    try: told = tk.read_text().strip()
+    except OSError: told = ""
+    if told != head:   # one comment per tip
+        (st / "cq").mkdir(parents=True, exist_ok=True)
+        (st / "cq" / f"{CQ}#{n}-render-{rd.name}-{child}-{head[:12]}.md").write_text(
+            f"Child {child} of squad run {rd.name} stands at {head[:9]} with no render: the issue carries an after image, and the"
+            f" worktree holds no PNG under `{render_owed.RENDERS}/`. It does not enter its wave. A fix round renders each changed"
+            f" screen through ego-browser against a throwaway hub on its own port, as `contrib/squad-goal/scripts/test-hub-e2e.py`"
+            f" does, and saves the renders there.\n")
+        tk.write_text(head + "\n")
+    return fix_round(rd, child, n, wt, fx, f"CHILD RENDER OWED #{n} ({rd.name} {child}): the issue carries an after image and the worktree holds {render_owed.TAG}")
 def enter(rd, child, n, d, approved=False, own=False):
     """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
@@ -298,6 +347,8 @@ def enter(rd, child, n, d, approved=False, own=False):
         if fix_running(fx): FIX_WAIT.add(f"{rd.name} {child}")   # a live fix run bounds its own child, so the deferral deadline never counts it (#931)
         return False, f"CHILD FIX WAIT #{n} ({rd.name} {child}): its fix run {pathlib.Path(fx.read_text().strip()).name} has no verdict yet", False
     if not approved and own: return False, f"CHILD RUN-OWNED #{n} ({rd.name} {child}): its run approved no head for it; delivery holds", False
+    held = render_hold(rd, child, n, wt, fx)   # an after image with no render: no entry, one fix round (#2833); a run-owned child too, since its run never renders
+    if held is not None: return held
     rvd = False if approved else reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
     if rvd == "nochange": return False, f"CHILD NO CHANGE #{n} ({rd.name} {child}): nothing to review past its base; the issue is requeued", True
     if not approved and not rvd: return False, "", None   # no review slot: the child waits, and the landing waits for it
@@ -384,7 +435,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             if cited: logged(f"remap {rec.parent.name} {d['child']}", f"CHILDCC REMAP {rec.parent.name} {d['child']}: its prompt names #{cited} first, which is no issue of its run; mapped to #{n}")   # a cited issue never decides the mapping (#2276)
             if d.get("envelope") in gated: owned.add(d["child"])
             if n is not None: issue[d["child"]] = n
-        elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in issue:   # unproven: the work is done and the proof could not finish, so the child is finished and its entry carries the obligation (ADR-0164)
+        elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in issue:   # unproven: the work is done and the proof could not finish, so the child is finished; its entry carries an obligation only when a gate wrote one (ADR-0164)
             done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]; word[d["node"]] = d.get("outcome")   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
         elif d.get("event") == "outcome" and d.get("outcome") in ("pass", "unproven") and d.get("node") in seen:
             if d["node"] not in unmapped: unmapped.append(d["node"])
@@ -507,7 +558,7 @@ for key, r, child, why, n, finished, d, lwhy, ok, own, rnd in pending[k0:] + pen
             print(f"CODE COMPLETE #{sib} ({name} {child})", flush=True)
     ow = word.get(child, "pass")   # the outcome the child ended on: `unproven` is no pass, so the record never claims one
     (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: {ow}. "
-        + (f"Its entry carries the proof obligation the tree still owes (ADR-0164). " if ow == "unproven" else "")
+        + (f"Its entry carries the proof obligation its gate wrote (ADR-0164). " if "with obligation" in why else "")   # only a gate writes an obligation (wave.sh's entry line names it); the child's own `unproven` word is none
         + f"Cards -> {batching_column(SHIPPED)}: {', '.join('#' + str(x) for x in every_issue(d, n))} (Closed follows when the wave lands in dev). {why[:600]}\n")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
 # in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
@@ -523,7 +574,7 @@ _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f
 HELD.update(key=None, step=None, rk=None); publish(live=False)
 for key, r, child, why, n, finished, d, lwhy, *_ in pending:   # a child that waits for review: its card reads Reviewing (#603)
     name = pathlib.Path(r).name
-    if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
+    if key not in visited and key not in RUN_HELD and (A / f"wave-{name}").exists() and not (A / f"render-{name}-{child}").exists(): code_review(name, child, n, "it waits for review")   # a child held for its render keeps its column (#2833)
 info = {p[0]: p for p in pending}
 for k in sorted(keys - visited):   # every child the pass leaves is named with its cause, every pass, so a deferral is diagnosable without a hand run (#931)
     p = info.get(k)
