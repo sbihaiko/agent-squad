@@ -542,3 +542,94 @@ def test_the_edit_button_of_the_personas_table_stays_on_one_line(hub):
     assert "white-space:nowrap" in rule, rule
     assert "justify-self:start" in rule, rule
     assert "min-width:0" in rule, rule
+
+
+# ---------------------------------------------------------------- the permissions and the sender preview
+
+def permissions(hub, tmp_path, name="#proj-agent-squad", committed=None, local=None):
+    return by_name(tree(hub, tmp_path, committed, local), name)["permissions"]
+
+
+def preview(hub, tmp_path, committed=None, local=None, **query):
+    c, loc = files(tmp_path, committed, local)
+    return hub.slack_decide(query, c, loc)
+
+
+def test_the_permissions_section_lists_the_project_roles_with_their_actions_and_members(hub, tmp_path):
+    node = by_name(tree(hub, tmp_path), "#proj-agent-squad")
+    assert node["ref"] == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001"}, node.get("ref")
+    roles = {r["id"]: r for r in node["permissions"]["roles"]}
+    assert list(roles) == ["manager", "colleague"], node["permissions"]["roles"]
+    assert roles["manager"]["actions"] == ["status", "logs"]
+    assert roles["colleague"]["actions"] == ["status"]
+    assert roles["manager"]["accepted"] is True
+    assert roles["colleague"]["accepted"] is False
+    assert roles["manager"]["members"] == ["U0OWNER001"]
+    assert roles["colleague"]["members"] == []
+
+
+def test_the_section_counts_distinct_eligible_people(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
+                             "users": ["U0OWNER001", "U0OTHER001"]})
+    assert permissions(hub, tmp_path, local=local)["eligible"] == 2
+
+
+def test_a_person_in_two_accepted_roles_gets_a_note_naming_the_membership_the_policy_takes(hub, tmp_path):
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["roles"] = ["manager", "colleague"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                             "users": ["U0OWNER001"]})
+    notes = permissions(hub, tmp_path, committed=committed, local=local)["notes"]
+    assert len(notes) == 1 and "U0OWNER001" in notes[0] and "manager" in notes[0], notes
+    decided = preview(hub, tmp_path, committed, local, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert decided["role"] == "manager", decided
+
+
+def test_the_preview_answers_an_owned_member_a_guest_member_a_stranger_a_bot_and_an_own_post(hub, tmp_path):
+    owned = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert owned == {"err": None, "decision": "inbox", "role": "manager", "actions": "status, logs",
+                     "reply": "bot", "mark": "none", "language": "pt-BR"}, owned
+    guest = preview(hub, tmp_path, workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    assert guest == {"err": None, "decision": "proposal", "role": "manager", "actions": "status, logs",
+                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US"}, guest
+    stranger = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0STRANGER")
+    assert stranger == {"err": None, "decision": "data", "role": "none", "actions": "none",
+                        "reply": "none", "mark": "none", "language": "pt-BR"}, stranger
+    bot = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", bot="1")
+    assert bot == {"err": None, "decision": "data", "role": "manager", "actions": "none",
+                   "reply": "none", "mark": "none", "language": "pt-BR"}, bot
+    own = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", own="1")
+    assert own["decision"] == "ignore" and own["reply"] == "none", own
+
+
+def test_the_preview_calls_decide_with_one_message_event_and_no_other_call(hub, tmp_path, monkeypatch):
+    P = hub.slack_policy()
+    seen, real = [], P.decide
+
+    def spy(committed, local, event, now, thread_state=None):
+        seen.append(dict(event))
+        return real(committed, local, event, now, thread_state)
+
+    monkeypatch.setattr(P, "decide", spy)
+    monkeypatch.setattr(hub, "slack_policy", lambda: P)
+    preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert [e["kind"] for e in seen] == ["message"], seen
+
+
+def test_a_reply_with_no_persona_shows_the_policy_mark_and_no_empty_name(hub, tmp_path):
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["project"].pop("persona")
+    got = preview(hub, tmp_path, committed, guest_workspace(persona=None),
+                  workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    assert got["reply"] == "draft" and got["mark"] == "none", got
+    assert "'s Msg" not in json.dumps(got), got
+
+
+def test_a_refused_guest_workspace_reads_not_read_in_the_preview(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
+                                "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
+    got = preview(hub, tmp_path, local=local, workspace="T0OTHER001", channel="C0CLIB0001", user="U0CLIENT01")
+    assert got["decision"] == "not read", got
