@@ -105,15 +105,16 @@ class Children:
                     res[f"{g}:evidence"] = r.evidence
         return res
 
-    async def run_of(self, node, ent, pe, sc, dl_at, reviews=None):
+    async def run_of(self, node, ent, pe, sc, dl_at, reviews=None, limit_by=None):
         """Run the accepted top-level children of one dispatch entry. Return (name, outcome, reasons) in request order.
         `reviews` is the task group that owns the children's reviews. A child's review starts the moment the child passes,
         so the reviews of several passing children overlap; the group is opened outside this entry's cancel scope, because
         a child that passed is finished work and a sibling's failure never cancels its review. A review takes a slot of
-        `review_slots`, never one of `limiter`: a reading beside a sibling's work is never a child's place in the queue."""
+        `review_slots`, never one of `limiter`: a reading beside a sibling's work is never a child's place in the queue.
+        `limit_by` names the bound that set `dl_at` when it is the wave ceiling (#2840): a child call it bounds records it."""
         e = self.e
         room = max(1, min(node["max_parallel"], e.run_cfg["max_parallel"]))
-        ctx = SimpleNamespace(node=node, dl_at=dl_at, deadline_at=sc.deadline_at, results=[], frontier=[], held=[],
+        ctx = SimpleNamespace(node=node, dl_at=dl_at, limit_by=limit_by, deadline_at=sc.deadline_at, results=[], frontier=[], held=[],
                               cancel=None, waits={}, reviews=reviews,
                               limiter=anyio.CapacityLimiter(room), review_slots=anyio.CapacityLimiter(room))
         with anyio.CancelScope() as scope:
@@ -250,7 +251,7 @@ class Children:
         `coder` when the review streak moved it (ADR-0151), and told to test the premise of the last fix when the
         finding repeated (#882)."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
-        dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
+        dl, ws = self.bound(ctx, d, slot), str(self.workspace(name, d))
         ends = e.clock() + dl      # the child's deadline bounds the whole chain, not each entry of it (#1289)
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
@@ -290,8 +291,16 @@ class Children:
             dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, chain=chain, registry=e._registry(),
             record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
-            on_deadline=hit_deadline, on_cancel=cancelled, no_progress=e.no_progress_window())
+            on_deadline=hit_deadline, on_cancel=cancelled, no_progress=e.no_progress_window(), limit_by=slot.get("limit_by"))
         return out, model
+
+    def bound(self, ctx, d, slot):
+        """The seconds one child entry may take: its own deadline, or what is left of the entry's bound when that is less.
+        When the wave ceiling set that bound, `slot` gets `limit_by` and the child's call_start names it (#2840)."""
+        own, left = d["deadline"] * self.e.scale, ctx.dl_at - self.e.clock()
+        if left < own and getattr(ctx, "limit_by", None):
+            slot["limit_by"] = ctx.limit_by
+        return min(own, left)
 
     async def prepare(self, name, d, dl):
         if self.isolated(d):
@@ -310,7 +319,7 @@ class Children:
         if out.kind == "no_funds":
             return self.outcome(name, "fail", ["run_spend_cap"], None, {}, entry)
         if out.kind == "expired":
-            return self.outcome(name, "deadline", ["deadline", "run_deadline"], None, {}, entry)
+            return self.outcome(name, "deadline", ["deadline", getattr(ctx, "limit_by", None) or "run_deadline"], None, {}, entry)
         if out.kind == "prepare_failed":
             return self.outcome(name, "fail", out.reasons, None, {}, entry)
         if out.kind in ("adapter_error", "no_progress"):      # a silent entry that ended the chain names its window in the message (#1289)

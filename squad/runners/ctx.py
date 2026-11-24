@@ -122,7 +122,11 @@ class RunCtx:
         return self._e._recorded_head(logical, item)
 
     def call_deadline(self, node, sc):
+        """(seconds, reason): the call's limit, and `wave_ceiling` when the wave ceiling set it (#2840)."""
         return self._e._call_deadline(node, sc)
+
+    def wave_bound(self, own):
+        return self._e.wave_bound(own)
 
     def no_progress_window(self):
         return self._e.no_progress_window()
