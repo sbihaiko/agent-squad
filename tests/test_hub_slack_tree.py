@@ -240,6 +240,19 @@ def test_the_guest_slot_names_the_project_that_holds_it(hub, tmp_path):
     assert out["guest_slot"] == {"held": "client-a", "count": 1, "line": "Guest slot 1 of 1 · client-a"}, out["guest_slot"]
 
 
+def test_a_workspace_tile_names_its_class_a_file_tile_and_the_detail_carries_class_and_id(hub, tmp_path):
+    """The Class tile keeps the class value, a File tile names the file the workspace row lives in, and the detail sub
+    line carries both the class and the workspace id, so the owned or guest status is never unclear."""
+    root = tree(hub, tmp_path)["root"]
+    team = tiles(by_name(root, "team"))
+    assert team["Class"] == {"key": "Class", "value": "owned", "sub": "", "tone": "neutral"}, team["Class"]
+    assert team["File"]["value"] == "slack.yaml", team["File"]
+    guest = by_name(root, "client-a")
+    assert tiles(guest)["Class"]["value"] == "guest", tiles(guest)["Class"]
+    assert tiles(guest)["File"]["value"] == "t.slack.local.yaml", tiles(guest)["File"]
+    assert guest["detail"]["sub"] == "guest · T0CLIENT01", guest["detail"]
+
+
 def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
     out = read(hub, tmp_path, committed={}, local={})["tree"]
     project = out["root"]["children"][0]
@@ -476,19 +489,21 @@ def _token(css, name):
 
 
 def test_at_a_desktop_width_the_now_tiles_fill_one_row(hub, tmp_path):
-    """At 1440 px a channel shows its five Now tiles in one row and a workspace its four (mockup, #2841). The pane's own
-    grid must outrank the generic two-column `.now`, so the rule carries both ids."""
+    """At 1440 px a channel and a workspace show five Now tiles in one row, and a project its four (mockup, #2841). The
+    pane's own grid must outrank the generic two-column `.now`, so the rule carries both ids."""
     page = hub.PAGE
     assert re.search(r"#tab-set #sbody \.sltn5\{grid-template-columns:repeat\(5,minmax\(0,1fr\)\)", page), \
-        "the channel's five tiles take one row"
+        "the five-tile blocks take one row"
     assert re.search(r"#tab-set #sbody \.sltn4\{grid-template-columns:repeat\(4,minmax\(0,1fr\)\)", page), \
-        "the workspace's four tiles take one row"
+        "the project's four tiles take one row"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(auto-fit,minmax\(120px,1fr\)\)", page), \
         "a count the block does not name still fills one row"
     channel = render(hub, read(hub, tmp_path), sel="c0.p0.w0.c0")
     assert "now sltnow sltn5" in channel, "a five-tile block names five columns"
     workspace = render(hub, read(hub, tmp_path), sel="c0.p0.w0")
-    assert "now sltnow sltn4" in workspace, "a four-tile block names four columns"
+    assert "now sltnow sltn5" in workspace, "the workspace also names five columns"
+    project = render(hub, read(hub, tmp_path), sel="c0.p0")
+    assert "now sltnow sltn4" in project, "a four-tile block names four columns"
 
 
 def test_a_folded_detail_keeps_three_tiles_and_a_phone_one(hub, tmp_path):
