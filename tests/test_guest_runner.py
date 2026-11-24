@@ -5,6 +5,7 @@ id, `ts` and text here is a placeholder.
 """
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -224,10 +225,13 @@ def test_a_text_page_poll_logs_a_decision_count_above_zero(tmp_path):
 
 
 def post_hook_argv(argv):
-    """The arguments of the `PostToolUse` hook of one session argv, as `hook_main` reads them."""
+    """The arguments of the `PostToolUse` hook of one session argv, as `hook_main` reads them. The word `hook` counts only
+    after the module pair `-m squad.guestrunner`, so a wrapper named `hook...` never shifts the arguments."""
     settings = json.loads(argv[argv.index("--settings") + 1])
     command = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-    return shlex.split(command)[[n for n, word in enumerate(shlex.split(command)) if word == "hook"][0] + 1:]
+    words = shlex.split(command)
+    start = words.index("-m") + 2
+    return words[words.index("hook", start) + 1:]
 
 
 def session_with_a_read_then_no_page():
@@ -259,7 +263,78 @@ def test_a_poll_keeps_no_page_text_on_disk_after_it_reads_the_page(tmp_path):
     runner = make_runner(tmp_path, session_with_a_read_then_no_page())
     prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
     runner.tick(NOW)
-    assert list((runner.state_root / "sessions" / CH).glob("page*.json")) == []
+    assert page_files_left(runner.state_root / "sessions" / CH) == []
+
+
+def page_files_left(folder):
+    """Every file of one session folder that holds the kept page or an atomic-write temp of it."""
+    return sorted(p.name for p in folder.iterdir()
+                  if p.name == G.PAGE_NAME or p.name.startswith(f".{G.PAGE_NAME}."))
+
+
+def session_with_a_read_then_failure(timeout):
+    """A session that keeps its page, leaves an atomic-write temp as a killed hook would, and then fails: a non-zero exit,
+    or a deadline the runner kills."""
+    def run(argv, **kwargs):
+        read = {"tool_name": "mcp__claude_ai_Slack__slack_read_channel", "tool_input": {"channel_id": CH},
+                "tool_response": {"messages": [CONNECTOR_PAGE], "next_cursor": "PLACEHOLDER-CURSOR"}}
+        G.hook_main(post_hook_argv(argv), stdin=io.StringIO(json.dumps(read)), stdout=io.StringIO(),
+                    stderr=io.StringIO())
+        (kwargs["cwd"] / f".{G.PAGE_NAME}.orphan").write_text(SECRET)
+        if timeout:
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+    return run
+
+
+def test_a_failed_poll_keeps_no_page_text_on_disk(tmp_path):
+    """#2855: a poll that fails after its read keeps no message text on disk either (story 42)."""
+    log = io.StringIO()
+    runner = make_runner(tmp_path, session_with_a_read_then_failure(timeout=False), log=log)
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert "failed" in log.getvalue()
+    assert page_files_left(runner.state_root / "sessions" / CH) == []
+
+
+def test_a_poll_killed_at_its_deadline_keeps_no_page_text_on_disk(tmp_path):
+    """#2855: a poll past its deadline keeps no message text on disk, and no temp of a killed hook either (story 42)."""
+    log = io.StringIO()
+    runner = make_runner(tmp_path, session_with_a_read_then_failure(timeout=True), log=log)
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert "killed" in log.getvalue()
+    assert page_files_left(runner.state_root / "sessions" / CH) == []
+
+
+def test_the_post_hook_command_keeps_the_page_it_read(tmp_path):
+    """#2855: the `PostToolUse` command keeps the page for the runner. The command parses the page and the channel it
+    names, so a real poll session never blocks its read on an argument the command does not know."""
+    page = tmp_path / "page.json"
+    data = {"tool_name": "mcp__claude_ai_Slack__slack_read_channel", "tool_input": {"channel_id": CH},
+            "tool_response": {"messages": [CONNECTOR_PAGE]}}
+    done = subprocess.run(
+        [sys.executable, "-m", "squad.guestrunner", "hook", "post", str(tmp_path / "checkpoint.json"), str(page), CH],
+        input=json.dumps(data), capture_output=True, text=True, env={**os.environ, "PYTHONPATH": G.ROOT})
+    assert done.returncode == 0, done.stderr
+    assert [m["ts"] for m in G.read_page(page)] == ["1900000000.000100", "1900000001.000200"]
+
+
+def test_the_post_hook_keeps_the_channel_page_and_no_other_read(tmp_path):
+    """#2855: a session may read a thread or a search hit before the channel page. Neither one replaces the page the
+    runner polls, so the runner never reads another resource as the channel page."""
+    checkpoint, page = tmp_path / "checkpoint.json", tmp_path / "page.json"
+
+    def run_hook(tool_name):
+        data = {"tool_name": tool_name, "tool_input": {"channel_id": CH},
+                "tool_response": {"messages": [CONNECTOR_PAGE], "next_cursor": "PLACEHOLDER-CURSOR"}}
+        return G.hook_main(["post", str(checkpoint), str(page), CH], stdin=io.StringIO(json.dumps(data)),
+                           stdout=io.StringIO(), stderr=io.StringIO())
+
+    assert run_hook("mcp__claude_ai_Slack__slack_read_thread") == 0
+    assert G.read_page(page) is None
+    assert run_hook("mcp__claude_ai_Slack__slack_read_channel") == 0
+    assert [m["ts"] for m in G.read_page(page)] == ["1900000000.000100", "1900000001.000200"]
 
 
 def test_session_selects_the_workspace_by_team_id(tmp_path):

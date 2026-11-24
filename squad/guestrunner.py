@@ -100,15 +100,25 @@ def read_page(path):
     return page if isinstance(page, list) else None
 
 
+def discard_page(path):
+    """Delete the kept page and every atomic-write temp of it, because both hold message text (story 42)."""
+    path = Path(path)
+    for kept in [path, *path.parent.glob(f".{path.name}.*")]:
+        kept.unlink(missing_ok=True)
+
+
+PAGE_TOOL = "read_channel"  # the connector's tool that reads one page of a channel
+
+
 def page_hook(checkpoint, page=None, channel=None):
-    """The `PostToolUse` hook of one poll: it moves the checkpoint, and it keeps the page its read tool returned, so the
-    runner reads the page the connector sent and never the model's reformatted answer (#2855). A read of another channel,
-    or a result the reader cannot understand, writes no page, and the answer stays the fallback."""
+    """The `PostToolUse` hook of one poll: it moves the checkpoint, and it keeps the page the channel read returned, so
+    the runner reads the page the connector sent and never the model's reformatted answer (#2855). Another tool, a read
+    of another channel, or a result the reader cannot understand writes no page, and the answer stays the fallback."""
     record = P.checkpoint_hook(checkpoint)
 
     async def hook(input_data, tool_use_id, context):
         reply = await record(input_data, tool_use_id, context)
-        if page is None or P.read_denial(input_data.get("tool_name")) is not None:
+        if page is None or P.connector_word(input_data.get("tool_name")) != PAGE_TOOL:
             return reply
         args = input_data.get("tool_input") or {}
         found = args.get("channel_id") or args.get("channel")
@@ -124,7 +134,8 @@ def page_hook(checkpoint, page=None, channel=None):
 def hook_settings(checkpoint_path, page=None, channel=None):
     base = [sys.executable, "-m", "squad.guestrunner", "hook"]
     pre = shlex.join([*base, "pre"])
-    post = shlex.join([*base, "post", str(checkpoint_path), *([str(page), str(channel or "")] if page else [])])
+    extra = [str(page or ""), str(channel or "")] if page is not None or channel is not None else []
+    post = shlex.join([*base, "post", str(checkpoint_path), *extra])
     return json.dumps({"hooks": {
         "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": pre, "timeout": HOOK_TIMEOUT}]}],
         "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": post, "timeout": HOOK_TIMEOUT}]}],
@@ -166,14 +177,15 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
     an empty page. A session past its deadline raises `subprocess.TimeoutExpired` after the runner kills it. The kept page
     holds message text, so it is deleted whatever the outcome (story 42)."""
     page = page_path(folder)
-    page.unlink(missing_ok=True)
+    discard_page(page)
+    kept = None
     try:
         done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
         if done.returncode != 0:
             raise SessionFailed(f"exit {done.returncode}")
         kept = read_page(page)
     finally:
-        page.unlink(missing_ok=True)
+        discard_page(page)
     if kept is not None:
         return kept
     try:
@@ -365,9 +377,11 @@ def main(argv=None):
     hook = sub.add_parser("hook")
     hook.add_argument("kind", choices=["pre", "post"])
     hook.add_argument("checkpoint", nargs="?", default="")
+    hook.add_argument("page", nargs="?", default="")
+    hook.add_argument("channel", nargs="?", default="")
     args = parser.parse_args(argv)
     if args.cmd == "hook":
-        return hook_main([args.kind, args.checkpoint])
+        return hook_main([args.kind, args.checkpoint, args.page, args.channel])
     state = Path(args.state) if args.state else gueststate.default_root()
     if args.cmd == "stop":
         try:
