@@ -1461,12 +1461,15 @@ function slWsReadHtml(r,join){return (r.workspaces.length?"":`<p class=m>${esc("
   +(w.channels.length?`<table class=slt2><thead><tr>${slChHeads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`
    +w.channels.map(c=>`<tr><td data-l="Channel">#${esc(c.name)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode)}</span></td><td data-l="Language"><span class=nw>${esc(c.language)}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"none")}</span></td><td data-l="Roles">${join(c.roles,"owner only")}</td><td data-l="Announce">${join(c.announce,"never posts")}</td></tr>`).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")}
+function slKeepFocus(id){if(!id||typeof document==="undefined"||!document.getElementById)return false;const el=document.getElementById(id);if(el&&el.focus){el.focus();return true}return false}   // the control the owner changed keeps the keyboard (#2846)
 function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const st=slStatusText(slR);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
- slT=(slR&&slR.tree)||slT;if(slT&&!slTNode(slTsel))slTsel="p";   // a reload that dropped the selected node falls back to the project
+ if(!slT&&slR&&slR.tree)slT=slR.tree;   // a fresh read plants the tree; a staged edit keeps its own until the save (#2846)
+ if(slT&&!slTNode(slTsel))slTsel="p";   // a reload that dropped the selected node falls back to the project
+ const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
  let h=slTreeHtml()+slReadHtml(slR);
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
- b.innerHTML=h;slTBind();slTFocus();if(typeof setBar==="function")setBar()}
+ b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar()}
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel, with the selected node's state in a Now
    block of tiles. The hub answers every value from the policy module; the view constructs, binds and moves the focus,
    and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow keys, Home and End. */
@@ -1531,12 +1534,13 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA(c.label||row.label||f)}"`,v=slTSettingVal(n,row,c);
+ at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=`aria-label="${slA(c.label||row.label||f)}"`,v=slTSettingVal(n,row,c),
+ id=`slf_${ch}_${f}`;   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
- if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} ${lab}${v?" checked":""}> ${esc(c.label||f)}</label>`;
- if(c.kind==="select")return `<select class=slsetctl ${at} ${lab}>`+(c.options||[]).map(slTOpt)
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl id="${slA(id)}" ${at} ${lab}${v?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl id="${slA(id)}" ${at} ${lab}>`+(c.options||[]).map(slTOpt)
   .map(o=>`<option value="${slA(o.value)}"${o.value===String(v)?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
- return `<input type=text class=slsetctl ${at} ${lab} value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
+ return `<input type=text class=slsetctl id="${slA(id)}" ${at} ${lab} value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
 function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
  return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
  +rows.map(r=>{const cs=r.controls||[];
@@ -1674,7 +1678,7 @@ function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",s
 function slDocEdit(attr,el){const op=slDocOp(attr,el);if(op)slOp(op)}
 async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
- if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};slMsg=""}}
+ if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)
  catch(x){slMsg="!the edit failed"}slRender()}
 const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
  value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
@@ -1703,13 +1707,14 @@ async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
    }catch(x){window.__slAudio=r.url}}}
  catch(x){slPvMsg="!the sample could not be fetched"}
  slRender()}
-async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
+function slDiscard(){slDocs=slClone(slSavedDocs);slT=slClone((slR&&slR.tree)||slT);slMsg="";slRender()}   // Discard puts back the values the page read last, the Now block included (#2846)
+async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
  slPv=null;slPvMsg="";   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
-  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)
+  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs);slT=(v&&v.tree)||slT}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
@@ -1792,7 +1797,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDocs=slClone(slSavedDocs);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDiscard()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
