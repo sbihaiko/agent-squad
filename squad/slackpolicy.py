@@ -117,6 +117,26 @@ def _language(file, key, value, out):
         out.append(_defect(file, key, f"language {value!r} is not one of {', '.join(LANGUAGES)}"))
 
 
+def _deploy_identity(file, doc, out):
+    """The deploy target of the project identity (#2724): one environment and one command, both non-empty, and never
+    `prod`, because production stays with the owner. The requester supplies neither, so the identity declares both."""
+    row = (doc.get("project") or {}).get("deploy")
+    if row is None:
+        return
+    if not isinstance(row, dict):
+        out.append(_defect(file, "project.deploy", "the deploy target names an environment and a command"))
+        return
+    environment = str(row.get("environment") or "").strip()
+    command = str(row.get("command") or "").strip()
+    if not environment:
+        out.append(_defect(file, "project.deploy.environment", "the project identity names the deploy environment"))
+    elif environment.lower() == "prod":
+        out.append(_defect(file, "project.deploy.environment",
+                           "the owner alone deploys to production; the project identity never declares prod"))
+    if not command:
+        out.append(_defect(file, "project.deploy.command", "the project identity names the deploy command"))
+
+
 def _personas(file, doc, out):
     for i, persona in enumerate(_rows(doc.get("personas"))):
         base = f"personas[{i}]"
@@ -309,6 +329,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     _send_grants("slack.yaml", committed, out, local=False)
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
+    _deploy_identity("slack.yaml", committed, out)
     events = {str(row.get("id")) for row in _rows(committed.get("events")) if row.get("id") is not None}
     for file, doc in ours:
         _announce(file, doc, events, out)
@@ -528,7 +549,8 @@ class Decision(NamedTuple):
     that reply leaves from the owner's account; a `bot` reply and a decision with no reply carry no mark. `next_poll` is
     set only for an event of a known `guest` channel, so it is None for an unknown channel and for `ignore`/`data` of a
     non-guest channel. `voice_reply` is true exactly when the `guest` channel asks for the reply also in audio, so a
-    channel that does not ask carries no clip (story 70)."""
+    channel that does not ask carries no clip (story 70). `deploy` is the tuple of environments the caller's role lists
+    for the `deploy` action, and it is empty for a decision with no role (#2724)."""
     kind: str
     role: str | None
     actions: tuple
@@ -538,6 +560,7 @@ class Decision(NamedTuple):
     mark: bool
     next_poll: datetime | None
     voice_reply: bool = False
+    deploy: tuple = ()
 
 
 def _row_at(rows, key, value):
@@ -553,6 +576,21 @@ def _project(committed, local):
     merged = dict(local.get("project") or {})
     merged.update(committed.get("project") or {})
     return merged
+
+
+def project_identity(committed, local):
+    """The project row the deploy action reads its target from: the same merged row the effective chain ends on, so the
+    executor and the writer resolve the project identity in one place."""
+    return _project(committed or {}, local or {})
+
+
+def deploy_target(identity):
+    """The `(environment, command)` the project identity declares for deploy, or `("", "")` when it declares none. The
+    environment and the command both live in the identity, and the requester supplies neither (SPEC 2682 S5, #2724)."""
+    row = (identity or {}).get("deploy") if isinstance(identity, dict) else None
+    if not isinstance(row, dict):
+        return "", ""
+    return str(row.get("environment") or "").strip(), str(row.get("command") or "").strip()
 
 
 def _effective_language(committed, local, workspace, channel):
@@ -669,6 +707,19 @@ def _role_actions(committed, role):
     for row in _rows(committed.get("roles")):
         if str(row.get("id")) == role:
             return tuple(str(action) for action in row.get("actions") or ())
+    return ()
+
+
+def _role_deploy(committed, role):
+    """The environments the role lists for deploy, in file order: the written grant of the owner for each one. A role
+    that names none, and a role the file does not hold, list nothing (SPEC 2682 S5, #2724)."""
+    for row in _rows(committed.get("roles")):
+        if str(row.get("id")) == role:
+            deploy = row.get("deploy")
+            items = deploy.get("environments") if isinstance(deploy, dict) else deploy
+            if isinstance(items, (list, tuple)):
+                return tuple(str(environment) for environment in items)
+            return ()
     return ()
 
 
@@ -900,7 +951,7 @@ def decide(committed, local, event, now, thread_state=None):
         reply = None
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
-                    next_poll, voice)
+                    next_poll, voice, _role_deploy(committed, role))
 
 
 # --- the one-time migration of the old per-profile Slack file (SPEC 2682 #2700, story 46) -------------

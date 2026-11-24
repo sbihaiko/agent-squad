@@ -427,7 +427,7 @@ def profiler_view(a, w=None, sw=None, ww=None):
     with the switch off. The strip, the slots and the load are folded from one `now`, so a column of the page is the same
     instant in each. All of them are null for a caller the hub refused, as the records are not read for one; the cap is
     read once, so the chart's ceiling and the rest of the page name the same value."""
-PROF_ON_SECS = 1.0    # with the switch on the sampler reads the tree once a second, so the view is kept no longer than that
+PROF_ON_SECS = PROF_POLL_SECS   # with the switch on the view is kept for the page's own poll cadence, which is never faster than the sampler's interval, so a read always serves an answer the poll would not have refreshed sooner (#2848)
 PROF_OFF_SECS = 30.0  # the file views' cadence with the switch off (`profFileDue`), so one build serves every page in a window
 _PROF_KEPT = {}   # (w, sw, ww, on, tailnet) -> (at, answer): the loaded module's own, so one profile never serves another's
 _PROF_LOCK = threading.Lock()
@@ -442,19 +442,20 @@ def profiler_served(a, w=None, sw=None, ww=None, now=None):
 
     The build reads the process table, the trip fold, the run table and the machine load, and it cost 0.8 to 1.8 seconds
     of CPU on a request that the page makes every two seconds while it samples and every thirty with the switch off. The
-    window follows the switch: the sampler's own second, or the file views' own thirty. A caller the hub refused is built
+    window follows the switch: the page's own poll cadence, which is never faster than the sampler's interval, or the file
+    views' own thirty. A caller the hub refused is built
     for and never kept, so a refusal is never served from a kept view; the tailnet flag is part of the key, since it
     decides the write the answer names."""
     if not a.allowed or a.tailnet: return profiler_view(a, w, sw, ww)   # a refusal is never kept, and a tailnet caller's
     on = profiler_on()                                                  # write follows a grant that can move inside a window
     window = PROF_ON_SECS if on else PROF_OFF_SECS
     key = (w, sw, ww, on)
-    now = POLL_CLOCK() if now is None else now
+    clock = POLL_CLOCK if now is None else (lambda: now)   # one clock for the stamp and its comparison (#2848)
     with _PROF_LOCK:
         at, answer = _PROF_KEPT.get(key, (None, None))
-        if at is not None and now - at < window: return answer
+        if at is not None and clock() - at < window: return answer
         answer = profiler_view(a, w, sw, ww)
-        _PROF_KEPT[key] = (now, answer)
+        _PROF_KEPT[key] = (clock(), answer)   # the stamp is the instant the answer existed: a build longer than the window would otherwise let the read that waited for it build again (#2848)
         return answer
 
 def profiler_view(a, w=None, sw=None, ww=None):

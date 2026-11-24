@@ -36,6 +36,7 @@ OWNER = "U0OWNER001"
 PEER = "U0PEER0001"
 STRANGER = "U0STRANGER"
 OPERATOR = "U0OPERATOR1"   # the role that lists loop_control, so it may pause, resume and drain the loop
+DEPLOYER = "U0DEPLOYER1"   # the role that lists deploy for stg, the environment the project identity declares
 HUB_LOGIN = "sbihaiko"     # the hub login the operator's Slack user id maps to, so the hub audit names a login
 # The Slack user id to hub login map the caller supplies, as the local Slack file's members give it.
 LOGINS = {OWNER: "sbihaiko", OPERATOR: HUB_LOGIN}
@@ -58,6 +59,11 @@ WORK_TITLE = "Retry the import that failed on the stg deploy"
 QUESTION = "Why did the nightly suite lose two workers?"
 WORK_ANSWER = "issue #2705 opened in acme/app"
 INVESTIGATION_ANSWER = "Two workers were held by the gate lock, and the suite has no defect."
+# The project identity of the committed file: the deploy target the owner ratified, and the environment it names.
+DEPLOY_COMMAND = "make deploy-stg"
+IDENTITY = {"language": "en-US", "persona": "hal",
+            "deploy": {"environment": "stg", "command": DEPLOY_COMMAND}}
+DEPLOY_ANSWER = "deploy stg finished: exit 0"
 # The hub registry lists one revision of the committed file; the second one no save approved.
 SHA_LISTED = "4f1c2a9e0b7d3c5a6e8f9012ab34cd56ef7890ab"
 SHA_UNLISTED = "9a8b7c6d5e4f3021ba9c8d7e6f50413243526170"
@@ -70,12 +76,13 @@ COMMITTED = {
         {"id": "manager", "actions": ["status", "logs", "request_work", "request_investigation"]},
         {"id": "colleague", "actions": ["status", "request_work"]},
         {"id": "operator", "actions": ["loop_control"]},
+        {"id": "deployer", "actions": ["deploy"], "deploy": ["stg"]},
     ],
     "workspaces": [
         {"id": WORKSPACE, "label": "team", "class": "owned", "app": "hal9k",
          "channels": [
              {"id": CHANNEL, "name": "proj", "mode": "listen+speak", "persona": "hal",
-              "roles": ["manager", "colleague", "operator"]},
+              "roles": ["manager", "colleague", "operator", "deployer"]},
              {"id": OTHER_CHANNEL, "name": "alerts", "mode": "listen", "roles": ["manager"]},
          ]},
     ],
@@ -87,6 +94,7 @@ LOCAL = {
         {"workspace": WORKSPACE, "channel": CHANNEL, "role": "manager", "users": [OWNER]},
         {"workspace": WORKSPACE, "channel": CHANNEL, "role": "colleague", "users": [PEER]},
         {"workspace": WORKSPACE, "channel": CHANNEL, "role": "operator", "users": [OPERATOR]},
+        {"workspace": WORKSPACE, "channel": CHANNEL, "role": "deployer", "users": [DEPLOYER]},
         {"workspace": WORKSPACE, "channel": OTHER_CHANNEL, "role": "manager", "users": [OWNER]},
     ],
 }
@@ -164,6 +172,20 @@ class Investigate(Work):
         super().__init__(text)
 
 
+class Deploy:
+    """The deploy source the executor calls for `deploy`. It records the project, the environment and the command it was
+    handed: a refused request proves it never reached it, and a run proves the environment and the command came from the
+    project identity."""
+
+    def __init__(self, text=DEPLOY_ANSWER):
+        self.text = text
+        self.calls = []
+
+    def __call__(self, project, environment, command):
+        self.calls.append((project, environment, command))
+        return self.text
+
+
 class Hub:
     """The hub loop switch the executor calls, standing in for the hub's one write path: it records each `(action, who)`
     and answers the hub's `(code, body)` shape, so a refused state answers as the hub answers it. `state` names the state
@@ -186,16 +208,18 @@ class Hub:
 
 
 def run(text=None, decision_user=OWNER, line_user=OWNER, channel=CHANNEL, source=None, logs=None, guest=(),
-        project=REPO, work=None, investigate=None, loop=None, listed=None, revision=None, logins=LOGINS):
-    """One request through the executor, with its decision, line, status source, work sources, loop switch and the Slack
-    user id to hub login map. The line carries the role the decision named, as #2687 writes it, and the request names the
-    channel of the case unless the test overrides it."""
+        project=REPO, work=None, investigate=None, loop=None, listed=None, revision=None, logins=LOGINS,
+        identity=IDENTITY, deploy=None):
+    """One request through the executor, with its decision, line, status source, work sources, loop switch, the project
+    identity and the Slack user id to hub login map. The line carries the role the decision named, as #2687 writes it, and
+    the request names the channel of the case unless the test overrides it."""
     request, why = X.parse(text if text is not None else request_text(channel=channel))
     assert request is not None, why
     dec = decision(decision_user, channel)
     src = source if source is not None else Source()
     extra = {name: value for name, value in
-             (("work", work), ("investigate", investigate), ("loop", loop), ("listed", listed))
+             (("work", work), ("investigate", investigate), ("loop", loop), ("listed", listed), ("deploy", deploy),
+              ("identity", identity))
              if value is not None}
     out = X.execute(request, dec, line(line_user, channel, role=dec.role, revision=revision), project, status=src,
                     logs=logs, guest=guest, logins=logins, **extra)
@@ -828,3 +852,121 @@ def test_the_audit_records_the_login_the_slack_user_id_maps_to(real_hub):
     lines = [json.loads(line) for line in real_hub.LOOP_AUDIT.read_text().splitlines() if line.strip()]
     assert seen == [HUB_LOGIN]
     assert lines[-1]["who"] == HUB_LOGIN
+
+
+# --- the deploy action per environment (#2724, SPEC 2682 S5, stories 27 and 29) -----------------------------------
+# The project identity declares the environment and the owner's ratified command. A role that lists the environment is
+# the standing grant for it. The request never supplies the command, and user text never sets the environment.
+
+def deploy_request(environment=None):
+    """The deploy request. It names no argument, or the one environment the requester asks for, and it never names the
+    command."""
+    arguments = {} if environment is None else {"environment": environment}
+    return request_text(action="deploy", arguments=arguments)
+
+
+def test_a_role_that_lists_the_environment_deploys_to_the_project_environment():
+    """Criterion (3): the deployer role lists `stg`, which is the environment the project identity declares, so the
+    request reaches the deploy source with the project, the identity's environment and the identity's command."""
+    deploy = Deploy()
+    out, _ = run(text=deploy_request(), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert out.ran is True
+    assert deploy.calls == [(REPO, "stg", DEPLOY_COMMAND)]
+    assert out.reply == {"path": "bot", "channel": CHANNEL, "text": DEPLOY_ANSWER}
+
+
+def test_a_role_that_does_not_list_the_environment_is_refused():
+    """Criterion (4): the deployer role lists `stage` and the project declares `stg`, so the request is refused at the
+    grant and the deploy source never runs."""
+    committed = copy.deepcopy(COMMITTED)
+    for role in committed["roles"]:
+        if role["id"] == "deployer":
+            role["deploy"] = ["stage"]
+    deploy = Deploy()
+    request, why = X.parse(deploy_request())
+    assert request is not None, why
+    out = X.execute(request, decision_from(committed, DEPLOYER), line(DEPLOYER, role="deployer"), REPO,
+                    deploy=deploy, identity=IDENTITY)
+    assert out.ran is False
+    assert deploy.calls == []
+    assert out.record["error"].startswith("grant:")
+    assert "stg" in out.record["error"]
+
+
+def test_the_deploy_environment_comes_from_the_project_identity_and_never_from_the_request():
+    """Criterion (1): the project identity declares `stg`, so a request that names another environment is refused and
+    user text never sets it. A request that names the identity's own environment deploys to the identity's value."""
+    deploy = Deploy()
+    out, _ = run(text=deploy_request("stage"), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert out.ran is False
+    assert deploy.calls == []
+    assert out.record["error"].startswith("environment:")
+    assert "stg" in out.record["error"]
+    ran, _ = run(text=deploy_request("stg"), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert ran.ran is True
+    assert deploy.calls == [(REPO, "stg", DEPLOY_COMMAND)]
+
+
+def test_the_requester_never_supplies_the_deploy_command():
+    """Criterion (2): the command comes from the project identity, so a request that names one is refused at the
+    arguments and the deploy source never runs. A run hands the source the identity's command."""
+    deploy = Deploy()
+    out, _ = run(text=request_text(action="deploy", arguments={"command": "rm -rf /"}),
+                 decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert out.ran is False
+    assert deploy.calls == []
+    assert out.record["error"].startswith("arguments:")
+    assert "command" in out.record["error"]
+    ran, _ = run(text=deploy_request(), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert ran.ran is True
+    assert deploy.calls == [(REPO, "stg", DEPLOY_COMMAND)]
+
+
+def test_a_request_for_prod_is_refused():
+    """Criterion (5): production stays with the owner. A request that names `prod` is refused by name, and so is a
+    project identity that declares `prod`, whatever the role lists. The deploy source never runs."""
+    deploy = Deploy()
+    out, _ = run(text=deploy_request("prod"), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=deploy)
+    assert out.ran is False
+    assert deploy.calls == []
+    assert out.record["error"].startswith("environment:")
+    assert "prod" in out.record["error"]
+    prod_identity = {"language": "en-US", "persona": "hal",
+                     "deploy": {"environment": "prod", "command": "make deploy-prod"}}
+    committed = copy.deepcopy(COMMITTED)
+    for role in committed["roles"]:
+        if role["id"] == "deployer":
+            role["deploy"] = ["prod"]
+    request, why = X.parse(deploy_request())
+    assert request is not None, why
+    out = X.execute(request, decision_from(committed, DEPLOYER), line(DEPLOYER, role="deployer"), REPO,
+                    deploy=deploy, identity=prod_identity)
+    assert out.ran is False
+    assert deploy.calls == []
+    assert out.record["error"].startswith("environment:")
+    assert "prod" in out.record["error"]
+
+
+def test_a_project_identity_with_no_environment_or_no_command_refuses_the_deploy():
+    """Criteria (1) and (2): the identity is the only source of the environment and the command, so an identity that
+    declares neither refuses the request, and the deploy source never runs."""
+    deploy = Deploy()
+    for identity, check in (({"language": "en-US"}, "environment"),
+                            ({"deploy": {"environment": "stg"}}, "command")):
+        request, why = X.parse(deploy_request())
+        assert request is not None, why
+        out = X.execute(request, decision(DEPLOYER), line(DEPLOYER, role="deployer"), REPO,
+                        deploy=deploy, identity=identity)
+        assert out.ran is False, identity
+        assert deploy.calls == [], identity
+        assert out.record["error"].startswith(f"{check}:"), out.record["error"]
+
+
+def test_the_deploy_action_needs_its_source():
+    """The action runs only after every check and with its source: a deploy request with no deploy source is a refusal,
+    not an empty answer."""
+    out, _ = run(text=deploy_request(), decision_user=DEPLOYER, line_user=DEPLOYER, deploy=None)
+    assert out.ran is False
+    assert out.reply is None
+    assert out.record["error"].startswith("source:")
+    assert "deploy" in out.record["error"]

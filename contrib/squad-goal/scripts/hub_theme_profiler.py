@@ -9,6 +9,13 @@
 PROFILER_SWITCH = STATE / "profiler.json"
 PROFILER_AUDIT = STATE / "profiler-audit.jsonl"
 PROFILER_SECS = 1.0   # the wait after each read of the process table, so two readings are never closer than this: a second resolves a fork storm, and the read runs only while the switch is on
+PAGE_PROF_FLOOR_S = 2.0   # the Loop page's own cadence floor: a page tick a second buys nothing, so the page never polls
+                         # the profiler faster than this, whatever the sampler interval (#2848)
+def prof_poll_secs(sampler_secs):
+    """The Loop page's profiler cadence for a sampler interval: the sampler's own interval, but never under the page floor.
+    The page polls no faster than the sampler, so a sampler faster than the floor still gets one page read per floor."""
+    return max(PAGE_PROF_FLOOR_S, sampler_secs)
+PROF_POLL_SECS = prof_poll_secs(PROFILER_SECS)   # the Loop page asks the view on this cadence, never faster than the sampler's own interval (#2848)
 PROFILER_READ_ONLY = "read-only from the tailnet: SQUAD_TAILNET_PROFILER_WRITE is not on (tailnet.profiler_write)"
 PROFILER_JOIN_S = 10.0   # how long an off write waits for the sampler's last pass
 PROFILER_STILL_RUNNING = "still running: the sampler ends after its current read of the process table"

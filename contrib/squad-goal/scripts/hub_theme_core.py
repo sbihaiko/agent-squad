@@ -17,6 +17,11 @@ BOARD_COLORS = {**COLUMN_COLORS, **{lane["name"]: f"var({BOARD_CHART_ROLES.get(l
 BOARD_COLORS_JSON = json.dumps(BOARD_COLORS, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in BOARD_COLUMNS], separators=(",", ":"))
 
+POLL_CLOCK = time.monotonic   # the age reader of every kept poll answer (the spend and profiler caches): a duration, never an
+                              # instant, so a wall-clock jump moves a view's own timestamps and leaves the age right. It is
+                              # defined here, in the first theme, so every later theme reads one bound clock and a stamp and
+                              # its comparison never fall on two clocks (#2440, #2848). A test injects its own.
+
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool

@@ -201,8 +201,6 @@ def stats(period, src="both"):
     pace = spend_pace(allr, calls, time.time(), src)   # the token guard's readings: the loop sources only (#1756)
     return {"buckets": rows, "pace": pace, "totals": {**{k: round(v, 2) for k, v in tot.items() if not k.startswith("tok_")}, **{k: tot[k] for k in ("tok_today", "tok_month", "tok_all")}}, "models": models, "operator": opt}
 
-POLL_CLOCK = time.monotonic   # the age reader of the kept poll answers, a duration and never an instant: a wall-clock jump
-                              # moves the view's own timestamps and leaves the age right. A test injects its own clock.
 _STATS_KEPT = {}   # (period, src) -> (the input stamp it was built from, answer). The key carries no profile because the
                    # module is one per profile: hubmux loads `hub_<slug>` per profile, and this cache lives in that module (#2440)
 _STATS_LOCK = threading.Lock()

@@ -167,10 +167,10 @@ def test_a_deploy_list_without_prod_passes():
 def test_an_action_outside_the_executor_list_is_refused():
     """The actions a role may list are the ones the executor runs (issue #2699): the editor offers that list, and a
     role that names another action is refused, with the message naming the key and the action."""
-    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status", "deploy"]}])
+    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status", "publish"]}])
     defects = S.validate(committed, local)
     assert "roles[0].actions[1]" in keys(defects), defects
-    assert "'deploy'" in str(defects[0]), defects
+    assert "'publish'" in str(defects[0]), defects
 
 
 def test_the_role_actions_are_the_executor_actions():
@@ -422,3 +422,57 @@ def test_resolved_members_counts_only_the_roles_a_channel_accepts():
                         {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague", "users": ["U0X"]}]
     assert S.resolved_members(local, "T0TEAM0001", "C0PROJ0001", ["manager"]) == ["U0OWNER001", "U0OWNER002"]
     assert S.resolved_members(local, "T0TEAM0001", "C0PROJ0001", []) == []
+
+
+# --- the project identity's deploy target (SPEC 2682 S5, #2724) ------------------------------------------------
+
+def deploy_identity(environment="stg", command="make deploy-stg"):
+    """A valid pair whose committed project identity declares the deploy target."""
+    committed, local = files()
+    committed["project"]["deploy"] = {"environment": environment, "command": command}
+    return committed, local
+
+
+def test_the_project_identity_declares_the_environment_and_the_command():
+    """The deploy action reads both from the project identity: one environment and one command. The module resolves the
+    merged project row in one place, so the executor never parses the identity's shape itself."""
+    committed, local = deploy_identity()
+    assert S.validate(committed, local) == []
+    assert S.deploy_target(S.project_identity(committed, local)) == ("stg", "make deploy-stg")
+
+
+def test_a_project_identity_that_declares_prod_is_refused():
+    """Production stays with the owner, so a project identity that declares prod is refused by its key, as a role that
+    lists prod is."""
+    committed, local = deploy_identity(environment="prod", command="make deploy-prod")
+    defects = S.validate(committed, local)
+    assert "project.deploy.environment" in keys(defects), defects
+    assert "prod" in str(defects[0])
+
+
+def test_a_project_deploy_target_with_no_environment_or_no_command_is_refused():
+    """The identity is the only source of both, so a target that names one and not the other is refused by the key it
+    misses."""
+    for row, key in (({"command": "make deploy-stg"}, "project.deploy.environment"),
+                     ({"environment": "stg"}, "project.deploy.command")):
+        committed, local = files()
+        committed["project"]["deploy"] = row
+        defects = S.validate(committed, local)
+        assert key in keys(defects), (row, defects)
+
+
+def test_a_project_deploy_target_that_is_not_a_mapping_is_refused():
+    """A shape the reader cannot use is refused by its key, so a scalar under `deploy` never reads as no target."""
+    committed, local = files()
+    committed["project"]["deploy"] = "make deploy-stg"
+    defects = S.validate(committed, local)
+    assert "project.deploy" in keys(defects), defects
+
+
+def test_the_local_file_never_sets_the_deploy_environment():
+    """The identity is the committed project row: a local file that names another environment, or prod, changes neither
+    the validated file nor the target."""
+    committed, local = deploy_identity()
+    local["project"] = {"deploy": {"environment": "prod", "command": "make deploy-prod"}}
+    assert S.validate(committed, local) == []
+    assert S.deploy_target(S.project_identity(committed, local)) == ("stg", "make deploy-stg")

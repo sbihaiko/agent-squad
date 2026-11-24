@@ -23,6 +23,9 @@ while [ $# -gt 0 ]; do
 done
 
 HOME_DIR=${HOME:-/root}
+# A home with no grok session is a throwaway one (a test, a render hub): a start there makes the CLI open a device
+# sign-in page in the owner's browser (#2849). The session file is the evidence of a signed-in CLI; the log rotates.
+[ -s "$HOME_DIR/.grok/auth.json" ] || { echo "skip: no grok session in $HOME_DIR/.grok (auth.json)"; exit 0; }
 STAMP=${SG_GROK_REFRESH_STAMP:-$HOME_DIR/.grok/credit-refresh.stamp}
 LOCK=${SG_GROK_REFRESH_LOCK:-$HOME_DIR/.grok/refresh.lock}
 mkdir -p "$(dirname "$STAMP")" "$(dirname "$LOCK")" 2>/dev/null
