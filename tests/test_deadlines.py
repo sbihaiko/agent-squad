@@ -13,9 +13,10 @@ from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
 from squad.procs import CommandAdapter
+from squad.runners.types import Scope
 from tests.flows import agent, doc, run_engine
 from tests.gitrepo import sibling_repo
-from tests.helpers import KIND_CHAINS, router
+from tests.helpers import KIND_CHAINS, node, router
 
 pytestmark = pytest.mark.anyio
 
@@ -182,7 +183,9 @@ async def test_a_null_run_deadline_with_no_node_deadline_runs_to_its_end_and_an_
 # #2840: a wave child's call limit is the smaller of its own deadline and the time left to its wave's age cap. The loop's
 # wave.sh writes one absolute epoch in a ceiling file; the engine option `wave_ceiling` names the file, and one engine
 # helper bounds both an agent call and a dispatch child, less an entry reserve, so a call that ends at the cap can still
-# enter its wave. A missing file changes nothing.
+# enter its wave. `by` names the bound that shortened a call, so a run or node deadline is never labelled the wave
+# ceiling. A running call reads the ceiling again, so a call dispatched before the ceiling was written still ends at it.
+# A file the run names but cannot read says so once on the record.
 def call_starts(path, node):
     return [e for e in record.read(path / "record.jsonl") if e["event"] == "call_start" and e["node"] == node]
 
@@ -210,6 +213,9 @@ async def test_no_ceiling_file_leaves_the_call_limit_as_it_was(tmp_path):
     assert (await eng.run()).verdict == "completed"
     start = call_starts(tmp_path / "r", "a")[0]
     assert start["limit"] == pytest.approx(7200, abs=1) and "limit_by" not in start
+    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl")
+            if e["event"] == "diagnostic" and e["source"] == "wave_ceiling"]
+    assert len(lost) == 1 and lost[0]["payload"]["path"] == str(tmp_path / "absent")    # the lost bound is on the record
 
 
 async def test_a_spent_wave_ceiling_ends_the_call_as_a_deadline_without_a_call(tmp_path):
@@ -233,5 +239,58 @@ async def test_a_wave_ceiling_bounds_a_dispatch_child_below_its_request_deadline
     eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "r", target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS,
                  options={"wave_ceiling": str(ceiling)})
     await eng.run()
+    assert record.read(tmp_path / "r" / "record.jsonl")[0]["engine_options"]["wave_ceiling"] == str(ceiling)   # the path the start recorded
     start = call_starts(tmp_path / "r", "route.router.1")[0]
     assert 0 < start["limit"] <= 3600 and start["limit_by"] == "wave_ceiling"
+
+
+async def test_a_run_deadline_below_the_child_deadline_is_never_the_wave_ceiling(tmp_path):
+    """#2840: the child's bound is the run scope here, not the wave ceiling: the label names the bound that shortened the
+    call, so a child call of a 1800 s run reads `run_deadline`. The child's deadline is 1800 s because a larger one is not
+    a shape a run can build: the graph refuses a node deadline above the run's (squad/graph.py:221), and the envelope
+    refuses a child's deadline above its dispatch node's (squad/envelope.py:157). The 7200 s case is the helper itself,
+    the next test."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    ceiling.write_text(f"{int(time.time()) + 3600}\n")
+    d = router()
+    d["run"]["deadline"] = 1800
+    node(d, "route")["deadline"] = 1800
+    child = {"prompt": "Run tdd on the task.", "skill": "tdd", "kind": "coding", "effort": "medium", "tools": ["Read", "Edit"],
+             "stalls": 4, "spend": 1.0, "deadline": 1800, "workspace": "worktrees/child"}
+    script = {"router": {"output": {"spawns": [child]}, "spend": 0.1},
+              "route.router.1": {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}}
+    eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "r", target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS,
+                 options={"wave_ceiling": str(ceiling)})
+    await eng.run()
+    start = call_starts(tmp_path / "r", "route.router.1")[0]
+    assert start.get("limit_by") == "run_deadline" and start["limit_by"] != "wave_ceiling"
+    assert 0 < start["limit"] <= 1800
+
+
+def test_a_run_scope_below_a_larger_node_deadline_is_named_run_deadline(tmp_path):
+    """#2840: the label follows the bound, never a comparison of the call's bound with its own deadline. A run scope of
+    1800 s under a 7200 s node deadline and a wave ceiling 3600 s away reads `run_deadline`."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    ceiling.write_text(f"{int(time.time()) + 3600}\n")
+    eng = Engine(from_doc(long_doc()), ScriptedAdapter({}), tmp_path / "r", options={"wave_ceiling": str(ceiling)})
+    seconds, by = eng._call_deadline({"deadline": 7200}, Scope(None, eng.clock() + 1800))
+    assert by == "run_deadline" and 0 < seconds <= 1800
+
+
+@pytest.mark.heavy
+async def test_a_call_already_running_ends_at_the_ceiling_written_under_it(tmp_path):
+    """#2840 AC1 at the running call: the engine reads the ceiling again while a call runs. The adapter writes the ceiling
+    file a fifth of a second ahead and then hangs past it, so the call ends as a deadline naming the wave ceiling
+    instead of answering after the wave's age cap. Before the fix the call ran to its own 7200 s bound and answered."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    t0 = time.time()
+
+    def arm(req):
+        ceiling.write_text(f"{t0 + 300 + 0.2}\n")     # the engine keeps its 300 s entry reserve: the call's bound is t0 + 0.2
+        return {"delay": 5, "output": {"x": 1}, "spend": 0.1}
+
+    eng = Engine(from_doc(long_doc()), ScriptedAdapter({"a": arm}), tmp_path / "r", options={"wave_ceiling": str(ceiling)})
+    v = await eng.run()
+    e = outs(tmp_path / "r", "a")[0]
+    assert e["outcome"] == "deadline" and e["reasons"] == ["deadline", "wave_ceiling"]
+    assert e["elapsed"] < 1.0 and v.verdict == "failed"    # not the adapter's 5 s answer: the ceiling ended it
