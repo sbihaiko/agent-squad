@@ -786,6 +786,14 @@ def test_a_role_edit_builds_a_committed_operation_and_a_member_a_local_one(hub):
     assert op == {"kind": "set", "doc": "committed", "path": ["roles", 0, "deploy"], "value": "stg, prod"}, op
 
 
+def test_a_delivery_edit_on_a_committed_channel_writes_the_local_file_only(hub):
+    """#2825 defect: a Delivery field on a channel whose row is committed goes to the local file, never the committed one."""
+    op = doc_op(hub, "committed:0:0:send_grant", {"type": "text", "value": "U0CLIENT02"})
+    assert op["doc"] == "local", op
+    op = doc_op(hub, "committed:0:0:poll.fast", {"type": "text", "value": "2m"})
+    assert op["doc"] == "local", op
+
+
 def test_the_page_shows_the_refusal_text_the_hub_answers(hub):
     """Criterion 6 on the page: a refusal is one message above the editor, with the mockup's own sentence."""
     msg = "!One guest Slack workspace at a time: the machine serves one guest workspace at a time; a second guest workspace is refused"
