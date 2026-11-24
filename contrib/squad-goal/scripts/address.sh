@@ -81,13 +81,13 @@ sg_land_base() { local row; row=$(sg_land_target "${1:-}#0") || return 1; printf
 # The context of a repository. <input> is a profile slug, a checkout (a path), an address owner/repo#n (owner/repo alone
 # too) or a bare n / #n. A bare n is the profile in force (SG_PROFILE) and nothing else: never the profile the cwd's origin
 # matches. A repository no profile names is refused by name with the list of known ones; nothing falls back to another.
-# The context: SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE.
+# The context: SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE SG_SQUAD.
 # A profile that still sets the retired SG_TOOLING_REPO is read like any other: env.sh maps it into SG_REPOS and warns.
 # A profile is read on its own (no inherited SG_* value reaches it), so one profile can never borrow another's settings.
 # SG_PROFILES_DIR (default the profiles/ beside this file) and SG_STATE_BASE (default ~/.cache/squad-goal) are its inputs.
 # The context reads nothing from GitHub: it is resolved before any caller may reach it.
 _sg_ctx_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SG_CTX_KEYS="SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE SG_SHARED SG_BOARD_CACHE"
+SG_CTX_KEYS="SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE SG_SHARED SG_BOARD_CACHE SG_SQUAD"
 # The machine state directory and the places in it. Only these functions spell a path under it.
 sg_state_base() { printf '%s\n' "${SG_STATE_BASE:-$HOME/.cache/squad-goal}"; }
 # One repository's own directory: its supervisor, cycle, slots, pid files, markers, live-run list, queued requests,
@@ -136,7 +136,7 @@ _sg_ctx_of() { local slug=$1 issue=$2 f out op; f="$(sg_profiles_dir)/$slug.sh"
   out=$(env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
     bash -c 'here=$1; . "$2" >/dev/null 2>&1
       printf "%s=%q\n" SG_PROFILE "$3" SG_REPO "$SG_REPO" SG_OWNER "${SG_OWNER:-${SG_REPO%%/*}}" SG_PROJECT "$SG_PROJECT" \
-        SG_CHECKOUT "$SG_CHECKOUT" SG_BASE "${SG_BASE:-main}" SG_FORK_DIR "$SG_FORK_DIR" SG_PROJECTS "${SG_PROJECTS:-}" SG_HUB_PATH "/$3" SG_ISSUE "$4"' \
+        SG_CHECKOUT "$SG_CHECKOUT" SG_BASE "${SG_BASE:-main}" SG_FORK_DIR "$SG_FORK_DIR" SG_PROJECTS "${SG_PROJECTS:-}" SG_HUB_PATH "/$3" SG_ISSUE "$4" SG_SQUAD "${SG_SQUAD:-}"' \
     _ "$_sg_ctx_here" "$f" "$slug" "$issue") || return 2
   op=$(eval "$out"; printf '%s %s' "$SG_OWNER" "$SG_PROJECT")
   printf '%s\n' "$out"

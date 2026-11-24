@@ -37,6 +37,10 @@ PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], 
 _PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": PROJECT_NO}   # the environment the hub was loaded in, kept for the seam
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
+# The profile's own squad package root, read once at import. hubmux.py pins the profile environment around the hub's
+# import and restores the shell's after it, so a request-time read of SG_SQUAD found the hub process's own value and
+# the hub of a host profile resolved no `squad` package (#2820). squad_roots takes this value first.
+SQUAD_ROOT = os.environ.get("SG_SQUAD", "")
 PROJECTS, FORK_DIR = os.environ.get("SG_PROJECTS", ""), os.environ.get("SG_FORK_DIR", "")   # read once at import: the mux pins them per profile (#859)
 # The profile this hub was loaded under, read once. hubmux.py pins the profile environment around the hub's import
 # and restores the shell's after it, so a read at request time found no SG_PROFILE and every session route answered
@@ -651,11 +655,12 @@ def gone_badge(b):
     return {**b, "text": b["text"] + " · no process"}
 
 def squad_roots(sg_squad, sg_checkout, checkout, here):
-    """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
-    hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
+    """Where the squad package may live, in order, each once: SG_SQUAD as the profile file set it (SQUAD_ROOT, read at
+    import), then the SG_SQUAD the caller reads now, SG_CHECKOUT, the profile's checkout as the hub resolved it (the
+    seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
     Rule layer: no hub state, no I/O."""
     out = []
-    for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
+    for r in (SQUAD_ROOT, sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
         if r and r not in out: out.append(r)
     return out
 
