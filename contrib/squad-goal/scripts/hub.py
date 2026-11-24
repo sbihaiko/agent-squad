@@ -233,6 +233,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/columns"): body, ct = json.dumps(columns_read()).encode(), "application/json"   # Settings > Spend & limits · Kanban (#2432)
         elif self.path.startswith("/api/slots"): body, ct = json.dumps(slots_read()).encode(), "application/json"   # Settings > Spend & limits · Machine slots (#2435)
         elif self.path.split("?", 1)[0] == "/api/slack/files": body, ct = json.dumps(slack_overview()).encode(), "application/json"   # Settings > Communication · the read view (SPEC 2682 #2693)
+        elif self.path.startswith("/api/slack/decide"): body, ct = json.dumps(slack_decide(dict(urllib.parse.parse_qsl(self.path.partition("?")[2])))).encode(), "application/json"   # Settings > Communication · the sender preview: one decide, no send (SPEC 2682 #2826)
         elif self.path.split("?", 1)[0] == "/api/slack": return self.not_found()   # the old per-profile settings route is retired (#2701)
         elif self.path.split("?", 1)[0] == "/api/slack/migrate": return self.not_found()   # its reader left with the file (#2701)
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"

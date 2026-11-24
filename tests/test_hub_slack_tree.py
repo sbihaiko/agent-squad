@@ -14,6 +14,8 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import urllib.parse
+from html.parser import HTMLParser
 
 import pytest
 import yaml
@@ -542,3 +544,269 @@ def test_the_edit_button_of_the_personas_table_stays_on_one_line(hub):
     assert "white-space:nowrap" in rule, rule
     assert "justify-self:start" in rule, rule
     assert "min-width:0" in rule, rule
+
+
+# ---------------------------------------------------------------- the permissions and the sender preview
+
+def permissions(hub, tmp_path, name="#proj-agent-squad", committed=None, local=None):
+    return by_name(tree(hub, tmp_path, committed, local)["root"], name)["permissions"]
+
+
+def _sender_type(local, workspace, channel, user):
+    """The sender kind the preview asks for: a member when the local file lists the user in this channel, a stranger
+    otherwise. The route checks the kind against the channel's own resolved member list."""
+    for row in (local or {}).get("members") or ():
+        if (str(row.get("workspace")), str(row.get("channel"))) == (str(workspace), str(channel)) \
+                and str(user) in {str(u) for u in row.get("users") or ()}:
+            return "member"
+    return "stranger"
+
+
+def preview(hub, tmp_path, committed=None, local=None, **query):
+    c, loc = files(tmp_path, committed, local)
+    if "sender_type" not in query:
+        query["sender_type"] = "bot" if hub._slack_flag(query.get("bot")) else \
+            _sender_type(LOCAL if local is None else local, query.get("workspace", ""), query.get("channel", ""),
+                         query.get("user", ""))
+    return hub.slack_decide(query, c, loc)
+
+
+def test_the_permissions_section_lists_the_project_roles_with_their_actions_and_members(hub, tmp_path):
+    node = by_name(tree(hub, tmp_path)["root"], "#proj-agent-squad")
+    assert node["ref"] == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001"}, node.get("ref")
+    roles = {r["id"]: r for r in node["permissions"]["roles"]}
+    assert list(roles) == ["manager", "colleague"], node["permissions"]["roles"]
+    assert roles["manager"]["actions"] == ["status", "logs"]
+    assert roles["colleague"]["actions"] == ["status"]
+    assert roles["manager"]["accepted"] is True
+    assert roles["colleague"]["accepted"] is False
+    assert roles["manager"]["members"] == ["U0OWNER001"]
+    assert roles["colleague"]["members"] == []
+
+
+def test_the_section_counts_distinct_eligible_people(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
+                             "users": ["U0OWNER001", "U0OTHER001"]})
+    assert permissions(hub, tmp_path, local=local)["eligible"] == 2
+
+
+def test_a_person_in_two_accepted_roles_gets_a_note_naming_the_membership_the_policy_takes(hub, tmp_path):
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["roles"] = ["manager", "colleague"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                             "users": ["U0OWNER001"]})
+    notes = permissions(hub, tmp_path, committed=committed, local=local)["notes"]
+    assert len(notes) == 1 and "U0OWNER001" in notes[0] and "manager" in notes[0], notes
+    decided = preview(hub, tmp_path, committed, local, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert decided["role"] == "manager", decided
+
+
+def test_the_preview_answers_an_owned_member_a_guest_member_a_stranger_a_bot_and_an_own_post(hub, tmp_path):
+    owned = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert owned == {"err": None, "decision": "inbox", "role": "manager", "actions": "status, logs",
+                     "reply": "bot", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, owned
+    guest = preview(hub, tmp_path, workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    assert guest == {"err": None, "decision": "proposal", "role": "manager", "actions": "status, logs",
+                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US"}, guest
+    stranger = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0STRANGER")
+    assert stranger == {"err": None, "decision": "data", "role": "none", "actions": "none",
+                        "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, stranger
+    bot = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", bot="1")
+    assert bot == {"err": None, "decision": "data", "role": "manager", "actions": "none",
+                   "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, bot
+    own = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", own="1")
+    assert own["decision"] == "ignore" and own["reply"] == "none", own
+
+
+def test_the_preview_calls_decide_with_one_message_event_and_no_other_call(hub, tmp_path, monkeypatch):
+    P = hub.slack_policy()
+    seen, real = [], P.decide
+
+    def spy(committed, local, event, now, thread_state=None):
+        seen.append(dict(event))
+        return real(committed, local, event, now, thread_state)
+
+    monkeypatch.setattr(P, "decide", spy)
+    monkeypatch.setattr(hub, "slack_policy", lambda: P)
+    preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert [e["kind"] for e in seen] == ["message"], seen
+
+
+def test_a_reply_with_no_persona_shows_the_policy_mark_and_no_empty_name(hub, tmp_path):
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["project"].pop("persona")
+    P = hub.slack_policy()
+    expected = P.mark(None) or "none"
+    got = preview(hub, tmp_path, committed, guest_workspace(persona=None),
+                  workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
+    assert got["reply"] == "draft" and got["mark"] == expected, got
+    assert expected == "none", "the fixture holds no persona, so the policy mark is empty"
+    assert "'s Msg" not in json.dumps(got), got
+
+
+def test_the_preview_shows_a_non_empty_policy_mark_and_never_a_shortcut_none(hub, tmp_path):
+    """A stranger in a channel with a persona keeps that persona's mark. The mark is the policy's answer for the
+    resolved persona, never a value the reply path chooses (AC9)."""
+    P = hub.slack_policy()
+    c, loc = files(tmp_path)
+    doc_c, doc_l, _ = P.documents(c, loc)
+    ws = next(w for w in doc_l["workspaces"] if w["id"] == "T0CLIENT01")
+    ch = next(ch for ch in ws["channels"] if ch["id"] == "C0CLISUP01")
+    expected = P.mark(P.effective_persona(doc_c, doc_l, ws, ch))
+    assert expected == "*Iara's Msg*", expected
+    got = preview(hub, tmp_path, workspace="T0CLIENT01", channel="C0CLISUP01", user="U0STRANGER")
+    assert got["mark"] == expected and got["mark"] != "none", got
+
+
+def test_the_preview_route_refuses_an_unknown_sender_type(hub, tmp_path):
+    got = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001",
+                  sender_type="owner")
+    assert got.get("err"), got
+
+
+def test_the_preview_route_binds_a_member_sender_to_the_channel_member_list(hub, tmp_path):
+    got = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0STRANGER",
+                  sender_type="member")
+    assert got.get("err"), got
+
+
+def test_the_preview_route_refuses_a_stranger_that_the_channel_lists_as_a_member(hub, tmp_path):
+    got = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001",
+                  sender_type="stranger")
+    assert got.get("err"), got
+
+
+def test_the_preview_route_reads_an_unknown_workspace_or_channel_as_unknown(hub, tmp_path):
+    ws = preview(hub, tmp_path, workspace="T0NOPE", channel="C0NOPE", user="U0X", sender_type="stranger")
+    assert ws["decision"] == "unknown" and ws["err"], ws
+    ch = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0NOPE", user="U0X", sender_type="stranger")
+    assert ch["decision"] == "unknown" and ch["err"], ch
+
+
+def test_the_preview_senders_are_the_accepted_members_only(hub, tmp_path):
+    """The `members` list feeds the sender options, so it holds the same accepted people the eligibility counts, never
+    a user the channel's accepted roles do not grant (AC3, AC6)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                             "users": ["U0NOTELIG1"]})
+    got = permissions(hub, tmp_path, local=local)
+    assert got["members"] == ["U0OWNER001"], got
+    assert got["eligible"] == len(got["members"]), got
+
+
+def test_the_dual_role_note_names_the_membership_the_policy_decides(hub, tmp_path):
+    """The note derives the taken membership from the same resolution `decide` runs, never from a local list order
+    (AC4)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["roles"] = ["manager", "colleague"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].insert(0, {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                                "users": ["U0OWNER001"]})
+    notes = permissions(hub, tmp_path, committed=committed, local=local)["notes"]
+    assert len(notes) == 1, notes
+    decided = preview(hub, tmp_path, committed, local,
+                      workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert f"The policy takes {decided['role']}" in notes[0], (notes[0], decided)
+
+
+class _Dom(HTMLParser):
+    """A parsed view of the rendered pane: each start tag with its attributes and its open ancestors. The test reads
+    the DOM the page builds, never a string of its source."""
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+
+    def __init__(self):
+        super().__init__()
+        self._stack, self.elements = [], []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        self.elements.append((tag, a, list(self._stack)))
+        if tag not in self.VOID:
+            self._stack.append((tag, a))
+
+    def handle_startendtag(self, tag, attrs):
+        self.elements.append((tag, dict(attrs), list(self._stack)))
+
+    def handle_endtag(self, tag):
+        if any(t == tag for t, _ in self._stack):
+            while self._stack and self._stack.pop()[0] != tag:
+                pass
+
+
+def _pane_elements(hub, tmp_path):
+    dom = _Dom()
+    dom.feed(render(hub, read(hub, tmp_path), sel="w0.c0"))
+    return dom.elements
+
+
+def test_the_tree_page_links_the_permissions_section_and_offers_the_sender_preview(hub, tmp_path):
+    """AC5 and AC6, read from the parsed pane: the Permissions link, its focus target, one sender option per accepted
+    member plus a stranger and a bot, and the read route the preview fetches."""
+    elements = _pane_elements(hub, tmp_path)
+    assert [a for t, a, _ in elements if t == "a" and a.get("href") == "#slperm" and "data-slt-perm" in a], \
+        "the pane links the Permissions section"
+    assert [a for t, a, _ in elements if t == "h3" and a.get("id") == "slperm" and a.get("tabindex") == "-1"], \
+        "the Permissions heading is the focus target"
+    select = [a for t, a, _ in elements if t == "select" and "data-slp-sender" in a]
+    assert len(select) == 1, select
+    options = [a.get("value") for t, a, parents in elements
+               if t == "option" and any(p == "select" and "data-slp-sender" in pa for p, pa in parents)]
+    assert options == ["U0OWNER001", "stranger", "bot"], options
+
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='w0.c0';" + "slRender=()=>{};"
+            "const urls=[];globalThis.document={querySelector:()=>null};"
+            "globalThis.fetch=async u=>{urls.push(String(u));return {json:async()=>({decision:'x'})}};"
+            "slPvAsk('w0.c0','U0OWNER001').then(()=>slPvAsk('w0.c0','stranger'))"
+            ".then(()=>slPvAsk('w0.c0','bot'))"
+            ".then(()=>console.log(JSON.stringify(urls)))")
+    urls = json.loads(_node(body))
+    assert all(u.startswith("/api/slack/decide?") for u in urls), urls
+    member, stranger, bot = (dict(urllib.parse.parse_qsl(u.partition("?")[2])) for u in urls)
+    assert member == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "sender_type": "member",
+                      "user": "U0OWNER001"}, member
+    assert stranger == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "sender_type": "stranger"}, stranger
+    assert bot == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "sender_type": "bot"}, bot
+
+
+def test_the_sender_preview_drops_a_stale_reading_state_for_a_sender_the_channel_no_longer_offers(hub, tmp_path):
+    """A sender the channel no longer lists falls back to its first option, so the pane never keeps "Reading the
+    decision." for a request it never made (AC6)."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='w1.c0';"
+            "slSnd={node:'w1.c0',sender:'U0GONE',data:null};slRender();"
+            "const html=STORE['#sbody'].innerHTML;"
+            "const box=html.match(/<select data-slp-sender=\"[^\"]*\"[^>]*>([\\s\\S]*?)<\\/select>/);"
+            "console.log(JSON.stringify({reading:html.includes('Reading the decision.'),"
+            "selected:(box&&box[1].match(/value=\"([^\"]+)\" selected/)||[])[1]}))")
+    got = json.loads(_node(body))
+    assert got["reading"] is False, got
+    assert got["selected"] == "U0CLIENT01", got
+
+
+def test_the_permissions_link_focuses_the_heading_and_scrolls_only_when_it_is_out_of_view(hub):
+    """One scroll mechanism: the focus carries `preventScroll`, and `scrollIntoView` runs only for a heading outside
+    the viewport (AC5)."""
+    base = _slices(hub.PAGE)
+    seen = base + (
+        "const calls=[];const el={focus:o=>calls.push(['focus',o]),scrollIntoView:o=>calls.push(['scroll',o]),"
+        "getBoundingClientRect:()=>({top:100,bottom:140})};"
+        "globalThis.document={getElementById:id=>id==='slperm'?el:null};globalThis.innerHeight=900;"
+        "slPermGo();console.log(JSON.stringify(calls))")
+    assert json.loads(_node(seen)) == [["focus", {"preventScroll": True}]]
+    hidden = base + (
+        "const calls=[];const el={focus:o=>calls.push(['focus',o]),scrollIntoView:o=>calls.push(['scroll',o]),"
+        "getBoundingClientRect:()=>({top:900,bottom:940})};"
+        "globalThis.document={getElementById:id=>id==='slperm'?el:null};globalThis.innerHeight=900;"
+        "slPermGo();console.log(JSON.stringify(calls))")
+    assert json.loads(_node(hidden)) == [["focus", {"preventScroll": True}], ["scroll", {"block": "start"}]]
+
+
+def test_a_refused_guest_workspace_reads_not_read_in_the_preview(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
+                                "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
+    got = preview(hub, tmp_path, local=local, workspace="T0OTHER001", channel="C0CLIB0001", user="U0CLIENT01")
+    assert got["decision"] == "not read", got
