@@ -6,6 +6,7 @@ id, `ts` and text here is a placeholder.
 import io
 import json
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -91,10 +92,18 @@ def make_docs(tmp_path, local=LOCAL):
     return root, profile
 
 
-def make_runner(tmp_path, runner, shadow=True, log=None, local=LOCAL):
+def make_runner(tmp_path, runner, shadow=True, log=None, local=LOCAL, deliver=None):
     root, profile = make_docs(tmp_path, local)
     state = tmp_path / "state"
-    return G.GuestRunner(profile, root, state, shadow=shadow, runner=runner, log=(log or io.StringIO()).write)
+    return G.GuestRunner(profile, root, state, shadow=shadow, runner=runner, log=(log or io.StringIO()).write,
+                         deliver=deliver)
+
+
+def deliver_to(connector):
+    """The delivery path of a live runner: each delivered decision becomes one post through the connector."""
+    def deliver(workspace, channel, message, decision):
+        connector.post(channel, message.get("text"))
+    return deliver
 
 
 def prime(state, channel, at, local=LOCAL):
@@ -149,12 +158,21 @@ def test_session_selects_the_workspace_by_team_id(tmp_path):
 def test_shadow_tick_records_decisions_and_makes_no_write_call(tmp_path):
     connector = FakeConnector([message("1900000000.000100"), message("1900000001.000100")])
     log = io.StringIO()
-    runner = make_runner(tmp_path, fake_session(connector), shadow=True, log=log)
+    runner = make_runner(tmp_path, fake_session(connector), shadow=True, log=log, deliver=deliver_to(connector))
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
     runner.tick(NOW)
     assert connector.writes == 0
     shadow = P.ShadowLog(runner.state_root / P.SHADOW_NAME)
     assert len(shadow.entries(CH)) == 2
     assert "poll " + CH + " decisions=2" in log.getvalue()
+
+
+def test_live_tick_delivers_each_decision_through_the_connector(tmp_path):
+    connector = FakeConnector([message("1900000000.000100"), message("1900000001.000100")])
+    runner = make_runner(tmp_path, fake_session(connector), shadow=False, deliver=deliver_to(connector))
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert connector.writes == 2
 
 
 def test_log_line_per_poll_names_channel_and_count_never_text(tmp_path):
@@ -215,7 +233,7 @@ def test_read_hook_denies_a_write_and_checkpoint_hook_moves_the_cursor(tmp_path)
 
 
 def test_start_and_stop_run_one_runner_per_profile(tmp_path):
-    root, profile = make_docs(tmp_path)
+    root, profile = make_docs(tmp_path, local={"version": 1, "workspaces": []})
     state = tmp_path / "state"
     pid = G.start(profile, root, state)
     try:
@@ -225,3 +243,43 @@ def test_start_and_stop_run_one_runner_per_profile(tmp_path):
     finally:
         assert G.stop(profile, state) is True
     assert G.stop(profile, state) is False
+
+
+def test_start_passes_its_state_folder_to_the_run_command(tmp_path, monkeypatch):
+    root, profile = make_docs(tmp_path, local={"version": 1, "workspaces": []})
+    state = tmp_path / "custom-state"
+    launched = []
+
+    class FakeProcess:
+        pid = 4242
+
+    def popen(command, **kwargs):
+        launched.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr(G.subprocess, "Popen", popen)
+    G.start(profile, root, state)
+    command = launched[0]
+    assert command[command.index("--state") + 1] == str(state)
+
+
+def test_stop_keeps_the_pidfile_when_the_runner_ignores_sigterm(tmp_path, monkeypatch):
+    monkeypatch.setattr(G, "STOP_WAIT", 0.3)
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    state = tmp_path / "state"
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE, text=True)
+    child.stdout.readline()
+    pidfile = G.pid_path(state, profile)
+    pidfile.parent.mkdir(parents=True)
+    pidfile.write_text(f"{child.pid}\n")
+    try:
+        with pytest.raises(G.RunnerError):
+            G.stop(profile, state)
+        assert pidfile.exists()
+    finally:
+        child.kill()
+        child.wait()

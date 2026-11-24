@@ -114,9 +114,11 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
 class GuestRunner:
     """The runner of one profile: `tick` polls each due channel once, and `run` ticks once a minute."""
 
-    def __init__(self, profile, root, state_root, shadow=True, runner=subprocess.run, log=None):
+    def __init__(self, profile, root, state_root, shadow=True, runner=subprocess.run, log=None, deliver=None):
+        if not shadow and deliver is None:
+            raise ValueError("a live runner needs a deliver callable: a delivered decision has no write path otherwise")
         self.profile, self.root, self.state_root = Path(profile), Path(root), Path(state_root)
-        self.shadow, self.runner = shadow, runner
+        self.shadow, self.runner, self.deliver = shadow, runner, deliver
         self.log = log or (lambda text: print(text, end="", flush=True))
 
     def _emit(self, line):
@@ -158,6 +160,8 @@ class GuestRunner:
         except SessionFailed as e:
             self._emit(f"guest-runner: poll {channel} failed: {e}")
             return False
+        for message, decision in pairs:
+            self.deliver(workspace, channel, message, decision)
         count = len(poller.shadow.entries(str(channel))) - recorded if self.shadow else len(pairs)
         self._emit(f"guest-runner: poll {channel} decisions={count}")
         schedule.polled(workspace, channel, now)
@@ -223,7 +227,7 @@ def start(profile, root, state_root, shadow=True):
     logs = Path(state_root) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, "-m", "squad.guestrunner", "run", str(profile), "--root", str(root),
-               "--shadow" if shadow else "--no-shadow"]
+               "--state", str(state_root), "--shadow" if shadow else "--no-shadow"]
     with open(logs / LOG_NAME, "ab") as log:
         proc = subprocess.Popen(command, cwd=ROOT, env=_env(), stdout=log, stderr=subprocess.STDOUT,
                                 start_new_session=True)
@@ -242,7 +246,8 @@ def _exited(pid):
 
 
 def stop(profile, state_root):
-    """Signal the runner of one profile and wait for it to exit. Returns False when no runner was recorded."""
+    """Signal the runner of one profile and wait for it to exit. Returns False when no runner was recorded. Raises
+    `RunnerError` and keeps the pid file when the runner has not exited after `STOP_WAIT`."""
     pidfile = pid_path(state_root, profile)
     pid = _read_pid(pidfile)
     if pid is None:
@@ -254,6 +259,8 @@ def stop(profile, state_root):
     deadline = time.monotonic() + STOP_WAIT
     while not _exited(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
+    if not _exited(pid):
+        raise RunnerError(f"the runner for {profile} did not exit after its signal; its pid file stays")
     pidfile.unlink(missing_ok=True)
     return True
 
@@ -265,20 +272,28 @@ def main(argv=None):
         cmd = sub.add_parser(name)
         cmd.add_argument("profile")
         cmd.add_argument("--root", default=".")
+        cmd.add_argument("--state", default=None)
         cmd.add_argument("--shadow", action=argparse.BooleanOptionalAction, default=True)
     stopper = sub.add_parser("stop")
     stopper.add_argument("profile")
+    stopper.add_argument("--state", default=None)
     hook = sub.add_parser("hook")
     hook.add_argument("kind", choices=["pre", "post"])
     hook.add_argument("checkpoint", nargs="?", default="")
     args = parser.parse_args(argv)
-    state = gueststate.default_root()
     if args.cmd == "hook":
         return hook_main([args.kind, args.checkpoint])
+    state = Path(args.state) if args.state else gueststate.default_root()
     if args.cmd == "stop":
-        stopped = stop(args.profile, state)
+        try:
+            stopped = stop(args.profile, state)
+        except RunnerError as e:
+            print(f"guest-runner: {e}")
+            return 1
         print("guest-runner: stopped" if stopped else "guest-runner: no runner for this profile")
         return 0 if stopped else 1
+    if not args.shadow:
+        parser.error("live delivery has no write path yet: start the runner in shadow mode")
     root = Path(args.root).resolve()
     if args.cmd == "start":
         print(f"guest-runner: started pid {start(args.profile, root, state, args.shadow)}")
