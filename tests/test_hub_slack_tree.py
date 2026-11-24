@@ -344,9 +344,68 @@ def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
     assert f'aria-label="{full}' in html, "the accessible name keeps the full name"
 
 
-def test_at_600_px_the_tree_collapses_after_a_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
+def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):
+    """ArrowLeft on an open node folds it on the first press, whether or not the owner ever toggled it (WebDriver #2843).
+    An unfolded node reads as open, so the toggle must flip the state the row shows, never the absent entry."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='w0';slTopen={{}};"
+            "const before=slTFlat().map(x=>x.id);"
+            "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
+            "console.log(JSON.stringify({before,after:slTFlat().map(x=>x.id)}))")
+    got = json.loads(_node(body))
+    assert got["before"] == ["p", "w0", "w0.c0", "w0.c1", "w1", "w1.c0", "w1.c1"], got["before"]
+    assert got["after"] == ["p", "w0", "w1", "w1.c0", "w1.c1"], got["after"]
+
+
+def test_a_pick_at_phone_width_keeps_the_keyboard_focus_in_the_detail_pane(hub, tmp_path):
+    """A phone folds the tree on a pick, so the picked tree item has no box and takes no focus: focus moves to the
+    detail pane instead of falling to BODY (WebDriver #2843)."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+            "const focused=[];"
+            "const treeEl={focus(){focused.push('tree')},getClientRects(){return []}};"   # inside the folded column: no box
+            "const detailEl={focus(){focused.push('detail')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='slt_w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({focused,sel:slTsel}))")
+    got = json.loads(_node(body))
+    assert got["sel"] == "w0.c0"
+    assert got["focused"] == ["detail"], got
+
+
+def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
     page = hub.PAGE
-    assert re.search(r"@media ?\(max-width: ?600px\)\{[\s\S]*?\.slttop:not\(\.sltshow\) \.sltcol\{display:none\}",
-                     page), "the phone hides the tree after a selection"
+    assert re.search(r"\.slttop:not\(\.sltshow\) \.sltdetail\{display:none\}", page), \
+        "the phone shows the tree until the first selection"
+    assert re.search(r"\.slttop\.sltshow \.sltcol\{display:none\}", page), \
+        "the phone folds the tree after the first selection"
+    assert not re.search(r":not\(\.sltshow\) \.sltcol\{display:none\}", page), \
+        "the tree is never hidden before a selection"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
         "the phone keeps two tiles"
+
+
+def _item(html, node_id):
+    return re.search(r'<div role=treeitem id="slt_' + re.escape(node_id) + r'".*?</div>', html, re.S).group(0)
+
+
+def test_the_tree_draws_indent_guides_and_level_icons_and_no_glyph_fallback(hub, tmp_path):
+    html = render(hub, read(hub, tmp_path))
+    assert "⌂" not in html and "▣" not in html, "the house and square glyphs are gone"
+    assert "<svg class=sltkind" in _item(html, "p"), "the project carries a level icon"
+    assert "<svg class=sltkind" in _item(html, "w0"), "the workspace carries a level icon"
+    assert _item(html, "p").count("class=sltg") == 0, "the project is the root of the tree"
+    assert _item(html, "w0").count("class=sltg") == 1, "the workspace draws one guide"
+    assert _item(html, "w0.c0").count("class=sltg") == 2, "a channel draws one guide per ancestor level"
+
+
+def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"][0]["channels"].append({"id": "D0DM00001", "name": "owner-dm", "mode": "listen"})
+    root = tree(hub, tmp_path, local=local)["root"]
+    assert by_name(root, "#support")["icon"] == "chat", "a guest channel shows the chat icon"
+    assert by_name(root, "#owner-dm")["icon"] == "chat", "a direct message shows the chat icon"
+    assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
+    html = render(hub, read(hub, tmp_path, local=local))
+    assert "<svg class=sltkind" in _item(html, "w1.c2"), _item(html, "w1.c2")   # the DM channel
+    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "w0.c0")
