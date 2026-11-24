@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -294,3 +295,57 @@ async def test_a_call_already_running_ends_at_the_ceiling_written_under_it(tmp_p
     e = outs(tmp_path / "r", "a")[0]
     assert e["outcome"] == "deadline" and e["reasons"] == ["deadline", "wave_ceiling"]
     assert e["elapsed"] < 1.0 and v.verdict == "failed"    # not the adapter's 5 s answer: the ceiling ended it
+
+
+async def test_a_child_shorter_than_its_own_deadline_still_ends_at_the_wave_ceiling(tmp_path):
+    """#2840: the bound is the smaller of the child's own deadline and the time left to the wave cap, not only the
+    7200 s default. A child whose own 3000 s deadline is longer than the wave's remaining time ends at that time, and
+    its call names the wave ceiling."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    ceiling.write_text(f"{int(time.time()) + 300 + 1000}\n")    # 1000 s left after the engine's 300 s entry reserve
+    d = router()
+    d["run"]["deadline"] = 21600
+    child = {"prompt": "Run tdd on the task.", "skill": "tdd", "kind": "coding", "effort": "medium", "tools": ["Read", "Edit"],
+             "stalls": 4, "spend": 1.0, "deadline": 3000, "workspace": "worktrees/child"}
+    script = {"router": {"output": {"spawns": [child]}, "spend": 0.1},
+              "route.router.1": {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}}
+    eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "r", target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS,
+                 options={"wave_ceiling": str(ceiling)})
+    await eng.run()
+    start = call_starts(tmp_path / "r", "route.router.1")[0]
+    assert start["limit_by"] == "wave_ceiling"
+    assert 900 <= start["limit"] <= 1001       # the wave's 1000 s, not the child's own 3000 s
+
+
+@pytest.mark.heavy
+async def test_a_child_already_running_ends_at_the_ceiling_written_under_it(tmp_path):
+    """#2840 AC1 at a dispatch child: a call already in flight when the wave ceiling is written ends at the ceiling,
+    never at its own 7200 s deadline. The child's adapter writes the ceiling file a fifth of a second ahead and then
+    hangs past it, so the child ends as a deadline naming the wave ceiling."""
+    ceiling = tmp_path / "wave-ceiling-run"
+    t0 = time.time()
+
+    def arm(req):
+        ceiling.write_text(f"{t0 + 300 + 0.2}\n")   # the engine keeps its 300 s entry reserve: the call's bound is t0 + 0.2
+        return {"delay": 5, "output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}
+
+    d = router()
+    d["run"]["deadline"] = 21600
+    child = {"prompt": "Run tdd on the task.", "skill": "tdd", "kind": "coding", "effort": "medium", "tools": ["Read", "Edit"],
+             "stalls": 4, "spend": 1.0, "deadline": 7200, "workspace": "worktrees/child"}
+    script = {"router": {"output": {"spawns": [child]}, "spend": 0.1}, "route.router.1": arm}
+    eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "r", target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS,
+                 options={"wave_ceiling": str(ceiling)})
+    await eng.run()
+    e = outs(tmp_path / "r", "route.router.1")[0]
+    assert e["outcome"] == "deadline" and e["reasons"] == ["deadline", "wave_ceiling"]
+    assert e["elapsed"] < 1.0    # not the adapter's 5 s answer: the ceiling ended the call
+
+
+def test_a_child_bound_equal_to_its_own_deadline_keeps_the_bound_that_set_it(tmp_path):
+    """#2840: the entry's bound and the child's own deadline can be the same second. The label follows the bound the
+    dispatch chose, so a node or run deadline at the child's own deadline still names itself and is never dropped."""
+    eng = Engine(from_doc(long_doc()), ScriptedAdapter({}), tmp_path / "r", clock=lambda: 1000.0)
+    ctx = SimpleNamespace(dl_at=2800.0, limit_by="node_deadline")
+    seconds, by = eng.runs.bound(ctx, {"deadline": 1800})
+    assert seconds == 1800 and by == "node_deadline"
