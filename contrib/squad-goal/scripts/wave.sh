@@ -112,14 +112,24 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
   && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; } && ceiling_write "$1"; }
 
-# ceiling_write <run> (#2840): auto/wave-ceiling-<run> holds one absolute epoch, the run's wave start plus the age cap. The
-# run's engine option `wave_ceiling` names the file (launch.py), and the engine bounds a child's call by the time left to
-# it, so a child never runs past the cap that requeues it. The file is written with the start marker and removed with it.
-# The pause the cap subtracts (#637) is not in it: the ceiling is the earliest the cap can fire.
+# ceiling_epoch <run> <start>: the absolute epoch of the run's wave ceiling: the wave start, the age cap and every pause
+# the cap has taken (#2840, #637). This is the one place the ceiling is computed, from the same pause `waited` subtracts.
+ceiling_epoch() {
+  local cap=${SG_WAVE_MAX_AGE_SECONDS:-7200} now p rd fx=()
+  now=$(date +%s); rd=$(run_dir "$2")
+  if [ -f "$SG_STATE/auto/wave-pause-$2" ]; then while IFS= read -r l; do [ -n "$l" ] && fx+=("$l"); done < "$SG_STATE/auto/wave-pause-$2"; fi
+  p=$(python3 "$here/wavepause.py" "$1" "$now" "$rd" ${fx[@]+"${fx[@]}"} 2>/dev/null); case "$p" in ''|*[!0-9]*) p=0;; esac
+  printf '%s\n' "$(( $1 + cap + p ))"
+}
+# ceiling_write <run> (#2840): auto/wave-ceiling-<run> holds one absolute epoch, the run's wave start plus the age cap and
+# its pause. The run's engine option `wave_ceiling` names the file (launch.py), and the engine bounds a child's call by the
+# time left to it, so a child never runs past the cap that requeues it. The engine keeps its own entry reserve and the file
+# holds none: a call that ends at the bound can still enter its wave. The file is written with the start marker, refreshed
+# as the pause grows (`expired`), and removed with the marker.
 ceiling_write() {
   local t f="$SG_STATE/auto/wave-ceiling-$1"
   t=$(cat "$SG_STATE/auto/wave-start-$1" 2>/dev/null); case "$t" in ''|*[!0-9]*) return 0;; esac
-  printf '%s\n' "$(( t + ${SG_WAVE_MAX_AGE_SECONDS:-7200} ))" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+  ceiling_epoch "$t" "$1" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
 }
 # age_clock <run>: a recut starts the age clock of the run's next cut, and its ceiling with it (#2559, #2840).
 age_clock() { mkdir -p "$SG_STATE/auto" && date +%s > "$SG_STATE/auto/wave-start-$1" && ceiling_write "$1"; }
@@ -201,7 +211,7 @@ print((v or {}).get("verdict") or "")' "$(run_dir "$1")/record.jsonl" 2>/dev/nul
 # The age does not count the pause (#637, wavepause.py): the time a child of the wave is in a review round or a fix entry,
 # read from the run's own record, and the time of each childcc fix run that auto/wave-pause-<run> names. The run folder is
 # its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>. A pause that cannot be read is no pause.
-expired() { [ -e "$SG_STATE/auto/wave-$1" ] || return 1; waited "$1" "$SG_STATE/auto/wave-start-$1" "${SG_WAVE_MAX_AGE_SECONDS:-7200}"; }
+expired() { [ -e "$SG_STATE/auto/wave-$1" ] || return 1; ceiling_write "$1"; waited "$1" "$SG_STATE/auto/wave-start-$1" "${SG_WAVE_MAX_AGE_SECONDS:-7200}"; }
 
 # entrywait <run>: 0 when the run's wave closes early (#2316, ADR-0145 rule 16). The wait is read from the epoch the first
 # child that entered the wave wrote in auto/wave-entry-<run>, never from a second clock; a wave with no entry is never

@@ -111,7 +111,8 @@ class Children:
         so the reviews of several passing children overlap; the group is opened outside this entry's cancel scope, because
         a child that passed is finished work and a sibling's failure never cancels its review. A review takes a slot of
         `review_slots`, never one of `limiter`: a reading beside a sibling's work is never a child's place in the queue.
-        `limit_by` names the bound that set `dl_at` when it is the wave ceiling (#2840): a child call it bounds records it."""
+        `limit_by` names the bound that set `dl_at` below the child's own deadline (`run_deadline`, `node_deadline`,
+        `wave_ceiling`; #2840): a child call it bounds records it, unchanged."""
         e = self.e
         room = max(1, min(node["max_parallel"], e.run_cfg["max_parallel"]))
         ctx = SimpleNamespace(node=node, dl_at=dl_at, limit_by=limit_by, deadline_at=sc.deadline_at, results=[], frontier=[], held=[],
@@ -283,6 +284,9 @@ class Children:
         def hit_deadline(res, el):
             slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el}, entry))
 
+        def hit_ceiling(res, el):     # the wave's age cap ended the call, at its start or while it ran (#2840)
+            slot.update(ev=self.outcome(name, "deadline", ["deadline", "wave_ceiling"], None, {"cap": res.amount, "elapsed": el}, entry))
+
         def cancelled(res, el):
             return self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el}, entry)
 
@@ -291,16 +295,20 @@ class Children:
             dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review, repeated), adapter=e.adapter, chain=chain, registry=e._registry(),
             record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
-            on_deadline=hit_deadline, on_cancel=cancelled, no_progress=e.no_progress_window(), limit_by=slot.get("limit_by"))
+            on_deadline=hit_deadline, on_cancel=cancelled, no_progress=e.no_progress_window(), limit_by=slot.get("limit_by"),
+            ceiling=e.wave_ceiling_at, on_ceiling=hit_ceiling)   # a fix round too: the review pauses the cap, not this bound
         return out, model
 
     def bound(self, ctx, d, slot):
         """The seconds one child entry may take: its own deadline, or what is left of the entry's bound when that is less.
-        When the wave ceiling set that bound, `slot` gets `limit_by` and the child's call_start names it (#2840)."""
+        `slot` gets `limit_by` as the bound carried it (`run_deadline`, `node_deadline`, `wave_ceiling`), so the child's
+        call_start names the bound that shortened it and never re-labels a run or node deadline the wave ceiling (#2840)."""
         own, left = d["deadline"] * self.e.scale, ctx.dl_at - self.e.clock()
-        if left < own and getattr(ctx, "limit_by", None):
-            slot["limit_by"] = ctx.limit_by
-        return min(own, left)
+        if left < own:
+            if getattr(ctx, "limit_by", None):
+                slot["limit_by"] = ctx.limit_by
+            return left
+        return own
 
     async def prepare(self, name, d, dl):
         if self.isolated(d):
@@ -319,7 +327,7 @@ class Children:
         if out.kind == "no_funds":
             return self.outcome(name, "fail", ["run_spend_cap"], None, {}, entry)
         if out.kind == "expired":
-            return self.outcome(name, "deadline", ["deadline", getattr(ctx, "limit_by", None) or "run_deadline"], None, {}, entry)
+            return self.outcome(name, "deadline", ["deadline", getattr(ctx, "limit_by", None) or out.limited_by or "run_deadline"], None, {}, entry)
         if out.kind == "prepare_failed":
             return self.outcome(name, "fail", out.reasons, None, {}, entry)
         if out.kind in ("adapter_error", "no_progress"):      # a silent entry that ended the chain names its window in the message (#1289)
