@@ -17,11 +17,13 @@ def run_shell_test(name: str) -> None:
 
 
 @pytest.mark.heavy
+@pytest.mark.slow(reason="runs a whole shell suite, a real script whose wall time is the machine's")
 def test_retired_profile_migration_cycle():
     run_shell_test("test-retired-settings.sh")
 
 
 @pytest.mark.heavy
+@pytest.mark.slow(reason="runs a whole shell suite, a real script whose wall time is the machine's")
 def test_address_seam_accepts_a_retired_profile():
     run_shell_test("test-address.sh")
 

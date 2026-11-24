@@ -14,7 +14,11 @@ from tests import shell_suites
 PROCESS_BOUND_SUITES = {"test-fastloop-pid.sh", "test-sg-ps-fallback.sh"}
 # A suite whose quiet-machine measure reads under the slow line, yet a loaded runner takes past the cap: its measure
 # cannot see the load the cap excuses, so the case states its own reason.
-LOADED_PAST_CAP = {"test-dispatch-mutex.sh": "runs a real script suite that a loaded runner takes past the cap"}
+LOADED_PAST_CAP = {
+    "test-dispatch-mutex.sh": "runs a real script suite that a loaded runner takes past the cap",
+    # (#2807) 15 s alone here and 20.3 s and 21.3 s under -n auto, though its header measure reads 4.35 s.
+    "test-wave-requeue-cap.sh": "runs a real script suite that a loaded runner takes past the cap",
+}
 
 
 def _has_slow_reason(case):
@@ -27,9 +31,9 @@ def test_a_call_that_runs_a_whole_shell_suite_carries_a_slow_reason():
     suite by hand or through the runner."""
     from tests.test_dispatch_mutex import test_the_two_dispatchers_share_one_claim_and_read_live_requests as dispatch
     from tests.test_live_check_orphans import test_the_live_check_suite_leaves_no_holder_behind as live_check
-    from tests.test_retired_profile import test_the_address_suite_runs_without_the_loops_exported_defaults as address
     from tests.test_retired_profile import test_address_seam_accepts_a_retired_profile as address_seam
     from tests.test_retired_profile import test_retired_profile_migration_cycle as migration
+    from tests.test_retired_profile import test_the_address_suite_runs_without_the_loops_exported_defaults as address
 
     whole_suite_calls = [dispatch, live_check, address, address_seam, migration]
     missing = [test.__name__ for test in whole_suite_calls if not _has_slow_reason(test)]
