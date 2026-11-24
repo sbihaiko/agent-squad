@@ -181,14 +181,14 @@ def render(hub, out, sel, docs_in=None):
 def test_the_channel_settings_controls_carry_a_stable_id(hub, tmp_path):
     """Criterion 3: each settings control carries an id built from the channel and the field, so a redraw can put the
     keyboard back on the very control the owner changed."""
-    html = render(hub, read(hub, tmp_path), "w0.c0")
+    html = render(hub, read(hub, tmp_path), "c0.p0.w0.c0")
     assert 'id="slf_C0PROJ0001_persona"' in html, html[html.index("data-slf"):][:400]
 
 
 def test_a_rerender_keeps_the_keyboard_on_the_control_that_changed(hub, tmp_path):
     """Criterion 3: a render replaces the pane's markup, and it puts the focus back on the control that had it."""
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(read(hub, tmp_path))};slDocs={json.dumps(docs())};"
-            f"slSavedDocs=JSON.parse(JSON.stringify(slDocs));slTsel=\"w0.c0\";"
+            f"slSavedDocs=JSON.parse(JSON.stringify(slDocs));slTsel=\"c0.p0.w0.c0\";"
             'globalThis.document={activeElement:{id:"slf_C0PROJ0001_persona"},'
             'getElementById:id=>id==="slf_C0PROJ0001_persona"?{focus:()=>console.log("FOCUS:"+id)}:null};'
             "slRender();")
@@ -201,7 +201,7 @@ def test_a_staged_edit_redraws_the_now_block_before_the_save(hub, tmp_path):
     out = read(hub, tmp_path)
     edited = stage(hub, tmp_path, "C0PROJ0001", "persona", "iara")
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slDocs={json.dumps(docs())};"
-            "slSavedDocs=JSON.parse(JSON.stringify(slDocs));slTsel=\"w0.c0\";"
+            "slSavedDocs=JSON.parse(JSON.stringify(slDocs));slTsel=\"c0.p0.w0.c0\";"
             f"const ANSWER={json.dumps(edited)};"
             "globalThis.fetch=async()=>({json:async()=>ANSWER});"
             "slOp({kind:'field',channel:'C0PROJ0001',field:'persona',value:'iara'})"
@@ -216,7 +216,7 @@ def test_discard_restores_the_values_the_page_read_last(hub, tmp_path):
     edited = stage(hub, tmp_path, "C0PROJ0001", "persona", "iara")
     staged = {"committed": edited["committed"], "local": edited["local"]}
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slDocs={json.dumps(staged)};"
-            f"slSavedDocs={json.dumps(docs())};slT={json.dumps(edited['tree'])};slTsel=\"w0.c0\";"
+            f"slSavedDocs={json.dumps(docs())};slT={json.dumps(edited['tree'])};slTsel=\"c0.p0.w0.c0\";"
             "slDiscard();console.log(JSON.stringify({docs:slDocs,html:STORE['#sbody'].innerHTML}));")
     out_page = json.loads(_node(body))
     assert out_page["docs"] == docs(), out_page["docs"]
@@ -232,7 +232,7 @@ def test_the_save_shows_the_diff_of_each_changed_file(hub, tmp_path):
     answer = {"diff": {"committed": ["-      persona: hal", "+      persona: iara"], "local": ["-  x: 1", "+  x: 2"]},
               "files": {"committed": "slack.yaml", "local": "4.slack.local.yaml"}}
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slDocs={json.dumps({'committed': c, 'local': copy.deepcopy(LOCAL)})};"
-            f"slSavedDocs={json.dumps(docs())};slTsel=\"w0.c0\";const ANSWER={json.dumps(answer)};"
+            f"slSavedDocs={json.dumps(docs())};slTsel=\"c0.p0.w0.c0\";const ANSWER={json.dumps(answer)};"
             "globalThis.themeLine=(t,l)=>t+' · '+l;"   # the page defines it above the slice under test
             "globalThis.fetch=async()=>({json:async()=>ANSWER});"
             "slAsk().then(g=>console.log(JSON.stringify(g.map(x=>x.file))));")

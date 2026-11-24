@@ -412,20 +412,23 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slws{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:10px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
 #sbody .sltag{padding:0 6px;border-radius:var(--radius-sm);border:1px solid var(--line);font-weight:400;text-transform:none;letter-spacing:0}
 #sbody .sltag.owned{color:var(--ok)}#sbody .sltag.guest{color:var(--warn);border-color:var(--tint-warn-line)}
-/* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel on the left, the selected node's Now block on
-   the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its whole text in the
-   tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay in view. */
+/* The Communication tree (SPEC 2682 #2824, #2827): Client > Project > Workspace > Channel on the left, the selected
+   node's Now block on the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its
+   whole text in the tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay
+   in view. A client holds its default persona and the proposed writes of a change. */
 #sbody .slttop{display:grid;grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:16px;align-items:start}
 #sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
+#sbody .sltnotice{margin:0 0 8px;padding:8px 10px;border:1px solid var(--tint-err-line);border-left:3px solid var(--err);border-radius:var(--radius-md);background:var(--tint-err);color:var(--fg);font-size:var(--fs-caption);line-height:1.4}
 #sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltguest b{color:var(--fg)}
 #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
 #sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
 #sbody .slti:hover{background:var(--inset)}
 /* The indent guides (mockup, #2843): one rule per ancestor level, drawn by an empty span of the row, so the line ends at
-   the last child of the subtree and never runs past it. */
+   the last child of the subtree and never runs past it. The client level (SPEC 2682 #2827) reads bolder than a project. */
 #sbody .sltg{flex:0 0 16px;align-self:stretch;margin-right:2px}
 #sbody .sltg.more{border-left:1px solid var(--line)}
+#sbody .slti.lv1{font-weight:600}
 #sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
 #sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
 #sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
@@ -446,6 +449,20 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
 #sbody .sltnow .tile .tss{display:block;margin-top:2px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+#sbody .sltclient{margin:10px 0 0;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
+#sbody .sltch{margin:0 0 4px;font-size:var(--fs-body);font-weight:600;color:var(--fg)}
+#sbody .sltclient .sltlab{display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
+#sbody .sltclient select{height:var(--ctl-h);padding:0 8px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}
+#sbody .sltclient .slt2{width:100%}
+#sbody .sltsethead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+#sbody .sltsethead .blkh{margin:0}
+#sbody .sltrow{display:grid;grid-template-columns:minmax(120px,.6fr) minmax(0,1fr);gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .sltrow .sl{color:var(--fg)}#sbody .sltrow .sc{justify-self:start;min-width:0}
+#sbody .sltprophead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:14px 0 4px}
+#sbody .sltprophead .blkh{margin:0}
+#sbody .slr.ok{color:var(--ok)}#sbody .slr.err{color:var(--err)}#sbody .slr.muted{color:var(--mute)}
+#sbody .sltprojs{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
+#sbody .sltproj{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--fg)}
 #sbody .sltback{display:none;margin:0 0 8px}
 /* The channel settings of the tree detail (#2844): one row per setting, the controls, and the file that owns the row. */
 #sbody .slsetrow{display:grid;grid-template-columns:minmax(96px,150px) minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
@@ -1332,7 +1349,11 @@ const slA=t=>esc(t).replace(/"/g,"&quot;");
 const slClone=o=>JSON.parse(JSON.stringify(o));
 const slDirty=()=>!!slDocs&&JSON.stringify(slDocs)!==JSON.stringify(slSavedDocs);
 const slOpts=(list,cur)=>list.map(x=>`<option${x===cur?" selected":""}>${slA(x)}</option>`).join("");
-const slStatusText=r=>!r?"":`${(r.workspaces||[]).length} workspace${r.workspaces.length===1?"":"s"} · ${(r.workspaces||[]).reduce((n,w)=>n+((w.channels||[]).length),0)} channels`;   // one text for the chip and the nav line (#1284)
+const slPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
+const slStatusText=r=>{if(!r)return "";
+ const c=(r.tree&&r.tree.counts)||null;   // the tree counts what every profile the hub knows holds (#2827)
+ return c?`${slPlural(c.clients,"client")} · ${slPlural(c.projects,"project")} · ${slPlural(c.channels,"channel")}`
+  :`${slPlural((r.workspaces||[]).length,"workspace")} · ${(r.workspaces||[]).reduce((n,w)=>n+((w.channels||[]).length),0)} channels`};   // one text for the chip and the nav line (#1284)   // one text for the chip and the nav line (#1284)
 /* The read view over the two Slack files (SPEC 2682 #2693): the Now tiles and the sections Personas, Roles, Slack
    workspaces and Project events. The view constructs and binds: it holds no rule of resolution and reads no file
    (ADR-0137); the hub hands every resolved value in, and each row names the file it comes from. */
@@ -1471,21 +1492,25 @@ function slKeepFocus(id){if(!id||typeof document==="undefined"||!document.getEle
 function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const st=slStatusText(slR);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
  if(!slT&&slR&&slR.tree)slT=slR.tree;   // a fresh read plants the tree; a staged edit keeps its own until the save (#2846)
- if(slT&&!slTNode(slTsel))slTsel="p";   // a reload that dropped the selected node falls back to the project
+ if(slT&&!slTNode(slTsel))slTsel=(slTRoots()[0]||{}).id||"";   // a reload that dropped the selected node falls back to the first client
  const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
  let h=slTreeHtml()+slReadHtml(slR);
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
- b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar()}
-/* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel, with the selected node's state in a Now
-   block of tiles. The hub answers every value from the policy module; the view constructs, binds and moves the focus,
-   and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow keys, Home and End. */
-let slT=null,slTsel="p",slTopen={},slTF="",slTshow=false;
-const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);return slT&&find(slT.root)};
+ b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar();
+ const n=slTNode(slTsel);if(n&&n.kind==="client"&&!n.proposal&&typeof fetch==="function"){n.proposal=[];slPropose(n.id,false)}}   // a client's selected default proposes its writes at once (#2827)
+/* The Communication tree (SPEC 2682 #2824, #2827): Client > Project > Workspace > Channel, with the selected node's state
+   in a Now block of tiles. The hub answers every value from the policy module and the client map module; the view
+   constructs, binds and moves the focus, and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow
+   keys, Home and End. */
+let slT=null,slTsel="",slTopen={},slTF="",slTshow=false;
+function slTRoots(){if(!slT)return [];return slT.clients||(slT.root?[slT.root]:[])}
+const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
+ for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
 const slTPath=id=>{const path=[];const find=(n,acc)=>{if(n.id===id){path.push(...acc,n);return true}
- return (n.children||[]).some(c=>find(c,acc.concat([n])))};if(slT&&slT.root)find(slT.root,[]);return path};
+ return (n.children||[]).some(c=>find(c,acc.concat([n])))};for(const r of slTRoots())if(find(r,[]))break;return path};
 function slTFlat(){const out=[],walk=(n,parent)=>{out.push({id:n.id,parent:parent,kids:!!(n.children&&n.children.length),open:slTOpen(n)});
- if(slTOpen(n))for(const c of n.children||[])walk(c,n.id)};if(slT&&slT.root)walk(slT.root,null);return out}
+ if(slTOpen(n))for(const c of n.children||[])walk(c,n.id)};for(const r of slTRoots())walk(r,null);return out}
 function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last=f.length-1;
  if(key==="ArrowDown")return i>=0&&i<last?{focus:f[i+1].id}:null;   // the next visible node, or nothing at the end
  if(key==="ArrowUp")return i>0?{focus:f[i-1].id}:null;
@@ -1512,6 +1537,9 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  for(const el of document.querySelectorAll("[data-slt]"))el.addEventListener("click",e=>{const id=el.getAttribute("data-slt"),n=slTNode(id);
   if(e.target&&e.target.closest&&e.target.closest(".sltarrow")&&n&&n.children&&n.children.length){slTGo({focus:id,toggle:id});return}slTPick(id)});
  for(const el of document.querySelectorAll("[data-slt-setup]"))el.addEventListener("click",()=>slSetup(el.getAttribute("data-slt-setup")));
+ const sel=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
+ if(sel)sel.addEventListener("change",()=>slPropose(slTsel,false));
+ for(const el of document.querySelectorAll("[data-slt-write]"))el.addEventListener("click",()=>slPropose(el.getAttribute("data-slt-write"),true));
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
 const slTBadge=b=>`<span class="sltb ${esc(b.tone||"neutral")}">${esc(b.text)}</span>`;
@@ -1522,8 +1550,9 @@ const slTKinds={
  project:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2.5 13.5V3h4.5v10.5"/><path d="M7 13.5V6h6.5v7.5"/><path d="M1.5 13.5h13"/><path d="M4 5.5h1M4 8h1M4 10.5h1M9.5 8.5h1M9.5 11h1"/></svg>`,
  workspace:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2 4.7A1.7 1.7 0 0 1 3.7 3h2.6l1.6 2h4.4A1.7 1.7 0 0 1 14 6.7v4.6A1.7 1.7 0 0 1 12.3 13H3.7A1.7 1.7 0 0 1 2 11.3z"/></svg>`,
  chat:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M13.5 8.4a4.7 4.7 0 0 1-5.1 4.6 5.7 5.7 0 0 1-1.7-.3L3.3 14l.8-2.5A4.4 4.4 0 0 1 2.9 8.4 4.7 4.7 0 0 1 8 3.8a4.7 4.7 0 0 1 5.5 4.6z"/></svg>`,
- hash:`<span class=sltkind aria-hidden=true>#</span>`};
-const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:slTKinds.hash):n.kind==="workspace"?slTKinds.workspace:slTKinds.project;
+ hash:`<span class=sltkind aria-hidden=true>#</span>`,
+ client:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2.5 5.5h11v8h-11z"/><path d="M6 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5"/><path d="M2.5 9h11"/></svg>`};
+const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:slTKinds.hash):n.kind==="workspace"?slTKinds.workspace:n.kind==="client"?slTKinds.client:slTKinds.project;
 /* The indent guides of one row, one per ancestor level: the line of a level draws only while that ancestor has another
    sibling after it, so a subtree's rule ends at its last child and never runs past it (mockup, #2843). */
 const slTGuides=more=>more.map(m=>`<span class="sltg${m?" more":""}" aria-hidden=true></span>`).join("");
@@ -1538,14 +1567,29 @@ function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
  +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
-function slTDetail(){const n=slTNode(slTsel)||(slT&&slT.root);if(!n)return "";
+const slTProp=n=>{const rows=n.proposal;if(!rows||!rows.length)return "";
+ const tone=r=>r.action==="refused"?"err":r.action==="write"?"ok":"muted";
+ return `<div class=setblk data-blk=prop><div class=sltprophead><h3 class=blkh>${esc("Proposed writes")}</h3>`
+ +`<span class="sltb ${n.proposal_saved?"ok":"warn"}">${esc(n.proposal_saved?"saved":"not saved")}</span></div>`
+ +`<table class=slt2><thead><tr><th>${esc("Project")}</th><th>${esc("project.persona now")}</th><th>${esc("Result")}</th></tr></thead><tbody>`
+ +rows.map(r=>`<tr><td data-l=Project>${esc(r.label||r.project)}</td><td data-l="persona now"><span class=nw>${esc(r.now||"none")}</span></td><td data-l=Result class="slr ${tone(r)}">${esc(r.result||"")}</td></tr>`).join("")
+ +`</tbody></table></div>`};
+const slTClient=n=>{if(n.kind!=="client")return "";
+ const opts=n.persona_options||[],cur=n.default_persona||"";
+ const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
+ const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div></div>`;
+ return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
+ +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
+ +`<div class=sltacts><button type=button data-slt-write="${slA(n.id)}">${esc("Save the writes")}</button></div>`
+ +slTProp(n)+projects};
+function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
  const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.defects||[]).map(d=>`<p class="mx err" role=status>${esc(d)}</p>`).join("");
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTSettings(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTClient(n)+slTSettings(n)}
 /* The channel settings of the detail pane (#2844): one row per field, and the row names the file it writes in a chip.
    The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and the
    field, never the row's place in a list, so the save writes the row that carries the id. */
@@ -1572,13 +1616,22 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
   return (cs.length?cs:[{kind:"read",value:""}]).map((c,i)=>`<div class=slsetrow data-slrow="${slA(r.key)}">`
    +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(n,r,c)}</span>${slTag(r.file)}</div>`).join("")
   +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
-function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
+function slTreeHtml(){const roots=slTRoots();if(!roots.length)return "";const out=[],cur=slTsel;
  const walk=(n,more)=>{out.push(slTItem(n,cur,more));if(!slTOpen(n))return;const kids=n.children||[];
-  kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};walk(slT.root,[]);
+  kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};for(const r of roots)walk(r,[]);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
+ +(slT.notice?`<div class="mx err sltnotice" role=status><b>${esc(slT.notice.title)}</b><br>${esc(slT.notice.text)}</div>`:"")
  +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${slTDetail()}</div></div>`}
+function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
+ const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
+ const pid=(el&&el.value)||n.default_persona||"",body={client:n.client||"",persona:pid};
+ if(confirm)body.confirm=true;slMsg="the proposed writes are being read";slRender();
+ fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+ .then(r=>r.json()).then(o=>{if(!o||o.err){slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
+  if(o.rows)n.proposal=o.rows;slMsg=confirm?"the writes were saved":"the proposed writes are shown";slRender()})
+ .catch(()=>{slMsg="!the proposed writes could not be read";slRender()})}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}

@@ -1,8 +1,8 @@
 """GitHub issue #2824: the Communication tree, a read view of the Slack policy (SPEC 2682).
 
-Settings > Communication shows one tree, Project > Workspace > Channel. The owner selects a node and reads its
-effective state in a Now block. Every effective value comes from `squad/slackpolicy.py` on the server, through the one
-read route `/api/slack/files`; the view holds no rule of its own (ADR-0137, ADR-0177).
+Settings > Communication shows one tree, Client > Project > Workspace > Channel (#2827). The owner selects a node and
+reads its effective state in a Now block. Every effective value comes from `squad/slackpolicy.py` on the server, through
+the one read route `/api/slack/files`; the view holds no rule of its own (ADR-0137, ADR-0177).
 
 The seams under test are the hub's own read, `slack_overview`, whose `tree` key is the tree, and the theme's renderer
 run in node. No browser runs here. Every id and name is a neutral placeholder.
@@ -127,13 +127,15 @@ def tiles(node):
 
 def test_the_tree_has_a_project_a_workspace_and_a_channel(hub, tmp_path):
     root = tree(hub, tmp_path)["root"]
-    assert (root["kind"], root["level"]) == ("project", 1)
+    assert (root["kind"], root["level"]) == ("client", 1)
+    project = by_name(root, "4")
+    assert (project["kind"], project["level"]) == ("project", 2)
     ws = by_name(root, "team")
-    assert (ws["kind"], ws["level"]) == ("workspace", 2)
+    assert (ws["kind"], ws["level"]) == ("workspace", 3)
     ch = by_name(root, "#proj-agent-squad")
-    assert (ch["kind"], ch["level"]) == ("channel", 3)
+    assert (ch["kind"], ch["level"]) == ("channel", 4)
     assert ch["children"] == []
-    assert [w["name"] for w in root["children"]] == ["team", "client-a"]
+    assert [w["name"] for w in project["children"]] == ["team", "client-a"]
 
 
 def test_a_channel_now_block_names_persona_language_destination_reply_and_announcements(hub, tmp_path):
@@ -211,7 +213,7 @@ def test_an_owned_workspace_with_a_guest_channel_says_so_and_offers_no_move(hub,
     assert tiles(ws)["Class"]["value"] == "owned · contains guest channel", tiles(ws)
     assert by_name(out["tree"]["root"], "#guest-sandbox")["badges"][0] == {"text": "guest", "tone": "neutral",
                                                                            "kind": "class"}
-    html = render(hub, out, sel="w0")
+    html = render(hub, out, sel=by_name(out["tree"]["root"], "team")["id"])
     assert "owned · contains guest channel" in html
     assert "Move to owned" not in html
 
@@ -220,7 +222,9 @@ def test_a_refused_guest_workspace_shows_one_defect_and_its_channels_no_mode_bad
     local = json.loads(json.dumps(LOCAL))
     local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
                                 "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
-    root = tree(hub, tmp_path, local=local)["root"]
+    out = tree(hub, tmp_path, local=local)
+    root = out["root"]
+    assert out["notice"] and out["notice"]["title"] == "2 guest workspaces", out.get("notice")
     refused = by_name(root, "client-b")
     assert refused["state"] == "refused"
     assert len(refused["defects"]) == 1, refused["defects"]
@@ -236,10 +240,10 @@ def test_the_guest_slot_names_the_project_that_holds_it(hub, tmp_path):
 
 def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
     out = read(hub, tmp_path, committed={}, local={})["tree"]
-    root = out["root"]
-    assert out["empty"] is True and root["state"] == "empty"
-    assert root["now"] == []
-    assert [c["label"] for c in root["setup"]] == ["Add owned workspace", "Add guest workspace"], root.get("setup")
+    project = out["root"]["children"][0]
+    assert out["empty"] is True and project["state"] == "empty"
+    assert project["now"] == []
+    assert [c["label"] for c in project["setup"]] == ["Add owned workspace", "Add guest workspace"], project.get("setup")
 
 
 def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
@@ -310,28 +314,29 @@ def test_the_tree_follows_the_wai_aria_pattern(hub, tmp_path):
 def test_a_tree_item_accessible_name_carries_its_badges(hub, tmp_path):
     html = render(hub, read(hub, tmp_path))
     items = re.findall(r"<div[^>]*role=treeitem[^>]*>", html)
-    team = next(i for i in items if 'id="slt_w0"' in i)
+    team = next(i for i in items if 'aria-label="team, owned"' in i)
     assert 'aria-label="team, owned"' in team, team
 
 
 def test_the_tree_is_the_keyboard_tree_of_the_view(hub, tmp_path):
     """Arrow keys move and fold, Home and End jump: the movement is one pure function, run here in node."""
     out = read(hub, tmp_path)
-    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='p';"
+    body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='c0';"
             "const f=slTFlat();"
             "const at=(cur,k)=>slTreeKey(f,cur,k);"
-            "console.log(JSON.stringify({ids:f.map(x=>x.id),down:at('p','ArrowDown'),up:at(f[f.length-1].id,'ArrowUp'),"
-            "home:at(f[3].id,'Home'),end:at('p','End'),right:at('w0','ArrowRight'),left:at('w0','ArrowLeft'),"
-            "leftChild:at('w0.c0','ArrowLeft')}))")
+            "console.log(JSON.stringify({ids:f.map(x=>x.id),down:at('c0','ArrowDown'),up:at(f[f.length-1].id,'ArrowUp'),"
+            "home:at(f[3].id,'Home'),end:at('c0','End'),right:at('c0.p0.w0','ArrowRight'),left:at('c0.p0.w0','ArrowLeft'),"
+            "leftChild:at('c0.p0.w0.c0','ArrowLeft')}))")
     got = json.loads(_node(body))
-    assert got["ids"] == ["p", "w0", "w0.c0", "w0.c1", "w1", "w1.c0", "w1.c1"], got["ids"]
-    assert got["down"] == {"focus": "w0"}
-    assert got["home"] == {"focus": "p"}
-    assert got["end"] == {"focus": "w1.c1"}
-    assert got["up"] == {"focus": "w1.c0"}
-    assert got["right"] == {"focus": "w0.c0"}, got["right"]          # an open node moves to its first child
-    assert got["left"] == {"focus": "w0", "toggle": "w0"}, got["left"]  # an open node folds
-    assert got["leftChild"] == {"focus": "w0"}
+    assert got["ids"] == ["c0", "c0.p0", "c0.p0.w0", "c0.p0.w0.c0", "c0.p0.w0.c1",
+                          "c0.p0.w1", "c0.p0.w1.c0", "c0.p0.w1.c1"], got["ids"]
+    assert got["down"] == {"focus": "c0.p0"}
+    assert got["home"] == {"focus": "c0"}
+    assert got["end"] == {"focus": "c0.p0.w1.c1"}
+    assert got["up"] == {"focus": "c0.p0.w1.c0"}
+    assert got["right"] == {"focus": "c0.p0.w0.c0"}, got["right"]          # an open node moves to its first child
+    assert got["left"] == {"focus": "c0.p0.w0", "toggle": "c0.p0.w0"}, got["left"]  # an open node folds
+    assert got["leftChild"] == {"focus": "c0.p0.w0"}
 
 
 def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
@@ -348,15 +353,16 @@ def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):
     """ArrowLeft on an open node folds it on the first press, whether or not the owner ever toggled it (WebDriver #2843).
     An unfolded node reads as open, so the toggle must flip the state the row shows, never the absent entry."""
     out = read(hub, tmp_path)
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='w0';slTopen={{}};"
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='c0.p0.w0';slTopen={{}};"
             "const before=slTFlat().map(x=>x.id);"
-            "const openBefore=slTOpen(slTNode('w0'));"
-            "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
-            "console.log(JSON.stringify({before,openBefore,after:slTFlat().map(x=>x.id),openAfter:slTOpen(slTNode('w0'))}))")
+            "const openBefore=slTOpen(slTNode('c0.p0.w0'));"
+            "slTGo(slTreeKey(slTFlat(),'c0.p0.w0','ArrowLeft'));"
+            "console.log(JSON.stringify({before,openBefore,after:slTFlat().map(x=>x.id),openAfter:slTOpen(slTNode('c0.p0.w0'))}))")
     got = json.loads(_node(body))
     assert got["openBefore"] is True, "an untouched node reads as open before the keypress"
-    assert got["before"] == ["p", "w0", "w0.c0", "w0.c1", "w1", "w1.c0", "w1.c1"], got["before"]
-    assert got["after"] == ["p", "w0", "w1", "w1.c0", "w1.c1"], got["after"]
+    assert got["before"] == ["c0", "c0.p0", "c0.p0.w0", "c0.p0.w0.c0", "c0.p0.w0.c1",
+                             "c0.p0.w1", "c0.p0.w1.c0", "c0.p0.w1.c1"], got["before"]
+    assert got["after"] == ["c0", "c0.p0", "c0.p0.w0", "c0.p0.w1", "c0.p0.w1.c0", "c0.p0.w1.c1"], got["after"]
     assert got["openAfter"] is False, "the first ArrowLeft press folds the never-toggled node"
 
 
@@ -364,26 +370,26 @@ def test_a_pick_at_phone_width_keeps_the_keyboard_focus_in_the_detail_pane(hub, 
     """A phone folds the tree on a pick, so the picked tree item has no box and takes no focus: focus moves to the
     detail pane instead of falling to BODY (WebDriver #2843). A picked row that still has a box keeps the focus."""
     out = read(hub, tmp_path)
-    base = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+    base = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='c0.p0';"
             "const focused=[];"
             "const sbody={getBoundingClientRect(){return {width:390}}};"
             "const detailEl={focus(){focused.push('detail')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};")
     folded = base + (
             "const treeEl={focus(){focused.push('tree')},getClientRects(){return []}};"   # inside the folded column: no box
             "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
-            "id==='slt_w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
-            "slTPick('w0.c0');"
+            "id==='slt_c0.p0.w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('c0.p0.w0.c0');"
             "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
     got = json.loads(_node(folded))
-    assert got["sel"] == "w0.c0"
+    assert got["sel"] == "c0.p0.w0.c0"
     assert got["show"] is True, "a pick at phone width folds the tree"
     assert got["focused"] == ["detail"], got
 
     shown = base + (
             "const rowEl={focus(){focused.push('tree')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};"
             "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
-            "id==='slt_w0.c0'?rowEl:id==='sltdetail'?detailEl:null};"
-            "slTPick('w0.c0');"
+            "id==='slt_c0.p0.w0.c0'?rowEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('c0.p0.w0.c0');"
             "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
     tree = json.loads(_node(shown))
     assert tree["focused"] == ["tree"], "a picked row that still has a box keeps the focus"
@@ -407,13 +413,13 @@ def test_a_pick_on_a_wide_panel_keeps_the_tree_beside_the_detail(hub, tmp_path):
     """The fold belongs to a narrow panel alone: a pick at 1440 px leaves `slTshow` false so the tree stays paneled
     beside the detail, and the wide rule keeps its column visible (WebDriver #2843)."""
     out = read(hub, tmp_path)
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='c0.p0';"
             "const wide={getBoundingClientRect(){return {width:1440}}};"
             "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?wide:null};"
-            "slTPick('w0.c0');"
+            "slTPick('c0.p0.w0.c0');"
             "console.log(JSON.stringify({sel:slTsel,show:slTshow}))")
     got = json.loads(_node(body))
-    assert got["sel"] == "w0.c0"
+    assert got["sel"] == "c0.p0.w0.c0"
     assert got["show"] is False, "a wide panel never folds the tree on a pick"
 
 
@@ -424,16 +430,18 @@ def _item(html, node_id):
 def test_the_tree_draws_indent_guides_and_level_icons_and_no_glyph_fallback(hub, tmp_path):
     html = render(hub, read(hub, tmp_path))
     assert "⌂" not in html and "▣" not in html, "the house and square glyphs are gone"
-    assert "<svg class=sltkind" in _item(html, "p"), "the project carries a level icon"
-    assert "<svg class=sltkind" in _item(html, "w0"), "the workspace carries a level icon"
-    assert _item(html, "p").count('class="sltg') == 0, "the project is the root of the tree"
-    assert _item(html, "w0").count('class="sltg') == 1, "the workspace draws one guide"
-    assert _item(html, "w0.c0").count('class="sltg') == 2, "a channel draws one guide per ancestor level"
+    assert "<svg class=sltkind" in _item(html, "c0"), "the client carries a level icon"
+    assert "<svg class=sltkind" in _item(html, "c0.p0"), "the project carries a level icon"
+    assert "<svg class=sltkind" in _item(html, "c0.p0.w0"), "the workspace carries a level icon"
+    assert _item(html, "c0").count('class="sltg') == 0, "the client is the root of the tree"
+    assert _item(html, "c0.p0").count('class="sltg') == 1, "the project draws one guide"
+    assert _item(html, "c0.p0.w0").count('class="sltg') == 2, "a workspace draws one guide per ancestor level"
+    assert _item(html, "c0.p0.w0.c0").count('class="sltg') == 3, "a channel draws one guide per ancestor level"
     # The line runs only while its ancestor has another sibling after it, so a subtree's rule ends at its last child.
-    assert 'class="sltg more"' in _item(html, "w0"), "the project's rule continues past a workspace with one after it"
-    assert 'more' not in _item(html, "w1"), "the project's last workspace ends the rule"
-    last = _item(html, "w1.c1")
-    assert last.count('class="sltg') == 2 and "more" not in last, "the last channel ends both rules"
+    assert 'class="sltg more"' not in _item(html, "c0.p0"), "the client is the project's last and only sibling"
+    assert 'class="sltg more"' in _item(html, "c0.p0.w0.c0"), "the workspace's rule continues past it to the next one"
+    last = _item(html, "c0.p0.w1.c1")
+    assert last.count('class="sltg') == 3 and "more" not in last, "the last channel ends its own rule"
 
 
 def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash(hub, tmp_path):
@@ -446,5 +454,5 @@ def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash
     assert by_name(root, "#owner-dm")["icon"] == "chat", "a direct message shows the chat icon"
     assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
     html = render(hub, read(hub, tmp_path, committed=committed))
-    assert "<svg class=sltkind" in _item(html, "w0.c2"), _item(html, "w0.c2")   # the DM channel
-    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "w0.c0")
+    assert "<svg class=sltkind" in _item(html, "c0.p0.w0.c2"), _item(html, "c0.p0.w0.c2")   # the DM channel
+    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "c0.p0.w0.c0")

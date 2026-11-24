@@ -319,7 +319,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] == "/api/board/priority": return self.priority_post(a)
         m = PROJECT_LOOP_ROUTE.match(self.path.split("?", 1)[0])
         if m: return self.loop_post(a, m.group(1))   # that project's own loop page writes that project alone (#1599)
-        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack/files", "/api/slack/preview", "/api/slack/sample", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", "/api/slots", "/api/slack/files", "/api/slack/preview", "/api/slack/sample", "/api/slack/clients", "/api/sync") and (a.tailnet or own_origin(self)) and "json" in (self.headers.get("Content-Type") or "")
         read_only = self.path == "/api/sync"   # a press is a read: its failed read answers an error in a 200, never a request defect (#1668)
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
@@ -333,6 +333,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/columns": out = columns_set(body)   # Settings > Spend & limits · Kanban (#2432)
                 elif self.path == "/api/slots": out = slots_set(body)   # Settings > Spend & limits · Machine slots (#2435)
                 elif self.path == "/api/slack/files": out = slack_files_post(body)   # Settings > Communication · the save (#2694) or one edit (#2696)
+                elif self.path == "/api/slack/clients": out = slack_clients_post(body)   # Settings > Communication · a client default's proposed writes (#2827)
                 elif self.path == "/api/slack/preview": out = slack_preview(body.get("committed"), body.get("local")) if isinstance(body, dict) else slack_preview(None, None)   # the persona editor's reply preview (#2697)
                 elif self.path == "/api/slack/sample": out = slack_sample(body)   # the persona editor's voice sample (#2697)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
