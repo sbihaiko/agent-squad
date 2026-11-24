@@ -783,6 +783,79 @@ def effective(committed, local, workspace, channel=None):
             effective_persona(committed, local, workspace, channel))
 
 
+def resolution(committed, local, workspace, channel=None):
+    """The language and the persona a row answers with, and the level each one comes from: `channel`, `workspace`,
+    `project` or `default`. The chain is the one `decide` reads (#2824). A level that names a value the tag rule
+    refuses is skipped, as `_effective_language` skips it, so a broken value never becomes the source."""
+    workspace, channel = workspace or {}, channel or {}
+    project = _project(committed or {}, local or {})
+    language = language_source = None
+    for level, row in (("channel", channel), ("workspace", workspace), ("project", project)):
+        if row.get("language") is None:
+            continue
+        tag = normalize_language(row.get("language"))
+        if tag:
+            language, language_source = tag, level
+            break
+    if language is None:
+        language, language_source = DEFAULT_LANGUAGE, "default"
+    wanted = None
+    for level, row in (("channel", channel), ("workspace", workspace), ("project", project)):
+        if wanted is None and row.get("persona") is not None:
+            wanted = row.get("persona")
+            persona_source = level
+    if wanted is None:
+        persona_source = "default"
+    return {"language": language, "language_source": language_source,
+            "persona": effective_persona(committed, local, workspace, channel), "persona_source": persona_source}
+
+
+def resolved_members(local, workspace_id, channel_id, accepted):
+    """Every user the local file gives a role this channel accepts, in file order. A role the channel does not accept
+    grants nothing, so its users are absent, as they are in `_member_role`."""
+    out = []
+    for member in _rows((local or {}).get("members")):
+        if (str(member.get("workspace")), str(member.get("channel"))) != (str(workspace_id), str(channel_id)):
+            continue
+        if str(member.get("role")) in {str(name) for name in accepted or ()}:
+            out += [str(u) for u in member.get("users") or []]
+    return out
+
+
+def guest_workspaces(doc):
+    """The indices of the workspaces the connector reaches: class `guest`, or one channel with the guest class
+    (#2770). The machine serves one guest workspace, so the validator refuses every one after the first."""
+    return [i for i, ws in enumerate(_rows((doc or {}).get("workspaces"))) if _guest_workspace(ws)]
+
+
+def destination_label(decision):
+    """The destination of an eligible member's message, in the words of the settings view: `inbox` in an `owned`
+    channel, `proposal` in a `guest` channel, `read as data` when no member holds an accepted role, and `none` for a
+    kind the channel ignores."""
+    return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read as data"}.get(decision.kind, "none")
+
+
+def reply_label(channel, decision):
+    """The reply path the settings view prints: `bot`, `draft`, `send`, `send, except N listed`, `never posts` for a
+    channel whose mode posts nothing, or `none` when the channel may reply and no member holds an accepted role."""
+    channel = channel or {}
+    if decision.reply:
+        listed = len([value for value in channel.get("draft_for") or ()])
+        if decision.reply == "send" and listed:
+            return f"send, except {listed} listed"
+        return decision.reply
+    return "never posts" if not can_speak(channel) else "none"
+
+
+def transport(workspace, channel):
+    """The badge a channel carries in the settings tree for its transport: `bot` when the app posts in an `owned`
+    channel, `send` when a `guest` channel posts from the owner's account (directly or as a draft), and `listen` when
+    the channel posts nothing."""
+    if not can_speak(channel):
+        return "listen"
+    return "bot" if channel_class(workspace, channel) != "guest" else "send"
+
+
 def decide(committed, local, event, now, thread_state=None):
     """The one decision for one event of one channel, from the two validated files and the caller's clock value.
 

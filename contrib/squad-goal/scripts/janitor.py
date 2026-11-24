@@ -2220,8 +2220,10 @@ def watchd_orphan():   # W (#959): watchd.pid names no live supervisor and a lan
     if dry or mk.exists(): return
     alert(f"WATCHD-ORPHAN: watchd.pid names no live supervisor (pid {sup or 'none'}), and {', '.join(lanes)} still runs (NEEDS OWNER)")
     mk.write_text(f"{now}\n")
-def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
+def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, an editor's .DS_Store (#661), or
+    # a project's local Slack file, which the hub writes into the profiles folder on a Communication save (#2829)
     parts = rel.split("/")
+    if parts[:2] == ["scripts", "profiles"] and len(parts) == 3 and parts[-1].endswith(".slack.local.yaml"): return True
     return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
 def live_mtime():   # M (#659): a change to the live skill copy that no publish made
     live = pathlib.Path(os.environ.get("SG_LIVE_DIR") or pathlib.Path.home() / ".claude" / "skills" / "squad-goal")

@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 9.06
+# seconds: 8.05
 # Rule M (#659): a file under the live skill directory whose mtime changed while no publish ran raises LIVE-MTIME in alerts.log.
 # live-guard.sh stamps $SG_STATE/live-publish.stamp and every publish writes the live PUBLISHED file; a change in a pass that follows either is the publish's own.
 # Stubbed gh and board; a temp state dir and a temp live skill. usage: bash test-janitor-live-mtime.sh [janitor.py]
@@ -37,8 +37,15 @@ d = json.load(open(sys.argv[1])); d["files"]["scripts/__pycache__/models.cpython
 json.dump(d, open(sys.argv[1], "w"))
 PY
 pass env; [ "$(alerts)" = 1 ] && ok "a snapshot that recorded a bytecode cache raises nothing when it is gone" || ko "an old cache entry alerted ($(alerts))"
-printf 'print(1)\n' > "$T/live/scripts/real.py"
+# The hub writes a project's local Slack file into the profiles folder when the owner saves the Communication settings.
+# That file is owner data, never a publish's, so its change raises nothing, whether it comes or changes (#2829).
+mkdir -p "$T/live/scripts/profiles"; printf 'version: 1\n' > "$T/live/scripts/profiles/p.slack.local.yaml"
+pass env; [ "$(alerts)" = 1 ] && ok "a new local Slack file raises nothing" || ko "a new local Slack file raised LIVE-MTIME ($(alerts))"
+sleep 1; printf 'version: 1\nworkspaces: []\n' > "$T/live/scripts/profiles/p.slack.local.yaml"
+pass env; [ "$(alerts)" = 1 ] && ok "a saved local Slack file raises nothing" || ko "a saved local Slack file raised LIVE-MTIME ($(alerts))"
+printf 'print(1)\n' > "$T/live/scripts/real.py"; printf 'x: 1\n' > "$T/live/scripts/profiles/p.yaml"
 pass env; [ "$(alerts)" = 2 ] && ok "a real script changing still raises LIVE-MTIME" || ko "a real script change was ignored ($(alerts))"
+/usr/bin/grep 'LIVE-MTIME' "$T/st/alerts.log" | tail -1 | /usr/bin/grep -q 'scripts/profiles/p.yaml' && ok "another file of the profiles folder still raises LIVE-MTIME" || ko "a profile file that is no local Slack file was ignored"
 rm "$T/live/SKILL.md"
 pass env; [ "$(alerts)" = 3 ] && ok "a removed file with no publish raises LIVE-MTIME" || ko "no alert for the removed file ($(alerts))"
 pass env JANITOR_DRY=1; printf 'x\n' > "$T/live/new.md"

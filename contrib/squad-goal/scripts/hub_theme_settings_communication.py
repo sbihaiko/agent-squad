@@ -239,6 +239,189 @@ def slack_sample(body, client=None):
     return {"err": None, "url": "data:audio/wav;base64," + base64.b64encode(data).decode(), "cached": cached,
             "bytes": len(data), "voice": voice, "tone": tone}
 
+# --- Settings > Communication, the tree (SPEC 2682 #2824). One read answers the effective state of every node:
+# Project > Workspace > Channel. Every resolved value comes from the policy module (#2684); the route computes no rule
+# and the view holds none (ADR-0137, ADR-0177). The Now block of a node carries the tiles; the view only draws them.
+def _slack_project_label():
+    return str(os.environ.get("SG_PROJECT") or PROFILE_NAME or "project")
+
+def _slack_badge(text, tone="neutral", kind="class"):
+    return {"text": _slack_text(text), "tone": tone, "kind": kind}
+
+def _slack_tile(key, value, sub="", tone="neutral"):
+    return {"key": key, "value": _slack_text(value), "sub": _slack_text(sub), "tone": tone}
+
+def _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf):
+    """The workspaces of both files in file order, one row per id: the first document's row wins and a later row adds a
+    channel it names, so one workspace is one node and never two. A row that names no id keys on its document and
+    position, so it still reads and never takes another row's place."""
+    groups, by_id = [], {}
+    for doc, file in ((committed_doc, cf), (local_doc, lf)):
+        for i, row in _slack_dicts(doc.get("workspaces")):
+            wid = _slack_text(row.get("id")) or f"\0{file}:{i}"
+            group = by_id.get(wid)
+            if group is None:
+                group = by_id[wid] = {"id": wid, "ws": row, "file": file, "index": i, "rows": [],
+                                      "channels": [], "named": set()}
+                groups.append(group)
+            group["rows"].append((row, file, i))
+            for ci, ch in _slack_dicts(row.get("channels")):
+                cid = _slack_text(ch.get("id")) or f"\0{file}:{i}:{ci}"
+                if cid in group["named"]:
+                    continue
+                group["named"].add(cid)
+                group["channels"].append({"id": cid, "row": ch, "file": file, "index": ci, "ws": row})
+    return groups
+
+def _slack_tree_channel_row(group, ch_id):
+    """The one channel row of both documents, committed first and the local file over it, as `decide` merges them, so
+    the class, the mode and the grant of the file that names them answer together."""
+    merged = {}
+    for row, file, i in group["rows"]:
+        for k, candidate in _slack_dicts(row.get("channels")):
+            if str(candidate.get("id")) == str(ch_id):
+                merged.update(candidate)
+    return merged
+
+def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused):
+    """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
+    the language, the decision for one eligible member's message, the transport badge and the announcement list. A
+    channel of a refused workspace carries the refusal alone, never a send, bot or listen badge."""
+    ws, ws_id, ch_id = group["ws"], group["id"], ch["id"]
+    merged = _slack_tree_channel_row(group, ch_id)
+    name = _slack_text(merged.get("name") or ch_id)
+    announcement = [_slack_text(x) for x in merged.get("announce") or ()] if isinstance(merged.get("announce"), list) else []
+    label = _slack_text(ws.get("label") or ws_id)
+    if refused:
+        return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "badges":
+                [_slack_badge("refused", "err", "refused")], "now": [],
+                "detail": {"title": f"#{name}", "sub": label, "text": "The workspace is refused, so this channel names no transport."}}
+    resolution = P.resolution(committed_doc, local_doc, ws, merged)
+    persona = resolution["persona"]
+    members = P.resolved_members(local_doc, ws_id, ch_id, merged.get("roles") or ())
+    decision = P.decide(committed_doc, local_doc, {"workspace": ws_id, "channel": ch_id,
+                                                   "user": members[0] if members else ""}, dt.datetime.now(dt.UTC))
+    badges = []
+    if P.channel_class(ws, merged) != _slack_text(ws.get("class") or "owned"):
+        badges.append(_slack_badge(P.channel_class(ws, merged)))
+    badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
+    if not members:
+        badges.append(_slack_badge("no one", "err", "noone"))
+    eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
+        else "nobody eligible"
+    reply_value = P.reply_label(merged, decision)
+    reply_sub = "listen mode" if reply_value == "never posts" else "nobody eligible to ask" if not members else ""
+    now = [_slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
+                       "neutral" if persona else "warn"),
+           _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
+           _slack_tile("A member's message", P.destination_label(decision), eligible,
+                       "warn" if not members else "neutral"),
+           _slack_tile("Reply", reply_value, reply_sub, "warn" if reply_value in ("none", "never posts") else "neutral"),
+           _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
+                       "as drafts for your review" if announcement else "",
+                       "neutral" if announcement else "muted")]
+    return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
+            "badges": badges, "now": now,
+            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
+
+def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held, refused_keys, defects):
+    """One workspace node: its class tile, its persona and language, the guest slot it holds, the validation defects
+    that name it and its channels. A refused workspace states its one defect and its channels carry no transport."""
+    ws, ws_id = group["ws"], group["id"]
+    class_ = _slack_text(ws.get("class") or "owned")
+    refused = (group["file"], group["index"]) in refused_keys
+    has_guest_channel = any(P.channel_class(row, candidate) == "guest"
+                            for row, file, i in group["rows"] for k, candidate in _slack_dicts(row.get("channels")))
+    caption = "owned · contains guest channel" if class_ == "owned" and has_guest_channel else class_
+    resolution = P.resolution(committed_doc, local_doc, ws)
+    persona = resolution["persona"]
+    slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
+    now = [_slack_tile("Class", caption, class_, "warn" if refused else "neutral"),
+           _slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
+                       "neutral" if persona else "warn"),
+           _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
+           _slack_tile("Guest slot", slot, "one guest workspace per machine",
+                       "err" if refused else "neutral" if slot == "holds it" else "muted")]
+    named = [str(d) for d in defects if d.file == group["file"]
+             and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused)
+                for k, ch in enumerate(group["channels"])]
+    badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
+    return {"id": node_id, "level": 2, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
+            "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
+            "children": channels,
+            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": class_,
+                       "text": "A client workspace. The persona reads it through the connector and writes from your own "
+                               "account with the persona mark; the bot never joins it." if class_ == "guest" else ""}}
+
+SLACK_TREE_SETUP = ({"id": "owned", "label": "Add owned workspace"}, {"id": "guest", "label": "Add guest workspace"})
+
+def _slack_tree_failed(message):
+    """The tree of a read that could not resolve the policy: one project node in the error state, its Now tiles at zero,
+    the reason as its one defect, and the two setup choices. A broken module never costs the reader the tree's shape."""
+    return {"err": message, "files": {"committed": "slack.yaml", "local": "slack.local.yaml"}, "defects": [message],
+            "empty": True, "guest_slot": None,
+            "root": {"id": "p", "level": 1, "kind": "project", "name": _slack_project_label(), "state": "error",
+                     "badges": [_slack_badge("no Slack", "muted")], "children": [], "defects": [message],
+                     "now": [{"key": key, "value": "0", "tone": "neutral"} for key in ("Workspaces", "Channels", "Personas", "Events")],
+                     "setup": list(SLACK_TREE_SETUP), "detail": {"title": "", "sub": "", "text": ""}}}
+
+def slack_tree(committed=None, local=None):
+    """The tree of the Communication theme (SPEC 2682 #2824): Project > Workspace > Channel, each node with its badges
+    and its Now tiles. Every resolved value comes from the policy module (#2684); this read merges the rows and counts
+    them, and computes no rule (ADR-0137, ADR-0177). Called with no path, it reads the files of the profile in force."""
+    if committed is None and local is None:
+        try:
+            committed, local = slack_yaml_paths()
+        except Exception as e:
+            return _slack_tree_failed(f"the Slack files did not resolve: {type(e).__name__}: {e}")
+    try:
+        P = slack_policy()
+        committed_doc, local_doc, read_defects = P.documents(committed, local)
+    except Exception as e:
+        return _slack_tree_failed(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
+    cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
+    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
+    refused_keys = set()
+    for d in defects:
+        hit = re.match(r"workspaces\[(\d+)\]\.id\Z", str(d.key))
+        if hit and d.reason == P.SECOND_GUEST_REASON:
+            refused_keys.add((d.file, int(hit.group(1))))
+    groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
+    local_rows = _slack_dicts(local_doc.get("workspaces"))
+    guests = P.guest_workspaces(local_doc)
+    held = _slack_text(local_rows[guests[0]][1].get("label") or local_rows[guests[0]][1].get("id")) if guests else None
+    guest_slot = {"held": held, "count": len(guests), "line": f"Guest slot 1 of {len(guests)} · {held}"} if guests else None
+    label = _slack_project_label()
+    personas = _slack_dicts(committed_doc.get("personas"))
+    events = _slack_dicts(committed_doc.get("events"))
+    project = P.project_settings(committed_doc, local_doc)
+    default_name = next((_slack_text(r.get("name")) for i, r in personas
+                         if _slack_text(r.get("id")) == project["persona"]), None)
+    nodes = [_slack_tree_node_workspace(P, committed_doc, local_doc, g, f"w{k}", held, refused_keys, defects)
+             for k, g in enumerate(groups)]
+    empty = not groups
+    rows = [(_slack_tree_channel_row(g, ch["id"]), g) for g in groups for ch in g["channels"]]
+    speak = sum(1 for merged, g in rows if P.can_speak(merged))
+    subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
+    guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
+    now = [] if empty else [
+        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
+                    tone="ok" if groups else "warn"),
+        _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="ok" if speak else "warn"),
+        _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
+                    else f"{len(personas)} · no default", tone="ok" if personas else "warn"),
+        _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe",
+                    tone="ok" if events else "warn")]
+    root = {"id": "p", "level": 1, "kind": "project", "name": label, "state": "empty" if empty else "ok",
+            "badges": [_slack_badge("no Slack", "muted")] if empty else
+                      ([_slack_badge(default_name)] if default_name else []),
+            "now": now, "children": nodes, "defects": [], "setup": list(SLACK_TREE_SETUP) if empty else [],
+            "detail": {"title": label, "sub": "",
+                       "text": "This project has no Slack files yet." if empty else ""}}
+    return {"err": None, "files": {"committed": cf, "local": lf}, "defects": [str(d) for d in defects],
+            "empty": empty, "guest_slot": guest_slot, "root": root}
+
 def slack_overview(committed=None, local=None):
     """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
     role with its actions, each Slack workspace with its class and channels, and each project event with its template.
@@ -247,12 +430,14 @@ def slack_overview(committed=None, local=None):
         try:
             committed, local = slack_yaml_paths()
         except Exception as e:
-            return _slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
+            return dict(_slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}"),
+                        tree=_slack_tree_failed(str(e)))
     try:
         P = slack_policy()
         committed_doc, local_doc, defects = P.documents(committed, local)
     except Exception as e:
-        return _slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}", committed, local)
+        return dict(_slack_overview_empty(f"the Slack rules module did not resolve: {type(e).__name__}: {e}", committed, local),
+                    tree=_slack_tree_failed(str(e)))
     cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
     project = P.project_settings(committed_doc, local_doc)
     personas = [{"id": _slack_text(r.get("id")), "name": _slack_text(r.get("name")), "voice": _slack_text(r.get("voice")),
@@ -296,6 +481,8 @@ def slack_overview(committed=None, local=None):
     # The persona editor (#2697): the voice list the policy module owns, and the reply of each channel before a save.
     out["voices"] = sorted(str(v) for v in P.GEMINI_VOICES)
     out["previews"] = _slack_reply_previews(P, committed_doc, local_doc)
+    # The tree (#2824): one read of the same two files, node by node, from the policy module alone.
+    out["tree"] = slack_tree(committed, local)
     return out
 
 # --- Settings > Communication, the save path (SPEC 2682 #2694). The theme saves the two files it reads: the profile's
