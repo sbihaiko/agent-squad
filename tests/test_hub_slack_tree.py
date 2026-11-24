@@ -355,7 +355,7 @@ def test_at_600_px_the_tree_collapses_after_a_selection_and_the_now_block_keeps_
 # ---------------------------------------------------------------- the permissions and the sender preview
 
 def permissions(hub, tmp_path, name="#proj-agent-squad", committed=None, local=None):
-    return by_name(tree(hub, tmp_path, committed, local), name)["permissions"]
+    return by_name(tree(hub, tmp_path, committed, local)["root"], name)["permissions"]
 
 
 def preview(hub, tmp_path, committed=None, local=None, **query):
@@ -364,7 +364,7 @@ def preview(hub, tmp_path, committed=None, local=None, **query):
 
 
 def test_the_permissions_section_lists_the_project_roles_with_their_actions_and_members(hub, tmp_path):
-    node = by_name(tree(hub, tmp_path), "#proj-agent-squad")
+    node = by_name(tree(hub, tmp_path)["root"], "#proj-agent-squad")
     assert node["ref"] == {"workspace": "T0TEAM0001", "channel": "C0PROJ0001"}, node.get("ref")
     roles = {r["id"]: r for r in node["permissions"]["roles"]}
     assert list(roles) == ["manager", "colleague"], node["permissions"]["roles"]

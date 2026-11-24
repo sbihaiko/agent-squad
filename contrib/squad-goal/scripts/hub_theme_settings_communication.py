@@ -283,6 +283,34 @@ def _slack_tree_channel_row(group, ch_id):
                 merged.update(candidate)
     return merged
 
+def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
+    """The Permissions section of one channel: each role of the project with its actions, whether the channel accepts
+    it and its members. The distinct eligible people, the members the preview offers and a note for each person who
+    holds two accepted roles come from the same rows. The policy decides every value; this read only arranges them."""
+    accepted = [_slack_text(r) for r in merged.get("roles") or ()]
+    own = [row for _, row in _slack_dicts(local_doc.get("members"))
+           if (_slack_text(row.get("workspace")), _slack_text(row.get("channel"))) == (ws_id, ch_id)]
+    roles = []
+    for _, role in _slack_dicts(committed_doc.get("roles")):
+        rid = _slack_text(role.get("id"))
+        users = [str(u) for row in own if _slack_text(row.get("role")) == rid for u in row.get("users") or ()]
+        roles.append({"id": rid, "actions": [_slack_text(a) for a in role.get("actions") or ()],
+                      "accepted": rid in accepted, "members": users})
+    held = {}
+    for row in own:
+        role = _slack_text(row.get("role"))
+        if role not in accepted:
+            continue
+        for user in row.get("users") or ():
+            names = held.setdefault(str(user), [])
+            if role not in names:
+                names.append(role)
+    notes = [f"{user} holds {' and '.join(names)}. The policy takes {names[0]}, the first membership in the file."
+             for user, names in held.items() if len(names) > 1]
+    people = list(dict.fromkeys(str(u) for row in own for u in row.get("users") or ()))
+    return {"roles": roles, "eligible": len(set(P.resolved_members(local_doc, ws_id, ch_id, accepted))),
+            "notes": notes, "members": people}
+
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -321,7 +349,8 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
     node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
-            "badges": badges, "now": now,
+            "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
+            "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
             "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
@@ -457,11 +486,7 @@ def slack_tree(committed=None, local=None):
         return _slack_tree_failed(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
     cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
     defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
-    refused_keys = set()
-    for d in defects:
-        hit = re.match(r"workspaces\[(\d+)\]\.id\Z", str(d.key))
-        if hit and d.reason == P.SECOND_GUEST_REASON:
-            refused_keys.add((d.file, int(hit.group(1))))
+    refused_keys = _slack_refused_keys(P, defects)
     groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
     local_rows = _slack_dicts(local_doc.get("workspaces"))
     guests = P.guest_workspaces(local_doc)
@@ -496,6 +521,52 @@ def slack_tree(committed=None, local=None):
                        "text": "This project has no Slack files yet." if empty else ""}}
     return {"err": None, "files": {"committed": cf, "local": lf}, "defects": [str(d) for d in defects],
             "empty": empty, "guest_slot": guest_slot, "root": root}
+
+def _slack_flag(value):
+    return str(value or "").lower() in ("1", "true", "yes")
+
+def _slack_refused_keys(P, defects):
+    """The (file, index) of each workspace row a second guest refuses, as the validator names it."""
+    keys = set()
+    for d in defects:
+        hit = re.match(r"workspaces\[(\d+)\]\.id\Z", str(d.key))
+        if hit and d.reason == P.SECOND_GUEST_REASON:
+            keys.add((d.file, int(hit.group(1))))
+    return keys
+
+def slack_decide(query, committed=None, local=None):
+    """GET /api/slack/decide: the sender preview of one channel. It runs `decide` on one message event built from the
+    query (`workspace`, `channel`, `user`, and the flags `bot` and `own`) and returns the answer as text. It posts
+    nothing. A refused workspace reads `not read` in every field, because the policy never reads it."""
+    not_read = {"err": None, "decision": "not read", "role": "not read", "actions": "not read", "reply": "not read",
+                "mark": "not read", "language": "not read"}
+    if committed is None and local is None:
+        try:
+            committed, local = slack_yaml_paths()
+        except Exception as e:
+            return {"err": f"the Slack files did not resolve: {type(e).__name__}: {e}"}
+    try:
+        P = slack_policy()
+        committed_doc, local_doc, read_defects = P.documents(committed, local)
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
+    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
+    refused_keys = _slack_refused_keys(P, defects)
+    ws_id, ch_id = str(query.get("workspace") or ""), str(query.get("channel") or "")
+    groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
+    group = next((g for g in groups if g["id"] == ws_id), None)
+    if group is not None and (group["file"], group["index"]) in refused_keys:
+        return not_read
+    merged = _slack_tree_channel_row(group, ch_id) if group is not None else {}
+    decision = P.decide(committed_doc, local_doc,
+                        {"workspace": ws_id, "channel": ch_id, "user": str(query.get("user") or ""),
+                         "kind": "message", "bot": _slack_flag(query.get("bot")), "own": _slack_flag(query.get("own"))},
+                        dt.datetime.now(dt.UTC))
+    return {"err": None, "decision": decision.kind, "role": decision.role or "none",
+            "actions": ", ".join(decision.actions) or "none", "reply": P.reply_label(merged, decision),
+            "mark": (P.mark(decision.persona) if decision.mark else "") or "none",
+            "language": decision.language}
 
 def slack_overview(committed=None, local=None):
     """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
