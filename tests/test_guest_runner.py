@@ -5,6 +5,7 @@ id, `ts` and text here is a placeholder.
 """
 import io
 import json
+import shlex
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -220,6 +221,45 @@ def test_a_text_page_poll_logs_a_decision_count_above_zero(tmp_path):
     prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
     runner.tick(NOW)
     assert "poll " + CH + " decisions=2" in log.getvalue()
+
+
+def post_hook_argv(argv):
+    """The arguments of the `PostToolUse` hook of one session argv, as `hook_main` reads them."""
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    command = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+    return shlex.split(command)[[n for n, word in enumerate(shlex.split(command)) if word == "hook"][0] + 1:]
+
+
+def session_with_a_read_then_no_page():
+    """A session that runs its own read hook on the connector's page and then answers with no page at all. The model
+    reformats the tool's page, and its answer shape varies from poll to poll."""
+    def run(argv, **kwargs):
+        read = {"tool_name": "mcp__claude_ai_Slack__slack_read_channel", "tool_input": {"channel_id": CH},
+                "tool_response": {"messages": [CONNECTOR_PAGE], "next_cursor": "PLACEHOLDER-CURSOR",
+                                  "redacted": False}}
+        G.hook_main(post_hook_argv(argv), stdin=io.StringIO(json.dumps(read)), stdout=io.StringIO(),
+                    stderr=io.StringIO())
+        stdout = json.dumps({"type": "result", "result": "I read the page of the channel."})
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+    return run
+
+
+def test_a_poll_reads_the_page_its_read_tool_returned_when_the_answer_is_no_page(tmp_path):
+    """#2855: the model reformats the tool's page and the shape of its answer varies, so the runner reads the page the
+    connector's read tool returned, which the `PostToolUse` hook keeps, and reads the answer only as a fallback."""
+    log = io.StringIO()
+    runner = make_runner(tmp_path, session_with_a_read_then_no_page(), log=log)
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert "poll " + CH + " decisions=2" in log.getvalue()
+
+
+def test_a_poll_keeps_no_page_text_on_disk_after_it_reads_the_page(tmp_path):
+    """#2855: the page the runner reads is transient, so no message text stays on disk after the poll (story 42)."""
+    runner = make_runner(tmp_path, session_with_a_read_then_no_page())
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert list((runner.state_root / "sessions" / CH).glob("page*.json")) == []
 
 
 def test_session_selects_the_workspace_by_team_id(tmp_path):
