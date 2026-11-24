@@ -825,9 +825,13 @@ class DispatchRunner:
         async with anyio.create_task_group() as reviews:
             try:
                 # The children's bound: the run scope, the node deadline and the wave ceiling, read by the engine helper
-                # `_call_deadline` reads too (#2840). A child's fix round is not bound by it: the review pauses the age cap.
+                # `_call_deadline` reads too (#2840). `by` names which of them shortened it, so a child's call never
+                # labels a run or node deadline as the wave ceiling. A fix round is not bound by `by`; the review pauses
+                # the age cap, and the call itself still ends at the ceiling the engine watches.
                 now = ctx.clock()
-                bound, by = ctx.wave_bound(min(sc.deadline_at - now, node["deadline"] * ctx.scale))
+                node_left, run_left = node["deadline"] * ctx.scale, sc.deadline_at - now
+                own, by = (node_left, "node_deadline") if node_left <= run_left else (run_left, "run_deadline")
+                bound, by = ctx.wave_bound(own, by)
                 seen = await ctx.runs.run_of(node, ent, pe, sc, now + bound, reviews, limit_by=by)
                 owed = await d.land(node, entry, sc, seen)
             except Exception as x:  # noqa: BLE001 - a task group wraps its body's exception: hand the run the one it raised
