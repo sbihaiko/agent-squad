@@ -38,6 +38,8 @@ SPEC_BOT_SCOPES = sorted([
     "channels:history",
     "channels:manage",
     "channels:read",
+    "groups:history",
+    "groups:read",
     "files:read",
     "files:write",
     "im:history",
@@ -46,7 +48,7 @@ SPEC_BOT_SCOPES = sorted([
     "users:read",
     "app_mentions:read",
 ])
-SPEC_EVENTS = ["message.im", "app_mention", "message.channels"]
+SPEC_EVENTS = ["message.im", "app_mention", "message.channels", "message.groups"]   # #2816: private owned channels
 VALUE = "xoxb-FAKE-0123456789-NOT-A-REAL-TOKEN"
 
 FAKE_SECURITY = """#!/bin/sh
