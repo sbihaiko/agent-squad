@@ -167,6 +167,17 @@ def test_shadow_tick_records_decisions_and_makes_no_write_call(tmp_path):
     assert "poll " + CH + " decisions=2" in log.getvalue()
 
 
+def test_shadow_tick_never_calls_deliver_even_when_the_poll_hands_out_a_decision(tmp_path, monkeypatch):
+    delivered = []
+    runner = make_runner(tmp_path, fake_session(FakeConnector([])), shadow=True,
+                         deliver=lambda *args: delivered.append(args))
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    handed = [({"ts": "1900000000.000100", "text": SECRET}, object())]
+    monkeypatch.setattr(G.P.Poller, "poll", lambda self, workspace, channel: handed)
+    runner.tick(NOW)
+    assert delivered == []
+
+
 def test_live_tick_delivers_each_decision_through_the_connector(tmp_path):
     connector = FakeConnector([message("1900000000.000100"), message("1900000001.000100")])
     runner = make_runner(tmp_path, fake_session(connector), shadow=False, deliver=deliver_to(connector))

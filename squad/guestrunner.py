@@ -160,8 +160,9 @@ class GuestRunner:
         except SessionFailed as e:
             self._emit(f"guest-runner: poll {channel} failed: {e}")
             return False
-        for message, decision in pairs:
-            self.deliver(workspace, channel, message, decision)
+        if not self.shadow:
+            for message, decision in pairs:
+                self.deliver(workspace, channel, message, decision)
         count = len(poller.shadow.entries(str(channel))) - recorded if self.shadow else len(pairs)
         self._emit(f"guest-runner: poll {channel} decisions={count}")
         schedule.polled(workspace, channel, now)
