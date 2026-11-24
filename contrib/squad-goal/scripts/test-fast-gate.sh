@@ -748,7 +748,9 @@ s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=5 SG_GATE_FULL_BOUN
 # the gate still reports the delta bound it stopped at, never the full one.
 vstub latefull 'trap "" TERM; sleep 1.5; printf "full\n" > "$GATE_SCOPE_FILE"; sleep 30'
 s0=$(date +%s); out=$(SG_STATE="$fbst" SG_GATE_BOUND_SECONDS=1 SG_GATE_FULL_BOUND_SECONDS=4 vfg latefull); rc=$?; el=$(( $(date +%s) - s0 ))
-[ $rc = 4 ] && [ "$el" -lt 5 ] && case "$(last "$out")" in *"its 1s deadline"*) true;; *) false;; esac \
+# The label carries the claim: a relabelled stop names the 4 s full bound. The wall only proves no hang (#2813: no bare
+# constant under a loaded runner), as the full-hang case above bounds it.
+[ $rc = 4 ] && [ "$el" -lt 20 ] && case "$(last "$out")" in *"its 1s deadline"*) true;; *) false;; esac \
   && ok "2379 a scope named after the delta stop never relabels the stop (${el}s)" \
   || ko "2379 a late scope relabelled the stop: rc $rc in ${el}s, last '$(last "$out")'"
 pgrep -f "sleep $HANG_NAP" >/dev/null 2>&1 && ko "2379 the full battery's tree survived its bound" || ok "2379 the full bound kills the battery's tree"
