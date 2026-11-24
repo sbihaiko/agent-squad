@@ -422,11 +422,14 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
 #sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
 #sbody .slti:hover{background:var(--inset)}
-#sbody .slti.lv2{padding-left:20px}#sbody .slti.lv3{padding-left:36px}
+/* The indent guides (mockup, #2843): one rule per ancestor level, drawn by an empty span of the row, so the line ends at
+   the last child of the subtree and never runs past it. */
+#sbody .sltg{flex:0 0 16px;align-self:stretch;margin-right:2px}
+#sbody .sltg.more{border-left:1px solid var(--line)}
 #sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
 #sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
 #sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
-#sbody .sltkind{flex:0 0 auto;color:var(--mute)}
+#sbody .sltkind{flex:0 0 14px;width:14px;height:14px;color:var(--mute)}
 #sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto}
 #sbody .sltb{padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
@@ -453,15 +456,18 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slsetrow .slfile{justify-self:end;margin-left:0}
 #sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slsetval{color:var(--fg)}
-/* A panel narrower than 700px has no room for the tree and the detail side by side: the tree alone shows until a pick,
-   then the detail alone with its back button, the phone's own rule at the panel's width (#2844). A row stacks its label
-   over its control below 560px, so the chip and the control keep their room in a narrow pane. */
-@container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltcol{display:none}
- #sbody .slttop.sltshow .sltdetail{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+/* A panel narrower than 700px has no room for the tree and the detail side by side: the tree alone shows until the
+   first selection, then the detail alone with its back button, the phone's own rule at the panel's width (#2843). The
+   flag `sltshow` means "the detail alone is shown": a pick sets it true only on a narrow panel, and the back button
+   clears it, so a wide panel keeps both columns. A row stacks its label over its control below 560px, so the chip and
+   the control keep their room in a narrow pane. */
+@container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltdetail{display:none}
+ #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+@container (min-width:701px){#sbody .slttop.sltshow .sltcol{display:block}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltcol{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -1461,12 +1467,15 @@ function slWsReadHtml(r,join){return (r.workspaces.length?"":`<p class=m>${esc("
   +(w.channels.length?`<table class=slt2><thead><tr>${slChHeads.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`
    +w.channels.map(c=>`<tr><td data-l="Channel">#${esc(c.name)} <span class=m>${esc(c.id)}</span></td><td data-l="Mode"><span class=nw>${esc(c.mode)}</span></td><td data-l="Language"><span class=nw>${esc(c.language)}</span></td><td data-l="Persona"><span class=nw>${esc(c.persona||"none")}</span></td><td data-l="Roles">${join(c.roles,"owner only")}</td><td data-l="Announce">${join(c.announce,"never posts")}</td></tr>`).join("")
    +`</tbody></table>`:`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)).join("")}
+function slKeepFocus(id){if(!id||typeof document==="undefined"||!document.getElementById)return false;const el=document.getElementById(id);if(el&&el.focus){el.focus();return true}return false}   // the control the owner changed keeps the keyboard (#2846)
 function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML="<span class=m>Loading the data.</span>";return}
  const st=slStatusText(slR);setChip("slk",st);const nv=$("#slknav");if(nv)nv.textContent=st;   // a status: the render writes the one text to the chip and the nav line (#1284)
- slT=(slR&&slR.tree)||slT;if(slT&&!slTNode(slTsel))slTsel="p";   // a reload that dropped the selected node falls back to the project
+ if(!slT&&slR&&slR.tree)slT=slR.tree;   // a fresh read plants the tree; a staged edit keeps its own until the save (#2846)
+ if(slT&&!slTNode(slTsel))slTsel="p";   // a reload that dropped the selected node falls back to the project
+ const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
  let h=slTreeHtml()+slReadHtml(slR);
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
- b.innerHTML=h;slTBind();slTFocus();if(typeof setBar==="function")setBar()}
+ b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar()}
 /* The Communication tree (SPEC 2682 #2824): Project > Workspace > Channel, with the selected node's state in a Now
    block of tiles. The hub answers every value from the policy module; the view constructs, binds and moves the focus,
    and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow keys, Home and End. */
@@ -1485,11 +1494,18 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
  if(key==="ArrowRight"){if(!n.kids)return null;if(!n.open)return {focus:cur,toggle:cur};const k=f[i+1];return k&&k.parent===cur?{focus:k.id}:null}
  if(key==="ArrowLeft"){if(n.kids&&n.open)return {focus:cur,toggle:cur};return n.parent?{focus:n.parent}:null}
  return null}
-function slTGo(r){if(!r)return;if(r.toggle)slTopen[r.toggle]=!slTopen[r.toggle];if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
-function slTPick(id){slTsel=id;slTF=id;slTshow=false;slRender()}
+function slTGo(r){if(!r)return;
+ if(r.toggle)slTopen[r.toggle]=!slTOpen(slTNode(r.toggle));   // an untouched node reads as open, so the fold must flip that reading
+ if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
+function slTPick(id){slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
-function slTBack(){slTshow=true;slRender();const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slt_"+slTsel);if(el&&el.focus)el.focus()}
-function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;const el=document.getElementById("slt_"+id);if(el&&el.focus)el.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree
+const slTNarrow=()=>{const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sbody");
+ return !!el&&!!el.getBoundingClientRect&&el.getBoundingClientRect().width<=700};
+function slTBack(){slTshow=false;slRender();const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slt_"+slTsel);if(el&&el.focus)el.focus()}
+function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;
+ const el=document.getElementById("slt_"+id);
+ if(el&&el.focus&&(!el.getClientRects||el.getClientRects().length)){el.focus();return}   // a folded item has no box and takes no focus
+ const d=document.getElementById("sltdetail");if(d&&d.focus)d.focus()}   // a fold, a pick and a crumb keep the keyboard on the tree or the detail pane
 function slSetup(kind){const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slwsclass]");
  if(el){el.value=kind;if(el.scrollIntoView)el.scrollIntoView({block:"center"});el.focus()}else{slMsg="!The workspace editor opens when the Slack files are readable.";slRender()}}
 function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)return;
@@ -1499,10 +1515,22 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
 const slTBadge=b=>`<span class="sltb ${esc(b.tone||"neutral")}">${esc(b.text)}</span>`;
-function slTItem(n,cur){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
+/* The level icons (mockup, #2843): an office building for the project and a folder for a workspace, both drawn in the
+   row's own colour. A channel shows the chat bubble of a guest channel or a direct message and the hash otherwise; the
+   hub names which one in the node's `icon`. */
+const slTKinds={
+ project:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2.5 13.5V3h4.5v10.5"/><path d="M7 13.5V6h6.5v7.5"/><path d="M1.5 13.5h13"/><path d="M4 5.5h1M4 8h1M4 10.5h1M9.5 8.5h1M9.5 11h1"/></svg>`,
+ workspace:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2 4.7A1.7 1.7 0 0 1 3.7 3h2.6l1.6 2h4.4A1.7 1.7 0 0 1 14 6.7v4.6A1.7 1.7 0 0 1 12.3 13H3.7A1.7 1.7 0 0 1 2 11.3z"/></svg>`,
+ chat:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M13.5 8.4a4.7 4.7 0 0 1-5.1 4.6 5.7 5.7 0 0 1-1.7-.3L3.3 14l.8-2.5A4.4 4.4 0 0 1 2.9 8.4 4.7 4.7 0 0 1 8 3.8a4.7 4.7 0 0 1 5.5 4.6z"/></svg>`,
+ hash:`<span class=sltkind aria-hidden=true>#</span>`};
+const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:slTKinds.hash):n.kind==="workspace"?slTKinds.workspace:slTKinds.project;
+/* The indent guides of one row, one per ancestor level: the line of a level draws only while that ancestor has another
+   sibling after it, so a subtree's rule ends at its last child and never runs past it (mockup, #2843). */
+const slTGuides=more=>more.map(m=>`<span class="sltg${m?" more":""}" aria-hidden=true></span>`).join("");
+function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
  const label=[n.name].concat((n.badges||[]).map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
- +`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span><span class=sltkind aria-hidden=true>${n.kind==="channel"?"#":n.kind==="workspace"?"▣":"⌂"}</span>`
+ +slTGuides(more||[])+`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span>${slTGlyph(n)}`
  +`<span class=sltname title="${slA(n.name)}">${esc(n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></div>`}
 function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
  return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow">${tiles.join("")}</div></div>`:""}
@@ -1531,12 +1559,13 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c);
+ at=`data-slf="${slA(ch)}|${slA(f)}"`,lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
+ id=`slf_${ch}_${f}`;   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
- if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl ${at} aria-label="${lab}"${v?" checked":""}> ${esc(c.label||f)}</label>`;
- if(c.kind==="select")return `<select class=slsetctl ${at} aria-label="${lab}">`+(c.options||[]).map(slTOpt)
+ if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl id="${slA(id)}" ${at} aria-label="${lab}"${v?" checked":""}> ${esc(c.label||f)}</label>`;
+ if(c.kind==="select")return `<select class=slsetctl id="${slA(id)}" ${at} aria-label="${lab}">`+(c.options||[]).map(slTOpt)
   .map(o=>`<option value="${slA(o.value)}"${o.value===String(v)?" selected":""}>${esc(o.label)}</option>`).join("")+`</select>`;
- return `<input type=text class=slsetctl ${at} aria-label="${lab}" value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
+ return `<input type=text class=slsetctl id="${slA(id)}" ${at} aria-label="${lab}" value="${slA(v)}"${f.indexOf("poll.")===0?` placeholder="the policy default"`:""}>`}
 function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)return "";
  return `<div class=setblk data-blk=settings data-theme=slk><h3 class=blkh>Settings</h3>`
  +rows.map(r=>{const cs=r.controls||[];
@@ -1544,11 +1573,12 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
    +`<span class=slsetk>${esc(c.label||r.label)}</span><span class=slsetc>${slTSettingCtl(n,r,c)}</span>${slTag(r.file)}</div>`).join("")
   +(r.note?`<p class=slsetnote>${esc(r.note)}</p>`:"")}).join("")+`</div>`}
 function slTreeHtml(){if(!slT||!slT.root)return "";const out=[],cur=slTsel;
- const walk=n=>{out.push(slTItem(n,cur));if(slTOpen(n))for(const c of n.children||[])walk(c)};walk(slT.root);
+ const walk=(n,more)=>{out.push(slTItem(n,cur,more));if(!slTOpen(n))return;const kids=n.children||[];
+  kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};walk(slT.root,[]);
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
  +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
- +`<div class=sltdetail>${slTDetail()}</div></div>`}
+ +`<div class=sltdetail id=sltdetail tabindex="-1">${slTDetail()}</div></div>`}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}
@@ -1674,7 +1704,7 @@ function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",s
 function slDocEdit(attr,el){const op=slDocOp(attr,el);if(op)slOp(op)}
 async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
- if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};slMsg=""}}
+ if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)
  catch(x){slMsg="!the edit failed"}slRender()}
 const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
  value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
@@ -1703,13 +1733,14 @@ async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
    }catch(x){window.__slAudio=r.url}}}
  catch(x){slPvMsg="!the sample could not be fetched"}
  slRender()}
-async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slD=null;slMsg="";slRender()}
+function slDiscard(){slDocs=slClone(slSavedDocs);slT=slClone((slR&&slR.tree)||slT);slMsg="";slRender()}   // Discard puts back the values the page read last, the Now block included (#2846)
+async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
  slPv=null;slPvMsg="";   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
-  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs)}catch(x){}}   // the read view follows the save (#2698)
+  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs);slT=(v&&v.tree)||slT}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
@@ -1792,7 +1823,7 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDocs=slClone(slSavedDocs);slMsg="";slRender()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDiscard()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};

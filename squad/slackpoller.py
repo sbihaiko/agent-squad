@@ -33,6 +33,7 @@ Guards: `tests/test_slack_poller.py`, `tests/test_slack_schedule.py`.
 """
 import json
 import os
+import re
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -64,9 +65,20 @@ def tool_word(name, server=DEFAULT_SERVER):
     return tool[len(f"{server}_"):] if tool.startswith(f"{server}_") else tool
 
 
+def connector_word(name, server=DEFAULT_SERVER):
+    """The word of a Slack connector tool, whatever its MCP server: the claude.ai connector names its server
+    `claude_ai_Slack`, so `mcp__claude_ai_Slack__slack_read_channel` and `mcp__slack__slack_read_channel` both give
+    `read_channel` (#2854). None for a tool that is no Slack tool."""
+    word = tool_word(str(name or ""), server)
+    if word is not None:
+        return word
+    tail = str(name or "").rsplit("__", 1)[-1]
+    return tail[len("slack_"):] if tail.startswith("slack_") else None
+
+
 def read_denial(name, server=DEFAULT_SERVER):
     """None when the tool is one of the connector's read tools, else the reason the hook denies it."""
-    tool = tool_word(str(name or ""), server)
+    tool = connector_word(str(name or ""), server)
     if tool is not None:
         words = tool.split("_")
         if words and words[0] in READ_VERBS and not WRITE_VERBS.intersection(words):
@@ -85,33 +97,110 @@ def pre_read_tool_use(server=DEFAULT_SERVER):
     return hook
 
 
+# The connector's read tool answers its page as one formatted text block, not as a list of message objects (#2855). Each
+# message starts at a header line that names the sender and the Message TS, and an optional Thread TS follows the same
+# line. The text of the message is every line after its header, up to the next header.
+_TS = r"\d+(?:\.\d+)?"
+_CONNECTOR_HEADER = re.compile(
+    rf"^\s*(?P<user>.*?)\s*\(\s*Message\s+TS\s*:?\s*(?P<ts>{_TS})"
+    rf"(?:\s*,\s*Thread\s+TS\s*:?\s*(?P<thread_ts>{_TS}))?\s*\)\s*$",
+    re.I)
+
+
+def _header_message(line):
+    """The open message of one header line, or None when the line is no header."""
+    hit = _CONNECTOR_HEADER.match(line)
+    if hit is None:
+        return None
+    message = {"ts": hit.group("ts"),
+               "user": hit.group("user").strip().strip("*_~").strip().rstrip(":").strip()}
+    if hit.group("thread_ts"):
+        message["thread_ts"] = hit.group("thread_ts")
+    return message
+
+
+def text_messages(text):
+    """The messages of a connector page held as text, or None when the text is not a page. A blank text is an empty
+    page, and a text with no header line is a page the reader cannot understand. Each message carries `ts`, `user`,
+    `text`, and `thread_ts` when its header names one."""
+    lines = str(text or "").splitlines()
+    if not any(line.strip() for line in lines):
+        return []
+    out, current, body = [], None, []
+    for line in lines:
+        head = _header_message(line)
+        if head is not None:
+            if current is not None:
+                current["text"] = "\n".join(body).strip()
+                out.append(current)
+            current, body = head, []
+        elif current is not None:
+            body.append(line)
+    if current is not None:
+        current["text"] = "\n".join(body).strip()
+        out.append(current)
+    return out or None
+
+
+def _content_text(block):
+    """The text of a connector result that wraps its page in content blocks, or None."""
+    if isinstance(block, list):
+        parts = [part.get("text") for part in block
+                 if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)]
+        return "\n".join(parts) if parts else None
+    return None
+
+
 def messages_of(response):
-    """The messages of one tool result. A result is a mapping with `messages`, a list, or the JSON text of either; a
-    result the reader cannot understand holds no message, and never raises."""
+    """The messages of one tool result. A result is a mapping with `messages`, a list, the JSON text of either, or the
+    connector's page held as text (#2855). A result the reader cannot understand holds no message, and never raises."""
     if isinstance(response, str):
         try:
             response = json.loads(response)
         except ValueError:
-            return []
+            return text_messages(response) or []
     if isinstance(response, dict):
+        if not isinstance(response.get("messages"), (list, str)) and "content" in response:
+            text = _content_text(response.get("content"))
+            if text is not None:
+                return text_messages(text) or []
         response = response.get("messages")
+    if isinstance(response, str):
+        return text_messages(response) or []
     if not isinstance(response, list):
         return []
-    return [m for m in response if isinstance(m, dict) and m.get("ts") is not None]
+    out = []
+    for item in response:
+        if isinstance(item, dict) and item.get("ts") is not None:
+            out.append(item)
+        elif isinstance(item, str):
+            out.extend(text_messages(item) or [])
+    return out
 
 
 def read_failed(response):
-    """True when a tool result reports a failed read or is not a page: a mapping with `ok` false or with no `messages`
-    list, or text the reader cannot parse. `messages_of` reads a failure as an empty page, so a caller that must not lose
-    a thread asks this first."""
+    """True when a tool result reports a failed read or is not a page: a mapping with `ok` false, a page the reader
+    cannot understand, or text of no page. A blank text and an empty page are no failure; `messages_of` reads a failure
+    as an empty page, so a caller that must not lose a thread asks this first."""
     if isinstance(response, str):
         try:
             response = json.loads(response)
         except ValueError:
-            return True
+            return text_messages(response) is None
     if isinstance(response, dict):
-        return response.get("ok") is False or not isinstance(response.get("messages"), list)
-    return not isinstance(response, list)
+        if response.get("ok") is False:
+            return True
+        page = response.get("messages")
+        if not isinstance(page, (list, str)) and "content" in response:
+            page = _content_text(response.get("content"))
+    else:
+        page = response
+    if isinstance(page, str):
+        return text_messages(page) is None
+    if not isinstance(page, list):
+        return True
+    texts = [item for item in page if isinstance(item, str)]
+    return bool(texts) and all(text_messages(text) is None for text in texts)
 
 
 def _stamp(ts):

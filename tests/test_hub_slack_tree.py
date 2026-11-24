@@ -344,9 +344,107 @@ def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
     assert f'aria-label="{full}' in html, "the accessible name keeps the full name"
 
 
-def test_at_600_px_the_tree_collapses_after_a_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
+def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):
+    """ArrowLeft on an open node folds it on the first press, whether or not the owner ever toggled it (WebDriver #2843).
+    An unfolded node reads as open, so the toggle must flip the state the row shows, never the absent entry."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='w0';slTopen={{}};"
+            "const before=slTFlat().map(x=>x.id);"
+            "const openBefore=slTOpen(slTNode('w0'));"
+            "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
+            "console.log(JSON.stringify({before,openBefore,after:slTFlat().map(x=>x.id),openAfter:slTOpen(slTNode('w0'))}))")
+    got = json.loads(_node(body))
+    assert got["openBefore"] is True, "an untouched node reads as open before the keypress"
+    assert got["before"] == ["p", "w0", "w0.c0", "w0.c1", "w1", "w1.c0", "w1.c1"], got["before"]
+    assert got["after"] == ["p", "w0", "w1", "w1.c0", "w1.c1"], got["after"]
+    assert got["openAfter"] is False, "the first ArrowLeft press folds the never-toggled node"
+
+
+def test_a_pick_at_phone_width_keeps_the_keyboard_focus_in_the_detail_pane(hub, tmp_path):
+    """A phone folds the tree on a pick, so the picked tree item has no box and takes no focus: focus moves to the
+    detail pane instead of falling to BODY (WebDriver #2843). A picked row that still has a box keeps the focus."""
+    out = read(hub, tmp_path)
+    base = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+            "const focused=[];"
+            "const sbody={getBoundingClientRect(){return {width:390}}};"
+            "const detailEl={focus(){focused.push('detail')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};")
+    folded = base + (
+            "const treeEl={focus(){focused.push('tree')},getClientRects(){return []}};"   # inside the folded column: no box
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
+            "id==='slt_w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
+    got = json.loads(_node(folded))
+    assert got["sel"] == "w0.c0"
+    assert got["show"] is True, "a pick at phone width folds the tree"
+    assert got["focused"] == ["detail"], got
+
+    shown = base + (
+            "const rowEl={focus(){focused.push('tree')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
+            "id==='slt_w0.c0'?rowEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
+    tree = json.loads(_node(shown))
+    assert tree["focused"] == ["tree"], "a picked row that still has a box keeps the focus"
+
+
+def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
     page = hub.PAGE
-    assert re.search(r"@media ?\(max-width: ?600px\)\{[\s\S]*?\.slttop:not\(\.sltshow\) \.sltcol\{display:none\}",
-                     page), "the phone hides the tree after a selection"
+    assert re.search(r"\.slttop:not\(\.sltshow\) \.sltdetail\{display:none\}", page), \
+        "the phone shows the tree until the first selection"
+    assert re.search(r"\.slttop\.sltshow \.sltcol\{display:none\}", page), \
+        "the phone folds the tree after the first selection"
+    assert not re.search(r":not\(\.sltshow\) \.sltcol\{display:none\}", page), \
+        "the tree is never hidden before a selection"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
         "the phone keeps two tiles"
+    assert re.search(r"@container \(min-width:701px\)\{#sbody \.slttop\.sltshow \.sltcol\{display:block\}\}", page), \
+        "a wide panel keeps the tree beside the detail through every selection"
+
+
+def test_a_pick_on_a_wide_panel_keeps_the_tree_beside_the_detail(hub, tmp_path):
+    """The fold belongs to a narrow panel alone: a pick at 1440 px leaves `slTshow` false so the tree stays paneled
+    beside the detail, and the wide rule keeps its column visible (WebDriver #2843)."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+            "const wide={getBoundingClientRect(){return {width:1440}}};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?wide:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({sel:slTsel,show:slTshow}))")
+    got = json.loads(_node(body))
+    assert got["sel"] == "w0.c0"
+    assert got["show"] is False, "a wide panel never folds the tree on a pick"
+
+
+def _item(html, node_id):
+    return re.search(r'<div role=treeitem id="slt_' + re.escape(node_id) + r'".*?</div>', html, re.S).group(0)
+
+
+def test_the_tree_draws_indent_guides_and_level_icons_and_no_glyph_fallback(hub, tmp_path):
+    html = render(hub, read(hub, tmp_path))
+    assert "⌂" not in html and "▣" not in html, "the house and square glyphs are gone"
+    assert "<svg class=sltkind" in _item(html, "p"), "the project carries a level icon"
+    assert "<svg class=sltkind" in _item(html, "w0"), "the workspace carries a level icon"
+    assert _item(html, "p").count('class="sltg') == 0, "the project is the root of the tree"
+    assert _item(html, "w0").count('class="sltg') == 1, "the workspace draws one guide"
+    assert _item(html, "w0.c0").count('class="sltg') == 2, "a channel draws one guide per ancestor level"
+    # The line runs only while its ancestor has another sibling after it, so a subtree's rule ends at its last child.
+    assert 'class="sltg more"' in _item(html, "w0"), "the project's rule continues past a workspace with one after it"
+    assert 'more' not in _item(html, "w1"), "the project's last workspace ends the rule"
+    last = _item(html, "w1.c1")
+    assert last.count('class="sltg') == 2 and "more" not in last, "the last channel ends both rules"
+
+
+def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash(hub, tmp_path):
+    """A direct message of an owned workspace has no guest class, so its own Slack id (a `D` id) reads as a chat, and a
+    regular channel keeps the hash (mockup, #2843)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"].append({"id": "D0DM00001", "name": "owner-dm", "mode": "listen"})
+    root = tree(hub, tmp_path, committed=committed)["root"]
+    assert by_name(root, "#support")["icon"] == "chat", "a guest channel shows the chat icon"
+    assert by_name(root, "#owner-dm")["icon"] == "chat", "a direct message shows the chat icon"
+    assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
+    html = render(hub, read(hub, tmp_path, committed=committed))
+    assert "<svg class=sltkind" in _item(html, "w0.c2"), _item(html, "w0.c2")   # the DM channel
+    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "w0.c0")

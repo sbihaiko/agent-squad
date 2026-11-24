@@ -105,6 +105,13 @@ def test_a_read_tool_passes_and_every_other_tool_is_denied():
         assert reason and "read" in reason, (name, reason)
 
 
+def test_the_claude_ai_connector_read_tool_passes_the_read_hook():
+    """#2854: the claude.ai connector names its server `claude_ai_Slack`, so the guest poll hook must accept that name
+    too, or the session holds a read tool that every call is denied."""
+    assert P.read_denial("mcp__claude_ai_Slack__slack_read_channel") is None
+    assert P.read_denial("mcp__claude_ai_Slack__slack_send_message") is not None
+
+
 def test_the_pre_hook_returns_one_denial_answer():
     hook = P.pre_read_tool_use()
     denied = asyncio.run(hook({"tool_name": "mcp__slack__slack_send_message", "tool_input": {}}, "t1", None))

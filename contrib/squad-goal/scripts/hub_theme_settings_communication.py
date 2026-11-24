@@ -283,6 +283,13 @@ def _slack_tree_channel_row(group, ch_id):
                 merged.update(candidate)
     return merged
 
+def _slack_tree_channel_icon(P, ws, merged, ch_id):
+    """The channel's tree icon (#2843): the chat bubble of a guest channel or a direct message, the hash otherwise. A
+    direct message carries no workspace class of its own, so its Slack `D` id decides."""
+    guest = P.channel_class(ws, merged) == "guest"
+    return "chat" if guest or str(ch_id).upper().startswith("D") else "hash"
+
+
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -292,8 +299,9 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     name = _slack_text(merged.get("name") or ch_id)
     announcement = [_slack_text(x) for x in merged.get("announce") or ()] if isinstance(merged.get("announce"), list) else []
     label = _slack_text(ws.get("label") or ws_id)
+    icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
     if refused:
-        return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "badges":
+        return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon, "badges":
                 [_slack_badge("refused", "err", "refused")], "now": [],
                 "detail": {"title": f"#{name}", "sub": label, "text": "The workspace is refused, so this channel names no transport."}}
     resolution = P.resolution(committed_doc, local_doc, ws, merged)
@@ -320,7 +328,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
-    node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
+    node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now,
             "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
@@ -356,7 +364,9 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
         """The row draws one line per control, so a group with two controls names each one (#2844)."""
         return {**control, "label": label}
 
-    personas = [{"value": _slack_text(i), "label": _slack_text(row.get("name") or i)}
+    # A persona option stages the persona id the policy names, never the row's place in the list: the hub would refuse a
+    # counter, and the page would show no effect of the edit (#2846).
+    personas = [{"value": _slack_text(row.get("id")), "label": _slack_text(row.get("name") or row.get("id"))}
                 for i, row in _slack_dicts(committed_doc.get("personas")) if _slack_text(row.get("id"))]
     languages = [inherited] + [{"value": language, "label": language} for language in P.LANGUAGES]
     rows = [
@@ -455,6 +465,12 @@ def slack_tree(committed=None, local=None):
         committed_doc, local_doc, read_defects = P.documents(committed, local)
     except Exception as e:
         return _slack_tree_failed(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
+    return _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects)
+
+def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects=()):
+    """The tree of two documents already in hand, so the read route and a staged edit's answer build one shape. Every
+    resolved value comes from the policy module; the caller hands in the documents and the file names, never a rule
+    (ADR-0137, ADR-0177)."""
     cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
     defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
     refused_keys = set()
@@ -1367,9 +1383,12 @@ def slack_docs_edit(body, committed=None, local=None):
                 "defects": [str(d) for d in blocking], "new_defects": [str(d) for d in new],
                 "held_defects": [str(d) for d in held],
                 "committed": docs["committed"], "local": docs["local"]}
+    # The tree of the staged documents, through the policy module, so the page redraws the Now block before the save
+    # (#2846). The files are the ones the edit was handed, so no chip moves under the owner's eyes.
+    tree = _slack_tree_docs(P, draft["committed"], draft["local"], _slack_name(committed, "slack.yaml"), local_name)
     return {"committed": draft["committed"], "local": draft["local"], "err": None, "defects": [],
             "new_defects": [], "held_defects": [],
-            "documents": {"committed": draft["committed"], "local": draft["local"]}}
+            "documents": {"committed": draft["committed"], "local": draft["local"]}, "tree": tree}
 
 def _slack_second_guest(P, defect):
     """Whether one defect is the second-guest refusal. The policy module names its own reason, and a module that names
