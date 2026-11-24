@@ -17,9 +17,10 @@ SCREEN_ROUTES = {"cost": "/api/stats", "lead": "/api/chart/lead"}   # #1028: the
 PERIODS = ["hour", "day", "month"]
 HUB_GET_ROUTES = {
     "/api/adapter-errors", "/api/board", "/api/chart/cfd", "/api/columns", "/api/chart/lead", "/api/delivery", "/api/ended", "/api/issue", "/api/leadtime", "/api/limits", "/api/live", "/api/load", "/api/models",
-    "/api/pending", "/api/runs", "/api/slack-link", "/api/slots", "/api/speed", "/api/stats", "/api/status",
+    "/api/pending", "/api/runs", "/api/slack-link", "/api/slack/decide", "/api/slots", "/api/speed", "/api/stats", "/api/status",
     "/api/subs", "/api/version",
 }   # /api/columns: the Spend & limits theme reads the card limit of each column (#2432); /api/slots: its Machine slots sub-group reads the machine slots (#2435)
+# /api/slack/decide: the Communication theme's sender preview, one decide and no send (SPEC 2682 #2826)
 
 
 def page():
