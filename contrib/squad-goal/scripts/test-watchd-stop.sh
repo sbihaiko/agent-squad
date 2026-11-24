@@ -43,12 +43,14 @@ sleep 300 & gp=$!; echo "$gp" > "$SG_STATE/locks/gate/pid"
 out=$(SG_DRAIN_POLL=1 bash "$T/watchd.sh" stop 2>&1)
 case "$out" in *draining*) ok "stop under a live run says it is draining";; *) ko "stop under a live run did not drain: $out";; esac
 [ -e "$SG_STATE/auto/drain" ] && [ -e "$SG_STATE/auto/off" ] && ok "stop pauses dispatch and marks the drain" || ko "stop left no drain marker and no pause"
+wpid=$(cat "$SG_STATE/auto/drain-waiter" 2>/dev/null)   # (#2801) the waiter clears the marks after the halt: wait on its pid
 sleep 1.5; alive_sup && ok "the loop stays up while the live run's gate is held" || ko "stop killed the loop under a live run"
 kill -0 "$gp" 2>/dev/null && ok "the held gate is not killed by stop" || ko "stop killed the held gate"
 
 # 2. The drained stop: the run ends, the loop stops once the work is done, and no WIP line or ref is written.
 printf '{"event": "verdict"}\n' >> "$T/co/runs/r1/record.jsonl"; kill "$gp" 2>/dev/null; gp=
 wait_down 20 && ok "the drained stop stops the loop once the run and its gate are done" || ko "the drained stop did not stop the loop"
+for _ in $(seq 1 40); do [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null || break; sleep 0.5; done
 grep -q 'WIP ' "$SG_STATE/cycle.log" 2>/dev/null && ko "a drained stop wrote a WIP line" || ok "a drained stop writes no WIP line"
 [ -z "$(git -C "$T/co/runs/r1/ws/child-1" for-each-ref refs/wip 2>/dev/null)" ] && ok "a drained stop writes no WIP ref" || ko "a drained stop wrote a WIP ref"
 [ ! -e "$SG_STATE/auto/drain" ] && ok "the drain marker is gone after the drained stop" || ko "the drain marker outlived the drained stop"
