@@ -484,3 +484,68 @@ def test_stop_keeps_the_pidfile_when_the_runner_ignores_sigterm(tmp_path, monkey
     finally:
         child.kill()
         child.wait()
+
+
+# The shapes the real CLI and the claude.ai Slack connector send (#2859). The CLI hands a `PostToolUse` hook its tool
+# result as MCP content blocks, and the connector wraps the page in a JSON envelope that holds the formatted text page.
+REAL_PAGE = (
+    "Channel: support (C0CLISUP01)\n"
+    "\n"
+    "=== Avery Example <avery@example.com> (UTC) on 2026-11-24 12:00:00 +00 ===\n"
+    "Message TS: 1900000000.000100\n"
+    "> The first placeholder line.\n"
+    "\n"
+    "=== Blair Example <blair@example.com> (UTC) on 2026-11-24 12:01:00 +00 ===\n"
+    "Message TS: 1900000001.000200\n"
+    "> The second placeholder line.\n"
+    "> The second placeholder line, continued.\n"
+)
+REAL_ENVELOPE = json.dumps({"messages": REAL_PAGE, "pagination_info": "PLACEHOLDER-CURSOR"})
+REAL_TOOL_RESULT = [{"type": "text", "text": REAL_ENVELOPE}]
+REAL_TS = ["1900000000.000100", "1900000001.000200"]
+
+
+def test_the_cli_tool_result_reads_as_the_connector_page():
+    """#2859: a real poll session receives its read result as MCP content blocks around a JSON envelope. The reader
+    reads that shape as the page, and it never reads it as an empty page while the channel holds messages."""
+    assert not P.read_failed(REAL_TOOL_RESULT)
+    page = P.messages_of(REAL_TOOL_RESULT)
+    assert [m["ts"] for m in page] == REAL_TS
+    assert [m["user"] for m in page] == ["Avery Example", "Blair Example"]
+    assert page[0]["text"] == "The first placeholder line."
+    assert page[1]["text"] == "The second placeholder line.\nThe second placeholder line, continued."
+
+
+def test_a_poll_keeps_the_page_when_the_cli_hands_its_read_result_as_content_blocks(tmp_path):
+    """#2859: the kept page must hold the channel's messages when the CLI hands the read result as content blocks, so a
+    poll reads the page on its first try and never depends on the shape of the session's answer."""
+    def run(argv, **kwargs):
+        read = {"tool_name": "mcp__claude_ai_Slack__slack_read_channel", "tool_input": {"channel_id": CH},
+                "tool_response": REAL_TOOL_RESULT}
+        G.hook_main(post_hook_argv(argv), stdin=io.StringIO(json.dumps(read)), stdout=io.StringIO(),
+                    stderr=io.StringIO())
+        stdout = json.dumps({"type": "result", "result": "I read the page of the channel."})
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    argv = G.session_argv({"channel": CH, "limit": 5}, WS, tmp_path, tmp_path / "checkpoint.json",
+                          G.page_path(tmp_path))
+    page = G.run_session(argv, tmp_path, run)
+    assert [m["ts"] for m in page] == REAL_TS
+
+
+def test_a_session_answer_that_holds_the_connector_page_text_reads_as_the_page(tmp_path):
+    """#2859: a session that keeps no page answers with the connector's own page text, alone or in a list. The fallback
+    reads that text page instead of raising `no page in the result`."""
+    for result in (json.dumps({"messages": REAL_PAGE}), json.dumps({"messages": [REAL_PAGE]})):
+        page = G.run_session(["claude"], tmp_path, session_of(result))
+        assert [m["ts"] for m in page] == REAL_TS
+
+
+def test_a_failed_poll_names_the_shape_of_the_page_and_never_its_text(tmp_path):
+    """#2859: a page the runner cannot read logs its shape, by keys and types only, never a message text."""
+    with pytest.raises(G.SessionFailed) as caught:
+        G.run_session(["claude"], tmp_path, session_of(json.dumps({"messages": [SECRET]})))
+    reason = str(caught.value)
+    assert "no page in the result" in reason
+    assert "messages: list of 1 of str" in reason
+    assert SECRET not in reason

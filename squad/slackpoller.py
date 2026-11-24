@@ -97,14 +97,18 @@ def pre_read_tool_use(server=DEFAULT_SERVER):
     return hook
 
 
-# The connector's read tool answers its page as one formatted text block, not as a list of message objects (#2855). Each
-# message starts at a header line that names the sender and the Message TS, and an optional Thread TS follows the same
-# line. The text of the message is every line after its header, up to the next header.
+# The connector's read tool answers its page as one formatted text block, not as a list of message objects (#2855). An
+# older page names the sender and the Message TS on one header line. The claude.ai connector names its sender on a
+# `=== sender <email> (zone) on <date> ===` line and its cursor on a `Message TS: <ts>` line, then quotes the message
+# (#2859). Each message starts at a header line, and the text of the message is every line up to the next header.
 _TS = r"\d+(?:\.\d+)?"
 _CONNECTOR_HEADER = re.compile(
     rf"^\s*(?P<user>.*?)\s*\(\s*Message\s+TS\s*:?\s*(?P<ts>{_TS})"
     rf"(?:\s*,\s*Thread\s+TS\s*:?\s*(?P<thread_ts>{_TS}))?\s*\)\s*$",
     re.I)
+_CONNECTOR_BLOCK = re.compile(r"^\s*===\s*(?P<user>.+?)\s*===\s*$")
+_TS_LINE = re.compile(rf"^\s*(?:Message\s+)?TS\s*:?\s*(?P<ts>{_TS})\s*$", re.I)
+_THREAD_LINE = re.compile(rf"^\s*Thread\s+TS\s*:?\s*(?P<thread_ts>{_TS})\s*$", re.I)
 
 
 def _header_message(line):
@@ -119,26 +123,62 @@ def _header_message(line):
     return message
 
 
+def _block_message(line):
+    """The open message of one `=== sender ... ===` header line, or None when the line is no header. The cursor comes on
+    the `Message TS` line that follows (#2859)."""
+    hit = _CONNECTOR_BLOCK.match(line)
+    if hit is None:
+        return None
+    who = hit.group("user").strip()
+    user = re.sub(r"\s*<[^>]*>.*$", "", who).strip()
+    if user == who:
+        user = re.sub(r"\s*\([^)]*\)\s*on\s+.*$", "", who).strip()
+    return {"user": user or who}
+
+
+def _body_line(line):
+    """The text of one body line: a line the connector quotes loses its `>` mark, and keeps its own indentation."""
+    stripped = line.rstrip().lstrip()
+    if stripped.startswith(">"):
+        stripped = stripped[1:]
+        return stripped[1:] if stripped.startswith(" ") else stripped
+    return line.rstrip()
+
+
 def text_messages(text):
     """The messages of a connector page held as text, or None when the text is not a page. A blank text is an empty
     page, and a text with no header line is a page the reader cannot understand. Each message carries `ts`, `user`,
-    `text`, and `thread_ts` when its header names one."""
+    `text`, and `thread_ts` when its header names one. A page names its sender on the older header line or on the
+    connector's `===` block line, and a message with no cursor reads as no message (#2859)."""
     lines = str(text or "").splitlines()
     if not any(line.strip() for line in lines):
         return []
     out, current, body = [], None, []
+
+    def close():
+        nonlocal current, body
+        if current is not None and current.get("ts") is not None:
+            current["text"] = "\n".join(body).strip()
+            out.append(current)
+        current, body = None, []
+
     for line in lines:
-        head = _header_message(line)
+        head = _header_message(line) or _block_message(line)
         if head is not None:
-            if current is not None:
-                current["text"] = "\n".join(body).strip()
-                out.append(current)
+            close()
             current, body = head, []
-        elif current is not None:
-            body.append(line)
-    if current is not None:
-        current["text"] = "\n".join(body).strip()
-        out.append(current)
+            continue
+        if current is None:
+            continue
+        thread = _THREAD_LINE.match(line)
+        stamp = _TS_LINE.match(line)
+        if thread is not None:
+            current["thread_ts"] = thread.group("thread_ts")
+        elif stamp is not None:
+            current["ts"] = stamp.group("ts")
+        else:
+            body.append(_body_line(line))
+    close()
     return out or None
 
 
@@ -151,56 +191,93 @@ def _content_text(block):
     return None
 
 
+def _block_text(response):
+    """The text of a tool result the CLI hands a hook as MCP content blocks, or None for another shape (#2859). The
+    claude.ai connector answers a read as one text block, so the hook sees a list of blocks, never the page."""
+    if isinstance(response, list) and response and all(
+            isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+            for block in response):
+        return "\n".join(block["text"] for block in response)
+    return None
+
+
+def _page_text(text, depth=0):
+    """The page a connector text carries, or None when the text holds no page: the text page itself, or the JSON
+    envelope the connector wraps it in, whose `messages` is the page text or a page list (#2859). A blank text is an
+    empty page."""
+    raw = str(text or "")
+    if not raw.strip():
+        return []
+    page = text_messages(raw)
+    if page is not None:
+        return page
+    if depth >= 3:
+        return None
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    if isinstance(doc, list):
+        return messages_of(doc)
+    if isinstance(doc, dict) and isinstance(doc.get("messages"), (str, list)):
+        inner = doc["messages"]
+        return _page_text(inner, depth + 1) if isinstance(inner, str) else messages_of(inner)
+    return None
+
+
 def messages_of(response):
-    """The messages of one tool result. A result is a mapping with `messages`, a list, the JSON text of either, or the
-    connector's page held as text (#2855). A result the reader cannot understand holds no message, and never raises."""
+    """The messages of one tool result. A result is a mapping with `messages`, a list, the JSON text of either, the
+    connector's page held as text, or the MCP content blocks the CLI hands a hook around that text (#2855, #2859). A
+    result the reader cannot understand holds no message, and never raises."""
+    block = _block_text(response)
+    if block is not None:
+        return _page_text(block) or []
     if isinstance(response, str):
-        try:
-            response = json.loads(response)
-        except ValueError:
-            return text_messages(response) or []
+        return _page_text(response) or []
     if isinstance(response, dict):
         if not isinstance(response.get("messages"), (list, str)) and "content" in response:
             text = _content_text(response.get("content"))
             if text is not None:
-                return text_messages(text) or []
+                return _page_text(text) or []
         response = response.get("messages")
     if isinstance(response, str):
-        return text_messages(response) or []
-    if not isinstance(response, list):
-        return []
-    out = []
-    for item in response:
-        if isinstance(item, dict) and item.get("ts") is not None:
-            out.append(item)
-        elif isinstance(item, str):
-            out.extend(text_messages(item) or [])
-    return out
+        return _page_text(response) or []
+    if isinstance(response, list):
+        out = []
+        for item in response:
+            if isinstance(item, dict) and item.get("ts") is not None:
+                out.append(item)
+            elif isinstance(item, str):
+                out.extend(_page_text(item) or [])
+        return out
+    return []
 
 
 def read_failed(response):
     """True when a tool result reports a failed read or is not a page: a mapping with `ok` false, a page the reader
     cannot understand, or text of no page. A blank text and an empty page are no failure; `messages_of` reads a failure
-    as an empty page, so a caller that must not lose a thread asks this first."""
+    as an empty page, so a caller that must not lose a thread asks this first. The MCP content blocks the CLI hands a
+    hook and the connector's JSON envelope are read as the page they carry (#2859)."""
+    block = _block_text(response)
+    if block is not None:
+        return _page_text(block) is None
     if isinstance(response, str):
-        try:
-            response = json.loads(response)
-        except ValueError:
-            return text_messages(response) is None
+        return _page_text(response) is None
     if isinstance(response, dict):
         if response.get("ok") is False:
             return True
         page = response.get("messages")
         if not isinstance(page, (list, str)) and "content" in response:
-            page = _content_text(response.get("content"))
+            text = _content_text(response.get("content"))
+            return text is None or _page_text(text) is None
     else:
         page = response
     if isinstance(page, str):
-        return text_messages(page) is None
+        return _page_text(page) is None
     if not isinstance(page, list):
         return True
     texts = [item for item in page if isinstance(item, str)]
-    return bool(texts) and all(text_messages(text) is None for text in texts)
+    return bool(texts) and all(_page_text(text) is None for text in texts)
 
 
 def _stamp(ts):

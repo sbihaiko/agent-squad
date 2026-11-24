@@ -52,6 +52,22 @@ class SessionFailed(Exception):
     """A session exited non-zero, or its result holds no page. The reason names no message text."""
 
 
+def shape_of(value):
+    """The shape of a page the runner could not read: keys, types and counts only, never a value (#2859). The runner
+    log names why a page was not read, so the shape reaches the log and no message text ever does."""
+    if isinstance(value, dict):
+        for key in ("messages", "content"):
+            if key in value:
+                return f"{key}: {shape_of(value[key])}"
+        return "mapping with keys " + (",".join(sorted(str(key) for key in value)) or "none")
+    if isinstance(value, list):
+        kinds = sorted({type(item).__name__ for item in value})
+        return f"list of {len(value)} of " + (",".join(kinds) or "nothing")
+    if isinstance(value, str):
+        return "text"
+    return type(value).__name__
+
+
 class _CursorBeforeSession(P.Checkpoint):
     """The cursor as the poll found it. The session's checkpoint hook has already moved the file, so the poll reads the
     value stored before the session, and the page is not delivered twice."""
@@ -191,17 +207,17 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
     try:
         outer = json.loads(done.stdout)
     except (ValueError, TypeError) as e:
-        raise SessionFailed("no page in the result") from e
+        raise SessionFailed("no page in the result: the CLI answer is not JSON") from e
     if not isinstance(outer, dict) or outer.get("is_error") or outer.get("error"):
         raise SessionFailed("the session answered an error")
     try:
         result = session_answer(outer.get("result"))
     except (ValueError, TypeError) as e:
-        raise SessionFailed("no page in the result") from e
+        raise SessionFailed(f"no page in the result: the answer is not JSON ({shape_of(outer.get('result'))})") from e
     if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
         raise SessionFailed("the session answered an error")
     if P.read_failed(result):
-        raise SessionFailed("no page in the result")
+        raise SessionFailed(f"no page in the result: {shape_of(result)}")
     return P.messages_of(result)
 
 
