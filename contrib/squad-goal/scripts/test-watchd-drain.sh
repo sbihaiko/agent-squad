@@ -186,7 +186,7 @@ check("stop-now kills both live runs", code == 200 and until(lambda: not alive(p
 check("each run stop-now killed ends in its verdict", all('"verdict"' in (r / "record.jsonl").read_text().splitlines()[-1] for r in (a, b)))
 code, _ = hub.loop_switch(LB, {"action": "start"}, origin_ok=True)
 c, pc = run("rc")
-check("after the restart only the new run is live", hub.loop_live()["runs"] == [str(c)], hub.loop_live())
+check("after the restart only the new run is live", until(lambda: hub.loop_live()["runs"] == [str(c)]), hub.loop_live())   # the run table reuses one scan for RUN_TABLE_SECS
 code, _ = hub.loop_switch(LB, {"action": "drain"}, origin_ok=True)
 time.sleep(3)
 check("the drain waits on the new live run", code == 200 and hub.loop_view(LB)["state"] == "draining", hub.loop_view(LB))
