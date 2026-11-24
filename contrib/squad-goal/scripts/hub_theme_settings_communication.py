@@ -456,7 +456,8 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     resolution = P.resolution(committed_doc, local_doc, ws)
     persona = resolution["persona"]
     slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
-    now = [_slack_tile("Class", caption, f"from {group['file']}", "warn" if refused else "neutral"),
+    now = [_slack_tile("Class", caption, "", "warn" if refused else "neutral"),
+           _slack_tile("File", _slack_text(group["file"]), "the workspace row lives here"),
            _slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
                        "neutral" if persona else "warn"),
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
@@ -470,7 +471,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     return {"id": node_id, "level": 3, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
             "children": channels,
-            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": _slack_text(ws_id),
+            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}",
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
                                "account with the persona mark; the bot never joins it." if class_ == "guest" else ""}}
 
@@ -559,15 +560,35 @@ def _slack_seat(slug, checkout, project):
             "read_defects": defects, "cf": _slack_name(cp, "slack.yaml"), "lf": _slack_name(lp, "slack.local.yaml")}
 
 
-def _slack_roster():
-    """One seat per project the hub knows, in the seam's order, each profile once."""
+PREVIEW_ROSTER_SECONDS = 3.0   # a burst of previews of one change shares one profile read; a save always reads fresh
+_ROSTER_CACHE = {"key": None, "at": 0.0, "seats": None}
+
+
+def _roster_key():
+    return (str(profiles_dir()), os.environ.get("SG_PROFILES_DIR") or "", os.environ.get("SG_CHECKOUT") or "")
+
+
+def _slack_roster(cache=0.0):
+    """One seat per project the hub knows, in the seam's order, each profile once. `_profiles_context` runs a bash
+    subprocess with a 20 s timeout, so a preview asks a short-lived cache; a save takes no cache and clears it."""
+    key = _roster_key() if cache > 0 else None
+    if cache > 0:
+        ent = _ROSTER_CACHE
+        if ent["seats"] is not None and ent["key"] == key and time.monotonic() - ent["at"] < cache:
+            return ent["seats"]
     seats, seen = [], set()
     for ctx in _profiles_context():
         if ctx["slug"] in seen: continue
         seat = _slack_seat(ctx["slug"], ctx["checkout"], ctx["project"])
         if seat is not None:
             seen.add(ctx["slug"]); seats.append(seat)
+    if cache > 0:
+        _ROSTER_CACHE.update({"key": key, "at": time.monotonic(), "seats": seats})
     return seats
+
+
+def _slack_roster_clear():
+    _ROSTER_CACHE.update({"key": None, "at": 0.0, "seats": None})
 
 
 def _slack_project_node(P, seat, node_id):
@@ -614,7 +635,7 @@ def _slack_project_node(P, seat, node_id):
             "detail": {"title": label, "sub": "",
                        "text": "This project has no Slack files yet." if empty else ""}}
     return {"node": node, "with_slack": bool(committed_doc or local_doc), "channels": len(rows),
-            "guest_slot": guest_slot, "defects": defects}
+            "guest_slot": guest_slot, "notice": notice, "defects": defects}
 
 
 def _slack_persona_options(P, seats):
@@ -647,6 +668,9 @@ def _slack_clients_tree_for(P, seats):
         for j, entry in enumerate(g["projects"]):
             seat = by_id[entry["id"]]
             built = _slack_project_node(P, seat, f"c{i}.p{j}")
+            built["node"]["badges"] = list(built["node"]["badges"]) + [
+                _slack_badge("follows default", "muted", "follow") if entry["follows"]
+                else _slack_badge("own persona", "neutral", "follow")]
             children.append(built["node"])
             with_slack += 1 if CL.has_slack(seat["committed"], seat["local"]) else 0
             channels += built["channels"]
@@ -668,14 +692,15 @@ def _slack_clients_tree_for(P, seats):
                                    "default persona proposes a write to each project's project.persona; a project that set "
                                    "its own persona keeps it."}}
         nodes.append(node)
-    guests = sum(len(P.guest_workspaces(s["local"])) for s in seats)
-    notice = {"title": f"{guests} guest workspaces", "text": P.SECOND_GUEST_REASON} if guests > 1 else None
+    # The second-guest refusal is a per-project rule (#2770), so its banner sits on the project that carries it, never
+    # across the tree; the guest-slot line is built only for a scope of one project.
+    notice = None
     guest_slot = None
-    if slots:
-        first, pid = slots[0]
-        suffix = f" ({pid})" if len(seats) > 1 else ""
-        guest_slot = {**first, "line": f"Guest slot 1 of {len(slots)} · {first['held']}{suffix}"}
-        if len(seats) > 1: guest_slot["project"] = pid
+    if len(seats) == 1:
+        guests = len(P.guest_workspaces(seats[0]["local"]))
+        notice = {"title": f"{guests} guest workspaces", "text": P.SECOND_GUEST_REASON} if guests > 1 else None
+        if slots:
+            guest_slot = {**slots[0][0]}
     files = {"committed": seats[0]["cf"], "local": seats[0]["lf"]} if seats else {"committed": "slack.yaml", "local": "slack.local.yaml"}
     no_slack = not any(CL.has_slack(s["committed"], s["local"]) for s in seats)
     return {"err": None, "files": files, "defects": all_defects + ([merr] if merr else []), "empty": not seats or no_slack, "notice": notice,
@@ -1154,10 +1179,11 @@ def slack_files_post(body):
 # table before the save; the save writes `project.persona` only in the rows that read "writes X", each one through its own
 # project's save path (#2694). The rules of the rows live in the client map module and the policy module (ADR-0177); this
 # route only resolves the seats and calls them (ADR-0137).
-def _slack_client_plan(body):
-    """(plan): one row for each project of the named client, and the committed documents a confirmed save writes, with the
-    two files of each project so the save reaches it. An unknown client, an unnamed persona or a map that does not read
-    answers its one error."""
+def _slack_client_plan(body, cache=0.0):
+    """(plan): one row for each project of the named client, the refused rows with their text, and the committed
+    documents a confirmed save writes, with the two files of each project so the save reaches it. An unknown client, an
+    unnamed persona or a map that does not read answers its one error. A preview passes a short cache window so a burst
+    of requests from one change shares one profile read."""
     if not isinstance(body, dict): return {"err": "bad request"}
     try: CL = slack_clients_module()
     except Exception as e: return {"err": f"the client map module did not resolve: {type(e).__name__}: {e}"}
@@ -1175,7 +1201,7 @@ def _slack_client_plan(body):
     name = name or pid
     try: P = slack_policy()
     except Exception as e: return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
-    seats = {s["id"]: s for s in _slack_roster()}
+    seats = {s["id"]: s for s in _slack_roster(cache)}
     projects = {sid: {"label": s["label"], "committed": s["committed"], "local": s["local"],
                       "committed_path": str(s["committed_path"]) if s["committed_path"] else None,
                       "local_path": str(s["local_path"]) if s["local_path"] else None,
@@ -1184,13 +1210,17 @@ def _slack_client_plan(body):
     plan = CL.proposal(P, client, projects, pid, name)
     writes = [{**w, **{k: projects[w["project"]][k] for k in ("committed_path", "local_path", "loop", "slug")}}
               for w in plan["writes"] if w["project"] in projects]
+    refused = [{"project": r["project"], "label": r.get("label") or r["project"], "result": r["result"]}
+               for r in plan["rows"] if r["action"] == CL.REFUSED]
     return {"err": None, "client": client["id"], "persona": pid, "persona_name": name,
-            "rows": plan["rows"], "writes": writes}
+            "rows": plan["rows"], "writes": writes, "refused": refused, "partial": bool(refused),
+            "proposal_saved": False}
 
 
 def slack_clients_preview(body):
-    """POST /api/slack/clients without `confirm`: the table of proposed writes and nothing written."""
-    return _slack_client_plan(body)
+    """POST /api/slack/clients without `confirm`: the table of proposed writes and nothing written. The roster read is
+    cached for a few seconds, so a change of the default never fans out one profile read per request."""
+    return _slack_client_plan(body, cache=PREVIEW_ROSTER_SECONDS)
 
 
 def slack_clients_save(body):
@@ -1206,7 +1236,9 @@ def slack_clients_save(body):
                               committed=w["committed_path"], local=local, loop=w["loop"], name=w["slug"])
         if out.get("err"): errors.append(f"{w['project']}: {out['err']}")
         else: saved.append({"project": w["project"], "sha": out.get("sha")})
-    plan = {**plan, "saved": saved}
+    _slack_roster_clear()   # a write changed a project's files, so the next preview reads the roster fresh
+    partial = bool(plan.get("refused")) or bool(errors)
+    plan = {**plan, "saved": saved, "partial": partial, "proposal_saved": not partial}
     if errors: plan["err"] = "; ".join(errors)
     return plan
 

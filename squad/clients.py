@@ -3,11 +3,13 @@
 A client groups the projects of one customer, across profiles. The map is a local file in the profile folder,
 `clients.local.yaml`, and it never enters a repository: a client name and a client id stay out of every committed file.
 
-A client has a default persona, and the map records for each project whether the project follows that default. A change
-of the default proposes one write to each project: a project that follows the default has `project.persona` set to the
-new persona, but only when the project declares that persona; a project the map records as not following keeps its own
-persona. The map adds no policy layer of its own: it only names which `project.persona` value each project receives, and
-the write goes through the project's own save path.
+A client has a default persona, and the map records for each project whether the project follows that default. A project
+is written either as a mapping `{id, follows}` or as its plain id; a plain id follows the default, so a hand-edited map
+that names no flag follows rather than keeps. A change of the default proposes one write to each project: a project that
+follows the default has `project.persona` set to the new persona, but only when the project declares that persona; a
+project the map records as not following keeps its own persona. The settings pane shows the follow state as a badge on
+each project, so a shorthand entry never follows silently. The map adds no policy layer of its own: it only names which
+`project.persona` value each project receives, and the write goes through the project's own save path.
 
 This module holds the rules. The hub route reads the map and calls this module; the page draws what the route answers
 (ADR-0137, ADR-0177).

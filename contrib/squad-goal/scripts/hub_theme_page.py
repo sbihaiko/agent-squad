@@ -1511,12 +1511,13 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
  let h=slTreeHtml()+slReadHtml(slR);
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
  b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar();
- const n=slTNode(slTsel);if(n&&n.kind==="client"&&!n.proposal&&typeof fetch==="function"){n.proposal=[];slPropose(n.id,false)}}   // a client's selected default proposes its writes at once (#2827)
+ const n=slTNode(slTsel);   // a client's selected default proposes its writes once; a hub without the route is not asked again (#2827)
+ if(n&&n.kind==="client"&&!n.proposal&&!n.proposal_tried&&typeof fetch==="function"){n.proposal_tried=true;n.proposal=[];slPropose(n.id,false)}}
 /* The Communication tree (SPEC 2682 #2824, #2827): Client > Project > Workspace > Channel, with the selected node's state
    in a Now block of tiles. The hub answers every value from the policy module and the client map module; the view
    constructs, binds and moves the focus, and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow
    keys, Home and End. */
-let slT=null,slTsel="",slTopen={},slTF="",slTshow=false;
+let slT=null,slTsel="",slTopen={},slTF="",slTshow=false,slProposeT=null;
 function slTRoots(){if(!slT)return [];return slT.clients||(slT.root?[slT.root]:[])}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
@@ -1552,7 +1553,7 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
   if(e.target&&e.target.closest&&e.target.closest(".sltarrow")&&n&&n.children&&n.children.length){slTGo({focus:id,toggle:id});return}slTPick(id)});
  for(const el of document.querySelectorAll("[data-slt-setup]"))el.addEventListener("click",()=>slSetup(el.getAttribute("data-slt-setup")));
  const sel=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
- if(sel)sel.addEventListener("change",()=>slPropose(slTsel,false));
+ if(sel)sel.addEventListener("change",()=>{clearTimeout(slProposeT);slProposeT=setTimeout(()=>slPropose(slTsel,false),300)});   // a debounce, so one change never starts a burst of roster reads (#2827)
  for(const el of document.querySelectorAll("[data-slt-write]"))el.addEventListener("click",()=>slPropose(el.getAttribute("data-slt-write"),true));
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
@@ -1584,10 +1585,12 @@ function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
  +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
-const slTProp=n=>{const rows=n.proposal;if(!rows||!rows.length)return "";
+const slTProp=n=>{if(n.proposal_na&&(!n.proposal||!n.proposal.length))return `<div class=setblk data-blk=prop><h3 class=blkh>${esc("Proposed writes")}</h3><p class=m>${esc("the proposal route is not available on this hub")}</p></div>`;
+ const rows=n.proposal;if(!rows||!rows.length)return "";
  const tone=r=>r.action==="refused"?"err":r.action==="write"?"ok":"muted";
+ const saved=n.proposal_saved?"saved":n.proposal_partial?"partly saved":"not saved";   // a partial save is never green (#2827)
  return `<div class=setblk data-blk=prop><div class=sltprophead><h3 class=blkh>${esc("Proposed writes")}</h3>`
- +`<span class="sltb ${n.proposal_saved?"ok":"warn"}">${esc(n.proposal_saved?"saved":"not saved")}</span></div>`
+ +`<span class="sltb ${n.proposal_saved?"ok":"warn"}">${esc(saved)}</span></div>`
  +`<table class=slt2><thead><tr><th>${esc("Project")}</th><th>${esc("project.persona now")}</th><th>${esc("Result")}</th></tr></thead><tbody>`
  +rows.map(r=>`<tr><td data-l=Project>${esc(r.label||r.project)}</td><td data-l="persona now"><span class=nw>${esc(r.now||"none")}</span></td><td data-l=Result class="slr ${tone(r)}">${esc(r.result||"")}</td></tr>`).join("")
  +`</tbody></table></div>`};
@@ -1602,11 +1605,13 @@ const slTClient=n=>{if(n.kind!=="client")return "";
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
  const badges=(n.badges||[]).map(slTBadge).join(""),defects=(n.defects||[]).map(d=>`<p class="mx err" role=status>${esc(d)}</p>`).join("");
+ const notice=n.notice?`<div class="mx err sltnotice" role=status><b>${esc(n.notice.title)}</b><br>${esc(n.notice.text)}</div>`:"";   // the second guest is bannered beside its project (#2827)
+ const slot=n.guest_slot?`<p class=sltguest>${esc(n.guest_slot.line||"")}</p>`:"";
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
- +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${defects}`
+ +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${slot}${defects}`
  +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTClient(n)+slTSettings(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844): one row per field, and the row names the file it writes in a chip.
    The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and the
@@ -1675,8 +1680,12 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const pid=(el&&el.value)||n.default_persona||"",body={client:n.client||"",persona:pid};
  if(confirm)body.confirm=true;slMsg="the proposed writes are being read";slRender();
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
- .then(r=>r.json()).then(o=>{if(!o||o.err){slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
-  if(o.rows)n.proposal=o.rows;slMsg=confirm?"the writes were saved":"the proposed writes are shown";slRender()})
+ .then(r=>{if(r.status===404){n.proposal_na=true;n.proposal=[];slMsg="!the proposal route is not available on this hub";slRender();return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
+  if(o.rows)n.proposal=o.rows;
+  if(confirm){n.proposal_saved=!!o.proposal_saved;n.proposal_partial=!!o.partial;slMsg=o.partial?"the writes were saved in part":"the writes were saved"}
+  else{n.proposal_saved=false;n.proposal_partial=false;slMsg="the proposed writes are shown"}
+  slRender()})
  .catch(()=>{slMsg="!the proposed writes could not be read";slRender()})}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
