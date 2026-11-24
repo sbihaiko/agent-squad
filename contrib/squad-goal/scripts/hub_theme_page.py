@@ -436,7 +436,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltdetail{min-width:0}
 #sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
-#sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--line)}
+#sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-title);color:var(--fg);overflow-wrap:anywhere}
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}

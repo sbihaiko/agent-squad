@@ -357,12 +357,13 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
 SLACK_TREE_SETUP = ({"id": "owned", "label": "Add owned workspace"}, {"id": "guest", "label": "Add guest workspace"})
 
 def _slack_tree_failed(message):
-    """The tree of a read that could not resolve the policy: one project node in the error state, the reason as its one
-    defect, and the two setup choices. A broken module never costs the reader the tree's shape."""
+    """The tree of a read that could not resolve the policy: one project node in the error state, its Now tiles at zero,
+    the reason as its one defect, and the two setup choices. A broken module never costs the reader the tree's shape."""
     return {"err": message, "files": {"committed": "slack.yaml", "local": "slack.local.yaml"}, "defects": [message],
             "empty": True, "guest_slot": None,
             "root": {"id": "p", "level": 1, "kind": "project", "name": _slack_project_label(), "state": "error",
-                     "badges": [_slack_badge("no Slack", "muted")], "now": [], "children": [], "defects": [message],
+                     "badges": [_slack_badge("no Slack", "muted")], "children": [], "defects": [message],
+                     "now": [{"key": key, "value": "0", "tone": "neutral"} for key in ("Workspaces", "Channels", "Personas", "Events")],
                      "setup": list(SLACK_TREE_SETUP), "detail": {"title": "", "sub": "", "text": ""}}}
 
 def slack_tree(committed=None, local=None):
