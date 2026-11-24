@@ -144,6 +144,41 @@ def test_the_profiler_file_view_is_built_once_per_off_window(served):
     assert len(prof_calls) == 2, "a read past the window builds the view again"
 
 
+def test_two_profiler_reads_inside_one_sampler_interval_build_once(served, hub, monkeypatch):
+    """AC 1 of #2848: a build that costs more than the interval it is kept for still serves the read that asks after it.
+
+    With the switch on, the Loop page asks the view every poll and the build reads the process table, the trip, the runs
+    and the load. The kept stamp is the instant the answer existed, never the instant the build began, so the read that
+    waited for the build serves it instead of building it again."""
+    port, _, prof_calls, clock = served
+    hub.PROFILER_SWITCH.write_text('{"on": true}')
+    cost = hub.PROF_ON_SECS * 2.5   # a build the page's own interval cannot cover by the stamp at its start
+
+    def slow_prof(*a, **k):
+        prof_calls.append(1)
+        clock[0] += cost
+        return {"tree": []}
+
+    monkeypatch.setattr(hub, "profiler_view", slow_prof)
+    get(port, "/api/profiler")
+    get(port, "/api/profiler")
+    assert len(prof_calls) == 1, (
+        f"two reads inside one sampler interval built the profiler view {len(prof_calls)} times, with a build of {cost} s")
+
+
+def test_the_loop_page_polls_the_profiler_no_faster_than_the_sampler_reads(hub):
+    """AC 2 of #2848: the Loop page takes its profiler cadence from the sampler's own interval, never from a literal."""
+    assert hub.PROF_POLL_SECS >= hub.PROFILER_SECS, (
+        f"the page polls every {hub.PROF_POLL_SECS} s, faster than the sampler's {hub.PROFILER_SECS} s")
+    page = hub.served_page("")
+    m = re.search(r'const PROF_MS=Number\("(\d+)"\)', page)
+    assert m, "the page's profiler poll does not name its interval"
+    assert int(m[1]) >= hub.PROFILER_SECS * 1000, (
+        f"the page polls the profiler every {m[1]} ms, faster than the sampler's {hub.PROFILER_SECS} s")
+    assert re.search(r"setInterval\(\(\)=>\{if\(profDue\(TAB,document\.hidden,profV\)\)profPoll\(\)\},PROF_MS\)", page), (
+        "the profiler poll does not read the page's own interval")
+
+
 def test_the_switch_write_clears_the_kept_profiler_view(hub, served):
     """A switch write is the page's own change: the next read shows it, never a view kept from before it."""
     assert hasattr(hub, "prof_kept_clear"), "the switch write clears the kept view through `prof_kept_clear`"
@@ -164,7 +199,7 @@ def test_the_watch_tick_reads_a_change_within_two_seconds(hub):
 
 
 POLLS = ("poll", "pollStats", "loadPoll", "loopPoll", "accPoll", "pollBoard", "squadChartTick", "endedPoll", "profPoll")
-POLLER = re.compile(r"setInterval\((.*?),(\d+|LOAD_MS)\)")
+POLLER = re.compile(r"setInterval\((.*?),(\d+|LOAD_MS|PROF_MS)\)")
 HELPER = "pollIfVisible"
 
 

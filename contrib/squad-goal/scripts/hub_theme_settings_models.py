@@ -583,6 +583,7 @@ def served_page(login="", allowed=True):
     or tailnet, writes the settings routes, so its page stays live (#1278)."""
     who = f"signed in as {html.escape(login)}" if login else ""
     return (PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))
+            .replace("__PROFMS__", str(int(PROF_POLL_SECS * 1000)))
             .replace("__LOADERR__", str(LOAD_ERR_PCT)).replace("__BUILD__", str(BOOT))
             .replace("__READONLY__", "false" if allowed else "true").replace("__ROWHY__", "" if allowed else RO_TAILNET)
             + (stream_tag() if hubstream.enabled() else ""))

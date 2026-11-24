@@ -2441,7 +2441,8 @@ setInterval(pollIfVisible(loopPoll),5000);loopPoll();livePoll();   // the live w
 setInterval(pollIfVisible(accPoll),5000);accPoll();
 /*PROFILER_JS*/
 profMount("desktop");
-setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},2000);   // off, or on another tab, the page asks nothing
+const PROF_MS=Number("__PROFMS__")||2000;   // the view's poll cadence, substituted when the page is served from the sampler's own interval (#2848); the fallback keeps a slice of this script evaluable on its own
+setInterval(()=>{if(profDue(TAB,document.hidden,profV))profPoll()},PROF_MS);   // off, or on another tab, the page asks nothing
 setInterval(()=>{if(profFileDue(TAB,document.hidden,profV))profPoll()},30000);   // an off switch still refreshes the file views, the trip bar among them, at a slower cadence
 /*BOARD_LANES*/
 // The swimlanes' state (#891): collapse and open state live in `bo`, so the device keeps them across a reload.
