@@ -37,6 +37,9 @@ case "$r" in *"WAVE CLOSE $W20"*"1800"*"#201"*) ok "EW2: one WAVE CLOSE line nam
 [ -e "$T/st/auto/disp-201" ] && ok "EW2: the child left out keeps its dispatch" || ko "EW2: the child left out lost its dispatch marker"
 [ -s "$T/st/auto/wave-run-20" ] && [ -s "$T/st/auto/wave-recut-run-20" ] && ok "EW2: the run keeps a wave to land, and the next cut is pending" || ko "EW2: the run's wave marker or the recut marker is missing"
 [ ! -e "$T/st/auto/wave-entry-run-20" ] && ok "EW2: the next wave starts its own entry clock" || ko "EW2: the entry clock of the closed wave survives"
+# #2840: the close restarts the age clock, so it writes the ceiling of the next cut: its start plus the age cap.
+[ "$(cat "$T/st/auto/wave-ceiling-run-20" 2>/dev/null)" = "$(( $(cat "$T/st/auto/wave-start-run-20" 2>/dev/null) + 7200 ))" ] && ok "EW2: the early close writes the ceiling of the next cut" || ko "EW2: the ceiling of the next cut is '$(cat "$T/st/auto/wave-ceiling-run-20" 2>&1)'"
+printf '%s\n' "$(( $(date +%s) - 100 ))" > "$T/st/auto/wave-start-run-20"
 
 # EW3 (the late sibling's later wave): the child left out enters after the close. Its wave branch is gone, so the entry cuts
 # the run's next wave from the moved base, and that wave lands with it.
@@ -44,6 +47,9 @@ r=$(cd "$T/c201" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-20 201 2>&1
 [ $rc = 0 ] && ok "EW3: the child left out enters the run's later wave (exit 0)" || ko "EW3: exit $rc: '$r'"
 $O cat-file -e $W20:g201 2>/dev/null && ok "EW3: the later wave carries the child left out" || ko "EW3: the later wave does not carry #201"
 $O merge-base --is-ancestor dev $W20 && ok "EW3: the later wave is cut from the moved base" || ko "EW3: the later wave is not cut from the moved base"
+# #2840: the recut at the entry restarts the age clock and writes the new ceiling with it.
+t=$(cat "$T/st/auto/wave-start-run-20" 2>/dev/null)
+[ "${t:-0}" -gt "$(( $(date +%s) - 100 ))" ] && [ "$(cat "$T/st/auto/wave-ceiling-run-20" 2>/dev/null)" = "$(( t + 7200 ))" ] && ok "EW3: the recut writes the ceiling of the new cut" || ko "EW3: the recut ceiling is '$(cat "$T/st/auto/wave-ceiling-run-20" 2>&1)' for the start '$t'"
 : > "$T/gh.log"; : > "$T/board.log"
 r=$(land2 run-20); rc=$?
 [ $rc = 0 ] && $O cat-file -e dev:g201 2>/dev/null && ok "EW3: the run's second wave lands too (exit 0)" || ko "EW3: exit $rc: '$r'"
@@ -95,7 +101,7 @@ recut() { local r=$1 e=$2 n rec; shift 2
   printf '%s\n' "$rec" > "$T/co/runs/$r/record.jsonl"
   printf '%s\n' "$(( $(date +%s) - 1801 ))" > "$T/st/auto/wave-entry-$r"
   land2 "$r"; }
-gone() { local r=$1 m left=""; for m in wave wave-recut wave-start; do [ -e "$T/st/auto/$m-$r" ] && left="$left $m-$r"; done; printf '%s' "$left"; }
+gone() { local r=$1 m left=""; for m in wave wave-recut wave-start wave-ceiling; do [ -e "$T/st/auto/$m-$r" ] && left="$left $m-$r"; done; printf '%s' "$left"; }
 
 # EW7 (#2559, AC1): a left-out child that never enters holds its issue for at most the wave age cap. The early close starts the
 # clock of the run's next cut, and the recut marker names the child left out. The run still holds its run slot, so only the

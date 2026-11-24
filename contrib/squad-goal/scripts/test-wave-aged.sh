@@ -11,6 +11,9 @@
 W8=wave/run-8; start2 run-8 >/dev/null
 child 80 g80 "origin/$W8"; en2 run-8 80 >/dev/null
 [ -s "$T/st/auto/wave-start-run-8" ] && ok "L: the run's wave records its start for the age cap" || ko "L: no wave start marker"
+# #2840: the cut also writes the wave's ceiling, one absolute epoch: the start plus the age cap. The engine reads it to bound a
+# child's call, so a child never runs past the cap that would requeue it.
+[ "$(cat "$T/st/auto/wave-ceiling-run-8" 2>/dev/null)" = "$(( $(cat "$T/st/auto/wave-start-run-8") + 7200 ))" ] && ok "L: the cut writes the wave ceiling, its start plus the age cap" || ko "L: the wave ceiling is '$(cat "$T/st/auto/wave-ceiling-run-8" 2>&1)'"
 # the children of the run: #80 is in the wave, #81 is still running (dispatched, never entered)
 printf 'run-8\n' > "$T/st/auto/disp-81"
 mkdir -p "$T/co/runs/run-8"
@@ -44,6 +47,7 @@ $O cat-file -e dev:g83 2>/dev/null && ok "L: the approved late child is in dev" 
 [ "$(cnt 81)" = 0 ] && ok "L: the landing's cap requeue does not count toward the requeue cap" || ko "L: the landing's cap requeue was counted"
 /usr/bin/grep -q 'issues/81 -f state=closed' "$T/gh.log" && ko "L: an issue that never entered the wave was closed" || ok "L: the child back in the queue is not closed"
 [ ! -e "$T/st/auto/wave-start-run-8" ] && ok "L: the landed wave clears its start marker" || ko "L: the wave start marker outlives the landing"
+[ ! -e "$T/st/auto/wave-ceiling-run-8" ] && ok "L: the landed wave clears its ceiling with its start marker" || ko "L: the wave ceiling outlives the landing"
 
 # M (#377): a red check at the wave tip names the child that broke it. Each child's own suite runs again against the wave
 # tip, the last entrant first; the first child whose suite fails leaves the wave -- its issue goes back to the queue -- and
