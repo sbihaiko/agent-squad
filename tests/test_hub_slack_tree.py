@@ -350,27 +350,43 @@ def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):
     out = read(hub, tmp_path)
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel='w0';slTopen={{}};"
             "const before=slTFlat().map(x=>x.id);"
+            "const openBefore=slTOpen(slTNode('w0'));"
             "slTGo(slTreeKey(slTFlat(),'w0','ArrowLeft'));"
-            "console.log(JSON.stringify({before,after:slTFlat().map(x=>x.id)}))")
+            "console.log(JSON.stringify({before,openBefore,after:slTFlat().map(x=>x.id),openAfter:slTOpen(slTNode('w0'))}))")
     got = json.loads(_node(body))
+    assert got["openBefore"] is True, "an untouched node reads as open before the keypress"
     assert got["before"] == ["p", "w0", "w0.c0", "w0.c1", "w1", "w1.c0", "w1.c1"], got["before"]
     assert got["after"] == ["p", "w0", "w1", "w1.c0", "w1.c1"], got["after"]
+    assert got["openAfter"] is False, "the first ArrowLeft press folds the never-toggled node"
 
 
 def test_a_pick_at_phone_width_keeps_the_keyboard_focus_in_the_detail_pane(hub, tmp_path):
     """A phone folds the tree on a pick, so the picked tree item has no box and takes no focus: focus moves to the
-    detail pane instead of falling to BODY (WebDriver #2843)."""
+    detail pane instead of falling to BODY (WebDriver #2843). A picked row that still has a box keeps the focus."""
     out = read(hub, tmp_path)
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+    base = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
             "const focused=[];"
+            "const sbody={getBoundingClientRect(){return {width:390}}};"
+            "const detailEl={focus(){focused.push('detail')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};")
+    folded = base + (
             "const treeEl={focus(){focused.push('tree')},getClientRects(){return []}};"   # inside the folded column: no box
-            "const detailEl={focus(){focused.push('detail')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};"
-            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='slt_w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
+            "id==='slt_w0.c0'?treeEl:id==='sltdetail'?detailEl:null};"
             "slTPick('w0.c0');"
-            "console.log(JSON.stringify({focused,sel:slTsel}))")
-    got = json.loads(_node(body))
+            "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
+    got = json.loads(_node(folded))
     assert got["sel"] == "w0.c0"
+    assert got["show"] is True, "a pick at phone width folds the tree"
     assert got["focused"] == ["detail"], got
+
+    shown = base + (
+            "const rowEl={focus(){focused.push('tree')},getClientRects(){return [{top:0,left:0,width:1,height:1}]}};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?sbody:"
+            "id==='slt_w0.c0'?rowEl:id==='sltdetail'?detailEl:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({focused,sel:slTsel,show:slTshow}))")
+    tree = json.loads(_node(shown))
+    assert tree["focused"] == ["tree"], "a picked row that still has a box keeps the focus"
 
 
 def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_keeps_two_tiles(hub, tmp_path):
@@ -383,6 +399,22 @@ def test_at_600_px_the_tree_shows_until_the_first_selection_and_the_now_block_ke
         "the tree is never hidden before a selection"
     assert re.search(r"#tab-set #sbody \.sltnow\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)\}", page), \
         "the phone keeps two tiles"
+    assert re.search(r"@container \(min-width:701px\)\{#sbody \.slttop\.sltshow \.sltcol\{display:block\}\}", page), \
+        "a wide panel keeps the tree beside the detail through every selection"
+
+
+def test_a_pick_on_a_wide_panel_keeps_the_tree_beside_the_detail(hub, tmp_path):
+    """The fold belongs to a narrow panel alone: a pick at 1440 px leaves `slTshow` false so the tree stays paneled
+    beside the detail, and the wide rule keeps its column visible (WebDriver #2843)."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel='p';"
+            "const wide={getBoundingClientRect(){return {width:1440}}};"
+            "globalThis.document={querySelectorAll:()=>[],getElementById:id=>id==='sbody'?wide:null};"
+            "slTPick('w0.c0');"
+            "console.log(JSON.stringify({sel:slTsel,show:slTshow}))")
+    got = json.loads(_node(body))
+    assert got["sel"] == "w0.c0"
+    assert got["show"] is False, "a wide panel never folds the tree on a pick"
 
 
 def _item(html, node_id):

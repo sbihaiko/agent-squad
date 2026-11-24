@@ -457,10 +457,13 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slsetval{color:var(--fg)}
 /* A panel narrower than 700px has no room for the tree and the detail side by side: the tree alone shows until the
-   first selection, then the detail alone with its back button, the phone's own rule at the panel's width (#2843). A row
-   stacks its label over its control below 560px, so the chip and the control keep their room in a narrow pane. */
+   first selection, then the detail alone with its back button, the phone's own rule at the panel's width (#2843). The
+   flag `sltshow` means "the detail alone is shown": a pick sets it true only on a narrow panel, and the back button
+   clears it, so a wide panel keeps both columns. A row stacks its label over its control below 560px, so the chip and
+   the control keep their room in a narrow pane. */
 @container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltdetail{display:none}
  #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+@container (min-width:701px){#sbody .slttop.sltshow .sltcol{display:block}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
@@ -1494,8 +1497,10 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
 function slTGo(r){if(!r)return;
  if(r.toggle)slTopen[r.toggle]=!slTOpen(slTNode(r.toggle));   // an untouched node reads as open, so the fold must flip that reading
  if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
-function slTPick(id){slTsel=id;slTF=id;slTshow=true;slRender()}   // a phone folds the tree on the first pick
+function slTPick(id){slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
+const slTNarrow=()=>{const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sbody");
+ return !!el&&!!el.getBoundingClientRect&&el.getBoundingClientRect().width<=700};
 function slTBack(){slTshow=false;slRender();const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slt_"+slTsel);if(el&&el.focus)el.focus()}
 function slTFocus(){const id=slTF||slTsel;slTF="";if(typeof document==="undefined"||!document.getElementById)return;
  const el=document.getElementById("slt_"+id);
