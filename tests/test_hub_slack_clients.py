@@ -112,7 +112,8 @@ def walk(node):
 
 
 def clients_tree(out):
-    return out["tree"]["clients"]
+    """The clients of the tree, from `slack_tree` itself or from an overview that carries it."""
+    return (out.get("tree") or out)["clients"]
 
 
 def by_name(out, name):
