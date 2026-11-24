@@ -283,6 +283,19 @@ def _slack_tree_channel_row(group, ch_id):
                 merged.update(candidate)
     return merged
 
+def _slack_channel_note(merged, members, announcement):
+    """One plain sentence under the Now tiles, naming how a message resolves. A channel with no eligible member says so,
+    and a listen channel names the proposal path; a channel that speaks and has a member needs no note. Every phrase is
+    the policy's meaning, drawn by the view (ADR-0137)."""
+    if not members:
+        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
+                "no reply.") if announcement else \
+               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
+    if _slack_text(merged.get("mode") or "listen") == "listen":
+        return ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
+                "nothing is posted here.")
+    return ""
+
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -306,7 +319,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "err", "noone"))
+        badges.append(_slack_badge("no one", "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -320,9 +333,11 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
+    note = _slack_channel_note(merged, members, announcement)
     node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
             "badges": badges, "now": now,
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
+            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
+                       "note": note}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
@@ -411,13 +426,14 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     resolution = P.resolution(committed_doc, local_doc, ws)
     persona = resolution["persona"]
     slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
-    now = [_slack_tile("Class", caption, class_, "warn" if refused else "neutral"),
+    now = [_slack_tile("Class", caption, "local" if group["file"] == lf else group["file"],
+                       "warn" if refused else "neutral"),
            _slack_tile("Persona", persona.name if persona else "none", f"from {resolution['persona_source']}",
                        "neutral" if persona else "warn"),
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
            _slack_tile("Guest slot", slot, "one guest workspace per machine",
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
-    named = [str(d) for d in defects if d.file == group["file"]
+    named = [str(d.reason) for d in defects if d.file == group["file"]
              and str(d.key).startswith(f"workspaces[{group['index']}]")]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
@@ -466,7 +482,17 @@ def slack_tree(committed=None, local=None):
     local_rows = _slack_dicts(local_doc.get("workspaces"))
     guests = P.guest_workspaces(local_doc)
     held = _slack_text(local_rows[guests[0]][1].get("label") or local_rows[guests[0]][1].get("id")) if guests else None
-    guest_slot = {"held": held, "count": len(guests), "line": f"Guest slot 1 of {len(guests)} · {held}"} if guests else None
+    refused_names = [_slack_text(g["ws"].get("label") or g["id"]) for g in groups
+                     if (g["file"], g["index"]) in refused_keys and _slack_text(g["ws"].get("label") or g["id"]) != held]
+    if not guests:
+        guest_slot = None
+    elif len(guests) > 1:
+        # The machine serves one guest workspace, so a second is refused: the line states who is served and who is not.
+        guest_slot = {"held": held, "count": len(guests), "tone": "err",
+                      "line": f"{len(guests)} guest workspaces; the machine serves one · {held} is served, "
+                              f"{', '.join(refused_names) or 'the other'} is refused"}
+    else:
+        guest_slot = {"held": held, "count": 1, "tone": "neutral", "line": f"Guest slot 1 of 1 · {held}"}
     label = _slack_project_label()
     personas = _slack_dicts(committed_doc.get("personas"))
     events = _slack_dicts(committed_doc.get("events"))
@@ -480,14 +506,14 @@ def slack_tree(committed=None, local=None):
     speak = sum(1 for merged, g in rows if P.can_speak(merged))
     subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
+    # A project-level value is neutral, never green: a count is context, and only a defect earns the warning tone.
     now = [] if empty else [
         _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
-                    tone="ok" if groups else "warn"),
-        _slack_tile("Channels", f"{len(rows)} · {speak} speak", tone="ok" if speak else "warn"),
+                    tone="warn" if len(guest_nodes) > 1 else "neutral"),
+        _slack_tile("Channels", f"{len(rows)} · {speak} speak"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
-                    else f"{len(personas)} · no default", tone="ok" if personas else "warn"),
-        _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe",
-                    tone="ok" if events else "warn")]
+                    else f"{len(personas)} · no default"),
+        _slack_tile("Events", f"{len(events)} · {_slack_counts(subscribing, 'channel')} subscribe")]
     root = {"id": "p", "level": 1, "kind": "project", "name": label, "state": "empty" if empty else "ok",
             "badges": [_slack_badge("no Slack", "muted")] if empty else
                       ([_slack_badge(default_name)] if default_name else []),

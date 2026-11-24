@@ -231,7 +231,122 @@ def test_a_refused_guest_workspace_shows_one_defect_and_its_channels_no_mode_bad
 
 def test_the_guest_slot_names_the_project_that_holds_it(hub, tmp_path):
     out = read(hub, tmp_path)["tree"]
-    assert out["guest_slot"] == {"held": "client-a", "count": 1, "line": "Guest slot 1 of 1 · client-a"}, out["guest_slot"]
+    assert out["guest_slot"] == {"held": "client-a", "count": 1, "tone": "neutral",
+                                 "line": "Guest slot 1 of 1 · client-a"}, out["guest_slot"]
+
+
+def two_guests():
+    """The local file with a second guest workspace, so the machine serves one and refuses the other."""
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
+                                "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
+    return local
+
+
+def test_two_guest_workspaces_raise_a_red_alert_at_the_top_line(hub, tmp_path):
+    """#2842: the machine serves one guest workspace, so a second is refused and the slot line says so in red."""
+    out = read(hub, tmp_path, local=two_guests())
+    slot = out["tree"]["guest_slot"]
+    assert slot["tone"] == "err", slot
+    assert "client-b" in slot["line"] and "refused" in slot["line"], slot["line"]
+    html = render(hub, out)
+    assert 'class="sltguest err"' in html, html[:600]
+
+
+def test_two_guest_workspaces_warn_in_the_project_tiles(hub, tmp_path):
+    root = tree(hub, tmp_path, local=two_guests())["root"]
+    assert tiles(root)["Workspaces"]["tone"] == "warn", tiles(root)
+
+
+def test_a_refused_workspace_state_reads_in_plain_words(hub, tmp_path):
+    """#2842: the defect shows in the error style and in words, never as the raw key the policy names."""
+    out = read(hub, tmp_path, local=two_guests())
+    html = render(hub, out, sel="w2")
+    assert "workspaces[" not in html, html
+    assert "a second guest workspace is refused" in html, html
+    assert re.search(r'class="mx err', html), html
+
+
+def test_the_no_one_badge_is_amber(hub, tmp_path):
+    """#2842: a channel with no eligible member carries the no-one badge in the amber warning tone."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    root = tree(hub, tmp_path, local=local)["root"]
+    badge = next(b for b in by_name(root, "#support")["badges"] if b["text"] == "no one")
+    assert badge["tone"] == "warn", badge
+
+
+def test_the_channel_note_shows_under_the_tiles(hub, tmp_path):
+    """#2842: a listen channel with an eligible member states how a message resolves, in a note under the Now tiles."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][1]["roles"] = ["manager"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0ALERT001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = read(hub, tmp_path, committed=committed, local=local)
+    ch = by_name(out["tree"]["root"], "#squad-alerts")
+    assert ch["detail"]["note"].startswith("Listen mode:"), ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    assert "Listen mode:" in html and "sltnote" in html, html
+    assert html.index("sltnote") > html.index("sltnow"), "the note sits under the tiles"
+
+
+def test_a_channel_with_no_member_names_the_reason_in_its_note(hub, tmp_path):
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    root = tree(hub, tmp_path, local=local)["root"]
+    ch = by_name(root, "#support")
+    assert ch["detail"]["note"].startswith("No member holds a role"), ch["detail"]
+
+
+def test_the_workspace_class_tile_names_its_source_file(hub, tmp_path):
+    """#2842: the workspace Class tile names the file its class comes from, so a reader knows where it is written."""
+    root = tree(hub, tmp_path)["root"]
+    assert tiles(by_name(root, "team"))["Class"]["sub"] == "slack.yaml", tiles(by_name(root, "team"))
+    assert tiles(by_name(root, "client-a"))["Class"]["sub"] == "local", tiles(by_name(root, "client-a"))
+
+
+def test_the_empty_project_setup_sits_in_a_dashed_box(hub):
+    """#2842: the setup choices of an empty project sit in a dashed box, as the mockup draws them."""
+    assert re.search(r"#sbody \.sltempty\{[^}]*border:[^;}]*dashed", hub.PAGE), "the empty project's setup box"
+
+
+# ---------------------------------------------------------------- layout and type (#2841)
+
+def test_the_node_title_is_the_largest_text_of_the_detail_pane(hub):
+    """#2841: the selected node's title is the largest text of the detail pane."""
+    rule = re.search(r"#sbody \.slth\{([^}]*)\}", hub.PAGE)
+    assert rule and "font-size:var(--fs-display)" in rule.group(1), rule and rule.group(1)
+
+
+def test_the_tile_label_is_muted_and_the_value_is_bold(hub):
+    """#2841: the tile's label is the quiet, regular text; its value is the bold one."""
+    page = hub.PAGE
+    tk = re.search(r"#sbody \.sltnow \.tile \.tk\{([^}]*)\}", page)
+    tv = re.search(r"#sbody \.sltnow \.tile \.tv\{([^}]*)\}", page)
+    assert tk and "color:var(--mute)" in tk.group(1) and "font-weight:400" in tk.group(1), tk and tk.group(1)
+    assert tv and "font-weight:600" in tv.group(1), tv and tv.group(1)
+
+
+def test_a_tile_value_never_breaks_inside_a_word(hub):
+    """#2841: at a laptop width a value wraps between words and never inside one."""
+    tv = re.search(r"#sbody \.sltnow \.tile \.tv\{([^}]*)\}", hub.PAGE)
+    assert tv and "overflow-wrap:normal" in tv.group(1) and "anywhere" not in tv.group(1), tv and tv.group(1)
+
+
+def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
+    """#2841: five channel tiles and four workspace tiles fit one row at 1440 px, so each track asks 140 px at most."""
+    rule = re.search(r"#sbody \.sltnow\{([^}]*)\}", hub.PAGE)
+    m = re.search(r"repeat\(auto-fit,minmax\((\d+)px,1fr\)\)", rule.group(1)) if rule else None
+    assert m and int(m.group(1)) <= 140, rule and rule.group(1)
+
+
+def test_the_persona_edit_button_stays_on_one_line(hub, tmp_path):
+    """#2841: the Personas table's Edit button never breaks its label across two lines."""
+    html = render(hub, read(hub, tmp_path))
+    btn = re.search(r"<button[^>]*data-slpopen[^>]*>", html)
+    assert btn and "slnw" in btn.group(0), btn and btn.group(0)
+    assert re.search(r"#sbody \.slnw\{[^}]*white-space:nowrap", hub.PAGE), "the one-line rule"
 
 
 def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
@@ -271,8 +386,8 @@ def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
         assert now["Reply"]["value"] == P.reply_label(ch, decision), (name, now["Reply"], decision.reply)
         assert now["A member's message"]["value"] == P.destination_label(decision), (name, decision.kind)
     assert [b["text"] for b in by_name(root, "client-b")["badges"]] == ["guest", "refused"]
-    assert by_name(root, "client-b")["defects"] == [str(d) for d in P.validate(committed, local,
-                                                                               local_name="t.slack.local.yaml")
+    assert by_name(root, "client-b")["defects"] == [str(d.reason) for d in P.validate(committed, local,
+                                                                                      local_name="t.slack.local.yaml")
                                                     if d.reason == P.SECOND_GUEST_REASON]
 
 
