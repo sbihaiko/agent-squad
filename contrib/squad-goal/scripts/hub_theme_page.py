@@ -448,7 +448,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
 #sbody .slperm th{font-size:var(--fs-caption);font-weight:400;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
-#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:break-word}
 #sbody .slperm td.no{color:var(--mute)}
 #sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
 #sbody .slpvnow{margin-top:8px}
@@ -462,10 +462,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute);overflow-wrap:anywhere}
 #sbody .slsetval{color:var(--fg);overflow-wrap:anywhere}
 /* A panel narrower than 700px has no room for the tree and the detail side by side: the tree alone shows until a pick,
-   then the detail alone with its back button, the phone's own rule at the panel's width (#2844). A row stacks its label
-   over its control below 560px, so the chip and the control keep their room in a narrow pane. */
+   then the detail alone with its back button, the phone's own rule at the panel's width (#2844, #2845). A value control
+   keeps the pane's width there. A row stacks its label over its control below 560px, so the chip and the control keep
+   their room in a narrow pane. */
 @container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltcol{display:none}
- #sbody .slttop.sltshow .sltdetail{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}}
+ #sbody .slttop.sltshow .sltdetail{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}
+ #sbody .slsetc .slsetctl{width:100%;max-width:320px}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
