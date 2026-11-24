@@ -258,6 +258,17 @@ def _channel_classes(file, doc, out, local):
                 out.append(_defect(file, key, "a local channel class is guest"))
 
 
+def _channel_replies(file, doc, out):
+    """A channel's `reply` is `all` or `addressed`, and the default is `all`, so a value that names neither is a defect
+    and never reads as `all` by accident (issue #2819)."""
+    for i, ws in enumerate(_rows(doc.get("workspaces"))):
+        for j, ch in enumerate(_rows(ws.get("channels"))):
+            reply = ch.get("reply")
+            if reply is not None and str(reply) not in FIELD_REPLY:
+                out.append(_defect(file, f"workspaces[{i}].channels[{j}].reply",
+                                   f"reply {reply!r} is one of {', '.join(FIELD_REPLY)}"))
+
+
 def _guest_ids(local):
     """The team ids and channel ids a local file declares as guest."""
     teams, channels = set(), set()
@@ -294,6 +305,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
         _roles(file, doc, out)
         _members(file, doc, out, local=(file == local_name))
         _channel_classes(file, doc, out, local=(file == local_name))
+        _channel_replies(file, doc, out)
     _send_grants("slack.yaml", committed, out, local=False)
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
@@ -337,6 +349,7 @@ def _second_guests(local_name, local, others):
 FIELD_CLASSES = ("owned", "guest")
 FIELD_MODES = ("listen", "listen+speak")
 FIELD_SPEAK = ("draft", "send")
+FIELD_REPLY = ("all", "addressed")     # the default is `all`
 FIELD_TRANSCRIBE = ("off", "local", "gemini")
 FIELD_POLL_MODES = ("two_state", "exponential")
 
@@ -394,6 +407,8 @@ def validate_field(documents, doc, path, field, value):
             return bad(f"event {unknown[0]!r} is not one of the project's events")
     if field == "speak" and str(value) not in FIELD_SPEAK:
         return bad(f"the answer is one of {', '.join(FIELD_SPEAK)}")
+    if field == "reply" and str(value) not in FIELD_REPLY:
+        return bad(f"the reply is one of {', '.join(FIELD_REPLY)}")
     if field == "transcribe" and str(value) not in FIELD_TRANSCRIBE:
         return bad(f"the transcription is one of {', '.join(FIELD_TRANSCRIBE)}")
     if field == "voice_reply" and not isinstance(value, bool):
@@ -505,7 +520,9 @@ class Decision(NamedTuple):
     language and persona of the channel, the reply path (`bot`, `draft` or `send`), the mark flag, and, for a `guest`
     channel, the time of the next poll.
 
-    Field population per kind. `language` and `persona` are always set, from the channel, its workspace or the project.
+    Field population per kind. `language` and `persona` are always set, from the channel, its workspace or the project,
+    and a leading `@<name>` of the event text selects the persona of that name. In a `reply: addressed` channel, a
+    message that addresses no persona has no reply path.
     `role` is set when the files name one, and `actions` only on `inbox` and `proposal`. `reply` is set only on `inbox`
     and `proposal`, and never in a `listen` channel. `mark` is true exactly when `reply` is `draft` or `send`, because
     that reply leaves from the owner's account; a `bot` reply and a decision with no reply carry no mark. `next_poll` is
@@ -572,6 +589,45 @@ def effective_persona(committed, local, workspace, channel):
     if row is None:
         return None
     return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
+
+
+def persona_named(committed, local, name):
+    """The persona a name declares, or None. A name is a field of a persona row of the project's two files, and the
+    match ignores case. Slack has no user for a persona, so the address is plain text, never a native mention."""
+    wanted = str(name or "").strip().lower()
+    if not wanted:
+        return None
+    rows = _rows((committed or {}).get("personas")) + _rows((local or {}).get("personas"))
+    for row in rows:
+        if str(row.get("name") or "").strip().lower() == wanted:
+            return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
+    return None
+
+
+def addressed(committed, local, text):
+    """The persona a leading `@<name>` of a message names, or None. The match ignores case, and only a persona the
+    project declares answers, so a name no persona declares reads as no address. The longest declared name wins, so a
+    name with a space still matches. A native mention (`<@U...>`) is no address: the message keeps the channel persona.
+    A leading Slack quote marker (`>` and its run) is stripped first, so a quoted reply that addresses a persona still
+    addresses it."""
+    body = str(text or "").lstrip()
+    while body.startswith(">"):
+        body = body[1:].lstrip()
+    if not body.startswith("@"):
+        return None
+    rest = body[1:]
+    low = rest.lower()
+    best = None
+    for name in {str(row.get("name") or "") for row in
+                 _rows((committed or {}).get("personas")) + _rows((local or {}).get("personas"))}:
+        if not name or not low.startswith(name.lower()):
+            continue
+        after = rest[len(name):]
+        if after and (after[0].isalnum() or after[0] in "._-"):
+            continue        # the name runs into a longer word, so it is no address of this persona
+        if best is None or len(name) > len(best):
+            best = name
+    return persona_named(committed, local, best) if best is not None else None
 
 
 def identity(committed, local, channel_id):
@@ -747,7 +803,10 @@ def decide(committed, local, event, now, thread_state=None):
     elif local_channel is not None:
         channel = {**channel, **local_channel}
     language = _effective_language(committed, local, workspace, channel)
-    persona = effective_persona(committed, local, workspace, channel)
+    # A leading `@<name>` of the text addresses the message to that persona of the project; a name no persona declares,
+    # and no address at all, keep the channel persona (SPEC 2682, issue #2819).
+    named = addressed(committed, local, event.get("text"))
+    persona = named or effective_persona(committed, local, workspace, channel)
     if channel is None:
         # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
         role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
@@ -762,6 +821,10 @@ def decide(committed, local, event, now, thread_state=None):
     if event.get("bot") or event.get("external") or role is None:
         return Decision(DATA, role, (), language, persona, None, False, next_poll, voice)
     reply = _reply_path(class_, channel, user)
+    if named is None and str(channel.get("reply") or "all") == "addressed":
+        # A `reply: addressed` channel answers only a message that addresses a persona. The decision keeps its role
+        # and its data; only the reply path is absent.
+        reply = None
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
                     next_poll, voice)
