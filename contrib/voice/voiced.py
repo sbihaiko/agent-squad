@@ -1109,8 +1109,8 @@ def check_channel_names(mapping, client):
 
     The client is the one source of live channel names, handed in by the caller; no token is read here. A listing Slack
     refuses yields one line naming the error, never an empty pass over a list the check never read. The listing asks
-    for public channels only, the type the shipped manifest covers: it grants `channels:read` and no `groups:read`
-    (#2767). The rule reads every project channel because `_ensure_channel` creates each one with `is_private` false;
+    for public channels only: an install made before #2816 grants `channels:read` and no `groups:read` (#2767), and that
+    listing works on both. The rule reads every project channel because `_ensure_channel` creates each one with `is_private` false;
     a channel converted to private later is Slack's act, and that channel leaves this list.
     """
     listing = client.api("conversations.list?types=public_channel&limit=1000")
