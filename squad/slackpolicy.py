@@ -373,6 +373,7 @@ FIELD_SPEAK = ("draft", "send")
 FIELD_REPLY = ("all", "addressed")     # the default is `all`
 FIELD_TRANSCRIBE = ("off", "local", "gemini")
 FIELD_POLL_MODES = ("two_state", "exponential")
+POLL_DEFAULT_MODE = "two_state"     # the mode a guest channel polls with when its row names none (#2845)
 
 
 def _key(path):
@@ -761,6 +762,13 @@ def _elapsed(now, value):
     return (now - value).total_seconds()
 
 
+def poll_defaults(mode=None):
+    """The poll settings a guest channel reads when its row names none, for `mode` or the default mode (#2845). The hub
+    draws these values and holds no copy of them; a mode the policy does not know answers the two-state settings, as
+    `poll_interval` reads it."""
+    return dict(_EXP_DEFAULTS if str(mode or POLL_DEFAULT_MODE) == "exponential" else _POLL_DEFAULTS)
+
+
 def poll_interval(now, channel, thread_state):
     """The interval to the next poll of a `guest` channel, in seconds. `two_state` is fast after a message and slow
     after `quiet_after` of silence, and a channel with no prior message keeps the fast default; `exponential` multiplies
@@ -819,11 +827,12 @@ def documents(committed_path, local_path):
 
 def project_settings(committed, local):
     """The project row the effective chain ends on: the language as a tag (`en-US` when the files name none or an
-    unknown one) and the persona id, or None when the files name none."""
+    unknown one) and the persona id, or None when the files name none. `stored_language` is the tag the file names, or
+    None when it names none, so the project's select shows `Not set` and not the default (#2845)."""
     row = _project(committed or {}, local or {})
     raw = row.get("language")
-    return {"language": (normalize_language(raw) if raw is not None else None) or DEFAULT_LANGUAGE,
-            "persona": row.get("persona")}
+    stored = normalize_language(raw) if raw is not None else None
+    return {"language": stored or DEFAULT_LANGUAGE, "persona": row.get("persona"), "stored_language": stored}
 
 
 def effective(committed, local, workspace, channel=None):
