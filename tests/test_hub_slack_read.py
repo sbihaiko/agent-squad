@@ -245,7 +245,7 @@ def test_the_theme_writes_one_status_text_to_the_chip_and_the_nav_line(hub, tmp_
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slRender();"
             "console.log(JSON.stringify({chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
     got = json.loads(_node(body))
-    assert got["chip"] == "2 workspaces · 4 channels", got
+    assert got["chip"] == "1 client · 1 project · 4 channels", got
     assert got["nav"] == got["chip"], got
 
 

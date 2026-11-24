@@ -301,7 +301,7 @@ def test_the_channel_detail_draws_one_setting_row_per_field_with_its_file_chip(h
     """Criterion 6 on the page: the selected channel's detail carries a settings row for each field, and each row names
     its file in a chip."""
     out = read(hub, tmp_path)
-    html = render(hub, out, "w1.c0")
+    html = render(hub, out, "c0.p0.w1.c0")
     rows = re.findall(r'<div class=slsetrow[^>]*>(.*?)</div>', html, re.S)
     assert rows, html
     for row in rows:
@@ -316,7 +316,7 @@ def test_the_pane_names_both_files_when_the_rows_live_in_both(hub, tmp_path):
     """Criterion 6 on the page: the Slack Connect channel's presentation rows carry `slack.yaml`, and its delivery rows
     carry the local file."""
     out = read(hub, tmp_path, local=OVERLAY)
-    html = render(hub, out, "w0.c1", docs={"committed": copy.deepcopy(COMMITTED), "local": copy.deepcopy(OVERLAY)})
+    html = render(hub, out, "c0.p0.w0.c1", docs={"committed": copy.deepcopy(COMMITTED), "local": copy.deepcopy(OVERLAY)})
     rows = re.findall(r'<div class=slsetrow[^>]*>(.*?)</div>', html, re.S)
     by_field = {re.search(r'data-slf="[^|]+\|([^"]+)"', row).group(1): row
                 for row in rows if re.search(r'data-slf="[^|]+\|([^"]+)"', row)}
