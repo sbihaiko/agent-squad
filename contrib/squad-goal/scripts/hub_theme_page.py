@@ -433,7 +433,9 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltb.err{color:var(--err);border-color:var(--err)}
 #sbody .sltb.warn{color:var(--warn);border-color:var(--tint-warn-line)}
 #sbody .sltb.muted{color:var(--mute)}
-#sbody .sltdetail{min-width:0}
+/* The detail pane is its own width container (#2845): a row keys on the pane it sits in, never on the whole Settings
+   column, so a long inherited label or a poll value is never cut in a narrow pane. */
+#sbody .sltdetail{min-width:0;container-type:inline-size}
 #sbody .sltcrumb{display:flex;flex-wrap:wrap;gap:2px;align-items:center;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltcrumb button{padding:0 4px;background:none;border:0;color:var(--mute);font:inherit;cursor:pointer}
 #sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}

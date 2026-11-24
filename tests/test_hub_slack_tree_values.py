@@ -295,6 +295,16 @@ def test_the_page_holds_no_poll_default_of_its_own(hub):
         assert literal not in page, f"the page holds the poll default {literal}"
 
 
+def test_a_narrow_detail_pane_stacks_a_row_under_its_label(hub):
+    """The channel pane is about half the Settings column, so an inherited label is wider than the select it sits in.
+    The detail pane is its own width container, and under 560 px of pane a row stacks its label over its control, so
+    no inherited label and no poll value is cut."""
+    page = hub.PAGE
+    assert re.search(r"#sbody \.sltdetail\{[^}]*container-type:inline-size", page), "the detail pane is a container"
+    assert re.search(r"@container \(max-width:560px\)\{#sbody \.slsetrow\{"
+                     r"grid-template-columns:minmax\(0,1fr\) auto", page), "a narrow pane stacks the row"
+
+
 def test_the_hub_read_carries_the_policy_languages_and_poll_defaults(hub, tmp_path, policy):
     """The page asks the hub for both lists, so it holds no copy of either."""
     out = read(hub, tmp_path)
