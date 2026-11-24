@@ -448,7 +448,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
 #sbody .slperm th{font-size:var(--fs-caption);font-weight:400;color:var(--mute);text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)}
-#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+#sbody .slperm td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:break-word}
 #sbody .slperm td.no{color:var(--mute)}
 #sbody .slpvbox{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px;margin-top:4px}
 #sbody .slpvnow{margin-top:8px}
@@ -461,7 +461,14 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slsetc input[type=text].slsetctl{width:220px}
 #sbody .slsetnote{margin:2px 0 0;font-size:var(--fs-caption);color:var(--mute);overflow-wrap:anywhere}
 #sbody .slsetval{color:var(--fg);overflow-wrap:anywhere}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetctl{min-height:44px}}
+/* #2845: under 700 px of Settings column the tree and the detail take one row each, so a value control keeps the pane's
+   width and no select, note or Now tile is cut. The tree stays whole above the selected node's detail. */
+@container (max-width:700px){
+#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}
+#tab-set #sbody .sltcol{border-right:0;padding-right:0}
+#tab-set #sbody .slsetc .slsetctl{width:100%;max-width:320px}
+}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltcol{display:none}#tab-set #sbody .slttop.sltshow .sltdetail{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:repeat(2,minmax(0,1fr))}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slsetc .slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetctl{min-height:44px}}
 /* The workspace and channel editor (SPEC 2682 #2696): one detail opens under its row, one label per field, and the id
    lists (roles, announce, draft_for) as one comma-separated line. The panel stacks the fields, so no field is clipped. */
 #sbody .slwsdet,#sbody .slchdet{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:6px 0 10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-md)}
