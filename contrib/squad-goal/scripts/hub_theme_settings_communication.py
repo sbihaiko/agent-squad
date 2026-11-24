@@ -422,10 +422,20 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
         taken = P.decide(committed_doc, local_doc, {"workspace": ws_id, "channel": ch_id, "user": user,
                                                     "kind": "message"}, now).role or names[0]
         notes.append(f"{user} holds {' and '.join(names)}. The policy takes {taken}.")
-    people = list(dict.fromkeys(str(u) for row in own if _slack_text(row.get("role")) in accepted
-                                for u in row.get("users") or ()))   # only people holding an accepted role (review DEBT 3)
-    return {"roles": roles, "eligible": len(set(P.resolved_members(local_doc, ws_id, ch_id, accepted))),
-            "notes": notes, "members": people}
+    members = list(dict.fromkeys(P.resolved_members(local_doc, ws_id, ch_id, accepted)))
+    return {"roles": roles, "eligible": len(members), "notes": notes, "members": members}
+def _slack_channel_note(merged, members, announcement):
+    """One plain sentence under the Now tiles, naming how a message resolves. A channel with no eligible member says so,
+    and a listen channel names the proposal path; a channel that speaks and has a member needs no note. Every phrase is
+    the policy's meaning, drawn by the view (ADR-0137)."""
+    if not members:
+        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
+                "no reply.") if announcement else \
+               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
+    if _slack_text(merged.get("mode") or "listen") == "listen":
+        return ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
+                "nothing is posted here.")
+    return ""
 
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
@@ -451,7 +461,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "err", "noone"))
+        badges.append(_slack_badge("no one", "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -465,10 +475,12 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
+    note = _slack_channel_note(merged, members, announcement)
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
+            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
+                       "note": note}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
@@ -562,7 +574,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
            _slack_tile("Guest slot", slot, "one guest workspace per machine",
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
-    named = [str(d) for d in defects if d.file == group["file"]
+    named = [str(d.reason) for d in defects if d.file == group["file"]
              and str(d.key).startswith(f"workspaces[{group['index']}]")]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
