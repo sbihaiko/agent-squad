@@ -179,6 +179,49 @@ def test_a_fenced_json_answer_reads_as_the_bare_one(tmp_path):
     assert G.run_session(["claude"], tmp_path, session(f"```json\n{bare}\n```")) == page
 
 
+CONNECTOR_PAGE = (
+    "Avery (Message TS 1900000000.000100)\n"
+    "The first placeholder line.\n"
+    "\n"
+    "Blair (Message TS 1900000001.000200, Thread TS 1900000000.000100)\n"
+    "The second placeholder line.\n"
+)
+
+
+def session_of(result):
+    """A session runner that answers one fixed result. Every text below is a placeholder."""
+    stdout = json.dumps({"type": "result", "result": result})
+    return lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+
+def test_a_connector_text_page_reads_as_one_message_object_for_each_message(tmp_path):
+    """#2855: the connector returns its page as one formatted text block, so a page of neutral text with one header
+    line per message reads as one message object for each message."""
+    page = G.run_session(["claude"], tmp_path, session_of(json.dumps({"messages": [CONNECTOR_PAGE]})))
+    assert [m["ts"] for m in page] == ["1900000000.000100", "1900000001.000200"]
+    assert [m["user"] for m in page] == ["Avery", "Blair"]
+    assert [m["text"] for m in page] == ["The first placeholder line.", "The second placeholder line."]
+    assert page[0].get("thread_ts") is None
+    assert page[1]["thread_ts"] == "1900000000.000100"
+    flat = G.run_session(["claude"], tmp_path, session_of(json.dumps({"messages": CONNECTOR_PAGE})))
+    assert [m["ts"] for m in flat] == ["1900000000.000100", "1900000001.000200"]
+
+
+def test_a_text_page_the_reader_cannot_understand_is_a_failed_poll(tmp_path):
+    """#2855: a page whose shape the reader cannot understand is a failed poll, never an empty page."""
+    with pytest.raises(G.SessionFailed):
+        G.run_session(["claude"], tmp_path, session_of(json.dumps({"messages": ["a shape with no message"]})))
+
+
+def test_a_text_page_poll_logs_a_decision_count_above_zero(tmp_path):
+    """#2855: a channel that holds messages logs one decision count above zero, never `decisions=0`."""
+    log = io.StringIO()
+    runner = make_runner(tmp_path, session_of(json.dumps({"messages": [CONNECTOR_PAGE]})), log=log)
+    prime(runner.state_root, OTHER, NOW - timedelta(seconds=30))
+    runner.tick(NOW)
+    assert "poll " + CH + " decisions=2" in log.getvalue()
+
+
 def test_session_selects_the_workspace_by_team_id(tmp_path):
     launches = []
     runner = make_runner(tmp_path, fake_session(FakeConnector([]), launches))
