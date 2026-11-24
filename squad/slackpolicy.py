@@ -909,6 +909,20 @@ def reply_label(channel, decision):
     return "never posts" if not can_speak(channel) else "none"
 
 
+def channel_note(channel, members, announcement):
+    """The one plain sentence the settings view prints under a channel's Now tiles, naming how a message resolves. A
+    channel with no eligible member says a message stays data; a listen channel with a member names the proposal path;
+    a channel that speaks and has a member needs no note. The view draws this sentence and holds no copy of it."""
+    if not members:
+        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
+                "no reply.") if announcement else \
+               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
+    if str((channel or {}).get("mode") or "listen") == "listen":
+        return ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
+                "nothing is posted here.")
+    return ""
+
+
 def transport(workspace, channel):
     """The badge a channel carries in the settings tree for its transport: `bot` when the app posts in an `owned`
     channel, `send` when a `guest` channel posts from the owner's account (directly or as a draft), and `listen` when
