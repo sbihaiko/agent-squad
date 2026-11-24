@@ -100,6 +100,7 @@ def wire(tmp_path, monkeypatch, hub, clients, seats):
         made[slug] = (co, c, prof / f"{slug}.slack.local.yaml")
     client_map(prof, clients)
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "ambient-checkout"))   # the hub pin, so no ambient checkout leaks
     monkeypatch.setattr(hub, "STATE", tmp_path / "state")
     return prof, made
 
@@ -135,6 +136,7 @@ def test_the_tree_shows_a_client_over_a_project_a_workspace_and_a_channel(hub, t
     out = hub.slack_tree()
     clients = clients_tree(out)
     assert [c["name"] for c in clients] == ["One"], clients
+    assert out["counts"]["projects"] == 1, out["counts"]   # the roster holds one project, never the ambient checkout
     client = clients[0]
     assert (client["kind"], client["level"]) == ("client", 1)
     project = by_name(out, "alpha")
@@ -178,11 +180,16 @@ def test_the_client_now_tiles_count_projects_and_name_the_default_persona(hub, t
 # ---------------------------------------------------------------- the proposed writes
 
 def test_a_project_with_its_own_persona_keeps_it_after_a_client_default_change(hub, tmp_path, monkeypatch):
-    """A project the map records as not following the default keeps its `project.persona`; its row reads kept."""
+    """A project the map records as not following the default keeps its `project.persona`; its row reads kept. The
+    follow flag is pinned both ways: the explicit false keeps, and a project with the flag omitted follows."""
     prof, made = wire(tmp_path, monkeypatch, hub,
-                      [{"id": "one", "name": "One", "default_persona": {"id": "blue", "name": "Blue"},
-                        "projects": [{"id": "owners", "follows": False}]}], {"owners": OWN})
+                      [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                        "projects": [{"id": "owners", "follows": False}, "alpha"]}],
+                      {"owners": OWN, "alpha": FOLLOWER})
     before = made["owners"][1].read_text()
+    rows = {r["project"]: r["result"] for r in hub.slack_clients_preview({"client": "one", "persona": "amber"})["rows"]}
+    assert rows["owners"] == "kept: the project set its own persona", rows
+    assert rows["alpha"] == "writes Amber", rows   # the omitted flag on the shorthand follows the default
     out = hub.slack_clients_save({"client": "one", "persona": "blue", "confirm": True})
     assert out.get("err") is None, out
     row = next(r for r in out["rows"] if r["project"] == "owners")
@@ -284,3 +291,149 @@ def test_the_renderer_draws_the_proposed_writes_table(hub, tmp_path, monkeypatch
     assert "Proposed writes" in html, html[:500]
     assert "writes Amber" in html and "kept: the project set its own persona" in html
     assert re.search(r"<th[^>]*>Project", html) and re.search(r"<th[^>]*>Result", html)
+
+
+# ---------------------------------------------------------------- the review's findings (#2827)
+
+def stub_write(hub, monkeypatch):
+    """A stub of the project save path: it writes the committed document to its own file and answers a sha. The route's
+    answer is the seam here, so no test of it needs a git repository."""
+    def fake(body, committed=None, local=None, loop=None, name=None):
+        pathlib.Path(committed).write_text(yaml.safe_dump(body["committed"], sort_keys=False))
+        return {"sha": "stub"}
+    monkeypatch.setattr(hub, "slack_files_set", fake)
+
+
+def test_a_confirmed_save_answers_saved_and_a_refused_row_makes_it_partial(hub, tmp_path, monkeypatch):
+    """A save that writes every planned row answers `proposal_saved`; a save with one refused row is partial and keeps
+    the refusal text, so the page never shows a green saved state over a row that wrote nothing."""
+    blue_only = {"version": 1, "project": {"language": "en-US", "persona": "blue"},
+                 "personas": [{"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."}], "workspaces": []}
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                        "projects": [{"id": "alpha", "follows": True}, {"id": "gamma", "follows": True}]}],
+                      {"alpha": FOLLOWER, "gamma": blue_only})
+    stub_write(hub, monkeypatch)
+    preview = hub.slack_clients_preview({"client": "one", "persona": "amber"})
+    assert preview["proposal_saved"] is False, preview
+    assert preview["partial"] is True and [r["project"] for r in preview["refused"]] == ["gamma"], preview
+    saved = hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
+    assert saved.get("err") is None, saved
+    assert [s["project"] for s in saved["saved"]] == ["alpha"], saved
+    assert saved["proposal_saved"] is False, saved
+    assert saved["partial"] is True, saved
+    refused = {r["project"]: r["result"] for r in saved["refused"]}
+    assert refused == {"gamma": "refused: Amber is not declared in this project"}, saved.get("refused")
+
+
+def test_a_confirmed_save_with_no_refused_row_answers_proposal_saved(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                        "projects": [{"id": "alpha", "follows": True}]}], {"alpha": FOLLOWER})
+    stub_write(hub, monkeypatch)
+    out = hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
+    assert out.get("err") is None, out
+    assert out["proposal_saved"] is True and out["partial"] is False, out
+    assert out["refused"] == [], out.get("refused")
+
+
+def test_a_shorthand_project_follows_the_default_and_the_tree_shows_the_flag(hub, tmp_path, monkeypatch):
+    """A project written as a plain string follows the client default: its row writes, and both follow states show a
+    badge in the settings pane, so a hand-edited map never follows silently."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                     "projects": ["alpha", {"id": "owners", "follows": False}]}],
+                   {"alpha": FOLLOWER, "owners": OWN})
+    out = hub.slack_clients_preview({"client": "one", "persona": "amber"})
+    rows = {r["project"]: r["result"] for r in out["rows"]}
+    assert rows == {"alpha": "writes Amber", "owners": "kept: the project set its own persona"}, rows
+    tree = hub.slack_tree()
+    alpha = by_name(tree, "alpha")
+    owners = by_name(tree, "owners")
+    assert "follows default" in [b["text"] for b in alpha["badges"]], alpha["badges"]
+    assert "own persona" in [b["text"] for b in owners["badges"]], owners["badges"]
+
+
+def test_a_burst_of_previews_shares_one_roster_read(hub, tmp_path, monkeypatch):
+    """The preview route caches the roster for a short window, so a change of the default never fans out one profile
+    read per request; a save reads the roster fresh."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                     "projects": [{"id": "alpha", "follows": True}]}], {"alpha": FOLLOWER})
+    calls = []
+    orig = hub._profiles_context
+
+    def counted():
+        calls.append(1)
+        return orig()
+
+    monkeypatch.setattr(hub, "_profiles_context", counted)
+    stub_write(hub, monkeypatch)
+    for _ in range(3):
+        hub.slack_clients_preview({"client": "one", "persona": "amber"})
+    assert len(calls) == 1, calls
+    hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
+    assert len(calls) == 2, calls
+
+
+def test_a_guest_slot_line_and_a_second_guest_banner_sit_beside_their_project(hub, tmp_path, monkeypatch):
+    """A tree over two projects banners the second guest beside the project that carries it, never across the whole
+    tree, and the guest-slot line is not built for a scope of more than one project."""
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_persona": "blue",
+                        "projects": [{"id": "alpha", "follows": True}, {"id": "beta", "follows": True}]}],
+                      {"alpha": FOLLOWER, "beta": OWN})
+    guests = {"version": 1, "workspaces": [
+        {"id": "T0GUEST001", "label": "g1", "class": "guest", "channels": []},
+        {"id": "T0GUEST002", "label": "g2", "class": "guest", "channels": []}]}
+    made["beta"][2].write_text(yaml.safe_dump(guests, sort_keys=False))
+    out = hub.slack_tree()
+    assert out["notice"] is None, out.get("notice")
+    assert out["guest_slot"] is None, out.get("guest_slot")
+    beta = by_name(out, "beta")
+    assert beta["notice"] and beta["notice"]["title"] == "2 guest workspaces", beta.get("notice")
+    assert "a second guest workspace is refused" in beta["notice"]["text"]
+    assert "2 guest workspaces" in [b["text"] for b in beta["badges"]], beta["badges"]
+    assert not by_name(out, "alpha").get("notice"), "a project with no second guest carries no banner"
+
+
+def _fetched(hub, out, sel, script):
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel={json.dumps(sel)};\n" + script)
+    return json.loads(_node(body))
+
+
+def test_the_bootstrap_proposes_once_and_a_missing_route_reads_not_available(hub, tmp_path, monkeypatch):
+    """The page proposes a client's writes once; a hub without the route answers 404, the pane reads 'not available',
+    and no later render asks again."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    script = ('let CALLS=0;globalThis.fetch=()=>{CALLS++;return Promise.resolve({status:404,json:()=>Promise.resolve({})})};'
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slRender();await new Promise(r=>setTimeout(r,20));'
+              "console.log(JSON.stringify({calls:CALLS,html:STORE['#sbody'].innerHTML}))})()")
+    got = _fetched(hub, out, "c0", script)
+    assert got["calls"] == 1, got["calls"]
+    assert "not available" in got["html"], got["html"][:600]
+
+
+def test_the_page_shows_saved_after_a_full_save_and_partly_saved_after_a_partial_one(hub, tmp_path, monkeypatch):
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    rows = [{"project": "alpha", "label": "alpha", "now": "Blue", "action": "write", "result": "writes Amber"}]
+    script = (f"const ANSWER={json.dumps({'rows': rows, 'proposal_saved': True, 'partial': False, 'refused': []})};"
+              'globalThis.fetch=()=>Promise.resolve({status:200,json:()=>Promise.resolve(ANSWER)});'
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slPropose("c0",true);'
+              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
+    html = _fetched(hub, out, "c0", script)
+    assert re.search(r'sltb ok">saved', html), html[-600:]
+    refused = {"rows": rows + [{"project": "gamma", "label": "gamma", "now": "none", "action": "refused",
+                                "result": "refused: Amber is not declared in this project"}],
+               "proposal_saved": False, "partial": True,
+               "refused": [{"project": "gamma", "result": "refused: Amber is not declared in this project"}]}
+    script = (f"const ANSWER={json.dumps(refused)};"
+              'globalThis.fetch=()=>Promise.resolve({status:200,json:()=>Promise.resolve(ANSWER)});'
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slPropose("c0",true);'
+              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
+    html = _fetched(hub, out, "c0", script)
+    assert "partly saved" in html and not re.search(r'sltb ok">saved', html), html[-600:]
