@@ -8,6 +8,7 @@ key named `secret` are refused; a `send_grant` outside the local file, or withou
 normalizes; the new ADR names the one home of the rules.
 """
 import copy
+import datetime
 import subprocess
 import sys
 from pathlib import Path
@@ -356,3 +357,68 @@ def test_the_mark_is_the_persona_names_one_bold_line():
     assert S.mark(persona) == "*HAL9K's Msg*"
     assert S.mark(S.Persona("x", "", "Kore", "")) == ""
     assert S.mark(None) == ""
+
+
+def test_the_resolution_names_the_level_of_each_value():
+    """The settings tree states where each effective value comes from (#2824): the channel wins, then its workspace,
+    then the project, then `en-US`. The persona chain is the same, and it ends on `default` when no level names one."""
+    committed, local = files()
+    ws = S.rows(committed["workspaces"])[0]
+    ch = S.rows(ws["channels"])[0]
+    got = S.resolution(committed, local, ws, ch)
+    assert (got["language"], got["language_source"]) == ("pt-BR", "channel")
+    assert (got["persona"].name, got["persona_source"]) == ("HAL9K", "channel")
+    got = S.resolution(committed, local, ws)
+    assert (got["language"], got["language_source"]) == ("en-US", "workspace")
+    committed["workspaces"][0].pop("language")
+    committed["project"].pop("language")
+    got = S.resolution(committed, local, committed["workspaces"][0])
+    assert (got["language"], got["language_source"]) == ("en-US", "default")
+    committed["project"].pop("persona")
+    committed["workspaces"][0].pop("persona")
+    got = S.resolution(committed, local, committed["workspaces"][0])
+    assert got["persona"] is None and got["persona_source"] == "default"
+
+
+def test_the_reply_label_reads_each_policy_path():
+    """The tile's words are the policy's (#2824): the reply the decision names, a listen channel's `never posts`, and
+    `none` when the channel may reply and no member holds an accepted role."""
+    committed, local = files()
+    ws = S.rows(committed["workspaces"])[0]
+    ch = S.rows(ws["channels"])[0]
+    decision = S.decide(committed, local, {"workspace": ws["id"], "channel": ch["id"], "user": "U0OWNER001"}, None)
+    assert S.reply_label(ch, decision) == "bot"
+    assert S.transport(ws, ch) == "bot"
+    guest = S.rows(local["workspaces"])[0]
+    gch = S.rows(guest["channels"])[0]
+    gch = {**gch, "mode": "listen+speak", "speak": "draft"}
+    now = datetime.datetime(2026, 11, 24, 12, 0, tzinfo=datetime.UTC)
+    assert S.reply_label(gch, S.decide(committed, local, {"workspace": guest["id"], "channel": gch["id"],
+                                                          "user": ""}, now)) == "none"
+    assert S.reply_label(gch, S.Decision(S.PROPOSAL, "manager", (), "en-US", None, "send", False, None)) == "send"
+    assert S.reply_label({**gch, "draft_for": ["U1", "U2"]},
+                         S.Decision(S.PROPOSAL, "manager", (), "en-US", None, "send", False, None)) == \
+        "send, except 2 listed"
+    listen = {**gch, "mode": "listen"}
+    assert S.reply_label(listen, S.decide(committed, local, {"workspace": guest["id"], "channel": gch["id"],
+                                                             "user": ""}, now)) == "never posts"
+    assert S.transport(guest, gch) == "send" and S.transport(guest, listen) == "listen"
+
+
+def test_the_destination_label_names_the_decision_kind():
+    def decision(kind):
+        return S.Decision(kind, None, (), "en-US", None, None, False, None)
+    assert S.destination_label(decision(S.INBOX)) == "inbox"
+    assert S.destination_label(decision(S.PROPOSAL)) == "proposal"
+    assert S.destination_label(decision(S.DATA)) == "read as data"
+
+
+def test_resolved_members_counts_only_the_roles_a_channel_accepts():
+    """A user of the local file counts for a channel only when the role the file gives them is one the channel
+    accepts, which is the rule `decide` reads (#2824)."""
+    committed, local = files()
+    local["members"] = [{"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
+                         "users": ["U0OWNER001", "U0OWNER002"]},
+                        {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague", "users": ["U0X"]}]
+    assert S.resolved_members(local, "T0TEAM0001", "C0PROJ0001", ["manager"]) == ["U0OWNER001", "U0OWNER002"]
+    assert S.resolved_members(local, "T0TEAM0001", "C0PROJ0001", []) == []
