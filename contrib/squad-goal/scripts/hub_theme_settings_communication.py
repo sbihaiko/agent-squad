@@ -283,6 +283,94 @@ def _slack_tree_channel_row(group, ch_id):
                 merged.update(candidate)
     return merged
 
+def _slack_pick(field, value, options):
+    """One select of a setting row (#2845): the stored value and every choice the policy allows. The empty choice is the
+    first, and its label names what the control inherits."""
+    return {"field": field, "kind": "select", "value": _slack_text(value), "options": options}
+
+def _slack_written(field, value, default=None):
+    """One text control. A poll field carries the policy's default, so the page shows the word `default` and holds no
+    copy of the value (#2845)."""
+    control = {"field": field, "kind": "text", "value": _slack_text(value)}
+    if default is not None:
+        control["default"] = _slack_text(default)
+    return control
+
+def _slack_named(control, label):
+    """A row draws one line per control, so a group with two controls names each one."""
+    return {**control, "label": label}
+
+def _slack_not_set():
+    """The empty choice at the project level: nothing stands above the project (#2845)."""
+    return {"value": "", "label": "Not set"}
+
+def _slack_inherit(resolution, key):
+    """The empty choice of a persona or language select at the workspace and channel level (#2845): the value the row
+    answers with when its own key is absent, and the level that value comes from. The policy answers both."""
+    if key == "persona":
+        persona = resolution["persona"]
+        value = persona.name if persona else "none"
+        source = resolution["persona_source"]
+    else:
+        value, source = resolution["language"], resolution["language_source"]
+    return {"value": "", "label": f"Inherit ({_slack_text(value) or 'none'} · from {_slack_text(source)})"}
+
+def _slack_persona_options(P, committed_doc, empty):
+    """The empty choice first, then every persona the project declares in its committed file: the file the edit writes,
+    and the list the policy validates a persona id against (ADR-0177)."""
+    out = [empty]
+    for _i, row in _slack_dicts(committed_doc.get("personas")):
+        if _slack_text(row.get("id")):
+            out.append({"value": _slack_text(row.get("id")),
+                        "label": _slack_text(row.get("name") or row.get("id"))})
+    return out
+
+def _slack_language_options(P, empty):
+    """The empty choice first, then every language the policy supports (#2845), never a copy in this read."""
+    return [empty] + [{"value": language, "label": language} for language in P.LANGUAGES]
+
+def _slack_default_rows(P, committed_doc, empties, values):
+    """The persona and language rows of a project or a workspace node: each select offers the policy's choices, and its
+    empty choice names the value it inherits (#2845)."""
+    return [{"key": "persona", "label": "Persona",
+             "controls": [_slack_pick("persona", values.get("persona") or "",
+                                      _slack_persona_options(P, committed_doc, empties["persona"]))]},
+            {"key": "language", "label": "Language",
+             "controls": [_slack_pick("language", values.get("language") or "",
+                                      _slack_language_options(P, empties["language"]))]}]
+
+def _slack_tree_project_settings(P, committed_doc, local_doc):
+    """The project's default persona and language (#2845). The project is the end of the chain, so its empty choice is
+    `Not set`, and its value is the one the project row stores, never the default it falls back to."""
+    project = P.project_settings(committed_doc, local_doc)
+    values = {"persona": project["persona"], "language": project["stored_language"]}
+    empties = {"persona": _slack_not_set(), "language": _slack_not_set()}
+    return _slack_default_rows(P, committed_doc, empties, values)
+
+def _slack_tree_workspace_settings(P, committed_doc, local_doc, group):
+    """A workspace's default persona and language (#2845). Its empty choice names the project value or the default the
+    policy would answer if the workspace named none, never the workspace's own value."""
+    inherited = P.resolution(committed_doc, local_doc, {})   # the workspace key is absent: project, then default
+    ws = group["ws"]
+    values = {"persona": ws.get("persona"), "language": ws.get("language")}
+    empties = {key: _slack_inherit(inherited, key) for key in ("persona", "language")}
+    return _slack_default_rows(P, committed_doc, empties, values)
+
+def _slack_poll_note(mode, defaults, poll):
+    """The Watch row's one line: the row names itself, then the channel's poll settings as the policy reads them, with the
+    word `default` after each value the channel does not name (#2845). The values come from the policy's `poll_defaults`,
+    so no copy lives here."""
+    def at(name):
+        got = poll.get(name)
+        if got not in (None, ""):
+            return _slack_text(got)
+        return f"{_slack_text(defaults.get(name))} (default)"
+    if mode == "exponential":
+        return (f"Watch: {at('floor')} to {at('ceiling')}, x{at('factor')} every {at('idle_window')}, and a reply "
+                f"thread stays open {at('thread_open')}")
+    return (f"Watch: {at('fast')} → {at('slow')} slow after {at('quiet_after')} quiet, and a reply thread stays "
+            f"fast for {at('thread_open')}")
+
 def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
     """The Permissions section of one channel: each role of the project with its actions, whether the channel accepts
     it and its members. The distinct eligible people, the members the preview offers and a note for each person who
@@ -359,42 +447,33 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
 
 
 def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf):
-    """The channel's setting rows (#2844). A presentation field (mode, persona, language, the accepted roles, announce
-    and the Slack Connect mark) writes the file that holds the channel row; a delivery field (`speak`, `send_grant`,
-    `draft_for`, every poll setting, transcription and the voice reply) writes the local file. Each row names its file,
-    and a control carries the field name alone: the operation addresses the channel by its Slack id, never by its place
-    in a list. Every value choice comes from the policy module, and the view only constructs and binds (ADR-0137)."""
+    """The channel's setting rows (#2844, #2845). A presentation field (mode, persona, language, the accepted roles,
+    announce and the Slack Connect mark) writes the file that holds the channel row; a delivery field (`speak`,
+    `send_grant`, `draft_for`, every poll setting, transcription and the voice reply) writes the local file. Each row
+    names its file, and a control carries the field name alone: the operation addresses the channel by its Slack id,
+    never by its place in a list. Every value choice comes from the policy module, the empty choice of a persona or
+    language names the value it inherits, and the Watch row marks each value the channel does not name (#2845)."""
     ws_id, ch_id = group["id"], ch["id"]
     owner_doc = "committed" if ch["file"] == cf else "local"
     owner_file = cf if owner_doc == "committed" else lf
     owner = _slack_channel_row_of(committed_doc if owner_doc == "committed" else local_doc, ws_id, ch_id) or {}
     local = _slack_channel_row_of(local_doc, ws_id, ch_id) or {}
-    inherited = {"value": "", "label": "inherit"}
-
-    def pick(field, value, options):
-        return {"field": field, "kind": "select", "value": _slack_text(value), "options": options}
-
-    def written(field, value):
-        return {"field": field, "kind": "text", "value": _slack_text(value)}
+    # The channel key is absent, so the empty choice names the workspace value, or the project's, or the policy default.
+    inherited = P.resolution(committed_doc, local_doc, group["ws"], {})
 
     def names(field, values):
         return {"field": field, "kind": "names",
                 "value": ", ".join(_slack_text(x) for x in values) if isinstance(values, list) else ""}
 
-    def named(control, label):
-        """The row draws one line per control, so a group with two controls names each one (#2844)."""
-        return {**control, "label": label}
-
-    personas = [{"value": _slack_text(i), "label": _slack_text(row.get("name") or i)}
-                for i, row in _slack_dicts(committed_doc.get("personas")) if _slack_text(row.get("id"))]
-    languages = [inherited] + [{"value": language, "label": language} for language in P.LANGUAGES]
     rows = [
         {"key": "mode", "label": "Mode", "doc": owner_doc, "file": owner_file,
-         "controls": [pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
+         "controls": [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
         {"key": "persona", "label": "Persona", "doc": owner_doc, "file": owner_file,
-         "controls": [pick("persona", owner.get("persona") or "", [inherited] + personas)]},
+         "controls": [_slack_pick("persona", owner.get("persona") or "",
+                                  _slack_persona_options(P, committed_doc, _slack_inherit(inherited, "persona")))]},
         {"key": "language", "label": "Language", "doc": owner_doc, "file": owner_file,
-         "controls": [pick("language", owner.get("language") or "", languages)]},
+         "controls": [_slack_pick("language", owner.get("language") or "",
+                                  _slack_language_options(P, _slack_inherit(inherited, "language")))]},
         {"key": "connect", "label": "Slack Connect", "doc": owner_doc, "file": owner_file,
          "controls": [{"field": "connect", "kind": "read", "value": "yes" if merged.get("connect") else "no"}]},
         {"key": "roles", "label": "Accepted roles", "doc": owner_doc, "file": owner_file,
@@ -402,30 +481,37 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
         {"key": "announce", "label": "Announce", "doc": owner_doc, "file": owner_file,
          "controls": [names("announce", owner.get("announce"))]},
     ]
-    if P.channel_class(group["ws"], merged) == "guest":
-        poll = local.get("poll") if isinstance(local.get("poll"), dict) else {}
-        poll_mode = _slack_text(poll.get("mode") or "two_state")
-        fields = (("floor", "Floor"), ("ceiling", "Ceiling"), ("factor", "Factor"),
-                  ("idle_window", "Idle window")) if poll_mode == "exponential" \
-            else (("fast", "Fast"), ("slow", "Slow"), ("quiet_after", "Quiet after"))
-        watch = [named(pick("poll.mode", poll_mode, list(P.FIELD_POLL_MODES)), "Poll mode")]
-        watch += [named(written(f"poll.{name}", poll.get(name) or ""), label) for name, label in fields]
-        watch.append(named(written("poll.thread_open", poll.get("thread_open") or ""), "Thread open"))
-        rows.insert(3, {"key": "delivery", "label": "Delivery", "doc": "local", "file": lf,
-                        "controls": [named(pick("speak", local.get("speak") or "draft", list(P.FIELD_SPEAK)),
-                                           "Answer as"),
-                                     named(written("send_grant", local.get("send_grant") or ""), "Send grant")],
-                        "note": f"granted {local['send_grant']} by the hub" if local.get("send_grant")
-                        else "no grant: a reply leaves as a draft"})
-        rows.insert(4, {"key": "draft_for", "label": "Always draft for", "doc": "local", "file": lf,
-                        "controls": [names("draft_for", local.get("draft_for"))]})
-        rows.insert(6, {"key": "watch", "label": "Watch", "doc": "local", "file": lf, "controls": watch,
-                        "note": "a blank field keeps the policy default"})
-        rows.insert(7, {"key": "audio", "label": "Audio", "doc": "local", "file": lf,
-                        "controls": [named(pick("transcribe", local.get("transcribe") or "off",
-                                                list(P.FIELD_TRANSCRIBE)), "Transcribe a clip"),
-                                     {"field": "voice_reply", "kind": "check", "label": "Voice reply",
-                                      "value": bool(local.get("voice_reply"))}]})
+    if P.channel_class(group["ws"], merged) != "guest":
+        return rows
+    poll = local.get("poll") if isinstance(local.get("poll"), dict) else {}
+    mode = _slack_text(poll.get("mode") or P.POLL_DEFAULT_MODE)
+    defaults = P.poll_defaults(mode)
+    fields = (("floor", "Floor"), ("ceiling", "Ceiling"), ("factor", "Factor"),
+              ("idle_window", "Idle window")) if mode == "exponential" \
+        else (("fast", "Fast"), ("slow", "Slow"), ("quiet_after", "Quiet after"))
+    modes = [{"value": m, "label": f"{m} (default)" if m == P.POLL_DEFAULT_MODE else m}
+             for m in P.FIELD_POLL_MODES]
+    watch = [_slack_named(_slack_pick("poll.mode", mode, modes), "Poll mode")]
+    watch += [_slack_named(_slack_written(f"poll.{name}", poll.get(name) or "", defaults.get(name)), label)
+              for name, label in fields]
+    watch.append(_slack_named(_slack_written("poll.thread_open", poll.get("thread_open") or "",
+                                             defaults.get("thread_open")), "Thread open"))
+    rows.insert(3, {"key": "delivery", "label": "Delivery", "doc": "local", "file": lf,
+                    "controls": [_slack_named(_slack_pick("speak", local.get("speak") or "draft",
+                                                          list(P.FIELD_SPEAK)), "Answer as"),
+                                 _slack_named(_slack_written("send_grant", local.get("send_grant") or ""),
+                                              "Send grant")],
+                    "note": f"granted {local['send_grant']} by the hub" if local.get("send_grant")
+                    else "no grant: a reply leaves as a draft"})
+    rows.insert(4, {"key": "draft_for", "label": "Always draft for", "doc": "local", "file": lf,
+                    "controls": [names("draft_for", local.get("draft_for"))]})
+    rows.insert(6, {"key": "watch", "label": "Watch", "doc": "local", "file": lf, "controls": watch,
+                    "note": _slack_poll_note(mode, defaults, poll)})
+    rows.insert(7, {"key": "audio", "label": "Audio", "doc": "local", "file": lf,
+                    "controls": [_slack_named(_slack_pick("transcribe", local.get("transcribe") or "off",
+                                                          list(P.FIELD_TRANSCRIBE)), "Transcribe a clip"),
+                                 {"field": "voice_reply", "kind": "check", "label": "Voice reply",
+                                  "value": bool(local.get("voice_reply"))}]})
     return rows
 
 def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held, refused_keys, defects, cf, lf):
@@ -453,6 +539,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
     return {"id": node_id, "level": 2, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
+            "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
             "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": class_,
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
@@ -517,6 +604,7 @@ def slack_tree(committed=None, local=None):
             "badges": [_slack_badge("no Slack", "muted")] if empty else
                       ([_slack_badge(default_name)] if default_name else []),
             "now": now, "children": nodes, "defects": [], "setup": list(SLACK_TREE_SETUP) if empty else [],
+            "settings": {"rows": _slack_tree_project_settings(P, committed_doc, local_doc)},
             "detail": {"title": label, "sub": "",
                        "text": "This project has no Slack files yet." if empty else ""}}
     return {"err": None, "files": {"committed": cf, "local": lf}, "defects": [str(d) for d in defects],
@@ -626,6 +714,11 @@ def slack_overview(committed=None, local=None):
     out["role_actions"] = list(P.role_actions())
     # The persona editor (#2697): the voice list the policy module owns, and the reply of each channel before a save.
     out["voices"] = sorted(str(v) for v in P.GEMINI_VOICES)
+    # The language list every select offers (#2845): the policy's own, so the page holds no copy.
+    out["languages"] = list(P.LANGUAGES)
+    # The poll defaults the tree pane and the older channel editor both annotate (#2845): the policy's own values.
+    out["poll_defaults"] = {mode: dict(P.poll_defaults(mode)) for mode in P.FIELD_POLL_MODES}
+    out["poll_default_mode"] = P.POLL_DEFAULT_MODE
     out["previews"] = _slack_reply_previews(P, committed_doc, local_doc)
     # The tree (#2824): one read of the same two files, node by node, from the policy module alone.
     out["tree"] = slack_tree(committed, local)
