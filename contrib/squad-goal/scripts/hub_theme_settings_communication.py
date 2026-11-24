@@ -8,7 +8,7 @@ SLACK_YAML_REL = pathlib.Path("docs") / "squad" / "slack.yaml"
 
 def slack_policy():
     """The one home of the Slack file rules (ADR-0177): the hub holds no copy of a rule."""
-    (SP,) = load_squad(squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("slackpolicy",))
+    (SP,) = load_squad(squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__), ("slackpolicy",))
     return SP
 
 def slack_yaml_paths():
@@ -172,7 +172,7 @@ def _slack_await_wav(path, seconds):
 def _slack_tts_cli(voice, tone, out):
     """The real client: the vendored TTS script, found by name (ADR-0129), in its own process, so no key and no module
     state enters the hub. Returns (path, error)."""
-    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
+    roots = squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try: (SKP,) = load_squad(roots, ("skillpath",))
     except Exception as e: return None, f"the skill path did not resolve: {type(e).__name__}: {e}"
     script = SKP.voice_script("tts.py")

@@ -86,13 +86,16 @@ def mux(tmp_path, monkeypatch):
     mux = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mux)
     apps = mux.load_apps()
+    assert set(apps) == {"host"}, apps
     assert all(a.get("mod") for a in apps.values()), [(s, a.get("err")) for s, a in apps.items()]
+    # The import-time pin, not the mux process's nopkg: this is what makes the policy module resolve (#2820).
+    assert apps["host"]["mod"].SQUAD_ROOT == str(ROOT), apps["host"]["mod"].SQUAD_ROOT
     for app in apps.values():
         app["mod"].runs = lambda: []
     srv = mux.server(0, apps)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     try:
-        yield srv.server_address[1]
+        yield srv.server_address[1], apps
     finally:
         srv.shutdown()
         srv.server_close()
@@ -102,7 +105,8 @@ def mux(tmp_path, monkeypatch):
 def test_a_host_profile_answers_its_read_view(mux):
     """Criterion 2: GET /<host-profile>/api/slack/files answers the read view, from the policy module its profile file
     names, with no error."""
-    status, raw = request(mux, "GET", "/host/api/slack/files")
+    port, _ = mux
+    status, raw = request(port, "GET", "/host/api/slack/files")
     assert status == 200, raw
     out = json.loads(raw)
     assert out.get("err") is None, out
@@ -113,10 +117,44 @@ def test_a_host_profile_answers_its_read_view(mux):
 def test_a_host_profile_answers_the_diff_of_a_dry_run_save(mux):
     """Criterion 3: POST with confirm false answers the diff of both files, validated by the policy module its profile
     file names."""
-    status, raw = request(mux, "POST", "/host/api/slack/files",
+    port, _ = mux
+    status, raw = request(port, "POST", "/host/api/slack/files",
                           {"committed": COMMITTED, "local": LOCAL, "confirm": False})
     assert status == 200, raw
     out = json.loads(raw)
     assert "err" not in out, out
     assert set(out["diff"]) == {"committed", "local"}, out
     assert out["diff"]["committed"], out
+
+
+@pytest.mark.heavy
+def test_squad_roots_keeps_the_callers_sg_squad_first(mux):
+    """The pin belongs to hubmux, never to a shadowed argument: an explicit SG_SQUAD the caller passes stays first in
+    the resolution order (#2820 review)."""
+    _, apps = mux
+    roots = apps["host"]["mod"].squad_roots("/tmp/explicit", "", "", "")
+    assert roots[0] == "/tmp/explicit", roots
+
+
+@pytest.mark.heavy
+def test_a_profile_that_names_no_sg_squad_inherits_none(tmp_path, monkeypatch):
+    """The pin is unconditional: a profile whose file names no SG_SQUAD imports with an empty one, so it never reads
+    the mux process's own package root (#2820 review)."""
+    root, scripts = _live_tree(tmp_path)
+    co = tmp_path / "co-plain"
+    co.mkdir()
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    (prof / "plain.sh").write_text(
+        f': "${{SG_REPO:=x/plain}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; : "${{SG_CHECKOUT:={co}}}"\n')
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    monkeypatch.setenv("SG_SQUAD", str(ROOT))   # the mux process's own root: a leak would be visible
+    for k in ("SG_CHECKOUT", "SG_PROJECTS", "SG_FORK_DIR", "SG_PROJECT"):
+        monkeypatch.delenv(k, raising=False)
+    spec = importlib.util.spec_from_file_location("hubmux_plain_profile", scripts / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    app = mux.load_one("plain")
+    assert app.get("mod"), app
+    assert app["mod"].SQUAD_ROOT == "", app["mod"].SQUAD_ROOT

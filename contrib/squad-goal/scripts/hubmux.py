@@ -69,7 +69,7 @@ def load_one(slug):
               "SG_PROJECTS": c.get("SG_PROJECTS", ""), "SG_FORK_DIR": c.get("SG_FORK_DIR", ""),   # the profile's own run roots, never the shell's (#859)
               "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", "") if PORT == LIVE_PORT else "",   # the live board cache is the live hub's (#512, #1000)
               "SG_SHARED": c.get("SG_SHARED", ""),   # the one shared directory the loop reads, never the profile's state (#678)
-              **({"SG_SQUAD": c["SG_SQUAD"]} if c.get("SG_SQUAD") else {})}   # the profile's own squad package root, read at import (#2820); a profile that names none keeps the hub process's
+              "SG_SQUAD": c.get("SG_SQUAD", "")}   # the profile's own squad package root, read at import (#2820); pinned empty when the profile names none, so no profile inherits the mux process's
     before = {k: os.environ.get(k) for k in pinned}
     try:
         os.environ.update(pinned)

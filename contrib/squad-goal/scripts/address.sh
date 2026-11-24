@@ -81,7 +81,7 @@ sg_land_base() { local row; row=$(sg_land_target "${1:-}#0") || return 1; printf
 # The context of a repository. <input> is a profile slug, a checkout (a path), an address owner/repo#n (owner/repo alone
 # too) or a bare n / #n. A bare n is the profile in force (SG_PROFILE) and nothing else: never the profile the cwd's origin
 # matches. A repository no profile names is refused by name with the list of known ones; nothing falls back to another.
-# The context: SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE SG_SQUAD.
+# The context: SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_PROJECTS SG_STATE SG_HUB_PATH SG_ISSUE SG_SHARED SG_BOARD_CACHE SG_SQUAD.
 # A profile that still sets the retired SG_TOOLING_REPO is read like any other: env.sh maps it into SG_REPOS and warns.
 # A profile is read on its own (no inherited SG_* value reaches it), so one profile can never borrow another's settings.
 # SG_PROFILES_DIR (default the profiles/ beside this file) and SG_STATE_BASE (default ~/.cache/squad-goal) are its inputs.

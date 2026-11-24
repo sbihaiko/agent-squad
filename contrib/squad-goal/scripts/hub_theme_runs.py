@@ -194,7 +194,7 @@ def _open_run(name, folder, start):
 
 def _start_dashboard(folder):
     """dashboard_server.start(folder) in a child interpreter, from the first root that holds the squad package."""
-    roots = [r for r in squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__) if (pathlib.Path(r) / "squad" / "dashboard_server.py").is_file()]
+    roots = [r for r in squad_roots(SQUAD_ROOT, os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__) if (pathlib.Path(r) / "squad" / "dashboard_server.py").is_file()]
     if not roots: raise RuntimeError("no squad package")
     py = pathlib.Path(roots[0]) / ".venv" / "bin" / "python"
     p = subprocess.run([str(py) if py.exists() else sys.executable, "-c", "import sys; from squad import dashboard_server as d; print(d.start(sys.argv[1]))", folder],
