@@ -249,10 +249,10 @@ class Children:
     async def session(self, ctx, name, entry=1, review=None, coder=None, repeated=False):
         """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
         Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it, led by
-        `coder` when the review streak moved it (ADR-0151), and told to test the premise of the last fix when the
-        finding repeated (#882)."""
-        e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
-        dl, ws = self.bound(ctx, d, slot), str(self.workspace(name, d))
+        `coder` when the review streak moved it (ADR-0151), and told to test the premise of the last fix when the finding repeated (#882)."""
+        e, d = self.e, self.e.dispatch.children[name]["definition"]
+        dl, by = self.bound(ctx, d)
+        slot, ws = ({"limit_by": by} if by else {}), str(self.workspace(name, d))
         ends = e.clock() + dl      # the child's deadline bounds the whole chain, not each entry of it (#1289)
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
@@ -299,16 +299,16 @@ class Children:
             ceiling=e.wave_ceiling_at, on_ceiling=hit_ceiling)   # a fix round too: the review pauses the cap, not this bound
         return out, model
 
-    def bound(self, ctx, d, slot):
-        """The seconds one child entry may take: its own deadline, or what is left of the entry's bound when that is less.
-        `slot` gets `limit_by` as the bound carried it (`run_deadline`, `node_deadline`, `wave_ceiling`), so the child's
-        call_start names the bound that shortened it and never re-labels a run or node deadline the wave ceiling (#2840)."""
+    def bound(self, ctx, d):
+        """(seconds, by) of one child entry: its own deadline, or what is left of the entry's bound when that is no more.
+        `by` is the bound that set the entry (`run_deadline`, `node_deadline`, `wave_ceiling`) while it is the one in
+        force, and None when the child's own deadline is. The caller records `by` unchanged, so a call_start names the
+        bound that shortened it and never re-labels a run or node deadline the wave ceiling (#2840). The entry's bound is
+        compared with the child's own, never a second time from `ctx.limit_by` alone: a tie keeps the label."""
         own, left = d["deadline"] * self.e.scale, ctx.dl_at - self.e.clock()
-        if left < own:
-            if getattr(ctx, "limit_by", None):
-                slot["limit_by"] = ctx.limit_by
-            return left
-        return own
+        if left <= own:
+            return left, getattr(ctx, "limit_by", None)
+        return own, None
 
     async def prepare(self, name, d, dl):
         if self.isolated(d):
