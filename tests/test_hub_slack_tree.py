@@ -394,18 +394,25 @@ def test_the_tree_draws_indent_guides_and_level_icons_and_no_glyph_fallback(hub,
     assert "⌂" not in html and "▣" not in html, "the house and square glyphs are gone"
     assert "<svg class=sltkind" in _item(html, "p"), "the project carries a level icon"
     assert "<svg class=sltkind" in _item(html, "w0"), "the workspace carries a level icon"
-    assert _item(html, "p").count("class=sltg") == 0, "the project is the root of the tree"
-    assert _item(html, "w0").count("class=sltg") == 1, "the workspace draws one guide"
-    assert _item(html, "w0.c0").count("class=sltg") == 2, "a channel draws one guide per ancestor level"
+    assert _item(html, "p").count('class="sltg') == 0, "the project is the root of the tree"
+    assert _item(html, "w0").count('class="sltg') == 1, "the workspace draws one guide"
+    assert _item(html, "w0.c0").count('class="sltg') == 2, "a channel draws one guide per ancestor level"
+    # The line runs only while its ancestor has another sibling after it, so a subtree's rule ends at its last child.
+    assert 'class="sltg more"' in _item(html, "w0"), "the project's rule continues past a workspace with one after it"
+    assert 'more' not in _item(html, "w1"), "the project's last workspace ends the rule"
+    last = _item(html, "w1.c1")
+    assert last.count('class="sltg') == 2 and "more" not in last, "the last channel ends both rules"
 
 
 def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash(hub, tmp_path):
-    local = json.loads(json.dumps(LOCAL))
-    local["workspaces"][0]["channels"].append({"id": "D0DM00001", "name": "owner-dm", "mode": "listen"})
-    root = tree(hub, tmp_path, local=local)["root"]
+    """A direct message of an owned workspace has no guest class, so its own Slack id (a `D` id) reads as a chat, and a
+    regular channel keeps the hash (mockup, #2843)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"].append({"id": "D0DM00001", "name": "owner-dm", "mode": "listen"})
+    root = tree(hub, tmp_path, committed=committed)["root"]
     assert by_name(root, "#support")["icon"] == "chat", "a guest channel shows the chat icon"
     assert by_name(root, "#owner-dm")["icon"] == "chat", "a direct message shows the chat icon"
     assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
-    html = render(hub, read(hub, tmp_path, local=local))
-    assert "<svg class=sltkind" in _item(html, "w1.c2"), _item(html, "w1.c2")   # the DM channel
+    html = render(hub, read(hub, tmp_path, committed=committed))
+    assert "<svg class=sltkind" in _item(html, "w0.c2"), _item(html, "w0.c2")   # the DM channel
     assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "w0.c0")

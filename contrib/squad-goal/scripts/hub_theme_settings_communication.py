@@ -283,6 +283,13 @@ def _slack_tree_channel_row(group, ch_id):
                 merged.update(candidate)
     return merged
 
+def _slack_tree_channel_icon(P, ws, merged, ch_id):
+    """The channel's tree icon (#2843): the chat bubble of a guest channel or a direct message, the hash otherwise. A
+    direct message carries no workspace class of its own, so its Slack `D` id decides."""
+    guest = P.channel_class(ws, merged) == "guest"
+    return "chat" if guest or str(ch_id).upper().startswith("D") else "hash"
+
+
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -292,8 +299,9 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     name = _slack_text(merged.get("name") or ch_id)
     announcement = [_slack_text(x) for x in merged.get("announce") or ()] if isinstance(merged.get("announce"), list) else []
     label = _slack_text(ws.get("label") or ws_id)
+    icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
     if refused:
-        return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "badges":
+        return {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon, "badges":
                 [_slack_badge("refused", "err", "refused")], "now": [],
                 "detail": {"title": f"#{name}", "sub": label, "text": "The workspace is refused, so this channel names no transport."}}
     resolution = P.resolution(committed_doc, local_doc, ws, merged)
@@ -320,7 +328,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
-    node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [],
+    node = {"id": node_id, "level": 3, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now,
             "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
