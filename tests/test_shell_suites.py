@@ -28,8 +28,10 @@ def test_a_call_that_runs_a_whole_shell_suite_carries_a_slow_reason():
     from tests.test_dispatch_mutex import test_the_two_dispatchers_share_one_claim_and_read_live_requests as dispatch
     from tests.test_live_check_orphans import test_the_live_check_suite_leaves_no_holder_behind as live_check
     from tests.test_retired_profile import test_the_address_suite_runs_without_the_loops_exported_defaults as address
+    from tests.test_retired_profile import test_address_seam_accepts_a_retired_profile as address_seam
+    from tests.test_retired_profile import test_retired_profile_migration_cycle as migration
 
-    whole_suite_calls = [dispatch, live_check, address]
+    whole_suite_calls = [dispatch, live_check, address, address_seam, migration]
     missing = [test.__name__ for test in whole_suite_calls if not _has_slow_reason(test)]
     assert missing == [], f"these calls run a whole shell suite and carry no slow reason: {missing}"
 
