@@ -273,6 +273,49 @@ def test_a_refused_workspace_state_reads_in_plain_words(hub, tmp_path):
     assert re.search(r'class="mx err', html), html
 
 
+def test_a_refused_workspace_carries_the_policy_diagnostic_and_a_plain_note(hub, tmp_path):
+    """#2842: `defects` serializes the policy's own diagnostic, with its key, while the view shows a plain-word note."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from squad import slackpolicy as P
+    local = two_guests()
+    c, loc = files(tmp_path, local=local)
+    committed, local_doc = yaml.safe_load(c.read_text()), yaml.safe_load(loc.read_text())
+    node = by_name(hub.slack_overview(c, loc)["tree"]["root"], "client-b")
+    want = [str(d) for d in P.validate(committed, local_doc, local_name="t.slack.local.yaml")
+            if d.reason == P.SECOND_GUEST_REASON]
+    assert node["defects"] == want, node["defects"]
+    note = node["detail"]["defect_note"]
+    assert "a second guest workspace is refused" in note and "workspaces[" not in note, note
+
+
+def test_an_unknown_guest_slot_tone_becomes_neutral(hub, tmp_path):
+    """#2842: a tone outside the fixed set (err, neutral, warn) never becomes a class token."""
+    out = read(hub, tmp_path)
+    out["tree"]["guest_slot"]["tone"] = "err onmouseover=alert(1)"
+    html = render(hub, out)
+    assert 'class="sltguest neutral"' in html, html[:400]
+    assert "onmouseover" not in html, html[:400]
+
+
+def test_the_channel_note_is_the_policy_sentence(hub, tmp_path):
+    """#2842: the note under the tiles is the policy's own sentence, drawn through one accessor (ADR-0137)."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from squad import slackpolicy as P
+    assert hasattr(P, "channel_note"), "the policy names the channel note"
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][1]["roles"] = ["manager"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0ALERT001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = read(hub, tmp_path, committed=committed, local=local)
+    channel = next(ch for ch in committed["workspaces"][0]["channels"] if ch["id"] == "C0ALERT001")
+    members = P.resolved_members(local, "T0TEAM0001", "C0ALERT001", channel.get("roles") or ())
+    want = P.channel_note(channel, members, channel.get("announce") or [])
+    assert by_name(out["tree"]["root"], "#squad-alerts")["detail"]["note"] == want, want
+
+
 def test_the_no_one_badge_is_amber(hub, tmp_path):
     """#2842: a channel with no eligible member carries the no-one badge in the amber warning tone."""
     local = json.loads(json.dumps(LOCAL))
@@ -342,7 +385,7 @@ def test_a_tile_value_never_breaks_inside_a_word(hub):
 
 def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
     """#2841: five channel tiles and four workspace tiles fit one row at 1440 px, so each track asks 140 px at most."""
-    rule = re.search(r"#sbody \.sltnow\{([^}]*)\}", hub.PAGE)
+    rule = re.search(r"#tab-set #sbody \.sltnow\{([^}]*)\}", hub.PAGE)
     m = re.search(r"repeat\(auto-fit,minmax\((\d+)px,1fr\)\)", rule.group(1)) if rule else None
     assert m and int(m.group(1)) <= 140, rule and rule.group(1)
 
@@ -405,8 +448,8 @@ def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
         assert now["Reply"]["value"] == P.reply_label(ch, decision), (name, now["Reply"], decision.reply)
         assert now["A member's message"]["value"] == P.destination_label(decision), (name, decision.kind)
     assert [b["text"] for b in by_name(root, "client-b")["badges"]] == ["guest", "refused"]
-    assert by_name(root, "client-b")["defects"] == [str(d.reason) for d in P.validate(committed, local,
-                                                                                      local_name="t.slack.local.yaml")
+    assert by_name(root, "client-b")["defects"] == [str(d) for d in P.validate(committed, local,
+                                                                               local_name="t.slack.local.yaml")
                                                     if d.reason == P.SECOND_GUEST_REASON]
 
 
