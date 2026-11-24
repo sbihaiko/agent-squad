@@ -486,6 +486,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
  #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}
  #tab-set #sbody .sltnow{grid-template-columns:repeat(3,minmax(0,1fr))}#tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}}   /* a folded detail keeps three tiles, so every label stays whole; a four-tile block still fills one row (#2841) */
 @container (min-width:701px){#sbody .slttop.sltshow .sltcol{display:block}}
+@container (max-width:700px){#sbody .slsetc .slsetctl{width:100%;max-width:320px}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
