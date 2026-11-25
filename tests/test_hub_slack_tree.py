@@ -1153,3 +1153,18 @@ def test_a_refused_guest_workspace_reads_not_read_in_the_preview(hub, tmp_path):
                                 "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
     got = preview(hub, tmp_path, local=local, workspace="T0OTHER001", channel="C0CLIB0001", user="U0CLIENT01")
     assert got["decision"] == "not read", got
+
+
+def test_the_slack_theme_takes_the_free_width_and_keeps_prose_short(hub):
+    """With the Slack theme open, the Settings wrap, its panel and the Save bar drop the 1120 px cap, so a collapsed
+    sidebar gives the tree and the detail pane its width; a paragraph stays at most 72 characters wide (#2907)."""
+    page = hub.PAGE
+    assert "max-width:none" in _rule(page, "#tab-set .swrap:has(#slk.on)")
+    assert "max-width:none" in _rule(page, "#tab-set details#slk")
+    assert "max-width:none" in _rule(page, "#tab-set:has(#slk.on) #sbar")
+    assert "max-width:72ch" in _rule(page, "#sbody .slttext")
+    assert "max-width:1120px" in _rule(page, "#tab-set .swrap"), "the other themes keep their cap"
+    # A wide pane never stretches a tile row or a label column across it: the tile row stops at 1080 px, and a client
+    # row's label column stops at 240 px.
+    assert "max-width:1080px" in _rule(page, "#sbody .sltnow")
+    assert "minmax(120px,240px)" in _rule(page, "#sbody .sltrow")

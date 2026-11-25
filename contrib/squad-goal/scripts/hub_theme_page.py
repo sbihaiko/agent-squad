@@ -455,8 +455,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);font-weight:600;line-height:1.25;color:var(--fg);overflow-wrap:anywhere}   /* the node title is the largest text of the pane (#2841) */
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
-#sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute)}
-#tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
+#sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute);max-width:72ch}
+#tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));max-width:1080px}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
 #tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
 #tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}   /* a workspace and the project carry four tiles: one row (#2841) */
 #tab-set #sbody .sltnow .tile .tk{color:var(--mute)}   /* the label is a muted caption (#2841) */
@@ -474,7 +474,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltclient .slt2{width:100%}
 #sbody .sltsethead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line)}
 #sbody .sltsethead .blkh{margin:0}
-#sbody .sltrow{display:grid;grid-template-columns:minmax(120px,.6fr) minmax(0,1fr);gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
+#sbody .sltrow{display:grid;grid-template-columns:minmax(120px,240px) minmax(0,1fr);gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:var(--fs-body)}
 #sbody .sltrow .sl{color:var(--fg)}#sbody .sltrow .sc{justify-self:start;min-width:0}
 #sbody .sltprophead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:14px 0 4px}
 #sbody .sltprophead .blkh{margin:0}
@@ -625,6 +625,8 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .snav button small{display:block;color:var(--mute);font-size:var(--fs-caption)}#tab-set .snav button.on{border-color:var(--acc);background:var(--bubble)}
 #tab-set .snav button small.err,.sp>summary .sr.err{color:var(--err);font-weight:600}   /* a state that needs a look: the same err tone in both places (#1282) */
 #tab-set .ssel{display:none}#tab-set details.sp:not(.on){display:none}
+/* #2907: the Slack tree and its detail pane use the width a collapsed sidebar frees; every other theme keeps its cap */
+#tab-set .swrap:has(#slk.on){max-width:none}#tab-set details#slk{max-width:none}#tab-set:has(#slk.on) #sbar{max-width:none}
 #sbar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:12px;max-width:1120px;background:var(--panel);border-top:1px solid var(--line);z-index:2}#sbar[hidden]{display:none}
 #sbar.dirty{background:var(--tint-warn);border-top-color:var(--tint-warn-line)}#sbar button{height:var(--ctl-h);padding:0 12px}#sbar.dirty #ssave{background:var(--warn);color:var(--on-tone)}#schg{color:var(--mute);font-size:var(--fs-caption)}#schg.err{color:var(--err);font-weight:600}#schg.ok{color:var(--ok)}
 #sdlg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);max-width:min(720px,94vw)}#sdpre{white-space:pre-wrap;font-size:var(--fs-caption);max-height:50vh;overflow:auto}#sdlg .sact{display:flex;gap:8px}
