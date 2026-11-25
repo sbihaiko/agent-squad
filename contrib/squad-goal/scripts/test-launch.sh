@@ -91,4 +91,23 @@ o=$(cd "$T/co" && SG_STATE="$T/st3" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_A
 case "$o" in *Traceback*) ko "the removed workspace still raises a traceback: $o";; *) ok "the removed workspace raises no traceback";; esac
 [ -z "$(cat "$T/st3/active-runs.txt" 2>/dev/null)" ] && ok "a refused dispatch adds no live run" || ko "a refused dispatch holds a live run"
 
+# #2847: the launch lists the run before `wave.sh start` writes its wave markers. The janitor drops a wave marker no line
+# names, so a pass between the cut and a later append dropped the wave of a live run. The stub cut records the listing it saw.
+mkdir -p "$T/st4"
+cat > "$T/bin/caffeinate" <<'C'
+#!/bin/bash
+while [ "${1#-}" != "$1" ]; do shift; done
+case " $* " in *" squad start "*) ;; *) exec sleep 1;; esac
+mkdir -p runs/run-20261125-101010-order
+sleep 3
+C
+chmod +x "$T/bin/caffeinate"
+printf '#!/bin/bash\n/usr/bin/grep "/$2$" "$SG_STATE/active-runs.txt" > "%s" 2>&1 || echo "no line" > "%s"\n' "$T/wave-saw" "$T/wave-saw" > "$T/s/wave.sh"
+printf 'Coding model: test-model\nCHILD — GitHub issue(s) #11 (a): do it\n' > "$T/reqorder.txt"
+rm -f "$T/wave-saw"
+o=$(cd "$T/co" && SG_STATE="$T/st4" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/reqorder.txt" 2>&1); rc=$?
+[ -f "$T/wave-saw" ] && ok "the launch cuts the wave of a child run" || ko "wave.sh start never ran (rc=$rc): $o"
+/usr/bin/grep -q '/run-20261125-101010-order$' "$T/wave-saw" 2>/dev/null && ok "the run's line is in active-runs.txt when wave.sh start runs" || ko "wave.sh start ran before the run was listed: $(cat "$T/wave-saw" 2>/dev/null) out=$o"
+[ "$(/usr/bin/grep -c '/run-20261125-101010-order$' "$T/st4/active-runs.txt" 2>/dev/null)" = 1 ] && ok "the launch lists the run once" || ko "the run is listed $(/usr/bin/grep -c '/run-20261125-101010-order$' "$T/st4/active-runs.txt" 2>/dev/null) times"
+
 rm -rf "$T"; exit $fail

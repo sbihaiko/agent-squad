@@ -5,6 +5,8 @@
 # that prefix, read `entry-<run>`, found no run by that name and deleted the entry clock of a live run (#2473). `wave-recut-<run>`
 # has the same shape. The rule names the run of each known marker and drops the marker of a run no line names and no live
 # process works; a listed run's markers stay, and a real `wave-<run>` of an unlisted run is still dropped (#2140).
+# `wave.sh start` writes the markers before the launch's line reaches the listing, so a marker younger than the grace stands
+# (#2847). A frontier run's folder is `worktrees/run/<stamp>/runs/<run>`, and a live process there holds its wave too.
 # A stub `gh`, a stub board, a temp state dir. usage: bash test-janitor-wave-marker.sh [janitor.py]
 export SG_TAKEOVER_SECONDS=1000000000000   # the run below tests rule V, not the takeover bound (ADR-0166)
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); src=${1:-$d/janitor.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
@@ -24,13 +26,26 @@ printf '%s\n' "$(( now + 7200 ))" > "$T/st/auto/wave-ceiling-run-live"
 # an unlisted run: no line names it and no folder works it, so its wave can never land.
 echo "wave/run-old" > "$T/st/auto/wave-run-old"
 printf '%s\n' "$(( now + 7200 ))" > "$T/st/auto/wave-ceiling-run-old"
+touch -t "$(date -r $(( now - 3600 )) +%Y%m%d%H%M.%S)" "$T/st/auto/wave-run-old" "$T/st/auto/wave-ceiling-run-old"   # past the grace
+# an unlisted run whose markers are fresh: the launch cut its wave and its line is on its way (#2847).
+echo "wave/run-new" > "$T/st/auto/wave-run-new"
+echo abc123 > "$T/st/auto/wave-start-run-new"
+# an unlisted frontier run, past the grace, whose folder a live process works (#2847).
+F="$T/co/worktrees/run/20261125-101010/runs/run-front"; mkdir -p "$F"
+echo "wave/run-front" > "$T/st/auto/wave-run-front"
+echo abc123 > "$T/st/auto/wave-start-run-front"
+touch -t "$(date -r $(( now - 3600 )) +%Y%m%d%H%M.%S)" "$T/st/auto/wave-run-front" "$T/st/auto/wave-start-run-front"
+(cd "$F" && exec -a gate.sh sleep 30) & gp=$!
 o=$(pass)
+kill "$gp" 2>/dev/null; wait "$gp" 2>/dev/null
 [ -e "$T/st/auto/wave-entry-run-live" ] && ok "the entry clock of a run the listing names stays" || ko "the entry clock of a live run went: $o"
 [ -e "$T/st/auto/wave-recut-run-live" ] && ok "the recut marker of a run the listing names stays" || ko "the recut marker of a live run went: $o"
 [ -e "$T/st/auto/wave-run-live" ] && ok "the wave of a listed run stays" || ko "the wave of a live run went: $o"
 [ -e "$T/st/auto/wave-ceiling-run-live" ] && ok "the ceiling of a run the listing names stays" || ko "the ceiling of a live run went: $o"
 [ ! -e "$T/st/auto/wave-run-old" ] && ok "the wave marker of an unlisted run is dropped" || ko "the wave marker of an unlisted run stayed: $o"
 [ ! -e "$T/st/auto/wave-ceiling-run-old" ] && ok "the ceiling of an unlisted run is dropped with its wave" || ko "the ceiling of an unlisted run stayed: $o"
+[ -e "$T/st/auto/wave-run-new" ] && [ -e "$T/st/auto/wave-start-run-new" ] && ok "a fresh wave of an unlisted run stays for the grace" || ko "a fresh wave of an unlisted run went: $o"
+[ -e "$T/st/auto/wave-run-front" ] && [ -e "$T/st/auto/wave-start-run-front" ] && ok "the wave of a frontier folder a live process works stays" || ko "the wave of a live frontier folder went: $o"
 /usr/bin/grep -q 'WAVE-DROPPED wave-run-old' "$T/st/cycle.log" && ok "the pass names the marker it dropped" || ko "the drop is unnamed: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'WAVE-DROPPED wave-ceiling-run-old' "$T/st/cycle.log" && ok "the pass names the ceiling it dropped" || ko "the ceiling drop is unnamed: $(cat "$T/st/cycle.log" 2>/dev/null)"
 exit $fail
