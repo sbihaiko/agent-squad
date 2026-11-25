@@ -174,3 +174,16 @@ def proposal(P, client, projects, persona_id, persona_name=None):
         rows.append({"project": pid, "label": label, "now": now, "action": WRITE, "result": f"writes {name}"})
         writes.append({"project": pid, "committed": after})
     return {"rows": rows, "writes": writes}
+
+
+def with_default(doc, client_id, persona_id, persona_name=None):
+    """The raw map with one client's default persona set to `{id, name}`. Every other key keeps its place and its form,
+    so a save of the default never rewrites the projects or another client. A client the map does not name leaves the
+    map unchanged."""
+    out = copy.deepcopy(doc if isinstance(doc, dict) else {})
+    for row in _rows(out.get("clients")):
+        if _text(row.get("id")).strip() == _text(client_id).strip():
+            pid = _text(persona_id).strip()
+            row["default_persona"] = {"id": pid, "name": _text(persona_name).strip() or pid}
+            break
+    return out

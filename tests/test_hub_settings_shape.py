@@ -259,8 +259,11 @@ def test_the_save_bar_never_hides_and_a_read_only_theme_says_so(hub):
     # re-anchored (#2433): Spend & limits writes each field on its own, so its bar keeps no button and says so.
     assert out["lim"]["text"] == "Spend & limits: each field saves as you set it", out["lim"]["text"]
     assert out["lim"]["save"] is True and out["lim"]["disc"] is True, out["lim"]
-    for theme in ("sub", "mdl", "slk", "acc"):
+    for theme in ("sub", "mdl", "acc"):
         assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
+    # re-anchored (#2908): Slack saves each edit by itself and says so.
+    assert out["slk"]["text"] == "Slack: each edit saves by itself", out["slk"]["text"]
+    assert out["slk"]["save"] is True and out["slk"]["disc"] is True, out["slk"]
     assert out["ro"]["hidden"] is False and out["ro"]["disabled"] is True
     assert out["ro"]["text"] == "Read-only over the tailnet"
     assert 'const SET_SAVE=["mdl","slk","sub"]' in hub.PAGE

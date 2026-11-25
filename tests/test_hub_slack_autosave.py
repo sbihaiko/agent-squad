@@ -14,13 +14,16 @@ import re
 
 import yaml
 
-from tests.test_hub_slack_clients import FOLLOWER, _node, _slices, hub, stub_write, wire  # noqa: F401  (hub is a fixture)
+from tests import test_hub_slack_clients as C
+
+FOLLOWER, _node, _slices, stub_write, wire = C.FOLLOWER, C._node, C._slices, C.stub_write, C.wire
+hub = C.hub   # the shared module fixture, registered here under its own name
 
 TIMERS = ('let TQ=[],TN=0;globalThis.setTimeout=(f,ms)=>{const id=++TN;TQ.push({id,f,ms});return id};'
           'globalThis.clearTimeout=id=>{TQ=TQ.filter(t=>t.id!==id)};'
           'const fire=()=>{const q=TQ;TQ=[];for(const t of q)t.f()};')
 DOCS = ('slDocs={committed:{version:1,project:{language:"en-US"}},local:{version:1}};slSavedDocs=slClone(slDocs);'
-        'slR={tree:{clients:[]}};slS=slR;')
+        'slR={tree:{clients:[]}};slS=slR;slRender=()=>{};')   # the pane's markup is not under test here
 
 
 def _post_src(page):
@@ -166,3 +169,26 @@ def test_a_client_default_save_records_the_default_in_the_client_map(hub, tmp_pa
     assert doc["clients"][0]["default_persona"] == {"id": "amber", "name": "Amber"}, doc
     assert doc["clients"][0]["projects"] == [{"id": "alpha", "follows": True}], doc
     assert pathlib.Path(prof / "clients.local.yaml").exists()
+
+
+def test_a_staged_edit_keeps_the_whole_tree_and_the_project_in_its_place(hub, tmp_path, monkeypatch):
+    """A staged edit answers the tree of every project, with the edited project in its client and under its own node id,
+    so the owner's selection never jumps to another node while the save waits (#2908)."""
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha", "beta"]}],
+                      {"alpha": FOLLOWER, "beta": FOLLOWER})
+    co, committed, local = made["alpha"]
+    monkeypatch.setattr(hub, "slack_yaml_paths", lambda: (str(committed), str(local)))
+    before = hub.slack_overview()
+    op = {"kind": "set", "doc": "committed", "path": ["workspaces", 0, "label"], "value": "renamed"}
+    out = hub.slack_docs_edit({"op": op}, committed=str(committed), local=str(local))
+    assert out.get("err") is None, out
+    tree = out["tree"]
+    assert [c["name"] for c in tree["clients"]] == [c["name"] for c in before["tree"]["clients"]], tree["clients"]
+    assert tree["clients"][0]["name"] == "One", tree["clients"][0]["name"]
+    names = [p["name"] for p in tree["clients"][0]["children"]]
+    assert names == ["alpha", "beta"], names
+    alpha = tree["clients"][0]["children"][0]
+    assert alpha["children"][0]["name"] == "renamed", alpha["children"][0]["name"]
+    assert alpha["id"] == "c0.p0", alpha["id"]
+    assert tree["counts"] == before["tree"]["counts"], (tree["counts"], before["tree"]["counts"])

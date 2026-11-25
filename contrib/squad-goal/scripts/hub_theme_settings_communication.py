@@ -861,7 +861,7 @@ def _slack_clients_tree_for(P, seats, here=None):
                 "persona_options": _slack_persona_options(P, seats_of),
                 "detail": {"title": g["name"], "sub": "",
                            "text": "A client groups projects in the local client map, never in a repository. Changing its "
-                                   "default persona proposes a write to each project's project.persona; a project that set "
+                                   "default persona sets it in each project that follows the client, by itself; a project with "
                                    "its own persona keeps it."}}
         nodes.append(node)
     # The second-guest refusal is a per-project rule (#2770), so its banner sits on the project that carries it, never
@@ -888,13 +888,22 @@ def _slack_clients_tree_for(P, seats, here=None):
             "counts": {"clients": len(nodes), "projects": len(seats), "channels": channels}}
 
 
-def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects=()):
+def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects=(), here=None):
     """The tree of two documents already in hand, so a staged edit's answer redraws the Now block before the save
     (#2846). The caller hands in the documents and the file names, never a rule (ADR-0137, ADR-0177)."""
     seat = {"id": _slack_project_label(), "label": _slack_project_label(), "checkout": None,
             "committed": committed_doc, "local": local_doc, "committed_path": committed, "local_path": local,
             "read_defects": list(read_defects),
             "cf": _slack_name(committed, "slack.yaml"), "lf": _slack_name(local, "slack.local.yaml")}
+    # A staged edit keeps the whole tree (#2908): the project the page edits takes the staged documents in its own place,
+    # so its client, its node id and the owner's selection stay where they were. A roster with no such project draws the
+    # project alone.
+    roster, rerr = _slack_roster_checked(PREVIEW_ROSTER_SECONDS) if here else ([], "no path")
+    hit = next((s for s in roster if _slack_here(s, roster, here)), None) if not rerr else None
+    if hit is not None:
+        seats = [{**s, "committed": committed_doc, "local": local_doc, "read_defects": list(read_defects)} if s is hit else s
+                 for s in roster]
+        return _slack_clients_tree_for(P, seats, here)
     return _slack_clients_tree_for(P, [seat])
 
 
@@ -1415,6 +1424,17 @@ def slack_clients_preview(body):
     return _slack_client_plan(body, cache=PREVIEW_ROSTER_SECONDS)
 
 
+def _clients_default_write(client_id, persona_id, persona_name):
+    """Write one client's default persona into the profile folder's map, whole or not at all. Returns an error, or None."""
+    path = clients_map_path()
+    if path is None: return "the profile folder did not resolve, so the client default was not kept"
+    try: doc = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as e: return f"the client map could not be read: {e}"
+    CL = slack_clients_module()
+    return _slack_atomic(path, yaml.safe_dump(CL.with_default(doc, client_id, persona_id, persona_name), sort_keys=False,
+                                              allow_unicode=True))
+
+
 def slack_clients_save(body):
     """POST /api/slack/clients: the preview when `confirm` is not true; on confirm, each row that reads "writes X" writes
     `project.persona` through that project's own save path, and every other row writes nothing."""
@@ -1429,6 +1449,9 @@ def slack_clients_save(body):
         if out.get("err"): errors.append(f"{w['project']}: {out['err']}")
         else: saved.append({"project": w["project"], "sha": out.get("sha")})
     _slack_roster_clear()   # a write changed a project's files, so the next preview reads the roster fresh
+    if not errors:   # the map keeps the chosen default, so the next read shows it (#2908)
+        merr = _clients_default_write(plan["client"], plan["persona"], plan.get("persona_name"))
+        if merr: errors.append(merr)
     partial = bool(plan.get("refused")) or bool(errors)
     plan = {**plan, "saved": saved, "partial": partial, "proposal_saved": not partial}
     if errors: plan["err"] = "; ".join(errors)
@@ -2000,7 +2023,8 @@ def slack_docs_edit(body, committed=None, local=None):
                 "committed": docs["committed"], "local": docs["local"]}
     # The tree of the staged documents, through the policy module, so the page redraws the Now block before the save
     # (#2846). The files are the ones the edit was handed, so no chip moves under the owner's eyes.
-    tree = _slack_tree_docs(P, draft["committed"], draft["local"], _slack_name(committed, "slack.yaml"), local_name)
+    tree = _slack_tree_docs(P, draft["committed"], draft["local"], _slack_name(committed, "slack.yaml"), local_name,
+                            here=committed)
     return {"committed": draft["committed"], "local": draft["local"], "err": None, "defects": [],
             "new_defects": [], "held_defects": [],
             "documents": {"committed": draft["committed"], "local": draft["local"]}, "tree": tree}
