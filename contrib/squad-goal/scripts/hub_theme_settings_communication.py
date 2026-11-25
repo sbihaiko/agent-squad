@@ -376,7 +376,7 @@ def _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf):
                 if cid in group["named"]:
                     continue
                 group["named"].add(cid)
-                group["channels"].append({"id": cid, "row": ch, "file": file, "index": ci, "ws": row})
+                group["channels"].append({"id": cid, "row": ch, "file": file, "index": ci, "ws": row, "ws_index": i})
     return groups
 
 def _slack_tree_channel_row(group, ch_id):
@@ -540,8 +540,8 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
     channel of a refused workspace carries the refusal alone, never a send, bot or listen badge."""
     ws, ws_id, ch_id = group["ws"], group["id"], ch["id"]
-    merged = _slack_tree_channel_row(group, ch_id)
-    name = _slack_text(merged.get("name") or ch_id)
+    merged = _slack_tree_channel_row(group, ch_id) or dict(ch["row"])   # a row with no Slack id merges with nothing
+    name = _slack_text(merged.get("name") or _slack_real_id(ch_id) or "unnamed channel")
     announcement = [_slack_text(x) for x in merged.get("announce") or ()] if isinstance(merged.get("announce"), list) else []
     label = _slack_text(ws.get("label") or ws_id)
     icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
@@ -586,6 +586,10 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "verdict": _slack_channel_verdict(persona, merged, members, listen_only)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
+    # The channel node removes its own row and opens the channel in the Slack web client (#2918).
+    node["channel_remove"] = {"doc": "committed" if ch["file"] == cf else "local", "ws": ch["ws_index"],
+                              "index": ch["index"], "name": f"#{name}"}
+    node["open"] = _slack_channel_url(ws_id, ch_id)
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
     return node
 
@@ -705,6 +709,17 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
                                   "value": bool(local.get("voice_reply"))}]})
     return rows
 
+def _slack_real_id(value):
+    """A Slack id the files name, never the placeholder key a row with no id stands on."""
+    text = _slack_text(value)
+    return "" if not text or text.startswith("\0") else text
+
+def _slack_channel_url(ws_id, ch_id):
+    """The channel in the Slack web client, or "" when the workspace or the channel names no Slack id (#2918)."""
+    ws_id, ch_id = _slack_real_id(ws_id), _slack_real_id(ch_id)
+    if not ws_id or not ch_id: return ""
+    return f"https://app.slack.com/client/{urllib.parse.quote(ws_id)}/{urllib.parse.quote(ch_id)}"
+
 def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held, refused_keys, defects, cf, lf):
     """One workspace node: its class tile, its persona and language, the guest slot it holds, the validation defects
     that name it and its channels. A refused workspace states its one defect and its channels carry no transport."""
@@ -734,8 +749,14 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
+    # The workspace node adds a channel to the row that leads it; the hub lists the Slack ids the files already name,
+    # so the channel list never offers one twice (#2918).
+    channel_add = None if refused or not _slack_real_id(ws_id) else {
+        "doc": "committed" if group["file"] == cf else "local", "ws": group["index"], "workspace": ws_id,
+        "named": [c for c in (_slack_real_id(x["id"]) for x in group["channels"]) if c]}
     return {"id": node_id, "level": 3, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
+            "channel_add": channel_add,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
             "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
@@ -2242,6 +2263,45 @@ def _slack_people_directory(ws, token):
     with _SLACK_PEOPLE_LOCK:
         _SLACK_PEOPLE[ws] = {"at": now, "users": people}
     return people, None
+
+SLACK_CHANNELS_SECS = 300.0
+_SLACK_CHANNELS = {}   # workspace id -> {"at", "channels"}
+_SLACK_CHANNELS_LOCK = threading.Lock()
+
+def _slack_channel_directory(ws, token):
+    """(channels, error): every channel of the workspace the connection reads, archived ones left out, kept for one
+    window."""
+    now = time.monotonic()
+    with _SLACK_CHANNELS_LOCK:
+        ent = _SLACK_CHANNELS.get(ws)
+        if ent and now - ent["at"] < SLACK_CHANNELS_SECS: return ent["channels"], None
+    channels, cursor = [], ""
+    for _ in range(50):   # 50 pages of 200: a workspace past 10 000 channels is cut, never a loop without end
+        method = ("conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=200"
+                  + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+        try: d = slack_api(token, method)
+        except Exception: return [], "the Slack connection did not answer"
+        if not isinstance(d, dict) or not d.get("ok"): return [], _slack_api_error(d if isinstance(d, dict) else {})
+        channels += [{"id": _slack_text(c.get("id")), "name": _slack_text(c.get("name") or c.get("id"))}
+                     for c in d.get("channels") or [] if isinstance(c, dict) and c.get("id") and not c.get("is_archived")]
+        cursor = _slack_text((d.get("response_metadata") or {}).get("next_cursor"))
+        if not cursor: break
+    channels.sort(key=lambda c: c["name"].casefold())
+    with _SLACK_CHANNELS_LOCK:
+        _SLACK_CHANNELS[ws] = {"at": now, "channels": channels}
+    return channels, None
+
+def slack_channels_post(body):
+    """POST /api/slack/channels: `{workspace, named}` answers the workspace's channels by name, the ones `named` holds
+    left out (#2918). A workspace this host cannot read answers `manual`, so the page offers the raw id field."""
+    if not isinstance(body, dict): return {"err": "bad request", "manual": True, "channels": []}
+    ws = _slack_text(body.get("workspace")).strip()
+    token, err = _slack_people_conn(ws)
+    if err: return {"err": err, "manual": True, "channels": []}
+    channels, err = _slack_channel_directory(ws, token)
+    if err: return {"err": err, "manual": True, "channels": []}
+    named = {_slack_text(x) for x in body.get("named") or [] } if isinstance(body.get("named"), list) else set()
+    return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named]}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and

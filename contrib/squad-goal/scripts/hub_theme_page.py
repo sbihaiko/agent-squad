@@ -469,6 +469,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    keeps the Slack id reachable with no id in the subtitle. */
 #sbody .sltverdict{margin:0 0 12px;font-size:var(--fs-body);font-weight:600;color:var(--fg);max-width:72ch}
 #sbody .sltids{margin:-4px 0 8px}#sbody .sltcopy{padding:0 8px;font-size:var(--fs-caption)}   /* the copy button keeps the token control height: 32px on the desktop and 44px on the phone */
+#sbody .sltopen{margin-left:8px;font-size:var(--fs-caption)}#sbody .sltchadd{margin:16px 0 0}#sbody .sltchadd .slad{display:flex;gap:8px;flex-wrap:wrap}#sbody .sltrm{margin:20px 0 0;padding-top:12px;border-top:1px solid var(--line)}   /* #2918 */
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute);max-width:72ch}
 #tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));max-width:1080px}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
 #tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
@@ -1672,8 +1673,25 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
- +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button></p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
+ +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button>${n.open?` <a class=sltopen href="${slA(n.open)}" target=_blank rel=noopener>Open in Slack</a>`:""}</p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)+slTChRm(n)}
+/* Add and remove a channel from its own tree node (#2918). The hub names the row each edit writes and lists the
+   workspace's channels by name, the ones the files name left out; the view draws the list and sends the edit. */
+let slChList={},slChAsk={};
+function slChNeed(a){if(typeof fetch!=="function"||!a)return;const ws=String(a.workspace||"");if(!ws||slChAsk[ws]||slChList[ws])return;slChAsk[ws]=true;
+ fetch("/api/slack/channels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,named:a.named||[]})})
+ .then(r=>r.json()).then(o=>{slChList[ws]=o||{err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})
+ .catch(()=>{slChList[ws]={err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})}
+function slTChAdd(n){const a=n&&n.kind==="workspace"&&n.channel_add;if(!a)return "";const key=`${a.doc}:${a.ws}`,l=slChList[String(a.workspace||"")];
+ if(!l)slChNeed(a);
+ const list=l&&Array.isArray(l.channels)?l.channels:[];
+ const pick=list.length?`<div class=slad><select data-sltchpick="${slA(key)}" aria-label="channel to add">${list.map(c=>`<option value="${slA(c.id)}">#${esc(c.name)}</option>`).join("")}</select><button type=button data-sltaddch="${slA(key)}">Add channel</button></div>`
+  :l&&!l.err?`<p class=m>Every channel this connection reads is already here.</p>`:!l?`<p class=m>Reading the channels…</p>`:"";
+ const err=l&&l.err?`<p class="mx err" role=status>${esc(l.err)}</p>`:"";
+ const ids=l&&l.manual?`<details class=sladv><summary>Slack ids</summary>${slAddCh(a.doc,a.ws)}</details>`:"";
+ return `<section class="setblk sltchadd" aria-label="Add channel"><h3 class=blkh>Channels</h3>${pick}${err}${ids}</section>`}
+function slTChRm(n){const r=n&&n.kind==="channel"&&n.channel_remove;if(!r)return "";
+ return `<p class=sltrm><button type=button data-sltrmch="${slA(`${r.doc}:${r.ws}:${r.index}`)}" data-sltrmname="${slA(r.name)}">Remove channel</button></p>`}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
    the field, never the row's place in a list, so the save writes the row that carries the id. A control shows the value
@@ -2021,6 +2039,12 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
   const o=dt.slopen;
   if(o!==undefined){slOpen=slOpen===o?"":o;slRender();return}
   if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
+  if(dt.sltaddch){const[d,i]=dt.sltaddch.split(":"),sel=document.querySelector(`[data-sltchpick="${dt.sltaddch}"]`),id=sel?String(sel.value||""):"";
+   const ws=Object.keys(slChList).find(w=>((slChList[w]||{}).channels||[]).some(c=>c.id===id)),c=ws?slChList[ws].channels.find(x=>x.id===id):null;
+   if(c){delete slChList[ws];slOp({kind:"add",doc:d,path:["workspaces",+i,"channels"],value:{id:c.id,name:c.name}})}return}   // #2918
+  if(dt.sltrmch){const[d,i,j]=dt.sltrmch.split(":");
+   if(typeof confirm!=="function"||confirm(`Remove ${dt.sltrmname||"this channel"}? The channel leaves the Slack file and its settings go with it.`)){
+    slChList={};slTsel=String(slTsel).replace(/\.c\d+$/,"");slOp({kind:"remove",doc:d,path:["workspaces",+i,"channels",+j]})}return}
   if(b.dataset.sladdws!==undefined){slAddWsOp();return}
   if(b.dataset.slrmch){const[d,i,j]=b.dataset.slrmch.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i,"channels",+j]});return}
   if(b.dataset.slrmws){const[d,i]=b.dataset.slrmws.split(":");slOp({kind:"remove",doc:d,path:["workspaces",+i]});return}
