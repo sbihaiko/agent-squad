@@ -1708,15 +1708,15 @@ def commit(repo, text):
 def revision_daemon(tmp_path, client=None, log=None, registry=None):
     """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives.
 
-    A `registry` path puts the hub's saved-sha check in force (#2695); none leaves the daemon as one whose machine
-    names no registry, so the older cases read the revision load alone.
+    A `registry` path puts the saved-sha check in force for every project (#2695); none leaves the daemon as one whose
+    machine names no registry, so the older cases read the revision load alone.
     """
     mod = voiced()
     lines = log if log is not None else []
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
                         transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=lines.append if isinstance(lines, list) else lines, client=client,
-                        registry=(lambda: str(registry)) if registry is not None else None)
+                        registry=(lambda entry: str(registry)) if registry is not None else None)
     return mod, daemon, lines
 
 
@@ -2464,7 +2464,7 @@ def unlisted_project_daemon(tmp_path, mod, client):
     registry = saved_registry(tmp_path)
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
                         downloader=lambda url: b"", log=lambda line: None, client=client,
-                        projects=lambda: ["acme/app"], registry=lambda: str(registry))
+                        projects=lambda: ["acme/app"], registry=lambda entry: str(registry))
     daemon.refuse_channel_claims([{"repo": "acme/app", "checkout": "", "local": ""}])
     return daemon, cid
 

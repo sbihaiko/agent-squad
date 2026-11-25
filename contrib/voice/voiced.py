@@ -265,20 +265,36 @@ def slack_registry_path(env=None):
     return os.path.join(state, SLACK_REGISTRY) if state else ""
 
 
-def hub_registry(projects=None):
-    """The registry path a daemon on this machine reads: the loop state directory the hub seam names (#2694).
+def hub_registries(projects=None):
+    """repository -> the registry path of that project's own profile, read from the hub seam's entries (#2961).
 
-    The explicit env var wins, then the `SG_STATE` of the first project the seam lists. `''` leaves the saved-sha
-    check out of force, so a machine that names no loop state keeps the older behaviour.
+    Every profile's hub writes its saves to its own state directory, so one registry per project is the only rule that
+    lets a save for one project reach the daemon. A project whose profile names no state directory is absent, so the
+    saved-sha check stays out of force for it alone.
     """
-    named = slack_registry_path({"SG_SLACK_REGISTRY": os.environ.get(SLACK_REGISTRY_ENV) or ""})
+    out = {}
+    for entry in (hub_projects() if projects is None else projects):
+        repo = str((entry or {}).get("repo") or "").strip()
+        path = project_registry(entry) if repo else ""
+        if path:
+            out[repo] = path
+    return out
+
+
+def project_registry(entry, env=None):
+    """The saved-sha registry of one project: the file in the state directory of that project's own profile (#2961).
+
+    Saving in the hub is the owner's approval (SPEC 2682 story 66), and each profile's hub writes its registry beside its
+    own loop state. A project's revision is approved by the registry its own profile wrote, never by another project's.
+    `SG_SLACK_REGISTRY` names one file for every project, for a machine that moves it. `''` means this project names no
+    registry, so the saved-sha check is out of force for it.
+    """
+    env = os.environ if env is None else env
+    named = (env.get(SLACK_REGISTRY_ENV) or "").strip()
     if named:
         return named
-    for entry in (hub_projects() if projects is None else projects):
-        state = str((entry or {}).get("state") or "").strip()
-        if state:
-            return os.path.join(state, SLACK_REGISTRY)
-    return ""
+    state = str((entry or {}).get("state") or "").strip()
+    return os.path.join(state, SLACK_REGISTRY) if state else ""
 
 
 def listed_revisions(path):
@@ -485,10 +501,12 @@ def project_documents_at_start(projects, listed=None):
     """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
 
     A tip that cannot be read, or a revision that breaks a rule, contributes nothing: the refresh that follows reports
-    it, and this start opens only the sockets it can justify. With `listed` given, a tip the hub registry does not list
-    contributes nothing either, so no socket opens for a project the owner approved no revision of (#2695).
+    it, and this start opens only the sockets it can justify. `listed` maps each project to the shas its own registry
+    lists (#2961): a tip that project's registry does not list contributes nothing, so no socket opens for a revision
+    the owner approved nothing of (#2695).
     """
     docs = {}
+    listed = listed or {}
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if not repo:
@@ -497,7 +515,7 @@ def project_documents_at_start(projects, listed=None):
             sha, text = dev_tip((entry.get("checkout") or "").strip())
         except TipUnreadable:
             continue
-        if listed is not None and sha not in listed:
+        if repo in listed and sha not in listed[repo]:
             continue
         out = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
@@ -509,16 +527,17 @@ def project_documents_at_start(projects, listed=None):
 def project_documents(state, projects, listed=None):
     """The active revision of each project: repository -> document; a project with no active revision contributes none.
 
-    With `listed` given, an active record whose sha the hub registry does not list contributes none: a revision no save
-    approved is no authority, whatever wrote the record (#2695).
+    `listed` maps each project to the shas its own registry lists (#2961): an active record whose sha that registry does
+    not list contributes none, because a revision no save approved is no authority, whatever wrote the record (#2695).
     """
     docs = {}
+    listed = listed or {}
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if not repo:
             continue
         record = state.active_revision(repo) or {}
-        if listed is not None and record.get("sha") not in listed:
+        if repo in listed and record.get("sha") not in listed[repo]:
             continue
         revision = record.get("revision")
         if isinstance(revision, dict):
@@ -531,8 +550,8 @@ def effective_documents(state, projects, read_start=None, listed=None):
 
     The dev tip answers on a fresh start, before the first revision is promoted, so a channel claim is refused from
     the first poll. A tip is read only for a project with no active revision, so a steady daemon reads no extra tip.
-    With `listed` given, a document no hub save lists contributes none, so a project the owner approved nothing for
-    serves no channel (#2695).
+    `listed` maps each project to the shas its own registry lists (#2961): a document that project's registry lists no
+    save of contributes none, so a project the owner approved nothing for serves no channel (#2695).
     """
     active = project_documents(state, projects, listed=listed)
     missing = []
@@ -1466,8 +1485,9 @@ class Daemon:
         self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
         self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
-        # The callable that names the hub's saved-sha registry. None leaves the saved-sha check out of force, for a
-        # machine that names no registry; a callable puts it in force, and a file it cannot read lists nothing.
+        # The callable that names one project's saved-sha registry, as the profile seam resolves it (#2961). None leaves
+        # the saved-sha check out of force, for a machine that names no registry; a callable puts it in force per
+        # project, and a file it cannot read lists nothing.
         self.registry = registry
         self.synthesizer = synthesizer
         self.uploader = uploader
@@ -1553,33 +1573,41 @@ class Daemon:
             return self.downloaders[app](url)
         return self.downloader(url)
 
-    def listed(self):
-        """The shas the hub registry lists, read fresh on every pass, or None when this daemon names no registry.
+    def listed(self, projects=None):
+        """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
 
-        Saving in the hub is the owner's approval, and a commit author is forgeable, so only a listed sha is an
-        authority (#2695). None means the check is out of force on a machine that names no registry.
+        Saving in the hub is the owner's approval, and a commit author is forgeable, so only a sha the project's own
+        profile lists is an authority (#2695). A project absent from the answer names no registry, so the check is out
+        of force for it alone.
         """
         if self.registry is None:
-            return None
-        return listed_revisions(self.registry())
+            return {}
+        out = {}
+        for entry in projects or ():
+            repo = str((entry or {}).get("repo") or "").strip()
+            path = self.registry(entry) if repo else ""
+            if path:
+                out[repo] = listed_revisions(path)
+        return out
 
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
 
         A tip that did not move is not read again. A valid revision replaces the active one. A revision that breaks a
-        rule, a tip that cannot be read, or a revision the hub registry does not list keeps the previous revision
-        active, so an invalid edit or an unapproved commit never changes a live channel. The owner gets one DM naming
-        the failing key, and every write is atomic (ADR-0030).
+        rule, a tip that cannot be read, or a revision the project's own registry does not list keeps the previous
+        revision active, so an invalid edit or an unapproved commit never changes a live channel. The owner gets one DM
+        naming the failing key, and every write is atomic (ADR-0030).
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
         local_docs, local_defects = self.local_documents(projects)
+        listed = self.listed(projects)
         results = []
         for entry in projects:
             repo = (entry.get("repo") or "").strip()
             if not repo:
                 continue
-            results.append(self.refresh_one(repo, entry, local_docs, local_defects))
+            results.append(self.refresh_one(repo, entry, local_docs, local_defects, listed))
         self.refuse_channel_claims(projects)
         self.log_uncovered_channels(projects)
         return results
@@ -1626,9 +1654,9 @@ class Daemon:
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
-        listed = self.listed()
+        listed = self.listed(projects)
         documents = effective_documents(self.state, projects, listed=listed)
-        unserved = self.unlisted_channel_lines(documents)
+        unserved = self.unlisted_channel_lines(documents, listed)
         claims = channel_claims(documents)
         lines = channel_claim_refusals(documents) + [line for _, line in unserved]
         self.refused_channels = {cid: f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused"
@@ -1655,18 +1683,19 @@ class Daemon:
         """One line for a channel whose project the hub lists no approved revision of (#2695)."""
         return (f"voiced: {repo} has no approved Slack revision in the hub registry; its channel {cid} is not served")
 
-    def unlisted_channel_lines(self, documents):
+    def unlisted_channel_lines(self, documents, listed=None):
         """`(channel id, line)` of each project channel whose project holds no listed document (#2695, criteria 7, 8).
 
-        With no registry this daemon serves as before. With one, a project channel and no listed document means the
-        hub saved no revision for it, so no event of that channel reaches an inbox and no answer leaves for it.
+        `listed` maps each project to the shas its own registry lists (#2961). A project that names no registry serves
+        as before. A project that names one, with no listed document, has no revision the hub saved, so no event of its
+        channel reaches an inbox and no answer leaves for it.
         """
         if self.registry is None:
             return []
         out = []
         for repo, entry in (self.state.channels() or {}).items():
             cid = str((entry or {}).get("id") or "")
-            if cid and repo not in documents:
+            if cid and repo not in documents and repo in (listed or {}):
                 out.append((cid, self._unlisted_line(repo, cid)))
         return out
 
@@ -1711,8 +1740,11 @@ class Daemon:
             defects[repo] = out
         return docs, defects
 
-    def refresh_one(self, repo, entry, local_docs, local_defects):
-        """One project's revision: read, validate with its local file, then save it or keep the previous one."""
+    def refresh_one(self, repo, entry, local_docs, local_defects, listed=None):
+        """One project's revision: read, validate with its local file, then save it or keep the previous one.
+
+        `listed` maps each project to the shas its own registry lists; `repo` absent from it names no registry, so the
+        check is out of force for this project alone (#2961)."""
         active = self.state.active_revision(repo)
         try:
             sha, text = dev_tip((entry.get("checkout") or "").strip())
@@ -1720,9 +1752,9 @@ class Daemon:
             return self.refuse_revision(repo, active, [str(x)], sha=None, tip_failed=True)
         if active is not None and active.get("sha") == sha:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
-        listed = self.listed()
-        if listed is not None and sha not in listed:
-            held = listed_revision_at((entry.get("checkout") or "").strip(), listed)
+        approved = (listed or {}).get(repo)
+        if approved is not None and sha not in approved:
+            held = listed_revision_at((entry.get("checkout") or "").strip(), approved)
             if held is None:
                 return self.refuse_revision(
                     repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
@@ -2765,10 +2797,12 @@ def main(argv):
         lock.close()
         return 1
     projects = hub_projects()
-    # The hub's saved-sha registry is the only authority for a Slack revision (#2695): the app set this start opens
-    # sockets for comes from listed revisions alone, and no listed revision means no channel of that project.
-    registry = hub_registry(projects)
-    specs = app_keychains(project_documents_at_start(projects, listed=listed_revisions(registry) if registry else None))
+    # Each project's own registry is the only authority for its Slack revision (#2695, #2961): the app set this start
+    # opens sockets for comes from the revisions that project's registry lists alone, and no listed revision means no
+    # channel of that project.
+    registries = hub_registries(projects)
+    listed = {repo: listed_revisions(path) for repo, path in registries.items()}
+    specs = app_keychains(project_documents_at_start(projects, listed=listed))
     if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
         specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
@@ -2784,7 +2818,7 @@ def main(argv):
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    registry=(lambda: registry) if registry else None,
+                    registry=project_registry,
                     synthesizer=lambda script, voice=None, tone=None:
                         spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
