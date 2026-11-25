@@ -546,8 +546,9 @@ CAUSE_FIELDS = ("subtype=error_during_execution", "api_error_status=529", "termi
 
 
 def test_a_failed_poll_names_the_cli_answer_fields_and_never_its_text(tmp_path):
-    """#2867: every failure path names the metadata of the CLI answer in the reason, so the runner log says why a poll
-    failed. The cause holds the answer's status fields and no result text: the channel's content never reaches the log."""
+    """#2867: a failure whose stdout parses as a JSON object names the metadata of that answer in the reason, so the
+    runner log says why a poll failed. The cause holds the answer's status fields and no result text: the channel's
+    content never reaches the log, however the answer nests it."""
     envelope = {"type": "result", "subtype": "error_during_execution", "api_error_status": 529,
                 "terminal_reason": "max_turns", "stop_reason": "tool_use", "num_turns": 3}
 
@@ -557,11 +558,14 @@ def test_a_failed_poll_names_the_cli_answer_fields_and_never_its_text(tmp_path):
     def answer(result, **extra):
         return json.dumps({**envelope, **extra, "result": result})
 
+    nested = [{"role": "user", "content": [{"type": "text", "text": SECRET}]},
+              {"role": "assistant", "content": SECRET}]
     cases = [
         ("an error answer", failed(answer(SECRET, is_error=True))),
-        ("an answer that is not JSON", failed(answer(SECRET))),
+        ("a result that is not JSON", failed(answer(SECRET))),
         ("an answer object that carries an error", failed(answer(json.dumps({"error": SECRET})))),
         ("a page the reader cannot read", failed(answer(json.dumps({"messages": [SECRET]})))),
+        ("a result that nests the text", failed(answer(nested))),
         ("a non-zero exit", failed(answer(SECRET), code=1)),
     ]
     for label, runner in cases:
@@ -571,6 +575,29 @@ def test_a_failed_poll_names_the_cli_answer_fields_and_never_its_text(tmp_path):
         for field in CAUSE_FIELDS:
             assert field in reason, (label, reason)
         assert SECRET not in reason, (label, reason)
+
+
+def test_a_cause_names_a_present_field_even_when_its_value_is_not_scalar():
+    """#2867: a status field whose value is a bool or a list is named, by its literal or its type, so a failure never
+    reads as cause-less when the CLI answered a listed field."""
+    assert G.answer_cause({"stop_reason": False, "api_error_status": [529, 503]}) == \
+        "api_error_status=<list> stop_reason=False"
+
+
+def test_a_not_json_answer_names_no_field_and_keeps_the_parse_error_as_its_cause(tmp_path):
+    """#2867: the CLI stdout that is not JSON at all carries no field to name, so the reason is the bare not-JSON one,
+    and the parse error stays chained so a debugging reader still sees why the answer did not parse."""
+    raw = SECRET + " this is not JSON at all"
+
+    def runner(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, raw, stderr="")
+
+    with pytest.raises(G.SessionFailed) as caught:
+        G.run_session(["claude"], tmp_path, runner)
+    reason = str(caught.value)
+    assert reason == "no page in the result: the CLI answer is not JSON", reason
+    assert SECRET not in reason, reason
+    assert isinstance(caught.value.__cause__, json.JSONDecodeError), caught.value.__cause__
 
 
 def test_a_failed_poll_names_the_shape_of_the_page_and_never_its_text(tmp_path):

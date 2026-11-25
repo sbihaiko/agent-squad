@@ -193,24 +193,31 @@ _NOT_JSON = object()    # the CLI's stdout is not JSON at all, so the answer car
 
 
 def answer_of(text):
-    """The JSON value the CLI printed. `_NOT_JSON` stands for a text that is not JSON, and a JSON value that is not an
-    object is still an answer the session made."""
+    """The JSON value the CLI printed, with the parse error of a text that is not JSON. `_NOT_JSON` stands for that text,
+    and a JSON value that is not an object is still an answer the session made. The caller keeps the error so the
+    `SessionFailed` it raises from _NOT_JSON stays chained to the `JSONDecodeError` that caused it (#2867)."""
     try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        return _NOT_JSON
+        return json.loads(text), None
+    except (ValueError, TypeError) as e:
+        return _NOT_JSON, e
 
 
 def answer_cause(outer):
     """The metadata of one CLI answer that names why its session failed (#2867): its status fields, and no text. The
-    result text, the answer's error text and every message stay out, so the runner log names a cause and never content."""
+    result text, the answer's error text and every message stay out, so the runner log names a cause and never content.
+    A field whose value is not scalar is named by its type, so a present-but-unprintable field still tells absent from
+    present."""
     if not isinstance(outer, dict):
         return ""
     parts = []
     for key in CAUSE_FIELDS:
         value = outer.get(key)
-        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        if isinstance(value, bool):
             parts.append(f"{key}={value}")
+        elif isinstance(value, (str, int, float)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, (list, dict)):
+            parts.append(f"{key}=<{type(value).__name__}>")
     return " ".join(parts)
 
 
@@ -231,7 +238,7 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
     kept = None
     try:
         done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
-        outer = answer_of(done.stdout)
+        outer, parse_error = answer_of(done.stdout)
         if done.returncode != 0:
             raise SessionFailed(_failed(f"exit {done.returncode}", outer))
         kept = read_page(page)
@@ -240,7 +247,7 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
     if kept is not None:
         return kept
     if outer is _NOT_JSON:
-        raise SessionFailed("no page in the result: the CLI answer is not JSON")
+        raise SessionFailed("no page in the result: the CLI answer is not JSON") from parse_error
     if not isinstance(outer, dict) or outer.get("is_error") or outer.get("error"):
         raise SessionFailed(_failed("the session answered an error", outer))
     try:
