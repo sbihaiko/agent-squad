@@ -71,8 +71,13 @@ pins_after=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
 [ "$pins_before" = "$pins_after" ] || fail "a second install grew the pin history"
 # #2957: with SG_PROFILES_DIR unset the install names the live profiles folder, never the deploy's own example-only one.
 env -u SG_PROFILES_DIR bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "an install without SG_PROFILES_DIR exited non-zero"
+# #2957: one constant names the folder. The install asks the daemon for its default, so the emitted value is the
+# daemon's LIVE_PROFILES and never a second copy the script carries.
+want=$("$SG_PYTHON" "$T/deploy/contrib/voice/voiced.py" --print-profiles-default) \
+  || fail "voiced.py --print-profiles-default exited non-zero"
 for P in "$V" "$O"; do
   dir=$(key "$P" EnvironmentVariables.SG_PROFILES_DIR) || fail "$(basename "$P") lacks the default SG_PROFILES_DIR"
+  [ "$dir" = "$want" ] || fail "default SG_PROFILES_DIR is $dir, not the daemon's LIVE_PROFILES ($want)"
   case "$dir" in */squad-goal/scripts/profiles) ;; *) fail "default SG_PROFILES_DIR is $dir, not the live profiles folder";; esac
   case "$dir" in "$T/deploy"/*) fail "default SG_PROFILES_DIR points into the deploy checkout";; esac
 done

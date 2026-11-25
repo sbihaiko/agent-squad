@@ -187,6 +187,27 @@ def test_a_paint_writes_nothing_and_the_trees_own_read_is_one_channel_read(hub, 
     assert named[TEAM] == ["C0PROJ0001", "C0ALERT001"], got
 
 
+def test_the_add_pane_asks_the_channel_list_without_a_read_target(hub, tmp_path):
+    """#2957: the add pane cannot offer a channel before the list is read, so the tree's read asks for a workspace's
+    add target too. A workspace node that carries `channel_add` and no `channel_read` still gets its one POST, so the
+    pane never stays on "Reading the channels…" and the owner can add a channel."""
+    out = read(hub, tmp_path)
+    ws = next(n for n in T.walk(out["tree"]["root"]) if n["name"] == "team")
+    ws.pop("channel_read", None)                 # the add pane alone names the read target
+    assert ws.get("channel_add"), ws
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
+            'const CALLS=[];globalThis.fetch=(u,o)=>{CALLS.push([String(u),JSON.parse((o&&o.body)||"{}")]);'
+            'return new Promise(()=>{})};'
+            'slRender();const painted=CALLS.length;slChTree();'
+            'setTimeout(()=>console.log(JSON.stringify({painted,calls:CALLS})),5)')
+    got = json.loads(_node(body))
+    assert got["painted"] == 0, got             # the paint opens no request of its own
+    calls = got["calls"]
+    assert {c[0] for c in calls} == {"/api/slack/channels"}, calls
+    mine = [c[1] for c in calls if c[1]["workspace"] == TEAM]
+    assert mine == [{"workspace": TEAM, "named": ["C0PROJ0001", "C0ALERT001"]}], calls   # one ask, from the add target
+
+
 def function_body(src, name):
     """The body of one top-level function, from its opening brace to the matching close, by brace depth."""
     start = src.index(name)

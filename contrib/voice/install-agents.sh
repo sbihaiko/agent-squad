@@ -14,9 +14,6 @@ LAUNCH_DIR=${SG_LAUNCH_DIR:-$HOME/Library/LaunchAgents}
 LAUNCHCTL=${LAUNCHCTL:-launchctl}
 PY=${SG_PYTHON:-$(command -v python3)}
 STATE=${VOICE_STATE:-$HOME/.local/state/agent-squad/voiced}
-# The folder both agents read their projects from (#2957). It is the live copy's profiles folder: the deploy checkout's
-# own profiles folder holds only example.sh, so an agent that fell back to it would find no project.
-PROFILES=${SG_PROFILES_DIR:-$HOME/.claude/skills/squad-goal/scripts/profiles}
 PINS="$DEPLOY/.git/squad-pins"
 CLAUDE_BIN=$(command -v claude) || { echo "install-agents: claude is not on PATH" >&2; exit 1; }
 
@@ -34,6 +31,16 @@ if [ "$restore" = 0 ]; then
   fi
 fi
 git -C "$DEPLOY" checkout -q --detach "$sha"
+
+# The folder both agents read their projects from (#2957). It is the live copy's profiles folder, never the deploy
+# checkout's own, which holds only example.sh. The daemon names that folder in one constant, so the default is read
+# from the pinned checkout and never carried as a second copy here.
+if [ -n "${SG_PROFILES_DIR:-}" ]; then
+  PROFILES=$SG_PROFILES_DIR
+else
+  PROFILES=$("$PY" "$DEPLOY/contrib/voice/voiced.py" --print-profiles-default) \
+    || { echo "install-agents: the pinned commit does not print its profiles default" >&2; exit 1; }
+fi
 
 mkdir -p "$LAUNCH_DIR"
 V="$LAUNCH_DIR/com.squad.voiced.plist"

@@ -389,33 +389,43 @@ def registry(state, repo=REPO, found=None):
     return units
 
 
-def example_only_profiles():
-    """True when the profiles folder is unset or holds no profile but `example.sh`: the documented cause of #2957.
+# The profiles folder beside `address.sh`, the folder the hub seam reads when `SG_PROFILES_DIR` is unset (#2957).
+PROFILES_FALLBACK = os.path.normpath(os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
 
-    The folder is the one the hub seam reads, `SG_PROFILES_DIR` or the profiles folder beside `address.sh`. A folder
-    with any other profile is a configuration the owner wrote on purpose, so a hub that lists no project is not this
-    fault, and the pass reports nothing."""
-    folder = os.environ.get("SG_PROFILES_DIR") or os.path.normpath(
-        os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
+
+def profiles_folder():
+    """The profiles folder the hub seam reads: `SG_PROFILES_DIR`, or the fallback folder beside `address.sh`."""
+    return os.environ.get("SG_PROFILES_DIR") or PROFILES_FALLBACK
+
+
+def profiles_note():
+    """The folder the pass read and its state, as a suffix of the mismatch line: the documented cause of #2957.
+
+    A folder the filesystem lacks and a folder that holds only the template both read as no project, but they are two
+    faults, so the note says which one. A folder with a project of its own reads as a hub that names none of them, and
+    the note names the path the pass read, so the operator never blames the wrong folder."""
+    folder = profiles_folder()
     try:
         names = os.listdir(folder)
     except OSError:
-        return True                                # a folder that is not there holds no project to read
-    return not any(n.endswith(".sh") and n != "example.sh" for n in names)
+        unset = "" if os.environ.get("SG_PROFILES_DIR") else ", and SG_PROFILES_DIR is unset"
+        return f"the profiles folder {folder} is not there{unset}"
+    if any(n.endswith(".sh") and n != "example.sh" for n in names):
+        return f"the profiles folder {folder} names a project the hub does not list"
+    return f"the profiles folder {folder} holds only example.sh"
 
 
 def report_no_project(units, found):
     """Name the mismatch in the error log: the channel map asks for a project the hub does not list (#2957).
 
-    A deploy whose agents read the wrong profiles folder finds only `example.sh`, so the hub names no project while
-    `channels.json` names one. The pass starts no session for it, and this line says why instead of staying silent.
-    The line prints only for that cause: a folder the owner filled with projects is a valid configuration, and a pass
-    over it reports no fault (#2957)."""
+    The report follows the hub seam alone: the channel map names a project and the hub lists none, so the pass starts
+    no session for it, and this line says so instead of staying silent. The profiles folder and its state follow as a
+    hint, never as a gate, so a folder that holds a project still reports the mismatch (#2957)."""
     named = [u.get("repo") or u["key"] for u in units if u["key"] != DM]
-    if found or not named or not example_only_profiles():
+    if found or not named:
         return
     print(f"operators: the hub names no project, but the channel map names {len(named)}: {', '.join(named)}; "
-          "check SG_PROFILES_DIR and address.sh --list", file=sys.stderr)
+          f"{profiles_note()}; check SG_PROFILES_DIR and address.sh --list", file=sys.stderr)
 
 
 def as_unit(unit, repo=REPO):
