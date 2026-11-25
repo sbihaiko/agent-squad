@@ -159,7 +159,8 @@ def test_one_session_serves_every_channel_of_a_project(tmp_path, monkeypatch):
 
 
 def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypatch):
-    """Criterion 10: the brief names one outbox per channel of the project, and no other outbox."""
+    """Criterion 10: the brief sends each answer through the helper with the inbox line's own channel, and it names no
+    outbox path for a free append (#2949)."""
     op = operators(tmp_path, monkeypatch)
     hub(tmp_path, monkeypatch, op, ["acme/widget"])
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
@@ -167,9 +168,47 @@ def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypat
     scenario(tmp_path, [])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     text = brief(tmp_path, "acme/widget")
-    state = str(tmp_path / "state")
-    assert f"{state}/outboxes/C0AAAAAA1.jsonl" in text and f"{state}/outboxes/C0AAAAAA2.jsonl" in text, text
+    assert op.ANSWER in text and "--scope" in text, text
+    assert "the inbox line's channel" in text
     assert "C0AAAAAA9" not in text
+
+
+def test_the_brief_names_the_answer_helper_as_the_only_answer_path(tmp_path, monkeypatch):
+    """#2949 criterion (5): every answer leaves through the one shipped helper, and the brief names no other path."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    text = brief(tmp_path, "acme/widget")
+    state = str(tmp_path / "state")
+    assert f"{op.ANSWER} --scope" in text, text
+    for flag in ("--thread", "--text", "--speech"):
+        assert flag in text, text
+    assert "appending ONE JSON line to the outbox" not in text, text
+    assert f"{state}/outboxes/C0AAAAAA1.jsonl" not in text, "the brief names an outbox for a free append"
+
+
+def test_a_start_binds_the_session_to_its_project_for_the_answer_helper(tmp_path, monkeypatch):
+    """#2949: the supervisor writes the binding and names it in the session's env, so the helper answers only the
+    channels of this project and nothing else."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen.update(env or {})
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    (tmp_path / "repo").mkdir(exist_ok=True)
+    state = str(tmp_path / "state")
+    (tmp_path / "state").mkdir(exist_ok=True)
+    op.start({"key": "acme-widget", "repo": "acme/widget", "checkout": str(tmp_path / "repo"),
+              "channels": ["C0AAAAAA1", "C0AAAAAA2"]}, state, str(tmp_path / "repo"))
+    path = seen["VOICE_ANSWER_BINDING"]
+    binding = json.loads(Path(path).read_text())
+    assert binding["channels"] == ["C0AAAAAA1", "C0AAAAAA2"], binding
+    assert binding["state"] == state, binding
 
 
 def test_the_brief_arms_one_monitor_per_inbox_of_the_project(tmp_path, monkeypatch):
@@ -563,11 +602,13 @@ def test_a_started_session_refuses_the_checkout_of_another_project(tmp_path, mon
 
 
 def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path, monkeypatch):
-    """Criterion 13: the brief answers an action request with the read-only limit and one proposal line to the owner."""
+    """Criterion 13: the brief answers an action request with the read-only limit and one proposal line to the owner,
+    and the proposal leaves through the helper like every other answer (#2949)."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
     assert "never acts" in text and "only reads" in text, text
-    assert "Proposal:" in text and "outboxes/dm.jsonl" in text, text
+    assert "Proposal:" in text and op.ANSWER in text, text
+    assert "outboxes/dm.jsonl" not in text, text
 
 
 def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
@@ -594,7 +635,7 @@ def test_the_dm_session_keeps_its_own_scope_and_the_agent_squad_repository(tmp_p
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="dm") == 0
     text = brief(tmp_path, "direct messages")
     state = str(tmp_path / "state")
-    assert f"tail -n 0 -F {state}/inboxes/dm.jsonl" in text and f"{state}/outboxes/dm.jsonl" in text, text
+    assert f"tail -n 0 -F {state}/inboxes/dm.jsonl" in text and op.ANSWER in text, text
     assert f"cwd={os.path.realpath(tmp_path / 'repo')}" in (tmp_path / "wrap.log").read_text()
     entry = record(tmp_path)["dm"]
     assert entry["name"] == "SQUAD-OPERATOR-dm" and entry["checkout"] == os.path.realpath(tmp_path / "repo")
@@ -878,7 +919,7 @@ def test_the_brief_tells_the_session_to_name_the_channel_persona_on_its_answers(
 
     text = op.prompt_for("C0PROJ0001", str(state), "/repo")
 
-    assert '"persona":"hal"' in text, text
+    assert "--persona hal" in text, text
 
 
 def test_the_dm_brief_keeps_its_language_when_no_revision_names_a_persona(tmp_path, monkeypatch):
