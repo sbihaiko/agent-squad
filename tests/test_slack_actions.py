@@ -8,6 +8,8 @@ command the project declares for that action, writes one audit line and appends 
 import copy
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime
 
 import pytest
@@ -230,8 +232,12 @@ def test_each_action_run_writes_one_audit_line(tmp_path):
     inbox(state)
     ask(state)
     run(state, Runner())
-    assert audit(state) == [{"time": NOW.isoformat(), "sender": OWNER, "role": "manager", "channel": CHANNEL,
-                             "action": "status", "exit": 0, "error": ""}]
+    row = audit(state)[0]
+    # The row names the handled key, so a later pass tells the row of a finished run from one a crash left unwritten.
+    assert set(row) == {"time", "sender", "role", "channel", "action", "exit", "error", "key"}, row
+    assert {name: row[name] for name in ("time", "sender", "role", "channel", "action", "exit", "error")} == {
+        "time": NOW.isoformat(), "sender": OWNER, "role": "manager", "channel": CHANNEL,
+        "action": "status", "exit": 0, "error": ""}
 
 
 def test_a_refused_request_writes_its_audit_line_too(tmp_path):
@@ -745,9 +751,9 @@ def test_a_declared_command_that_names_a_shell_metacharacter_never_runs(tmp_path
     assert runs[0].exit == 1
 
 
-def test_a_crash_between_the_key_and_the_refusal_audit_writes_no_second_row(tmp_path):
-    """Finding 13 (DEBT 2): the handled key is written before the refusal's audit line, so a crash between the two
-    writes never repeats the audit row on the next pass."""
+def test_a_crash_between_the_key_and_the_refusal_audit_writes_one_row_on_the_next_pass(tmp_path):
+    """Finding 13 (DEBT 2): the handled key is written before the refusal's audit line and carries its fields, so a
+    crash between the two writes never repeats a row: the next pass writes the row the crash cut, once."""
     state = str(tmp_path)
     inbox(state)
     ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)      # a stale line: the pass's own refusal branch
@@ -770,7 +776,164 @@ def test_a_crash_between_the_key_and_the_refusal_audit_writes_no_second_row(tmp_
     finally:
         A._append_line = real
     run(state)
+    rows = audit(state)
+    assert len(rows) == 2, rows
+    assert len({row["key"] for row in rows}) == 2, rows
+
+
+def test_a_request_appended_without_its_final_newline_runs_once_the_line_is_complete(tmp_path):
+    """Blocking 1: a request line the session writes in two appends never runs half-written, and it runs on the first
+    pass after its final newline arrives. The kept place stops at the last complete line, so a partial tail is read
+    again, never skipped."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    record = A.request_record("status", channel=CHANNEL, sender=OWNER, source=MID, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(record))             # the session has not yet written the final newline
+    runner = Runner()
+    assert run(state, runner) == (), "a half-written line ran"
+    assert runner.calls == []
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n")                           # the session completes the line
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+    assert len(replies(state)) == 1
+
+
+def test_a_refusal_in_an_addressed_only_channel_is_recorded_and_never_posted(tmp_path):
+    """Debt 1: a channel that answers only an addressed message never gets an unsolicited refusal. The stranger's
+    request is refused at the identity, the audit names it, and the channel sees no post."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER, text="what is the status?")
+    ask(state, sender=STRANGER)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    assert replies(state) == [], "an addressed-only channel got an unsolicited refusal"
+    assert audit(state)[0]["error"].startswith("identity:")
+
+
+def test_an_addressed_refusal_in_an_addressed_only_channel_is_posted(tmp_path):
+    """Debt 1: the telling fallback keeps working where the policy does answer. A message that addresses the persona
+    gets its refusal even when the channel answers only an addressed message."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER, text="@HAL9K what is the status?")
+    ask(state, sender=STRANGER)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW, runner=Runner())
+    assert len(replies(state)) == 1
+    assert "grant" in replies(state)[0]["text"]
+
+
+def _die_inside_the_command(state, docs, now):
+    """Run one pass in another process that dies inside the declared command, as a crash does: the handled key is
+    written, the command starts, and the process is gone before the reply and the audit line. Returns the code."""
+    script = f"""
+import json, os, sys
+from datetime import datetime
+from squad import slackactions as A
+state, now_text, docs_text = sys.argv[1], sys.argv[2], sys.argv[3]
+docs = json.loads(docs_text)
+
+def runner(*args, **kwargs):
+    os._exit(9)                                 # the daemon dies with the command in flight
+
+A.run_pass(state, lambda channel: {PROJECT!r}, lambda channel: (docs["committed"], docs["local"]),
+           datetime.fromisoformat(now_text), runner=runner)
+"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(A.__file__)))
+    return subprocess.run([sys.executable, "-c", script, state, now.isoformat(), json.dumps(docs)],
+                          cwd=root, capture_output=True, text=True)
+
+
+def test_a_real_process_death_in_the_command_records_the_run_and_never_runs_it_again(tmp_path):
+    """Debt 2: a pass that dies inside the declared command leaves the handled key and no audit row. The next pass
+    writes the one audit row that names the unfinished run and never runs the command again. The death is a real
+    process death, not a patched writer."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed, local = documents()
+    done = _die_inside_the_command(state, {"committed": committed, "local": local}, NOW)
+    assert done.returncode == 9, done.stderr
+    assert not os.path.exists(os.path.join(state, A.AUDIT)), "the dead pass wrote an audit line"
+    runner = Runner()
+    runs = run(state, runner)
+    assert runs == (), "the next pass ran a request the dead pass had recorded as handled"
+    assert runner.calls == [], runner.calls
+    rows = audit(state)
+    assert len(rows) == 1, rows
+    assert rows[0]["action"] == "status" and "did not finish" in rows[0]["error"], rows[0]
+    run(state, runner)
     assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_deploy_command_that_names_a_shell_metacharacter_is_refused_as_invalid(tmp_path):
+    """Debt 3: the deploy source goes through the same invalid-source check as every declared action, so a deploy
+    command that names `;` is refused as invalid and never reads as a missing command."""
+    state = str(tmp_path)
+    inbox(state, user="U0DEPLOY01")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["deploy"]["command"] = "make deploy-stg; rm -rf /"
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "one argv" in text, text
+    assert "declares no command" not in text, "an invalid deploy command read as a missing one"
+
+
+def test_a_request_whose_at_is_in_the_future_never_runs(tmp_path):
+    """Debt 4: a request line that names a time past the daemon's own clock is refused, so a session clock ahead of the
+    daemon never keeps a line fresh past the window."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() + A.REQUEST_WINDOW + 1)
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "future" in audit(state)[0]["error"]
+
+
+def test_a_session_clock_ahead_of_the_daemon_does_not_keep_a_request_fresh(tmp_path):
+    """Debt 4: a session clock ahead of the daemon by more than the small tolerance is refused, whatever the line says
+    about how long ago it was written."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() + 600)
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "future" in audit(state)[0]["error"]
+
+
+def test_a_request_the_daemon_did_not_observe_within_the_window_never_runs(tmp_path):
+    """Debt 4: the age comes from the daemon's own observation, not from the line. The last pass read the outbox
+    longer ago than the window, so a line found past that place could be older than the window and never runs."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    inbox(state)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # an empty outbox the pass read before
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0, "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}}))
+    ask(state, at=NOW.timestamp())                      # the line itself claims it is fresh
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "did not read" in audit(state)[0]["error"], audit(state)[0]["error"]
 
 
 def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
