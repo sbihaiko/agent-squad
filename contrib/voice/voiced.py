@@ -318,6 +318,31 @@ def _rows(value):
     return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def listed_revision_at(checkout, listed, name=None):
+    """The newest revision the hub lists that this checkout holds, as `(sha, text)`, or None (#2934).
+
+    The hub lists the sha of its save. A later commit moves the dev tip, and a stale `origin/dev` ref lags behind it, so
+    the tip is often no listed sha. The listed sha is the approval, so the file is read at that revision itself: the
+    channel keeps the language and the persona its save declared.
+    """
+    name = name or slackpolicy.COMMITTED.as_posix()
+    best = None
+    for sha in sorted(listed or ()):
+        if git_output(checkout, "cat-file", "-e", f"{sha}:{name}") is None:
+            continue
+        stamp = (git_output(checkout, "show", "-s", "--format=%ct", sha) or "").strip()
+        try:
+            when = int(stamp or 0)
+        except ValueError:
+            when = 0
+        if best is None or when > best[0]:
+            best = (when, sha)
+    if best is None:
+        return None
+    text = git_output(checkout, "show", f"{best[1]}:{name}")
+    return None if text is None else (best[1], text)
+
+
 def project_documents_at_start(projects, listed=None):
     """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
 
@@ -1203,6 +1228,7 @@ class Daemon:
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
         self._unowned_logged = set()      # each release channel no app owns, whose skip is already one log line
+        self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
 
     def app_of(self, channel):
@@ -1284,7 +1310,39 @@ class Daemon:
                 continue
             results.append(self.refresh_one(repo, entry, local_docs, local_defects))
         self.refuse_channel_claims(projects)
+        self.log_uncovered_channels(projects)
         return results
+
+    def log_uncovered_channels(self, projects=None):
+        """One line per channel a project's `slack.yaml` names while no active revision covers it (#2934).
+
+        A channel with no active revision answers with the default language and no persona, and its answers post under
+        the app name, so the owner reads one line that names the channel and the project instead of a silent default.
+        The line is written once, not one per poll."""
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        for entry in projects:
+            repo = str((entry.get("repo") or "").strip())
+            if not repo or self.state.active_revision(repo):
+                continue
+            try:
+                _, text = dev_tip(str((entry.get("checkout") or "").strip()))
+            except TipUnreadable:
+                continue
+            doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), [])
+            if doc is None:
+                continue
+            for workspace in _rows(doc.get("workspaces")):
+                for channel in _rows(workspace.get("channels")):
+                    cid = str(channel.get("id") or "").strip()
+                    if not cid:
+                        continue
+                    line = (f"voiced: {repo}: channel {cid} has no active Slack revision; its lines keep the default "
+                            "language and no persona")
+                    if line in self._uncovered_logged:
+                        continue
+                    self._uncovered_logged.add(line)
+                    self.log(line)
 
     def refuse_channel_claims(self, projects=None):
         """Refuse every channel id two projects claim: one line and one DM that name both projects and the id.
@@ -1393,9 +1451,16 @@ class Daemon:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
         listed = self.listed()
         if listed is not None and sha not in listed:
-            return self.refuse_revision(
-                repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
-                sha=sha)
+            held = listed_revision_at((entry.get("checkout") or "").strip(), listed)
+            if held is None:
+                return self.refuse_revision(
+                    repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
+                    sha=sha)
+            if active is not None and active.get("sha") == held[0]:
+                return {"repo": repo, "sha": held[0], "changed": False, "active": active}
+            # The tip moved past the save. The listed sha is the approval, so its file becomes the active revision.
+            self.log(f"voiced: {repo}: the dev tip is not a saved revision; reading the listed revision {held[0][:12]}")
+            sha, text = held
         tip_defects = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), tip_defects)
         name, local = local_docs.get(repo, (None, None))
