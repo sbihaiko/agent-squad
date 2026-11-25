@@ -18,7 +18,9 @@ the owner stopped on purpose: a pass never revives one. One lock bounds a pass, 
 
 A message must never wait for the five-minute pass: `--ensure <project>` runs one pass for one project, and the daemon
 calls it the moment an inbox line lands. The new session's Monitors start at `tail -n 0`, so the line that paid for the
-start rides in the brief as the first answer owed, and the session answers the message that started it.
+start rides in the brief as the first answer owed, and the session answers the message that started it. That pass prints
+one verdict line, `operators: ensure <project> started <id>` or `... live <id>`, so the daemon tells a start that
+answers the line from a pass that started nothing, and reports the second against the inbox line that waits.
 
 A listed session is adopted only while it turns (#2923). A turn writes the session's transcript under the CLI's
 projects folder, so the newest transcript write is the session's last turn. A session whose last turn ended in an API
@@ -29,8 +31,9 @@ the project, once per line, and the owner answers it in Slack.
 usage: operators.py [--check] [--state DIR] [--repo DIR] [--ensure PROJECT]
   --check           print what a pass would do, and change nothing.
   --ensure PROJECT  run one pass for one project, or for `dm`, so a message starts its session at once.
-Exit 0: the pass ran (or reported). Exit 1: the CLI refused or a deadline passed. Exit 2: `--ensure` named a project the
-registry does not know, or one whose checkout is not on this machine, so nothing could start.
+Exit 0: the pass ran (or reported), and an `--ensure` project has a live session or a start this pass. Exit 1: the CLI
+refused or a deadline passed. Exit 2: `--ensure` named a project the registry does not know, one whose checkout is not on
+this machine, or one that has no live session after the pass, so nothing started for it.
 """
 import argparse
 import errno
@@ -698,19 +701,46 @@ def acquire(state):
             time.sleep(0.05)
 
 
+def ensure_verdict(unit, started_sid, sessions):
+    """The one verdict line an `--ensure` pass prints, and its exit code: started, live, or nothing (#2925).
+
+    A message paid for this pass, so a pass that started no session and found none live is a failure the caller acts on,
+    never a silent no-op: the line stays in the inbox, and the daemon reports it against that line. A live session
+    answers the line from its own Monitor, so it is a success. `started_sid` is None when this pass started nothing; an
+    empty string means it started a session the CLI named no id for."""
+    key = unit["key"]
+    name = unit.get("repo") or key                    # the verdict answers the name `--ensure` was given
+    if started_sid is not None:
+        print(f"operators: ensure {name} started {started_sid or 'unknown-id'}")
+        return 0
+    try:
+        live = [s for s in sessions() if carried(s.get("name")) == key]
+    except Refused as e:
+        print(f"operators: ensure {name} started no session; the session list is unreadable: {e}", file=sys.stderr)
+        return 1
+    if live:
+        print(f"operators: ensure {name} live {live[0]['id']}")
+        return 0
+    print(f"operators: ensure {name} started no session; the inbox line waits for the next pass", file=sys.stderr)
+    return 2
+
+
 def run_pass(state, repo, check=False, only=None):
     """One pass: read, plan, then start, adopt and stop, writing the record after each change.
 
     With `only` given, the pass reads one project alone (`dm` or a project key or repository), so a message starts its
-    session at once instead of at the next five-minute pass (#2925)."""
+    session at once instead of at the next five-minute pass (#2925). That pass prints one verdict line: `started <id>`,
+    `live <id>`, or a reason on stderr and exit 2 when the project has no session at all."""
     state = os.path.abspath(state)
     units = registry(state, repo)
+    only_unit = None
     if only is not None:
         named = [u for u in units if only in (u["key"], u["repo"])]
         if not named:
             print(f"operators: no project names {only}; nothing to ensure", file=sys.stderr)
             return 2
         units = named
+        only_unit = named[0]
         # The message that asked for this start is still in the inbox, so a project with no checkout on this machine is
         # an error the caller must see, never a silent no-op (#2925). A full pass keeps running for every other project.
         if not check and not os.path.isdir(named[0].get("checkout") or ""):
@@ -750,6 +780,7 @@ def run_pass(state, repo, check=False, only=None):
             write_json(rec_path, record)
             print(f"operators: adopted {key} as {session['id']}")
         by_key = {u["key"]: u for u in units}
+        started_now = {}                           # key -> session id: the sessions this pass started, for the verdict
         for key in starts:
             retire_proxy(record.get(key))
             prior = {k: v for k, v in (record.get(key) or {}).items() if k != "proxy"}
@@ -758,6 +789,7 @@ def run_pass(state, repo, check=False, only=None):
                 continue
             sid, entry = start(by_key[key], state, repo)  # the record is written after each start, never at the end
             record[key] = {**prior, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
+            started_now[key] = sid
             write_json(rec_path, record)
             print(f"operators: started {key} as {sid or 'unknown id'}")
         for unit, session, why in restarts:
@@ -784,6 +816,7 @@ def run_pass(state, repo, check=False, only=None):
             kept = {k: v for k, v in old.items() if k != "proxy"}
             record[key] = {**kept, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             write_json(rec_path, record)
+            started_now[key] = sid
             print(f"operators: restarted {key} as {sid or 'unknown id'}: {why}")
             line = pending(state, unit)       # a new session skips the inbox lines already there, so one alert stands
             if line and int(kept.get("alerted") or 0) != int(line):
@@ -817,6 +850,8 @@ def run_pass(state, repo, check=False, only=None):
             if key in record:
                 retire_proxy(record.pop(key, None))
                 write_json(rec_path, record)
+        if only_unit is not None:
+            return ensure_verdict(only_unit, started_now.get(only_unit["key"]), listing)
         return 0
     finally:
         os.close(fd)

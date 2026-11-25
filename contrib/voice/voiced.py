@@ -288,59 +288,125 @@ class TipUnreadable(Exception):
     """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
 
 
-def watch_operator_start(proc, repo, log):
-    """Log one detached supervisor pass that started no session, with the reason it printed (#2925).
+class Start:
+    """One detached `--ensure` pass: its process, the inbox line that paid for it, and the outcome once it ends.
 
-    The caller discards the pass's output, so a pass that exits non-zero is invisible: an inbox line then waits for the
-    five-minute pass, and for a project the hub never names it waits forever. The pass's stderr goes to a file, never a
-    pipe, so a daemon that dies mid-pass never breaks the child with a closed read end. Runs in its own thread: the
-    pass may make several bounded CLI calls, and the event loop never waits for them.
+    `outcome` is None while the pass runs and then `{"started", "session", "code", "reason", "verdict"}`. The watcher
+    thread fills it, and `wait` hands it to a caller, so the daemon tells a start that answers the line from a pass
+    that started nothing (#2925).
+    """
+
+    def __init__(self, proc, repo, line=None):
+        self.proc = proc
+        self.repo = repo
+        self.line = line
+        self.outcome = None
+        self._done = threading.Event()
+
+    def finished(self, outcome):
+        self.outcome = outcome
+        self._done.set()
+
+    def wait(self, timeout=None):
+        """The pass's outcome, or None when it has not ended within `timeout`. Never blocks the event loop: a caller
+        that reads it runs off the loop."""
+        self._done.wait(timeout)
+        return self.outcome
+
+
+def pass_output(proc, stream=None):
+    """Everything one detached pass printed. `stream` is the file the Popen wrote to; a Popen given a file object puts
+    nothing on `proc.stdout`, so the caller hands its own stream too. A fixture's own StringIO on the process answers as
+    well. One stream handed for both stdout and stderr is read once, and it is closed after the read."""
+    streams = [stream] if stream is not None else []
+    for name in ("stderr", "stdout"):
+        got = getattr(proc, name, None)
+        if got is not None:
+            streams.append(got)
+    text, seen = [], set()
+    for s in streams:
+        if id(s) in seen:
+            continue
+        seen.add(id(s))
+        try:
+            s.seek(0)
+            part = s.read()
+        except (OSError, ValueError):
+            part = ""
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+        if isinstance(part, bytes):
+            part = part.decode("utf-8", "replace")
+        if part:
+            text.append(part)
+    return "\n".join(text)
+
+
+def verdict_session(row):
+    """The session id one `--ensure` verdict line names, or "" when the row is no verdict (#2925).
+
+    A verdict is `operators: ensure <project> started <id>` or `operators: ensure <project> live <id>`, and nothing
+    else: the failure line carries words after `started`, so it never reads as a start."""
+    words = row.split()
+    if len(words) == 5 and words[0] == "operators:" and words[1] == "ensure" and words[3] in ("started", "live"):
+        return words[4]
+    return ""
+
+
+def watch_operator_start(proc, repo, log, line=None, finished=None, stream=None):
+    """Read one detached supervisor pass and report whether it left the inbox line answered (#2925).
+
+    The pass's `--ensure` prints one verdict line on stdout: `operators: ensure <project> started <id>`, or `... live
+    <id>` when a session was already there. Any other outcome, a non-zero exit or a zero exit with no verdict, is a
+    start that left the line waiting: the log names that inbox line, so the fault reaches the message that paid for the
+    pass. `stream` is the file the pass's output was written to. `finished`, if given, receives the outcome. Runs in its
+    own thread: the pass may make several bounded CLI calls, and the event loop never waits for them.
     """
     try:
         code = proc.wait()
     except (OSError, ValueError):
-        return
-    stream = getattr(proc, "stderr", None)
-    text = ""
-    try:
-        if stream is not None:
-            stream.seek(0)
-            text = stream.read()
-            if isinstance(text, bytes):
-                text = text.decode("utf-8", "replace")
-    except (OSError, ValueError):
-        text = ""
-    finally:
-        try:
-            if stream is not None:
-                stream.close()
-        except OSError:
-            pass
-    if code:
-        lines = (text or "").strip().splitlines()
-        log(f"voiced: the operator start for {repo} exited {code}: {lines[-1] if lines else 'no reason'}")
+        code = None
+    rows = pass_output(proc, stream).strip().splitlines()
+    verdict, session = "", ""
+    for row in rows:
+        named = verdict_session(row)
+        if named:
+            verdict, session = row, named
+    outcome = {"started": bool(verdict), "session": session,
+               "code": code, "reason": rows[-1] if rows else "", "verdict": verdict}
+    if not outcome["started"]:
+        where = f"inbox line {line} for {repo}" if line else f"the operator start for {repo}"
+        log(f"voiced: {where} got no operator session: {outcome['reason'] or 'no reason'}")
+    if finished is not None:
+        finished(outcome)
+    return outcome
 
 
-def start_operator(state_dir, repo, log=None):
+def start_operator(state_dir, repo, log=None, line=None):
     """Start one project's operator session now when none is live (#2925).
 
-    A message must never wait for the five-minute supervisor pass. The call is fire and forget: operators.py takes its
-    own lock, so a pass in flight answers first and a second start stands aside. A start that cannot run is one log
-    line, never a lost message: the line stays in the inbox and the next pass takes it. A pass that exits non-zero is
-    one log line too, so an inbox line with no session and no checkout is never silent.
+    A message must never wait for the five-minute supervisor pass. operators.py takes its own lock, so a pass in flight
+    answers first and a second start stands aside. A start that cannot run is one log line and False, never a lost
+    message: the line stays in the inbox and the next pass takes it. Otherwise the return is a `Start` handle whose
+    `wait` gives the pass's outcome, so a caller never reads a pass that started nothing as a success.
     """
     log = log or (lambda line: None)
     err = tempfile.TemporaryFile(mode="w+b")
     try:
         proc = subprocess.Popen([sys.executable, OPERATORS, "--state", state_dir, "--ensure", repo],
-                                stdout=subprocess.DEVNULL, stderr=err, stdin=subprocess.DEVNULL,
+                                stdout=err, stderr=err, stdin=subprocess.DEVNULL,
                                 start_new_session=True, close_fds=True)
     except OSError as x:
         err.close()
         log(f"voiced: the operator start for {repo} failed: {x.strerror or x}")
         return False
-    threading.Thread(target=watch_operator_start, args=(proc, repo, log), daemon=True).start()
-    return True
+    start = Start(proc, repo, line)
+    threading.Thread(target=watch_operator_start, args=(proc, repo, log),
+                     kwargs={"line": line, "finished": start.finished, "stream": err}, daemon=True).start()
+    return start
 
 
 def git_output(checkout, *args):
@@ -1640,16 +1706,18 @@ class Daemon:
             self.log(line)
         return got
 
-    def wake_operator(self, repo):
+    def wake_operator(self, repo, line=None):
         """Start the project's operator session at once when its inbox line lands (#2925).
 
         A project with no live session never waits for the five-minute pass: the message that arrived is the reason the
-        session starts. A refused start is one log line; the line stays in the inbox, and the pass takes it later.
+        session starts. `line` is the inbox line's id, so a pass that started nothing is reported against the message
+        still waiting. Returns the starter's handle, or False when no start ran; a refused start is one log line, and
+        the line stays in the inbox for the next pass.
         """
         if self.starter is None or not repo:
             return False
         try:
-            return bool(self.starter(self.state.dir, repo))
+            return self.starter(self.state.dir, repo, log=self.log, line=line)
         except Exception as x:      # noqa: BLE001 - a start that fails is a log line, never a lost inbox line
             self.log(f"voiced: the operator start for {repo} failed: {type(x).__name__}: {x}")
             return False
@@ -2105,7 +2173,8 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
-        self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""))
+        self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""),
+                           record["id"])
         return "inbox"
 
 

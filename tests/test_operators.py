@@ -236,6 +236,41 @@ def test_ensure_does_nothing_when_the_project_already_has_a_live_session(tmp_pat
     assert not started(tmp_path), f"a live project was started again: {started(tmp_path)}"
 
 
+def test_ensure_names_the_session_it_started_and_the_one_it_kept(tmp_path, monkeypatch, capsys):
+    """Criterion 4: the ensure says whether it started a session or kept a live one, so the caller never reads a pass
+    that started nothing as a success. The daemon's watcher tells the two apart by this one line (#2925)."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    out = capsys.readouterr().out
+    assert "operators: ensure acme/widget started " in out, out
+
+    live = session(found["acme/widget"], "acme-widget", "cccccccc-0000-0000-0000-000000000001",
+                   started=int(time.time()))
+    scenario(tmp_path, [live])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    out = capsys.readouterr().out
+    assert f"operators: ensure acme/widget live {live['sessionId']}" in out, out
+    assert len(started(tmp_path)) == 1, f"the live project was started again: {started(tmp_path)}"
+
+
+def test_ensure_that_started_no_session_exits_non_zero_and_names_the_project(tmp_path, monkeypatch, capsys):
+    """Criterion 4: no live session and no start is a failure the caller acts on, never a silent no-op. The record
+    holds an id the CLI does not list, and a miss under MISSING_PASSES starts nothing on this pass."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    (tmp_path / "state" / "operators.json").write_text(json.dumps(
+        {"acme-widget": {"id": "dddddddd-0000-0000-0000-000000000001", "pid": 9, "started": 1}}))
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 2
+    assert not started(tmp_path), f"a project with no listed session was started: {started(tmp_path)}"
+    err = capsys.readouterr().err
+    assert "acme/widget" in err and "no session" in err, err
+
+
 def test_the_session_answers_the_message_that_started_it(tmp_path, monkeypatch):
     """Criterion 5: the line that paid for the start rides in the brief, and the brief says to answer it first."""
     op = operators(tmp_path, monkeypatch)
