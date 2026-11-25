@@ -280,14 +280,42 @@ def test_the_session_loads_the_projects_claude_md(tmp_path, monkeypatch):
     assert "CLAUDE.md" in argv, argv
 
 
-def test_a_project_whose_checkout_is_missing_starts_no_session(tmp_path, monkeypatch):
-    """Criterion 6: a project whose profile names no checkout on this machine starts nothing, and says so."""
+def test_a_project_whose_checkout_is_missing_starts_no_session(tmp_path, monkeypatch, capsys):
+    """Criterion 6: a project whose profile names no checkout on this machine starts nothing, and the ensure says so.
+
+    The message that asked for the session is still waiting, so the daemon's fire-and-forget start must not look like a
+    success: `--ensure` exits non-zero and names the missing checkout, and the daemon logs that outcome (#2925)."""
     op = operators(tmp_path, monkeypatch)
     monkeypatch.setattr(op, "hub_projects", lambda *a, **k: [{"repo": "acme/widget", "checkout": "/nonexistent/wt"}])
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
     scenario(tmp_path, [])
-    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 2
     assert not started(tmp_path), f"a project with no checkout was started: {started(tmp_path)}"
+    err = capsys.readouterr().err
+    assert "acme/widget" in err and "no checkout" in err, err
+
+
+def test_ensure_of_a_project_the_registry_does_not_name_exits_non_zero(tmp_path, monkeypatch, capsys):
+    """Criterion 4: an ensure for a project no registry row names is an error, never a silent no-op."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/ghost") == 2
+    assert not started(tmp_path), f"an unknown project started a session: {started(tmp_path)}"
+    assert "acme/ghost" in capsys.readouterr().err
+
+
+def test_the_full_pass_never_fails_for_a_project_with_no_checkout(tmp_path, monkeypatch):
+    """Criterion 3: a machine that lacks one checkout still runs the launchd pass, and starts every other session."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    monkeypatch.setattr(op, "hub_projects", lambda *a, **k: [{"repo": "acme/widget", "checkout": found["acme/widget"]},
+                                                            {"repo": "acme/api", "checkout": "/nonexistent/wt"}])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget"), ("acme/api", "C0BBBBBB1", "proj-api")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert set(record(tmp_path)) == {"dm", "acme-widget"}, record(tmp_path)
 
 
 def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tmp_path, monkeypatch):

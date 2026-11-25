@@ -73,6 +73,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.request
 import xml.sax.saxutils
 from datetime import datetime
@@ -287,21 +288,59 @@ class TipUnreadable(Exception):
     """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
 
 
+def watch_operator_start(proc, repo, log):
+    """Log one detached supervisor pass that started no session, with the reason it printed (#2925).
+
+    The caller discards the pass's output, so a pass that exits non-zero is invisible: an inbox line then waits for the
+    five-minute pass, and for a project the hub never names it waits forever. The pass's stderr goes to a file, never a
+    pipe, so a daemon that dies mid-pass never breaks the child with a closed read end. Runs in its own thread: the
+    pass may make several bounded CLI calls, and the event loop never waits for them.
+    """
+    try:
+        code = proc.wait()
+    except (OSError, ValueError):
+        return
+    stream = getattr(proc, "stderr", None)
+    text = ""
+    try:
+        if stream is not None:
+            stream.seek(0)
+            text = stream.read()
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", "replace")
+    except (OSError, ValueError):
+        text = ""
+    finally:
+        try:
+            if stream is not None:
+                stream.close()
+        except OSError:
+            pass
+    if code:
+        lines = (text or "").strip().splitlines()
+        log(f"voiced: the operator start for {repo} exited {code}: {lines[-1] if lines else 'no reason'}")
+
+
 def start_operator(state_dir, repo, log=None):
     """Start one project's operator session now when none is live (#2925).
 
     A message must never wait for the five-minute supervisor pass. The call is fire and forget: operators.py takes its
     own lock, so a pass in flight answers first and a second start stands aside. A start that cannot run is one log
-    line, never a lost message: the line stays in the inbox and the next pass takes it.
+    line, never a lost message: the line stays in the inbox and the next pass takes it. A pass that exits non-zero is
+    one log line too, so an inbox line with no session and no checkout is never silent.
     """
+    log = log or (lambda line: None)
+    err = tempfile.TemporaryFile(mode="w+b")
     try:
-        subprocess.Popen([sys.executable, OPERATORS, "--state", state_dir, "--ensure", repo],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                         start_new_session=True, close_fds=True)
-        return True
+        proc = subprocess.Popen([sys.executable, OPERATORS, "--state", state_dir, "--ensure", repo],
+                                stdout=subprocess.DEVNULL, stderr=err, stdin=subprocess.DEVNULL,
+                                start_new_session=True, close_fds=True)
     except OSError as x:
-        (log or (lambda line: None))(f"voiced: the operator start for {repo} failed: {x.strerror or x}")
+        err.close()
+        log(f"voiced: the operator start for {repo} failed: {x.strerror or x}")
         return False
+    threading.Thread(target=watch_operator_start, args=(proc, repo, log), daemon=True).start()
+    return True
 
 
 def git_output(checkout, *args):

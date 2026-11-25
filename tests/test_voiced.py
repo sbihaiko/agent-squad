@@ -2351,6 +2351,10 @@ def test_the_start_operator_spawns_the_ensure_pass_for_the_project(tmp_path, mon
     class FakePopen:
         def __init__(self, argv, **kwargs):
             spawned.append((argv, kwargs))
+            self.stderr = kwargs["stderr"]
+
+        def wait(self):
+            return 0
 
     monkeypatch.setattr(mod.subprocess, "Popen", FakePopen)
     assert mod.start_operator(str(tmp_path / "state"), "acme/app") is True
@@ -2359,6 +2363,53 @@ def test_the_start_operator_spawns_the_ensure_pass_for_the_project(tmp_path, mon
     assert argv[argv.index("--state") + 1] == str(tmp_path / "state")
     assert argv[argv.index("--ensure") + 1] == "acme/app"
     assert kwargs["start_new_session"] is True and kwargs["stdout"] is subprocess.DEVNULL
+
+
+def test_a_pass_that_exited_non_zero_is_logged_with_its_reason():
+    """Criterion 4: an ensure pass that started no session names the project and the supervisor's own reason."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stderr = io.StringIO("operators: acme/ghost names no checkout; no session started\n")
+
+        def wait(self):
+            return 2
+
+    mod.watch_operator_start(Done(), "acme/ghost", logged.append)
+    assert logged == ["voiced: the operator start for acme/ghost exited 2: "
+                      "operators: acme/ghost names no checkout; no session started"], logged
+
+
+def test_a_pass_that_exited_zero_logs_nothing():
+    """Criterion 4: the start a message paid for is the normal case, so it writes no log line."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stderr = io.StringIO("operators: started acme/widget as abc")
+
+        def wait(self):
+            return 0
+
+    mod.watch_operator_start(Done(), "acme/widget", logged.append)
+    assert logged == [], logged
+
+
+def test_the_start_operator_logs_a_pass_that_exited_non_zero(tmp_path, monkeypatch):
+    """Criterion 4: the detached pass that started no session still reaches the daemon's log through the watcher."""
+    mod = voiced()
+    script = tmp_path / "operators.py"
+    script.write_text("import sys\n"
+                      "sys.stderr.write('operators: acme/ghost names no checkout; no session started\\n')\n"
+                      "sys.exit(2)\n")
+    monkeypatch.setattr(mod, "OPERATORS", str(script))
+    logged = []
+    assert mod.start_operator(str(tmp_path / "state"), "acme/ghost", log=logged.append) is True
+    give_up = time.time() + 10
+    while not logged and time.time() < give_up:
+        time.sleep(0.01)
+    assert logged and "acme/ghost" in logged[0] and "exited 2" in logged[0], logged
 
 
 def test_a_start_that_cannot_spawn_is_one_log_line_and_no_raise(tmp_path, monkeypatch):

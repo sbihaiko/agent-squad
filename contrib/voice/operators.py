@@ -29,7 +29,8 @@ the project, once per line, and the owner answers it in Slack.
 usage: operators.py [--check] [--state DIR] [--repo DIR] [--ensure PROJECT]
   --check           print what a pass would do, and change nothing.
   --ensure PROJECT  run one pass for one project, or for `dm`, so a message starts its session at once.
-Exit 0: the pass ran (or reported). Exit 1: the CLI refused or a deadline passed.
+Exit 0: the pass ran (or reported). Exit 1: the CLI refused or a deadline passed. Exit 2: `--ensure` named a project the
+registry does not know, or one whose checkout is not on this machine, so nothing could start.
 """
 import argparse
 import errno
@@ -708,8 +709,13 @@ def run_pass(state, repo, check=False, only=None):
         named = [u for u in units if only in (u["key"], u["repo"])]
         if not named:
             print(f"operators: no project names {only}; nothing to ensure", file=sys.stderr)
-            return 0
+            return 2
         units = named
+        # The message that asked for this start is still in the inbox, so a project with no checkout on this machine is
+        # an error the caller must see, never a silent no-op (#2925). A full pass keeps running for every other project.
+        if not check and not os.path.isdir(named[0].get("checkout") or ""):
+            print(f"operators: {only} names no checkout; no session started", file=sys.stderr)
+            return 2
     if check:
         sessions = listing()
         record = read_json(os.path.join(state, "operators.json"), {})
