@@ -424,9 +424,30 @@ run = new[-1]
 # A workspace removed under the dispatch is a refusal, not a traceback (#1637): the child tree is culled between the cut and
 # this write, the folder goes with it, and a crash here left the issue claimed by a marker no pass frees. A refusal frees it
 # and returns the card to Todo (#852).
-def _gone(): sys.exit(f"launch refused: the run folder {runs / run} is gone; its workspace was removed while the dispatch started, so nothing started")
+def _active_runs_module():   # #1862: squad/active_runs.py, the list's one writer protocol, from the build this launcher starts
+    roots = [r for r in (str(here.parents[2]), os.environ.get("SG_SQUAD"), str(squad), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
+    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "active_runs.py").is_file()), None)
+    if root is None:
+        sys.exit("refused: no squad/active_runs.py in " + ", ".join(roots) + ": the run's line in active-runs.txt has no "
+                 "writer protocol, so a janitor pass could lose it (#1862)")
+    spec = importlib.util.spec_from_file_location("active_runs", pathlib.Path(root) / "squad" / "active_runs.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+_runs_list = _active_runs_module()
+_line = str(runs / run)   # absolute: watch.sh/heartbeat.sh find it from any cwd
+def _gone():   # the refusal takes back the run's line, so a refused dispatch adds no live run; a line left behind names a missing folder, and the janitor drops it
+    if _listed:
+        try: _runs_list.rewrite(state / "active-runs.txt", [_line], [])
+        except OSError: pass
+    sys.exit(f"launch refused: the run folder {runs / run} is gone; its workspace was removed while the dispatch started, so nothing started")
+_listed = False
 if not (runs / run).is_dir(): _gone()
 (runs / run / "request.txt").write_text(req_text)   # consult.sh reads the request from the run folder; a stacked child's tip is the one cut here (#2260)
+# The run is listed before its wave is cut (#2847). The janitor drops a wave marker no line names, so a pass between
+# `wave.sh start` and a later append dropped the markers of a live run. The append holds the lock the janitor's rewrite
+# holds, so a run started during a pass keeps its line (#1862).
+_runs_list.append(state / "active-runs.txt", _line); _listed = True
 # One branch per wave (#375, ADR-0145 rules 8 and 10): a run that dispatches children cuts its wave branch from the base
 # as it starts, so every child has a wave to enter and the run's completion has one to land. `wave.sh start` owns the cut
 # -- a throwaway clone, never this checkout -- and leaves the marker $SG_STATE/auto/wave-<run> that watch.sh reads when
@@ -454,17 +475,4 @@ except OSError:
     subprocess.Popen(["caffeinate", "-dimsu", "python3", str(here / "hub.py"), "7700"],
                      stdout=open(state / "hub.log", "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
 finally: _s.close()
-def _active_runs_module():   # #1862: squad/active_runs.py, the list's one writer protocol, from the build this launcher starts
-    roots = [r for r in (str(here.parents[2]), os.environ.get("SG_SQUAD"), str(squad), os.environ.get("SG_CHECKOUT"),
-             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
-    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "active_runs.py").is_file()), None)
-    if root is None:
-        sys.exit("refused: no squad/active_runs.py in " + ", ".join(roots) + ": the run's line in active-runs.txt has no "
-                 "writer protocol, so a janitor pass could lose it (#1862)")
-    spec = importlib.util.spec_from_file_location("active_runs", pathlib.Path(root) / "squad" / "active_runs.py")
-    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
-    return mod
-# The append holds the lock the janitor's rewrite holds, so a run started during a pass keeps its line (#1862). Absolute:
-# watch.sh/heartbeat.sh find it from any cwd.
-_active_runs_module().append(state / "active-runs.txt", str(runs / run))
 print(run)
