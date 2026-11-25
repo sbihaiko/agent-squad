@@ -137,6 +137,15 @@ def test_squad_roots_keeps_the_callers_sg_squad_first(mux):
 
 
 @pytest.mark.heavy
+def test_squad_roots_takes_a_short_script_path(mux):
+    """A script path with fewer than four parents gives its roots and no IndexError: a shallow path sits in no
+    repository, so it adds none (#2875)."""
+    _, apps = mux
+    roots = apps["host"]["mod"].squad_roots("/tmp/explicit", "", "", "/x.py")
+    assert roots == ["/tmp/explicit"], roots
+
+
+@pytest.mark.heavy
 def test_a_profile_that_names_no_sg_squad_inherits_none(tmp_path, monkeypatch):
     """The pin is unconditional: a profile whose file names no SG_SQUAD imports with an empty one, so it never reads
     the mux process's own package root (#2820 review)."""
