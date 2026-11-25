@@ -1639,7 +1639,6 @@ function slTGone(n){if(!n||n.kind!=="channel"||!n.ids)return null;
  const hit=list.find(g=>String(g.id)===String(n.ids.channel));
  return hit?{text:String(hit.text||""),tone:"err",kind:"unreachable"}:null}
 function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
- if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);   // the tree asks which mapped channels Slack still lists (#2955)
  const gone=slTGone(n),badges=(n.badges||[]).concat(gone?[gone]:[]);
  const label=[n.name].concat(badges.map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
@@ -1723,6 +1722,11 @@ function slChNeed(a){if(typeof fetch!=="function"||!a)return;const ws=String(a.w
  fetch("/api/slack/channels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,named:a.named||[]})})
  .then(r=>r.json()).then(o=>{slChList[ws]=o||{err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})
  .catch(()=>{slChList[ws]={err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})}
+/* The page asks each workspace's own connection which mapped channels Slack still lists, once per page load, so the tree
+   marks an unreachable channel without a paint that posts (#2955). The read belongs to the load, never to a render. */
+function slChReadAll(){if(!slT||typeof fetch!=="function")return;
+ const walk=n=>{if(!n)return;if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);for(const c of n.children||[])walk(c)};
+ for(const r of slTRoots())walk(r)}
 function slTChAdd(n){const a=n&&n.kind==="workspace"&&n.channel_add;if(!a)return "";const key=`${a.doc}:${a.ws}`,l=slChList[String(a.workspace||"")];
  if(!l)slChNeed(a);
  const list=l&&Array.isArray(l.channels)?l.channels:[];
@@ -2085,7 +2089,7 @@ const slBarState=()=>{if(slSaving)return {text:"Saving…",undo:false,retry:fals
  return slMsg?{text:slMsg[0].toUpperCase()+slMsg.slice(1),undo,retry:false,err:false}
   :{text:"Slack: each edit saves by itself",undo:false,retry:false,err:false}};
 function slDiscard(){slDocs=slClone(slSavedDocs);slT=slClone((slR&&slR.tree)||slT);slMsg="";slRender()}   // Discard puts back the values the page read last, the Now block included (#2846)
-async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender()}
+async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender();slChReadAll()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
  const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)

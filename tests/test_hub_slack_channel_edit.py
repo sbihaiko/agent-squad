@@ -159,6 +159,25 @@ def test_the_tree_marks_no_channel_the_hub_lists(hub, tmp_path):
     assert hub.SLACK_NOT_LISTED not in html, html
 
 
+def test_the_page_load_asks_each_workspace_for_its_channel_list(hub, tmp_path):
+    """#2955: the read that marks a channel unreachable belongs to the page's load, never to a paint, so a render posts
+    nothing and one load posts once per workspace the hub can read."""
+    out = read(hub, tmp_path)
+    wanted = [n["channel_read"]["workspace"] for n in T.walk(out["tree"]["root"])
+              if n["kind"] == "workspace" and n.get("channel_read")]
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};\n"
+            "const BODIES=[];globalThis.fetch=(u,o)=>{BODIES.push(JSON.parse(o.body));"
+            "return Promise.resolve({status:200,json:()=>Promise.resolve({channels:[],unreachable:[]})})};"
+            "(async()=>{slRender();const paint=BODIES.length;slChReadAll();"
+            "await new Promise(r=>setTimeout(r,20));"
+            "console.log(JSON.stringify({paint,bodies:BODIES}))})()")
+    got = json.loads(_node(body))
+    assert wanted, "the fixture names a readable workspace"
+    assert got["paint"] == 0, "a render posts nothing"
+    assert [b["workspace"] for b in got["bodies"]] == wanted, got["bodies"]
+    assert all(isinstance(b.get("named"), list) for b in got["bodies"]), got["bodies"]
+
+
 def test_the_workspace_detail_offers_the_listed_channels_by_name(hub, tmp_path):
     seed = ('slChList={"T0TEAM0001":{"err":null,"manual":false,'
             '"channels":[{"id":"C0NEWCH002","name":"design"},{"id":"C0NEWCH001","name":"release-notes"}]}};')
