@@ -119,6 +119,17 @@ def test_a_tone_over_300_characters_is_refused():
     assert "personas[0].tone" in keys(S.validate(committed, local))
 
 
+def test_a_role_row_accepts_an_optional_tone():
+    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status"], "tone": "Short sentences."}])
+    assert S.validate(committed, local) == []
+
+
+def test_a_role_tone_over_300_characters_is_refused_and_names_its_key():
+    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status"], "tone": "x" * 301}])
+    defects = S.validate(committed, local)
+    assert "roles[0].tone" in keys(defects), defects
+
+
 def test_a_tone_of_300_characters_passes():
     committed, local = files(committed__personas__0__tone="x" * 300)
     assert S.validate(committed, local) == []
