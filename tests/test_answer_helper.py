@@ -45,6 +45,14 @@ def queued(tmp_path, channels=(CHANNEL, OTHER), dm=None):
     return binding, state
 
 
+def pinned(state, channel):
+    """The supervisor's own DM record at `<state>/operators/sessions/dm.json` (#2949): the one channel the daemon may
+    post a DM answer to, written by the supervisor and never derived from a line the helper happens to read."""
+    folder = state / "operators" / "sessions"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "dm.json").write_text(json.dumps({"key": "dm", "state": str(state), "channels": ["dm"], "dm": channel}))
+
+
 def asked(state, channel=CHANNEL, ts=QUESTION, text="check the loop"):
     """One pending inbox line: the question an answer must thread under."""
     line = {"id": f"{channel}:{ts}", "ts": ts, "user": "UPROBE0001", "channel": channel, "text": text,
@@ -186,19 +194,50 @@ def test_the_helper_refuses_a_dm_line_that_names_a_project_channel(tmp_path):
     assert outbox(state, "dm") == []
 
 
-def test_the_dm_answer_reads_the_one_channel_when_the_binding_names_none(tmp_path):
-    """A DM session started before the first DM arrived has no DM channel in its binding, so the helper reads the one
-    channel of the inbox, which only the daemon writes."""
+def test_the_dm_answer_reads_the_pinned_record_when_the_binding_names_none(tmp_path):
+    """A DM session whose binding names no channel resolves the supervisor's pinned record, never the inbox line's own
+    channel: only the supervisor's record is authoritative for where the daemon may post (#2949)."""
     mod = helper()
     binding, state = queued(tmp_path, channels=("dm",))
-    for ts in (QUESTION, "1762500000.000200"):
-        with open(state / "inboxes" / "dm.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"id": f"dm:{ts}", "ts": ts, "user": "UPROBE0001", "channel": "D0AAAAAA1",
-                                "text": "hi"}) + "\n")
+    pinned(state, "D0AAAAAA1")
+    with open(state / "inboxes" / "dm.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001", "channel": "D0AAAAAA1",
+                            "text": "hi"}) + "\n")
 
-    mod.answer(mod.read_binding(bound(binding)), "dm", "1762500000.000200", ANSWER)
+    mod.answer(mod.read_binding(bound(binding)), "dm", QUESTION, ANSWER)
 
-    assert outbox(state, "dm") == [{"thread_ts": "1762500000.000200", "text": ANSWER, "channel": "D0AAAAAA1"}]
+    assert outbox(state, "dm") == [{"thread_ts": QUESTION, "text": ANSWER, "channel": "D0AAAAAA1"}]
+
+
+def test_the_helper_refuses_a_dm_line_when_no_authoritative_channel_exists(tmp_path):
+    """Debt 6 (#2949): a binding that names no DM channel and a state with no pinned record leave the inbox line's own
+    channel unverified, so the helper refuses rather than route an answer to a channel a tampered line named."""
+    mod = helper()
+    binding, state = queued(tmp_path, channels=("dm",))
+    line = {"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001", "channel": "C0PROJECT", "text": "hi"}
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps(line) + "\n")
+
+    with pytest.raises(mod.Refused):
+        mod.answer(mod.read_binding(bound(binding)), "dm", QUESTION, ANSWER)
+
+    assert outbox(state, "dm") == []
+
+
+def test_a_tampered_dm_line_never_names_a_second_channel(tmp_path):
+    """Debt 6 (#2949): the pinned record names one DM channel; an inbox line that names another one is refused, so a
+    line written by anything but the daemon never carries a channel into the DM outbox."""
+    mod = helper()
+    binding, state = queued(tmp_path, channels=("dm",))
+    pinned(state, "D0AAAAAA1")
+    line = {"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001", "channel": "C0PROJECT", "text": "hi"}
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps(line) + "\n")
+
+    with pytest.raises(mod.Refused):
+        mod.answer(mod.read_binding(bound(binding)), "dm", QUESTION, ANSWER)
+
+    assert outbox(state, "dm") == []
 
 
 def test_the_helper_refuses_a_project_line_that_names_another_channel(tmp_path):
@@ -321,12 +360,12 @@ def test_the_helper_refuses_a_scope_that_escapes_the_state_folder(tmp_path):
     assert leak.read_text() == json.dumps(line) + "\n"
 
 
-def test_the_dm_fallback_reads_the_answered_lines_channel_not_the_oldest(tmp_path):
-    """Criterion (2): a DM session whose binding names no channel must never compare the answered line against the
-    oldest line's channel. The daemon posts to the channel the answered line itself names, so a second DM channel that
-    arrived after the first must not make the answer refuse."""
+def test_the_dm_answer_reads_the_pinned_channel_not_the_oldest_line(tmp_path):
+    """Criterion (2): a DM session whose binding names no channel answers the pinned record's one channel, never the
+    oldest inbox line's channel and never a newer contradicting one."""
     mod = helper()
     binding, state = queued(tmp_path, channels=("dm",))
+    pinned(state, "D0NEW0002")
     oldest, answered_ts = "1762500000.000100", "1762500000.000200"
     with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps({"id": f"dm:{oldest}", "ts": oldest, "user": "UPROBE0001", "channel": "D0OLD0001",

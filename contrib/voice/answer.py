@@ -9,8 +9,9 @@ the channels of that one project, whatever arguments the session passes.
 The rule that binds an answer to an inbox line is the Slack policy module's (`slackpolicy.pending_line`), never a second
 copy: an answer threads under the question whose `ts` equals its thread, and a channel whose inbox holds no line
 answers nothing. The inbox line itself must name a channel of the session's project: a project line names its own
-channel, and a DM line names the binding's one DM channel, since the daemon posts to the channel the outbox line
-carries. This helper is the only gate on that path; `voiced` posts the line as it reads it.
+channel, and a DM line names the DM channel the supervisor pinned in the session's record, since the daemon posts to
+the channel the outbox line carries. A DM session with no pinned channel answers nothing, so an inbox line anything
+wrote never picks the outbox channel. This helper is the only gate on that path; `voiced` posts the line as it reads it.
 
 A message that asks for an action gets two calls under its one line: the read-only answer, then a second call for the
 same thread whose text starts with `Proposal:`. The inbox keeps the question, so the second call answers the same
@@ -42,6 +43,7 @@ for path in (HERE, ROOT):
     if path not in sys.path:
         sys.path.insert(0, path)
 import operators  # noqa: E402  the one naming rule of an inbox and an outbox
+from operators import dm_channel  # noqa: E402  the supervisor's pinned DM record, never an inbox line's own channel
 
 from squad import slackpolicy  # noqa: E402  the one rule that binds an answer to an inbox line (ADR-0177)
 
@@ -151,11 +153,13 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
         raise Refused(f"no pending inbox line in {scope} answers thread {thread!r}")
     line_channel = str(question.get("channel") or scope)
     if scope == DM:
-        # A binding that names the one DM channel pins the answer there. A session started before its first DM arrived
-        # names none, so the answered line's own channel is the one the daemon posts to; the oldest line's channel is
-        # never that, since a later DM may carry another channel.
-        own = str(binding.get("dm") or "")
-        if own and line_channel != own:
+        # The DM channel is the one the supervisor pinned at the session start. A binding that names none resolves the
+        # pinned record alone, never an inbox line's own channel: a line anything wrote could route the answer to a
+        # channel this session's project does not own. With no pinned channel, nothing is verified, so nothing answers.
+        own = str(binding.get('dm') or dm_channel(binding['state'], pinned=True))
+        if not own:
+            raise Refused("the DM session has no pinned DM channel, so it answers nothing")
+        if line_channel != own:
             raise Refused(f"the DM line names channel {line_channel!r}, not this session's own DM channel {own!r}")
     elif line_channel != scope:
         raise Refused(f"the line in {scope} names channel {line_channel!r}, outside this session's project")
