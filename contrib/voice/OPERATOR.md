@@ -44,10 +44,12 @@ Answer each inbox line through the shipped `answer` helper, and through nothing 
 
 The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
-`VOICE_ANSWER_BINDING`: the state folder and the channels of the session's project. The helper refuses a channel
-outside that project and a thread that matches no pending inbox line, so an answer never lands in another channel or
-under a stale thread. It reuses the binding rule of the Slack policy module (`squad/slackpolicy.py`), and `voiced`
-checks the same rule again before it posts. Never append to an outbox yourself.
+`VOICE_ANSWER_BINDING`: the state folder, the channels of the session's project, and the DM channel for the DM
+session. The helper refuses a channel outside that project and a thread that matches no pending inbox line, so an
+answer never lands in another channel or under a stale thread. A line must also name a channel of the project: a
+project line names its own channel, and a DM line names the binding's one DM channel. The helper reuses the binding
+rule of the Slack policy module (`squad/slackpolicy.py`). It is the only gate on the answer path: `voiced` posts the
+line as it reads it and checks no rule again. Never append to an outbox yourself.
 
 One outbox line is one answer:
 
@@ -75,10 +77,11 @@ It reads every outbox on its own. The session makes no Slack call and waits for 
 
 ## Reads and answers, never acts
 
-The session reads and answers. It never acts: it writes no file, runs no command and makes no Slack write, and the
-kernel refuses all three. When a message asks for an action, the session answers in that channel that it only reads.
-The DM session also calls the helper once more for the same line, with a text that starts with `Proposal:`. A project
-session cannot write the DM outbox, so it proposes nothing; the executor that runs an action is #2939.
+The session reads and answers. It never acts beyond that: the one command it runs is the `answer` helper above, and
+the kernel permits that call while it refuses every other command. It writes no other file and makes no Slack write.
+When a message asks for an action, the session answers in that channel that it only reads. The DM session also calls
+the helper once more for the same line, with a text that starts with `Proposal:`. A project session cannot write the
+DM outbox, so it proposes nothing; the executor that runs an action is #2939.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:
 the kernel refuses the settings files, every top-level Markdown file, the skills, agents, commands, hooks, plugins,
