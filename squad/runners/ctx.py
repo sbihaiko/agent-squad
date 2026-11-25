@@ -122,7 +122,15 @@ class RunCtx:
         return self._e._recorded_head(logical, item)
 
     def call_deadline(self, node, sc):
+        """(seconds, by): the call's limit, and the bound that shortened it below its own deadline (#2840)."""
         return self._e._call_deadline(node, sc)
+
+    def wave_bound(self, own, by=None):
+        return self._e.wave_bound(own, by)
+
+    def wave_ceiling_at(self):
+        """The absolute epoch a running call must end by, or None (#2840)."""
+        return self._e.wave_ceiling_at()
 
     def no_progress_window(self):
         return self._e.no_progress_window()

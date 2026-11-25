@@ -119,6 +119,43 @@ def test_a_merge_land_carries_the_refs_trailers_of_the_branch(tmp_path):
     assert "Closes #9" not in msg and "Refs #9" not in msg, msg
 
 
+def switched_child(tmp_path, ahead):
+    """A worktree on branch `child`; its HEAD then moves to a second branch, `other`, that holds the new commit.
+    `ahead` True: `other` descends from `child`'s tip. False: `other` is cut from the base, so `child`'s tip is no ancestor."""
+    repo = make_repo(tmp_path / "repo")
+    wt = tmp_path / "wt"
+    sh(repo, "git", "worktree", "add", "-q", "-b", "child", str(wt))
+    (wt / "a.txt").write_text("a\n")
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "first")
+    sh(wt, "git", "checkout", "-q", "-b", "other", *([] if ahead else ["HEAD~1"]))
+    (wt / "b.txt").write_text("b\n")
+    sh(wt, "git", "add", "-A")
+    sh(wt, "git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "second")
+    return repo, wt
+
+
+def test_a_land_merges_the_worktree_head_when_the_child_switched_to_a_descendant_branch(tmp_path):
+    """#2864: a child that commits on another local branch leaves the named branch behind. When the named tip is an ancestor of the
+    worktree head, the land merges the head, so no commit is dropped, and the result says the branch switched."""
+    from squad import actions
+    repo, wt = switched_child(tmp_path, ahead=True)
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)")
+    assert r.ok, r
+    assert r.extra.get("land_branch_switched") is True, r.extra
+    assert (repo / "a.txt").exists() and (repo / "b.txt").read_text() == "b\n"
+
+
+def test_a_land_fails_when_the_worktree_head_is_not_built_on_the_named_branch(tmp_path):
+    """#2864: a head that does not contain the named tip is unknown work. The land fails by name and the target stays put."""
+    from squad import actions
+    repo, wt = switched_child(tmp_path, ahead=False)
+    before = git.head(repo)
+    r = actions.merge_land(repo, wt, "child", "squad: land c (r1)")
+    assert not r.ok and r.reasons == ["land_branch_switched"], r
+    assert git.head(repo) == before and not (repo / "b.txt").exists()
+
+
 async def test_a_merge_conflict_fails_the_node_and_leaves_the_target_clean(tmp_path):
     repo = make_repo(tmp_path / "repo")
 

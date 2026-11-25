@@ -110,7 +110,29 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 # `waved-<run>` is the durable record that the run cut a wave: nothing clears it, so childcc.py still knows, after the landing
 # removed `wave-<run>`, that a child of this run never gets the direct Batching move.
 mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
-  && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; }; }
+  && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; } && ceiling_write "$1"; }
+
+# ceiling_epoch <run> <start>: the absolute epoch of the run's wave ceiling: the wave start, the age cap and every pause
+# the cap has taken (#2840, #637). This is the one place the ceiling is computed, from the same pause `waited` subtracts.
+ceiling_epoch() {
+  local cap=${SG_WAVE_MAX_AGE_SECONDS:-7200} now p rd fx=()
+  now=$(date +%s); rd=$(run_dir "$2")
+  if [ -f "$SG_STATE/auto/wave-pause-$2" ]; then while IFS= read -r l; do [ -n "$l" ] && fx+=("$l"); done < "$SG_STATE/auto/wave-pause-$2"; fi
+  p=$(python3 "$here/wavepause.py" "$1" "$now" "$rd" ${fx[@]+"${fx[@]}"} 2>/dev/null); case "$p" in ''|*[!0-9]*) p=0;; esac
+  printf '%s\n' "$(( $1 + cap + p ))"
+}
+# ceiling_write <run> (#2840): auto/wave-ceiling-<run> holds one absolute epoch, the run's wave start plus the age cap and
+# its pause. The run's engine option `wave_ceiling` names the file (launch.py), and the engine bounds a child's call by the
+# time left to it, so a child never runs past the cap that requeues it. The engine keeps its own entry reserve and the file
+# holds none: a call that ends at the bound can still enter its wave. The file is written with the start marker, refreshed
+# as the pause grows (`expired`), and removed with the marker.
+ceiling_write() {
+  local t f="$SG_STATE/auto/wave-ceiling-$1"
+  t=$(cat "$SG_STATE/auto/wave-start-$1" 2>/dev/null); case "$t" in ''|*[!0-9]*) return 0;; esac
+  ceiling_epoch "$t" "$1" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+}
+# age_clock <run>: a recut starts the age clock of the run's next cut, and its ceiling with it (#2559, #2840).
+age_clock() { mkdir -p "$SG_STATE/auto" && date +%s > "$SG_STATE/auto/wave-start-$1" && ceiling_write "$1"; }
 
 # run_dir <run>: the run folder, its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>.
 run_dir() { local rd; rd=$(/usr/bin/grep "/$1\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); printf '%s\n' "${rd:-${SG_CHECKOUT:-.}/runs/$1}"; }
@@ -189,7 +211,7 @@ print((v or {}).get("verdict") or "")' "$(run_dir "$1")/record.jsonl" 2>/dev/nul
 # The age does not count the pause (#637, wavepause.py): the time a child of the wave is in a review round or a fix entry,
 # read from the run's own record, and the time of each childcc fix run that auto/wave-pause-<run> names. The run folder is
 # its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>. A pause that cannot be read is no pause.
-expired() { [ -e "$SG_STATE/auto/wave-$1" ] || return 1; waited "$1" "$SG_STATE/auto/wave-start-$1" "${SG_WAVE_MAX_AGE_SECONDS:-7200}"; }
+expired() { [ -e "$SG_STATE/auto/wave-$1" ] || return 1; ceiling_write "$1"; waited "$1" "$SG_STATE/auto/wave-start-$1" "${SG_WAVE_MAX_AGE_SECONDS:-7200}"; }
 
 # entrywait <run>: 0 when the run's wave closes early (#2316, ADR-0145 rule 16). The wait is read from the epoch the first
 # child that entered the wave wrote in auto/wave-entry-<run>, never from a second clock; a wave with no entry is never
@@ -710,7 +732,7 @@ recut_drop() {
   [ "${3:-}" = nosalvage ] || rnote=$(salvage_note "$run" "$n")
   for k in $lo; do [ "$k" = "$n" ] || rest="${rest:+$rest }$k"; done
   if [ -n "$rest" ]; then printf '%s\n%s\n' "$(head -1 "$m")" "$rest" > "$m.tmp" && mv "$m.tmp" "$m"; return 0; fi
-  rm -f "$m" "$SG_STATE/auto/wave-start-$run"
+  rm -f "$m" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run"
   [ -n "$(python3 "$here/issue_ledger.py" owed "$SG_REPO" "$run" 2>/dev/null)" ] || rm -f "$SG_STATE/auto/wave-$run"
 }
 
@@ -744,7 +766,7 @@ recut_end() {
     cap_hold "$run" "$rd" "$n" "$why"
     out="${out:+$out, }#$n"
   done
-  rm -f "$m" "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  rm -f "$m" "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run"
   echo "WAVE RECUT-END $w: no child of run $run can enter its next cut any more (age cap or run end); left out: ${out:-none}"
   retire_run "$run" || true   # the run ends before its issues go back to the queue; a hold retries on a later pass (#1970)
   return 0
@@ -933,7 +955,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
         $G fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null \
           && $G push -q origin "refs/remotes/origin/$base:refs/heads/$w" 2>/dev/null \
           && $G fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null \
-          && { rm -f "$SG_STATE/auto/wave-recut-$run"; mkdir -p "$SG_STATE/auto"; date +%s > "$SG_STATE/auto/wave-start-$run"
+          && { rm -f "$SG_STATE/auto/wave-recut-$run"; age_clock "$run"
                echo "WAVE $w cut from $base again: the run's earlier wave closed early"; }
       fi
       $G rev-parse -q --verify "refs/remotes/origin/$w" >/dev/null 2>&1 || {
@@ -1785,7 +1807,7 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wave-recut-$run"; tipred_clear "$w"   # a wave that stopped for good leaves no tip to check again (#1700), and no recut (#2559)
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wave-recut-$run"; tipred_clear "$w"   # a wave that stopped for good leaves no tip to check again (#1700), and no recut (#2559)
   if [ -n "${all// /}" ]; then echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $held"
   else echo "WAVE NEEDS-HUMAN $w: the landing failed and the wave names no issue; the run's wave marker is cleared and $held"; fi
   return 1
@@ -1804,9 +1826,9 @@ close_early() {
   mkdir -p "$SG_STATE/auto"; rm -f "$SG_STATE/auto/wave-entry-$run"
   if [ -n "$lo" ]; then
     printf '%s\n%s\n' "$w" "$lo" > "$m.tmp" && mv "$m.tmp" "$m"   # the wave that closed early, and its children left out
-    date +%s > "$SG_STATE/auto/wave-start-$run"   # the age cap bounds the wait for the next cut (#2559)
+    age_clock "$run"   # the age cap bounds the wait for the next cut (#2559)
     for n in $lo; do out="${out:+$out, }#$n"; done
-  else rm -f "$m" "$SG_STATE/auto/wave-start-$run"; fi
+  else rm -f "$m" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run"; fi
   echo "WAVE CLOSE $w: the oldest entry waited past ${SG_WAVE_ENTRY_WAIT_SECONDS:-1800} s (SG_WAVE_ENTRY_WAIT_SECONDS), so the wave lands with the children that entered; left out: ${out:-none}"
 }
 
@@ -1966,7 +1988,7 @@ wave_conflict() {
   bsha=$($G -C "$S" rev-parse "origin/$base" 2>/dev/null)
   if km=$(land_marker "$run"); then   # a kept landing branch is in its round: the repeat rule replaces the same-paths rule (#1500)
     land_round "$run" "$km" "$bsha" "$files" "$at"
-    rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1
+    rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run"; return 1
   fi
   for n in $refs; do case " $list " in *" $n "*) kset="${kset:+$kset }$n";; esac; done
   if [ -n "$kset" ] && keep_landing "$run" "$w" "$S" "$kset" "$files" "$at"; then
@@ -1976,7 +1998,7 @@ wave_conflict() {
     done
     # A dispatched issue the wave head does not carry has no branch to keep: it takes the requeue path below, as it did before the keep.
     local rest=""; for n in $list; do case " $kset " in *" $n "*) ;; *) rest="${rest:+$rest }$n";; esac; done
-    if [ -z "$rest" ]; then rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; return 1; fi
+    if [ -z "$rest" ]; then rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run"; return 1; fi
     list=$rest; outs=""
   fi
   for n in $list; do
@@ -2002,7 +2024,7 @@ wave_conflict() {
     # picks it again while the loop rebuilds it (#1343). The count is the two conflicts on the same paths.
     c=2; stop "$n" "the rebase on $base conflicts again at $at in ${files:-no path named by git}, the same paths as its last conflict: $w cannot land on the current base"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run"
   return 1
 }
 
@@ -2189,7 +2211,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
         rm -rf "$S"; return 1
       fi
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"; tipred_clear "$w"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run" "$refused"; tipred_clear "$w"
       if [ -n "$landed" ]; then
         echo "WAVE $w already landed in $base (its tip is in the base; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       else
@@ -2314,7 +2336,7 @@ land_read() {
 # (#2058) share one path after the push.
 land_books() {
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
+  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-ceiling-$run" "$SG_STATE/auto/wave-pause-$run"; tipred_clear "$w"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   sg_base_red "$base" >/dev/null   # the base right after the push (#786): a red head the wave lands on is reported now
   printf '%s\n' "$rows" | while read -r k sha ns; do
     [ "$k" = A ] && echo "WAVE-NOTE $w: commit ${sha:0:9} names several issues ($ns) and closes none of them"; done

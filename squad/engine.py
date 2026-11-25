@@ -45,6 +45,10 @@ from squad.runners.types import Scope as Scope
 # spent ids and the hours windows stay the resuming invocation's: they are facts of the moment, and the record states the
 # chain each call had.
 CHAIN_ORDER = "model_order"
+# The engine option that names the wave ceiling file (#2840), and the time a call leaves before that ceiling so its work
+# can still enter the wave: the entry's gates and push run after the call ends.
+WAVE_CEILING = "wave_ceiling"
+WAVE_ENTRY_RESERVE_SECONDS = 300
 
 
 def _signals_recorded(fn):
@@ -83,6 +87,7 @@ class Engine:
         self.has_git = git.available(self.target)
         self.dry, self.forced, self.from_node = False, False, None
         self.waits, self.answer, self.default_applied = {}, None, []
+        self._ceiling_missing = False   # one event says the wave ceiling file the run names is gone (#2840)
         self.branches = {}
         self.replay = Replay(self)   # the replay half of resume
         self.runs = Children(self)   # dispatch child execution
@@ -203,10 +208,54 @@ class Engine:
         return self.limits.get("no_progress_seconds", session.NO_PROGRESS_SECONDS) * self.scale
 
     def _call_deadline(self, node, sc):
+        """(seconds, by) of one call: the node's own deadline, the project's per-call ceiling, the run's remaining scope
+        and the wave's age cap. `by` names the bound that shortened the call below its own deadline: `run_deadline`,
+        `project_deadline` or `wave_ceiling`; None when the node's own deadline is the limit (#2840)."""
         own = node.get("deadline", self.run_cfg["deadline"])     # null run deadline: no run limit, the node's own deadline is the cap
         own = math.inf if own is None else own * self.scale
-        own = min(own, self.limits.get("deadline_seconds", math.inf) * self.scale)    # the project's per-call ceiling
-        return min(own, sc.deadline_at - self.clock())
+        bounds = [(own, None),
+                  (self.limits.get("deadline_seconds", math.inf) * self.scale, "project_deadline"),    # the project's per-call ceiling
+                  (sc.deadline_at - self.clock(), "run_deadline")]
+        ceiling = self.wave_ceiling_at(notify=True)
+        if ceiling is not None:
+            bounds.append((ceiling - self.wall(), "wave_ceiling"))
+        return min(bounds, key=lambda b: b[0])
+
+    def wave_ceiling_epoch(self, notify=False):
+        """The absolute epoch the loop wrote as the wave's age cap, or None with no ceiling option. `notify` writes one
+        first-class `wave_ceiling_lost` event when the run names a ceiling file that is missing or unreadable: the lost
+        bound is on the record as an event, not a passing diagnostic (#2840)."""
+        path = (self.record.events[0].get("engine_options") or {}).get(WAVE_CEILING) if self.record.events else None
+        path = path or self.options.get(WAVE_CEILING)   # a resume reads the file the start recorded (ADR-0106)
+        if not path:
+            return None
+        try:
+            return float(Path(path).read_text().split()[0])
+        except (OSError, ValueError, IndexError) as x:
+            if notify and not self._ceiling_missing:
+                self._ceiling_missing = True
+                self.record.append("wave_ceiling_lost", source="wave_ceiling", node=None, entry=None,
+                                   path=str(path), error=str(x)[:200])
+            return None
+
+    def wave_ceiling_at(self, notify=False):
+        """The absolute epoch a call must end by: the wave's age cap less the entry reserve, so a call that ends at the
+        bound can still enter its wave. A running call reads this again, so a ceiling the loop rewrites under a live wave
+        bounds the call it already runs (#2840). None with no ceiling."""
+        epoch = self.wave_ceiling_epoch(notify)
+        return None if epoch is None else epoch - WAVE_ENTRY_RESERVE_SECONDS
+
+    def wave_bound(self, own, by=None):
+        """(seconds, by): `own` seconds, or the time left to the wave's age cap when that is less (#2840). `by` names the
+        bound `own` came from and is kept when the ceiling does not shorten it. The ceiling is one absolute epoch the loop
+        writes when it cuts the wave and removes with the wave; it already carries every pause the age cap took. The time
+        left keeps an entry reserve, so a call that ends at the bound can still enter its wave. Zero or less is a spent
+        deadline. No option, no file or an unreadable file: no ceiling."""
+        ceiling = self.wave_ceiling_at()
+        if ceiling is None:
+            return own, by
+        left = ceiling - self.wall()
+        return (left, "wave_ceiling") if left < own else (own, by)
 
     # ------------------------------------------------------------ the walk
     LEAVES = ("agent", "gate", "action", "wait")

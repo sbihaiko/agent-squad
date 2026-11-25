@@ -69,7 +69,8 @@ def apply_proposals(ctx, node, entry, sc, r):
 class AgentRunner:
     async def run(self, ctx, node, entry, sc):
         await shadow(ctx, node, entry, sc)    # before the deadline and the reservation, so it never eats a node's time
-        eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
+        (deadline, bound_by), eff = ctx.call_deadline(node, sc), ctx.eff.agent(node)
+        slot = {"limit_by": bound_by} if bound_by else {}     # call_start names the wave ceiling when it is the bound (#2840)
         ends = ctx.clock() + deadline      # the node's deadline bounds the whole chain, not each entry of it (#1289)
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
         eff, chain = self.chain(ctx, node, entry, sc, eff)
@@ -95,7 +96,7 @@ class AgentRunner:
             if out.kind == "no_funds":
                 return fin("fail", ["run_spend_cap"], spend=None, cap=None), None, who, None
             if out.kind == "expired":
-                return fin("deadline", ["deadline", "run_deadline"]), None, who, None
+                return fin("deadline", ["deadline", slot.get("limit_by") or out.limited_by or "run_deadline"]), None, who, None
             if out.kind == "deadline":
                 return slot["res"], None, who, None
             if out.kind == "adapter_error":
@@ -154,6 +155,9 @@ class AgentRunner:
         def hit_deadline(res, el):
             slot.update(res=fin("deadline", ["deadline"], spend=None, cap=res.amount, elapsed=el, **who))
 
+        def hit_ceiling(res, el):     # the wave's age cap ended the call, at its start or while it ran (#2840)
+            slot.update(res=fin("deadline", ["deadline", "wave_ceiling"], spend=None, cap=res.amount, elapsed=el, **who))
+
         def cancelled(res, el):
             return fin("fail", ["cancelled"], spend=None, cap=res.amount, elapsed=el, **who)
 
@@ -167,7 +171,7 @@ class AgentRunner:
             lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"], node["budget"]["spend"].get("max_tokens")), deadline, make, adapter=ctx.adapter,
             chain=chain, registry=ctx.model_registry,
             record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled,
-            no_progress=ctx.no_progress_window())
+            no_progress=ctx.no_progress_window(), limit_by=slot.get("limit_by"), ceiling=ctx.wave_ceiling_at, on_ceiling=hit_ceiling)
         return out, who
 
     def settle(self, ctx, node, entry, sc, out, eff, who, shape=None):

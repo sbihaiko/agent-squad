@@ -268,7 +268,8 @@ def cap_reason(stop_reason, granted, spend_max=None):
 @dataclass
 class CallOutcome:
     """kind: no_funds | expired | prepare_failed | result | deadline | no_progress | adapter_error. A cancel raises, after the settle.
-    `window` is the no-progress window a `no_progress` call kept silent for."""
+    `window` is the no-progress window a `no_progress` call kept silent for. `limited_by` names the bound that ended the
+    call below its own deadline (`wave_ceiling`, #2840)."""
     kind: str
     res: object = None
     result: object = None
@@ -276,26 +277,40 @@ class CallOutcome:
     elapsed: float = 0.0
     reasons: list = field(default_factory=list)
     window: float | None = None
+    limited_by: str | None = None
 
 
-async def _ends_before_silence(done, pulse, window):
-    """True when the call ends (`done`) before the upstream has been silent for `window` seconds; False when it has been
-    silent that long with no tool open. The pulse is read every tenth of the window, so silence is seen within that step."""
-    if window is None or math.isinf(window):
+CEILING_POLL_SECONDS = 0.05   # how often a running call reads the wave ceiling again: a ceiling rewritten under a live wave bounds it (§#2840)
+
+
+async def _ends_before_silence(done, pulse, window, ceiling=None, wall=None):
+    """Why the wait ended: `ended` when the call answered, `silent` when the upstream kept no beat for `window` seconds
+    with no tool open, or `ceiling` when the wave's age cap passed while the call ran (#2840). The pulse is read every
+    tenth of the window, so silence is seen within that step; a call with a ceiling reads it again each poll, so a bound
+    the loop rewrote under a live wave ends the call it already runs."""
+    windowed = window is not None and not math.isinf(window)
+    if not windowed and ceiling is None:
         await done.wait()
-        return True
-    step = max(min(1.0, window / 10), 0.001)
+        return "ended"
+    step = max(min(1.0, window / 10), 0.001) if windowed else 1.0
+    if ceiling is not None:
+        step = min(step, CEILING_POLL_SECONDS)
     while not done.is_set():
+        if ceiling is not None:
+            epoch = ceiling()
+            if epoch is not None and wall() >= epoch:
+                return "ceiling"
         with anyio.move_on_after(step):
             await done.wait()
-        quiet = pulse.silent_for()
+        quiet = pulse.silent_for() if windowed else None
         if not done.is_set() and quiet is not None and quiet >= window:
-            return False
-    return True
+            return "silent"
+    return "ended"
 
 
 async def run_call(source, deadline, make_request, *, chain, adapter, record, budget, clock, wall,
-                   registry=None, prepare=None, on_deadline=None, on_cancel=None, no_progress=NO_PROGRESS_SECONDS):
+                   registry=None, prepare=None, on_deadline=None, on_cancel=None, no_progress=NO_PROGRESS_SECONDS, limit_by=None,
+                   ceiling=None, on_ceiling=None):
     """Reserve from `source()`, run the call, settle once. `make_request(res)` builds the CallRequest.
 
     `chain` is the ordered models this call may answer on, already led by its pick and with the spent and hours-closed
@@ -303,16 +318,26 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     order (`modelreg.chain_sha256`), so a reader never rebuilds it from a later configuration (SPEC 1035). `registry` is
     the registry those ids resolve through; None is the committed one.
     `prepare(res)` may refuse with a list of reasons before the call starts; the grant is released.
-    `on_deadline(res, elapsed)` and `on_cancel(res, elapsed)` write the caller's event after the settle.
+    `on_deadline(res, elapsed)` and `on_cancel(res, elapsed)` write the caller's event after the settle. `on_ceiling`
+    writes it instead when the wave ceiling ended the call (#2840); it falls back to `on_deadline`.
     `no_progress` is the silence, in seconds, one call may keep: the adapter beats the pulse on each message it reads, and a
     call with no beat for that long ends as `no_progress` (#1289). The node deadline is checked first and still wins.
+    `limit_by` names the bound that set `deadline` when it is not the call's own deadline (`wave_ceiling`, #2840); the
+    `call_start` event records it beside the limit.
+    `ceiling()` reads the absolute epoch the call must end by, or None; the call reads it at its start and again while it
+    runs, so a ceiling the loop writes or rewrites under a live wave ends the call it already runs (#2840).
     """
     res = source()
     if res is None:
         return CallOutcome("no_funds")
+    by = limit_by
+    if ceiling is not None:
+        epoch = ceiling()
+        if epoch is not None and epoch - wall() < deadline:
+            deadline, by = max(0.0, epoch - wall()), "wave_ceiling"
     if deadline <= 0:
         budget.release(res)
-        return CallOutcome("expired", res)
+        return CallOutcome("expired", res, limited_by=by)
     if prepare is not None:
         why = await prepare(res)
         if why:
@@ -325,7 +350,7 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
     ids = modelreg.chain_ids(chain, registry)
     record.append("call_start", node=req.node, entry=req.entry, item=req.item, session=req.session_id,
                   pid=os.getpid(), limit=None if deadline == math.inf else deadline, started_at=wall(),
-                  chain=ids, chain_id=modelreg.chain_sha256(ids))
+                  chain=ids, chain_id=modelreg.chain_sha256(ids), **({"limit_by": by} if by else {}))
 
     async def runner():
         try:
@@ -335,19 +360,29 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
         finally:
             done.set()
 
+    def fire(hook, el):
+        fn = hook or on_deadline
+        if fn:
+            fn(res, el)
+
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(runner)
-            ended = True
+            ended = "ended"
             with anyio.move_on_after(deadline) as scope:
-                ended = await _ends_before_silence(done, pulse, no_progress)
+                ended = await _ends_before_silence(done, pulse, no_progress, ceiling, wall)
             if scope.cancelled_caught and not done.is_set():
                 budget.settle(res, None)
                 hit.append(clock() - t0)
-                if on_deadline:
-                    on_deadline(res, hit[0])
+                fire(on_ceiling if by == "wave_ceiling" else on_deadline, hit[0])
                 tg.cancel_scope.cancel()
-            elif not ended:
+            elif ended == "ceiling":
+                budget.settle(res, None)
+                hit.append(clock() - t0)
+                by = "wave_ceiling"
+                fire(on_ceiling, hit[0])
+                tg.cancel_scope.cancel()
+            elif ended == "silent":
                 budget.settle(res, None)
                 silent.append(clock() - t0)
                 tg.cancel_scope.cancel()
@@ -358,7 +393,7 @@ async def run_call(source, deadline, make_request, *, chain, adapter, record, bu
                 on_cancel(res, clock() - t0)
         raise
     if hit:
-        return CallOutcome("deadline", res, elapsed=hit[0])
+        return CallOutcome("deadline", res, elapsed=hit[0], limited_by=by)
     if silent:
         return CallOutcome("no_progress", res, elapsed=silent[0], window=no_progress)
     elapsed = clock() - t0
