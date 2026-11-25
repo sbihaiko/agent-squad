@@ -700,11 +700,11 @@ API_ERROR = {"type": "assistant", "isApiErrorMessage": True, "error": "Connectio
                                       "text": "API Error: getaddrinfo ENOTFOUND api.anthropic.com"}]}}
 
 
-def transcript(tmp_path, cwd, entries, mtime):
-    """Write one session's transcript at the folder the CLI derives from the project checkout."""
+def transcript(tmp_path, cwd, entries, mtime, sid="session"):
+    """Write one session's transcript at the folder the CLI derives from the project checkout, named by its full id."""
     folder = tmp_path / "projects" / re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd))
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / "session.jsonl"
+    path = folder / f"{sid}.jsonl"
     path.write_text("".join(json.dumps(e) + "\n" for e in entries))
     os.utime(path, (mtime, mtime))
     return path
@@ -826,3 +826,126 @@ def test_the_newer_of_two_sessions_is_stopped_by_its_short_id(tmp_path, monkeypa
     op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget")
     stops = [c for c in calls(tmp_path) if c.startswith("stop ")]
     assert stops == ["stop bbbbbbbb"], stops
+
+
+# ---------------------------------------------------------------- the review of the branch (#2925)
+
+def test_stopping_the_newer_duplicate_keeps_the_older_sessions_record(tmp_path, monkeypatch):
+    """The stop of the newer session of two leaves the record of the kept one: its id, its profile and its proxy."""
+    import subprocess
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    old = session(found["acme/widget"], "acme-widget", "eeeeeeee-0000-0000-0000-00000000001a", started=100)
+    new = session(found["acme/widget"], "acme-widget", "eeeeeeee-0000-0000-0000-00000000001b", started=200)
+    proxy = subprocess.Popen(["sleep", "30"])
+    try:
+        held = {"id": old["sessionId"], "pid": old["pid"], "started": 100, "checkout": found["acme/widget"],
+                "profile": {"path": "/p.sb", "sha256": "0" * 64}, "proxy": {"pid": proxy.pid, "port": 1}}
+        (tmp_path / "state" / "operators.json").write_text(json.dumps({"acme-widget": held}))
+        scenario(tmp_path, [new, old])
+        assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+        entry = record(tmp_path).get("acme-widget") or {}
+        assert entry.get("id") == old["sessionId"], entry
+        assert entry.get("profile") == held["profile"] and entry.get("proxy") == held["proxy"], entry
+        assert proxy.poll() is None, "the kept session's model proxy was killed"
+    finally:
+        proxy.kill()
+        proxy.wait()
+
+
+def test_one_ensure_replaces_a_recorded_session_that_died(tmp_path, monkeypatch):
+    """A message for a project whose recorded session is gone starts a new one in that one pass, not at the second."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    (tmp_path / "state" / "operators.json").write_text(json.dumps(
+        {"acme-widget": {"id": "dddddddd-0000-0000-0000-00000000000d", "pid": 9, "started": 1, "missing": 0}}))
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    assert len(started(tmp_path)) == 1, "the message waited for a second pass"
+
+
+def test_an_ensure_waits_for_a_pass_that_holds_the_lock(tmp_path, monkeypatch):
+    """An ensure that meets a pass in flight waits for it, so the message never waits for the launchd pass. A full
+    pass still stands aside."""
+    import fcntl
+    import threading
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    monkeypatch.setattr(op, "LOCK_WAIT", 0.05)
+    fd = os.open(str(tmp_path / "state" / "operators.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+        assert not started(tmp_path), "a full pass ran beside the holder"
+        timer = threading.Timer(0.3, lambda: fcntl.flock(fd, fcntl.LOCK_UN))
+        timer.start()
+        assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+        timer.join()
+        assert len(started(tmp_path)) == 1, "the ensure stood aside and the message waits"
+    finally:
+        os.close(fd)
+
+
+def test_the_stall_check_reads_the_sessions_own_transcript(tmp_path, monkeypatch):
+    """The owner's own session in the same checkout writes beside the operator's. Its API error restarts nothing, and its
+    turns hide no stalled operator: the check reads the transcript the session id names."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    now = time.time()
+    live = session(found["acme/widget"], "acme-widget", "abababab-0000-0000-0000-0000000000a1", started=1)
+    (tmp_path / "state" / "operators.json").write_text(json.dumps(
+        {"acme-widget": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
+    scenario(tmp_path, [live])
+    ok = {"type": "assistant", "message": {"id": "m0", "model": "claude-sonnet-5-5",
+                                           "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    transcript(tmp_path, found["acme/widget"], [ok], mtime=now - 60, sid=live["sessionId"])
+    transcript(tmp_path, found["acme/widget"], [API_ERROR], mtime=now - 5, sid="owner-own-session")
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert not [c for c in calls(tmp_path) if c.startswith("stop")], "the owner's error restarted the operator"
+    transcript(tmp_path, found["acme/widget"], [ok], mtime=now - 3600, sid=live["sessionId"])
+    inbox(tmp_path, "C0AAAAAA1", mtime=now - 900)
+    transcript(tmp_path, found["acme/widget"], [ok], mtime=now - 1, sid="owner-own-session")
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert f"stop {live['sessionId']}" in calls(tmp_path), "the owner's turn hid a stalled operator"
+
+
+def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path, monkeypatch):
+    """A session moved by a message never writes a file that the owner's next, unsandboxed session loads."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    allow = text.index(f'(subpath "{home}/.claude")')
+    for path in ("settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json"):
+        rule = f'(deny file-write* (literal "{home}/.claude/{path}"))'
+        assert rule in text and text.index(rule) > allow, (path, text)
+    for folder in ("skills", "agents", "commands", "hooks", "plugins", "output-styles"):
+        rule = f'(subpath "{home}/.claude/{folder}")'
+        assert rule in text and text.index(rule) > allow, (folder, text)
+    assert "/memory" in text[allow:], "a project memory folder stays writable"
+
+
+def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):
+    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It answers in the
+    channel that this session does not run actions yet."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": found["acme/widget"], "channels": ["C0AAAAAA1"]}
+    text = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
+    assert "outboxes/dm.jsonl" not in text and "Proposal:" not in text, text
+    assert "never acts" in text and "only reads" in text, text
+
+
+def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeypatch):
+    """`claude --bg` prints an 8-hex short id; one with no digit is still the id."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    monkeypatch.setenv("FAKE_NEW", "abcdefab")
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    assert record(tmp_path)["acme-widget"]["id"] == "abcdefab", record(tmp_path)
