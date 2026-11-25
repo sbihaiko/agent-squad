@@ -77,8 +77,9 @@ def inbox(state, user=OWNER, text="what is the status?", channel=CHANNEL, mid=MI
 
 def ask(state, action="status", channel=CHANNEL, sender=OWNER, arguments=None, **over):
     """Append one request line to the channel's outbox, as the operator session writes it."""
+    over.setdefault("at", NOW.timestamp())
     record = A.request_record(action, channel=channel, sender=sender, source=over.pop("source", MID),
-                              arguments=arguments or {})
+                              arguments=arguments or {}, **over)
     record.update(over)
     path = os.path.join(state, "outboxes", f"{channel}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -161,7 +162,9 @@ def test_a_sender_with_no_role_in_the_channel_is_refused_and_the_reply_names_the
     assert runner.calls == []
     assert runs[0].exit == 1
     text = replies(state)[0]["text"]
-    assert "status" in text and "role" in text
+    # The reply names the missing grant (the action) and the role that lacks it, so a reply that names only the role
+    # fails here.
+    assert "status" in text and "grant" in text and "role" in text
 
 
 def test_a_role_that_does_not_list_the_action_is_refused_and_the_reply_names_the_grant(tmp_path):
@@ -277,6 +280,133 @@ def test_a_request_for_an_action_with_no_declared_command_names_the_missing_sour
     runs = run(state, runner)
     assert runner.calls == []
     assert runs[0].exit == 1 and "logs" in replies(state)[0]["text"]
+
+
+def test_a_request_in_the_outbox_of_a_channel_no_project_owns_never_runs(tmp_path):
+    """The pass reads only the outbox of a channel a project owns, so a request line in any other outbox never runs."""
+    state = str(tmp_path)
+    inbox(state, channel=OTHER_CHANNEL)
+    ask(state, channel=OTHER_CHANNEL)
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT if channel == CHANNEL else "", documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "owned by no project" in audit(state)[0]["error"]
+
+
+def test_a_request_in_the_dm_outbox_never_runs(tmp_path):
+    """The DM outbox carries the owner's answers and proposals, never an action request, so a request line there never
+    runs even when the DM channel is named."""
+    state = str(tmp_path)
+    inbox(state, channel="dm")
+    ask(state, channel="dm")
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "DM outbox" in audit(state)[0]["error"]
+
+
+def test_a_request_older_than_the_window_never_runs(tmp_path):
+    """A request line older than the small window is stale: a line a crashed pass left behind never runs on a later
+    pass, so an old request cannot act on a channel long after its message."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "older" in audit(state)[0]["error"]
+
+
+def test_a_request_with_no_timestamp_is_stale(tmp_path):
+    """A request line with no `at` is stale, because the pass cannot tell its age, and it never runs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    with open(path, encoding="utf-8") as f:
+        record = json.loads(f.readline())
+    record.pop("at")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "older" in audit(state)[0]["error"]
+
+
+def test_a_request_for_a_project_with_no_active_revision_gets_no_reply(tmp_path):
+    """A request whose channel names no project has no session writing its outbox, so its refusal is silent: the reply
+    is None and the audit is the only record."""
+    state = str(tmp_path)
+    inbox(state)
+    record = ask(state)
+    outbox_for = lambda channel: os.path.join(state, "outboxes", f"{channel}.jsonl")  # noqa: E731
+    run = A._run_one(record, state, lambda channel: "", documents, NOW, Runner(), outbox_for)
+    assert run.exit == 1 and run.reply is None
+    assert replies(state) == []
+
+
+def test_a_run_with_no_source_is_not_a_success():
+    """A run that reports a success with no source is a wiring bug, so the audit never reads it as a success."""
+    from squad import slackexecutor as X
+
+    assert A._exit_code(X.Outcome(True, {"text": "ok"}, None), None) == 1
+    assert A._exit_code(X.Outcome(False, None, {}), None) == 1
+
+
+def test_an_answer_line_that_carries_every_request_field_is_not_a_request():
+    """The reserved `kind` field is the sole discriminator, so an answer line that happens to carry the five request
+    fields is still an answer and the drain still posts it."""
+    answer = {"action": "note", "arguments": {}, "sender": OWNER, "channel": CHANNEL, "source": MID,
+              "thread_ts": "1762500100.000100", "text": "one answer, not one request"}
+    assert A.is_request(answer) is False
+    assert A.is_request(A.request_record("status", CHANNEL, OWNER, MID)) is True
+
+
+def test_the_pass_reads_only_the_inbox_of_the_request_channel(tmp_path):
+    """The inbox line is read from the request's own channel inbox, so an id that lives in another channel's inbox never
+    matches and the request is refused at the identity."""
+    state = str(tmp_path)
+    inbox(state, channel=OTHER_CHANNEL)
+    ask(state, channel=CHANNEL)
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "identity" in runs[0].error
+
+
+def test_the_handled_ledger_appends_one_line_per_key(tmp_path):
+    """The ledger appends one JSON line per handled key, so a pass never rewrites its whole list for one request."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    path = os.path.join(state, A.HANDLED)
+    lines = [line for line in open(path, encoding="utf-8").read().splitlines() if line.strip()]
+    assert len(lines) == 1 and json.loads(lines[0])["key"]
+    run(state, Runner())
+    lines = [line for line in open(path, encoding="utf-8").read().splitlines() if line.strip()]
+    assert len(lines) == 1
+
+
+def test_a_declared_command_of_a_request_action_runs(tmp_path):
+    """The sources build a command source for every action id the project declares, so a declared `request_work`
+    command runs instead of the executor refusing the action for a missing source."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    ask(state, action="request_work", arguments={"title": "fix the thing"})
+    runner = Runner(stdout="done")
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert [command for command, _ in runner.calls] == ["echo done"]
+    assert runs[0].exit == 0
+    assert replies(state)[0]["text"] == "done"
 
 
 def test_the_decision_keeps_a_message_of_a_bot_out_of_the_executor(tmp_path):

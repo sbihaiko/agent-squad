@@ -466,7 +466,7 @@ def test_a_project_action_message_writes_one_request_line_instead_of_running_a_c
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
     assert "never run a command" in text, text
-    for field in ('"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
+    for field in ('"kind"', '"at"', '"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
         assert field in text, (field, text)
     assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") in text
 
