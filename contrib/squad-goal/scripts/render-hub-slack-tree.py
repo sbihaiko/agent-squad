@@ -98,7 +98,8 @@ class Hub:
         if committed is not None:
             write_yaml(self.checkout / "docs" / "squad" / "slack.yaml", committed)
         if local is not None:
-            write_yaml(self.profiles / "probe.slack.local.yaml", local)
+            # The local file is named for the checkout folder, as `slack_yaml_paths` reads it (#2899): `checkout`.
+            write_yaml(self.profiles / "checkout.slack.local.yaml", local)
         # A profile is one shell file (address.sh sources it); `example` is refused by name, so this one is `probe`.
         (self.profiles / "probe.sh").write_text(
             f'SG_REPO="probe/probe"\nSG_OWNER="probe"\nSG_PROJECT="probe"\nSG_CHECKOUT="{self.checkout}"\n')

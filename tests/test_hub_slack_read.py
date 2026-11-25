@@ -146,7 +146,7 @@ def test_each_field_carries_the_label_of_its_target_file(hub, tmp_path):
 def test_the_now_tiles_state_the_read_facts(hub, tmp_path):
     out = overview(hub, tmp_path)
     tiles = {t["key"]: t["value"] for t in out["now"]}
-    assert tiles["Workspaces"] == "2 · 1 owned · 1 guest"
+    assert tiles["Workspaces"] == "2"
     assert tiles["Channels"] == "4 · 2 speak"
     assert tiles["Personas"] == "2 · default HAL9K"
     assert tiles["Events"] == "2 · 2 channels subscribe"

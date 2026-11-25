@@ -350,7 +350,7 @@ def test_a_shorthand_project_follows_the_default_and_the_tree_shows_the_flag(hub
     tree = hub.slack_tree()
     alpha = by_name(tree, "alpha")
     owners = by_name(tree, "owners")
-    assert "follows default" in [b["text"] for b in alpha["badges"]], alpha["badges"]
+    assert "inherits from client" in [b["text"] for b in alpha["badges"]], alpha["badges"]
     assert "own persona" in [b["text"] for b in owners["badges"]], owners["badges"]
 
 

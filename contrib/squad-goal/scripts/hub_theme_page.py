@@ -456,6 +456,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);font-weight:600;line-height:1.25;color:var(--fg);overflow-wrap:anywhere}   /* the node title is the largest text of the pane (#2841) */
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute);max-width:72ch}
+#sbody .sltverdict{margin:6px 0 10px;font-size:var(--fs-body);font-weight:600;color:var(--fg);max-width:72ch}   /* the one sentence that answers first (#2912) */
+#sbody .sltcopy{margin:0 0 8px;padding:0 6px;background:none;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font:inherit;font-size:var(--fs-caption);cursor:pointer}   /* the id stays reachable, never in the title (#2912) */
 #tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));max-width:1080px}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
 #tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
 #tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}   /* a workspace and the project carry four tiles: one row (#2841) */
@@ -497,14 +499,14 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    clears it, so a wide panel keeps both columns. A row stacks its label over its control below 560px, so the chip and
    the control keep their room in a narrow pane. */
 @container (max-width:700px){#sbody .slttop{grid-template-columns:minmax(0,1fr)}#sbody .slttop:not(.sltshow) .sltdetail{display:none}
- #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .sltback{display:inline-flex}
+ #sbody .slttop.sltshow .sltcol{display:none}#sbody .sltcol{border-right:0;padding-right:0}#sbody .slttop.sltshow .sltback{display:inline-flex}
  #tab-set #sbody .sltnow{grid-template-columns:repeat(3,minmax(0,1fr))}#tab-set #sbody .sltn4{grid-template-columns:repeat(4,minmax(0,1fr))}}   /* a folded detail keeps three tiles, so every label stays whole; a four-tile block still fills one row (#2841) */
 @container (min-width:701px){#sbody .slttop.sltshow .sltcol{display:block}}
 @container (max-width:700px){#sbody .slsetc .slsetctl{width:100%;max-width:320px}}
 @container (max-width:560px){#sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}
  #sbody .slsetrow .slsetk{grid-area:k}#sbody .slsetrow .slfile{grid-area:f}#sbody .slsetrow .slsetc{grid-area:c}
  #sbody .slsetc input[type=text].slsetctl{max-width:none}}
-@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltcol{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:1fr}#tab-set #sbody .sltn4{grid-template-columns:1fr}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
+@media (max-width:600px){#tab-set #sbody .slttop{grid-template-columns:minmax(0,1fr)}#tab-set #sbody .slttop:not(.sltshow) .sltdetail{display:none}#tab-set #sbody .slttop.sltshow .sltcol{display:none}#tab-set #sbody .sltcol{border-right:0;padding-right:0}#tab-set #sbody .slttop.sltshow .sltback{display:inline-flex}#tab-set #sbody .sltnow{grid-template-columns:1fr}#tab-set #sbody .sltn4{grid-template-columns:1fr}#tab-set #sbody .slti{min-height:44px}#tab-set #sbody .slsetrow{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"k f" "c c"}#tab-set #sbody .slsetrow .slsetk{grid-area:k}#tab-set #sbody .slsetrow .slfile{grid-area:f}#tab-set #sbody .slsetrow .slsetc{grid-area:c}#tab-set #sbody .slsetc input[type=text].slsetctl{width:100%;max-width:none}#tab-set #sbody .slsetc .slsetctl{min-height:44px}}
 #sbody .sltjump{margin:0 0 8px;font-size:var(--fs-caption)}
 #sbody .sltjump a{color:var(--mute)}#sbody .sltjump a:hover{color:var(--fg)}
 #sbody .slperm{width:100%;border-collapse:collapse;font-size:var(--fs-body);margin:4px 0 8px}
@@ -1585,6 +1587,7 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  if(sel)sel.addEventListener("change",()=>{clearTimeout(slProposeT);slProposeT=setTimeout(()=>slPropose(slTsel,false),300)});   // a debounce, so one change never starts a burst of roster reads (#2827)
  for(const el of document.querySelectorAll("[data-slt-write]"))el.addEventListener("click",()=>slPropose(el.getAttribute("data-slt-write"),true));
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
+ for(const el of document.querySelectorAll("[data-slcid]"))el.addEventListener("click",()=>slCopyId(el.getAttribute("data-slcid")));
  for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
  for(const el of document.querySelectorAll("[data-slt-perm]"))el.addEventListener("click",e=>{e.preventDefault();slPermGo()});
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
@@ -1597,8 +1600,10 @@ const slTKinds={
  workspace:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2 4.7A1.7 1.7 0 0 1 3.7 3h2.6l1.6 2h4.4A1.7 1.7 0 0 1 14 6.7v4.6A1.7 1.7 0 0 1 12.3 13H3.7A1.7 1.7 0 0 1 2 11.3z"/></svg>`,
  chat:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M13.5 8.4a4.7 4.7 0 0 1-5.1 4.6 5.7 5.7 0 0 1-1.7-.3L3.3 14l.8-2.5A4.4 4.4 0 0 1 2.9 8.4 4.7 4.7 0 0 1 8 3.8a4.7 4.7 0 0 1 5.5 4.6z"/></svg>`,
  hash:`<span class=sltkind aria-hidden=true>#</span>`,
+ blank:`<span class=sltkind aria-hidden=true></span>`,
  client:`<svg class=sltkind viewBox="0 0 16 16" aria-hidden=true fill=none stroke=currentColor stroke-width=1.3 stroke-linejoin=round><path d="M2.5 5.5h11v8h-11z"/><path d="M6 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5"/><path d="M2.5 9h11"/></svg>`};
-const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:slTKinds.hash):n.kind==="workspace"?slTKinds.workspace:n.kind==="client"?slTKinds.client:slTKinds.project;
+/* The hash glyph draws only when the name does not carry its own `#`, so a channel row shows one mark (#2912). */
+const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:String(n.name||"").trimStart().startsWith("#")?slTKinds.blank:slTKinds.hash):n.kind==="workspace"?slTKinds.workspace:n.kind==="client"?slTKinds.client:slTKinds.project;
 /* The indent guides of one row, one per ancestor level: the line of a level draws only while that ancestor has another
    sibling after it, so a subtree's rule ends at its last child and never runs past it (mockup, #2843). */
 const slTGuides=more=>more.map(m=>`<span class="sltg${m?" more":""}" aria-hidden=true></span>`).join("");
@@ -1612,6 +1617,13 @@ function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone
  return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow sltn${cols}">${tiles.join("")}</div></div>`:""}
 function slTNote(n){const t=(n.detail||{}).note;   /* the channel's one sentence under its tiles (#2842) */
  return t?`<p class=sltnote><span class=sltni aria-hidden=true>ⓘ</span> ${esc(t)}</p>`:""}
+function slTVerdict(n){const v=(n.detail||{}).verdict;   /* the hub's one sentence, drawn above the tiles (#2912) */
+ return v?`<p class=sltverdict>${esc(v)}</p>`:""}
+function slTCopy(n){const id=(n.detail||{}).copy_id;if(!id)return "";   /* the raw id stays reachable, out of the title (#2912) */
+ return `<button type=button class=sltcopy data-slcid="${slA(id)}" title="${slA("copy the channel id")}">${esc("copy id")}</button>`}
+function slCopyId(id){const t=String(id||"");if(!t)return;
+ try{if(typeof navigator!=="undefined"&&navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t)}catch(e){}
+ return undefined}
 /* The guest slot line (#2842): one plain line when the machine serves one guest workspace, and an alert with its title
    and its sentence when a second one is refused. Every value is text. */
 function slTSlot(s){if(!s)return "";
@@ -1621,7 +1633,7 @@ function slTSlot(s){if(!s)return "";
 function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
- +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
+ +`<p class="m">${esc("Our workspace: the bot posts in it · Guest workspace: the persona writes from your account in a client's")}</p></div>`}
 const slTProp=n=>{if(n.proposal_na&&(!n.proposal||!n.proposal.length))return `<div class=setblk data-blk=prop><h3 class=blkh>${esc("Proposed writes")}</h3><p class=m>${esc("the proposal route is not available on this hub")}</p></div>`;
  const rows=n.proposal;if(!rows||!rows.length)return "";
  const tone=r=>r.action==="refused"?"err":r.action==="write"?"ok":"muted";
@@ -1649,8 +1661,8 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
- +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
+ +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${slTCopy(n)}${notice}${defects}`
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTVerdict(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
    the field, never the row's place in a list, so the save writes the row that carries the id. A control shows the value
