@@ -9,6 +9,7 @@ theme's renderer run in node. Every id and name is a neutral placeholder.
 """
 import json
 
+import pytest
 import yaml
 
 from tests import test_hub_slack_tree as T
@@ -32,6 +33,16 @@ def _seat(tmp_path, name, committed, local):
     return {"id": name, "label": name, "checkout": str(root), "committed": committed, "local": local,
             "committed_path": str(c), "local_path": str(loc), "read_defects": [],
             "cf": "slack.yaml", "lf": loc.name}
+
+
+MAP = [{"id": "acme", "name": "Acme", "default_persona": None,
+        "projects": [{"id": "alpha", "follows": True}, {"id": "beta", "follows": True}]}]
+
+
+@pytest.fixture(autouse=True)
+def _client_map(hub, monkeypatch):
+    """Re-anchored (#2922): a project no client names is drawn nowhere, so the map names both projects."""
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: (json.loads(json.dumps(MAP)), None))
 
 
 def _tree(hub, tmp_path):

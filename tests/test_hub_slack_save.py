@@ -466,6 +466,9 @@ def test_the_read_after_a_save_shows_the_saved_file_and_the_next_save_keeps_it(h
         f': "${{SG_REPO:=x/loop-checkout}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=loop-checkout}}"; '
         f': "${{SG_CHECKOUT:={loop}}}"; : "${{SG_SQUAD:={ROOT}}}"\n')
     (prof / "loop-checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    # Re-anchored (#2922): a project no client names is drawn nowhere, so the client map names this one.
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump(
+        {"version": 1, "clients": [{"id": "acme", "name": "Acme", "projects": ["loop-checkout"]}]}, sort_keys=False))
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
     monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
     monkeypatch.setenv("SG_CHECKOUT", str(loop))
