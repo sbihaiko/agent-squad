@@ -1164,3 +1164,7 @@ def test_the_slack_theme_takes_the_free_width_and_keeps_prose_short(hub):
     assert "max-width:none" in _rule(page, "#tab-set:has(#slk.on) #sbar")
     assert "max-width:72ch" in _rule(page, "#sbody .slttext")
     assert "max-width:1120px" in _rule(page, "#tab-set .swrap"), "the other themes keep their cap"
+    # A wide pane never stretches a tile row or a label column across it: the tile row stops at 1080 px, and a client
+    # row's label column stops at 240 px.
+    assert "max-width:1080px" in _rule(page, "#sbody .sltnow")
+    assert "minmax(120px,240px)" in _rule(page, "#sbody .sltrow")
