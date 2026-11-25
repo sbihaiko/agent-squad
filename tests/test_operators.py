@@ -370,9 +370,10 @@ def profiles_folder(tmp_path, monkeypatch, *projects):
 
 def test_a_pass_that_finds_no_project_names_the_channel_maps_mismatch(tmp_path, monkeypatch, capsys):
     """#2957: the hub lists no project while the channel map names one, as a deploy whose profiles folder holds only
-    example.sh does. The pass starts nothing, and the error log names the mismatch instead of staying silent."""
+    example.sh does. The pass starts nothing, and the error log names the mismatch instead of staying silent, with the
+    folder the pass read and its state as the hint."""
     op = operators(tmp_path, monkeypatch)
-    profiles_folder(tmp_path, monkeypatch)            # the documented cause: the folder holds only example.sh
+    folder = profiles_folder(tmp_path, monkeypatch)   # the documented cause: the folder holds only example.sh
     hub(tmp_path, monkeypatch, op, [])                # the hub seam answers: no profile names a repository
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
     scenario(tmp_path, [])
@@ -380,6 +381,7 @@ def test_a_pass_that_finds_no_project_names_the_channel_maps_mismatch(tmp_path, 
     assert set(record(tmp_path)) == {"dm"}, record(tmp_path)   # only the owner's own session starts
     err = capsys.readouterr().err
     assert "acme/widget" in err and "no project" in err, err
+    assert str(folder) in err and "example.sh" in err, err
 
 
 def test_a_pass_with_no_project_and_no_channel_map_reports_no_fault(tmp_path, monkeypatch, capsys):
@@ -404,16 +406,50 @@ def test_a_pass_the_hub_answers_for_reports_no_fault(tmp_path, monkeypatch, caps
     assert capsys.readouterr().err == ""
 
 
-def test_a_profiles_folder_with_a_project_is_no_mismatch(tmp_path, monkeypatch, capsys):
-    """#2957: the owner's own profiles folder is a valid configuration even when the hub names no project, so the pass
-    prints no fault line; the warning is for the example-only folder alone."""
+def test_a_profiles_folder_with_a_project_still_names_the_mismatch(tmp_path, monkeypatch, capsys):
+    """#2957: the report follows the hub seam alone. The channel map names a project and the hub lists none, so the pass
+    names the mismatch even when the profiles folder holds a project: the folder hint is a suffix, never a gate."""
     op = operators(tmp_path, monkeypatch)
-    profiles_folder(tmp_path, monkeypatch, "widget")   # a project profile the owner wrote on purpose
+    folder = profiles_folder(tmp_path, monkeypatch, "widget")   # a project profile the owner wrote on purpose
     hub(tmp_path, monkeypatch, op, [])                # the hub seam answers no project this pass
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
     scenario(tmp_path, [])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
-    assert capsys.readouterr().err == ""
+    err = capsys.readouterr().err
+    assert "acme/widget" in err and "no project" in err, err
+    assert str(folder) in err and "example.sh" not in err, err
+
+
+def test_a_missing_profiles_folder_names_the_path_and_the_unset_variable(tmp_path, monkeypatch, capsys):
+    """#2957: with SG_PROFILES_DIR unset the pass reads the fallback beside address.sh. When that folder is not there,
+    the hint names the fallback path and the unset variable, so the operator never blames a folder that holds no
+    project when the pass read the wrong path."""
+    op = operators(tmp_path, monkeypatch)
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    missing = tmp_path / "there-is-no-such-profiles-folder"
+    monkeypatch.setattr(op, "PROFILES_FALLBACK", str(missing))
+    hub(tmp_path, monkeypatch, op, [])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    err = capsys.readouterr().err
+    assert "acme/widget" in err and "no project" in err, err
+    assert str(missing) in err and "is not there" in err and "SG_PROFILES_DIR is unset" in err, err
+
+
+def test_a_named_profiles_folder_that_is_missing_blames_no_unset_variable(tmp_path, monkeypatch, capsys):
+    """#2957: a folder SG_PROFILES_DIR names and the filesystem lacks is named by its own path, and the hint says the
+    variable is set, so the operator reads which path the pass read and why it holds no project."""
+    op = operators(tmp_path, monkeypatch)
+    missing = tmp_path / "named-but-missing"
+    monkeypatch.setenv("SG_PROFILES_DIR", str(missing))
+    hub(tmp_path, monkeypatch, op, [])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    err = capsys.readouterr().err
+    assert str(missing) in err and "is not there" in err, err
+    assert "SG_PROFILES_DIR is unset" not in err, err
 
 
 def test_a_profiles_folder_with_a_project_starts_its_session(tmp_path, monkeypatch):
