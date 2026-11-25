@@ -304,12 +304,23 @@ def _slack_not_set():
     """The empty choice at the project level: nothing stands above the project (#2845)."""
     return {"value": "", "label": "Not set"}
 
-def _slack_inherit(resolution, key):
+def _slack_persona_label(committed_doc, persona):
+    """The label an inherited persona choice shows for the policy's persona object. The object may carry its id alone,
+    so the label is the committed persona's name for that id, and the id itself when the file names none: it reads the
+    same id the project select lists, never `none` (review BLOCKING 1)."""
+    if persona is None:
+        return "none"
+    pid = _slack_text(getattr(persona, "id", "") or "")
+    for _i, row in _slack_dicts((committed_doc or {}).get("personas")):
+        if _slack_text(row.get("id")) == pid:
+            return _slack_text(row.get("name")) or pid
+    return pid or "none"
+
+def _slack_inherit(resolution, key, committed_doc=None):
     """The empty choice of a persona or language select at the workspace and channel level (#2845): the value the row
     answers with when its own key is absent, and the level that value comes from. The policy answers both."""
     if key == "persona":
-        persona = resolution["persona"]
-        value = persona.name if persona else "none"
+        value = _slack_persona_label(committed_doc, resolution["persona"])
         source = resolution["persona_source"]
     else:
         value, source = resolution["language"], resolution["language_source"]
@@ -350,10 +361,13 @@ def _slack_tree_project_settings(P, committed_doc, local_doc):
 def _slack_tree_workspace_settings(P, committed_doc, local_doc, group):
     """A workspace's default persona and language (#2845). Its empty choice names the project value or the default the
     policy would answer if the workspace named none, never the workspace's own value."""
-    inherited = P.resolution(committed_doc, local_doc, {})   # the workspace key is absent: project, then default
     ws = group["ws"]
+    # The workspace's own key is absent, so the empty choice names the project value or the policy default. The level is
+    # this workspace with its own persona and language cleared, the same rule the channel level applies with `{}`.
+    above = {k: v for k, v in ws.items() if k not in ("persona", "language")}
+    inherited = P.resolution(committed_doc, local_doc, above)
     values = {"persona": ws.get("persona"), "language": ws.get("language")}
-    empties = {key: _slack_inherit(inherited, key) for key in ("persona", "language")}
+    empties = {key: _slack_inherit(inherited, key, committed_doc) for key in ("persona", "language")}
     return _slack_default_rows(P, committed_doc, empties, values)
 
 def _slack_poll_note(mode, defaults, poll):
@@ -366,9 +380,9 @@ def _slack_poll_note(mode, defaults, poll):
             return _slack_text(got)
         return f"{_slack_text(defaults.get(name))} (default)"
     if mode == "exponential":
-        return (f"Watch: {at('floor')} to {at('ceiling')}, x{at('factor')} every {at('idle_window')}, and a reply "
+        return (f"{at('floor')} to {at('ceiling')}, x{at('factor')} every {at('idle_window')}, and a reply "
                 f"thread stays open {at('thread_open')}")
-    return (f"Watch: {at('fast')} → {at('slow')} slow after {at('quiet_after')} quiet, and a reply thread stays "
+    return (f"{at('fast')} → {at('slow')} slow after {at('quiet_after')} quiet, and a reply thread stays "
             f"fast for {at('thread_open')}")
 
 def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
@@ -395,7 +409,8 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
                 names.append(role)
     notes = [f"{user} holds {' and '.join(names)}. The policy takes {names[0]}, the first membership in the file."
              for user, names in held.items() if len(names) > 1]
-    people = list(dict.fromkeys(str(u) for row in own for u in row.get("users") or ()))
+    people = list(dict.fromkeys(str(u) for row in own if _slack_text(row.get("role")) in accepted
+                                for u in row.get("users") or ()))   # only people holding an accepted role (review DEBT 3)
     return {"roles": roles, "eligible": len(set(P.resolved_members(local_doc, ws_id, ch_id, accepted))),
             "notes": notes, "members": people}
 
@@ -470,7 +485,7 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
          "controls": [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
         {"key": "persona", "label": "Persona", "doc": owner_doc, "file": owner_file,
          "controls": [_slack_pick("persona", owner.get("persona") or "",
-                                  _slack_persona_options(P, committed_doc, _slack_inherit(inherited, "persona")))]},
+                                  _slack_persona_options(P, committed_doc, _slack_inherit(inherited, "persona", committed_doc)))]},
         {"key": "language", "label": "Language", "doc": owner_doc, "file": owner_file,
          "controls": [_slack_pick("language", owner.get("language") or "",
                                   _slack_language_options(P, _slack_inherit(inherited, "language")))]},
@@ -647,13 +662,19 @@ def slack_decide(query, committed=None, local=None):
     if group is not None and (group["file"], group["index"]) in refused_keys:
         return not_read
     merged = _slack_tree_channel_row(group, ch_id) if group is not None else {}
-    decision = P.decide(committed_doc, local_doc,
-                        {"workspace": ws_id, "channel": ch_id, "user": str(query.get("user") or ""),
-                         "kind": "message", "bot": _slack_flag(query.get("bot")), "own": _slack_flag(query.get("own"))},
-                        dt.datetime.now(dt.UTC))
+    try:
+        decision = P.decide(committed_doc, local_doc,
+                            {"workspace": ws_id, "channel": ch_id, "user": str(query.get("user") or ""),
+                             "kind": "message", "bot": _slack_flag(query.get("bot")),
+                             "own": _slack_flag(query.get("own"))},
+                            dt.datetime.now(dt.UTC))
+        reply = P.reply_label(merged, decision)
+        mark = (P.mark(decision.persona) if decision.mark else "") or "none"
+    except Exception as e:
+        # A channel absent from the files, or a policy that does not answer it, reads as `err`, never a bare 500.
+        return {"err": f"the decision did not resolve: {type(e).__name__}: {e}"}
     return {"err": None, "decision": decision.kind, "role": decision.role or "none",
-            "actions": ", ".join(decision.actions) or "none", "reply": P.reply_label(merged, decision),
-            "mark": (P.mark(decision.persona) if decision.mark else "") or "none",
+            "actions": ", ".join(decision.actions) or "none", "reply": reply, "mark": mark,
             "language": decision.language}
 
 def slack_overview(committed=None, local=None):
