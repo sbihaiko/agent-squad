@@ -168,6 +168,33 @@ def test_the_workspace_detail_offers_the_listed_channels_by_name(hub, tmp_path):
     assert "C0NEWCH002</option>" not in html   # the owner picks by name, never by id
 
 
+def test_a_paint_writes_nothing_and_the_trees_own_read_is_one_channel_read(hub, tmp_path):
+    """#2955: a paint never opens a request of its own; the tree's own read asks the hub once for each workspace's
+    channel list, so the unreachable mark still follows a read and no render posts."""
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
+            'const CALLS=[];globalThis.fetch=(u,o)=>{CALLS.push([String(u),JSON.parse((o&&o.body)||"{}")]);'
+            'return Promise.resolve({status:200,json:()=>Promise.resolve({err:null,manual:false,channels:[],unreachable:[]})})};'
+            '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));const painted=CALLS.length;'
+            'slChTree();await new Promise(r=>setTimeout(r,20));'
+            'console.log(JSON.stringify({painted,calls:CALLS}))})()')
+    got = json.loads(_node(body))
+    reads = [n for n in T.walk(out["tree"]["root"]) if n["kind"] == "workspace" and n.get("channel_read")]
+    assert got["painted"] == 0, got
+    assert {c[0] for c in got["calls"]} == {"/api/slack/channels"}, got
+    assert sorted(c[1]["workspace"] for c in got["calls"]) == sorted(n["channel_read"]["workspace"] for n in reads), got
+    named = {c[1]["workspace"]: c[1]["named"] for c in got["calls"]}
+    assert named[TEAM] == ["C0PROJ0001", "C0ALERT001"], got
+
+
+def test_the_slack_load_asks_the_channel_read_after_the_tree_is_read():
+    """#2955: the page's load reads the tree, paints it, and then asks the channel read, so the read follows the tree's
+    own read and never a paint."""
+    src = (T.ROOT / "contrib" / "squad-goal" / "scripts" / "hub_theme_page.py").read_text()
+    line = next(ln for ln in src.splitlines() if ln.startswith("async function slLoad()"))
+    assert "slRender();slChTree()" in line, line
+
+
 def test_a_workspace_the_host_cannot_read_shows_the_reason_and_the_id_field(hub, tmp_path):
     seed = ('slChList={"T0TEAM0001":{"err":"the Slack connection lacks the scope channels:read","manual":true,"channels":[]}};')
     html = _detail(hub, tmp_path, "team", seed)

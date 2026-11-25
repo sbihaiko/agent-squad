@@ -1639,7 +1639,6 @@ function slTGone(n){if(!n||n.kind!=="channel"||!n.ids)return null;
  const hit=list.find(g=>String(g.id)===String(n.ids.channel));
  return hit?{text:String(hit.text||""),tone:"err",kind:"unreachable"}:null}
 function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
- if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);   // the tree asks which mapped channels Slack still lists (#2955)
  const gone=slTGone(n),badges=(n.badges||[]).concat(gone?[gone]:[]);
  const label=[n.name].concat(badges.map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
@@ -1723,8 +1722,11 @@ function slChNeed(a){if(typeof fetch!=="function"||!a)return;const ws=String(a.w
  fetch("/api/slack/channels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,named:a.named||[]})})
  .then(r=>r.json()).then(o=>{slChList[ws]=o||{err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})
  .catch(()=>{slChList[ws]={err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})}
+/* The tree asks which mapped channels Slack still lists (#2955) once the tree is read, never while it is painted: a render
+   writes nothing, so a paint never opens a request of its own. */
+function slChTree(){const walk=n=>{if(!n)return;if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);(n.children||[]).forEach(walk)};
+ slTRoots().forEach(walk)}
 function slTChAdd(n){const a=n&&n.kind==="workspace"&&n.channel_add;if(!a)return "";const key=`${a.doc}:${a.ws}`,l=slChList[String(a.workspace||"")];
- if(!l)slChNeed(a);
  const list=l&&Array.isArray(l.channels)?l.channels:[];
  const pick=list.length?`<div class=slad><select data-sltchpick="${slA(key)}" aria-label="channel to add">${list.map(c=>`<option value="${slA(c.id)}">#${esc(c.name)}</option>`).join("")}</select><button type=button data-sltaddch="${slA(key)}">Add channel</button></div>`
   :l&&!l.err?`<p class=m>Every channel this connection reads is already here.</p>`:!l?`<p class=m>Reading the channels…</p>`:"";
@@ -2085,7 +2087,7 @@ const slBarState=()=>{if(slSaving)return {text:"Saving…",undo:false,retry:fals
  return slMsg?{text:slMsg[0].toUpperCase()+slMsg.slice(1),undo,retry:false,err:false}
   :{text:"Slack: each edit saves by itself",undo:false,retry:false,err:false}};
 function slDiscard(){slDocs=slClone(slSavedDocs);slT=slClone((slR&&slR.tree)||slT);slMsg="";slRender()}   // Discard puts back the values the page read last, the Now block included (#2846)
-async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender()}
+async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender();slChTree()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
  const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)
@@ -2096,7 +2098,7 @@ async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().
   try{const v=await(await fetch("/api/slack/files")).json();slR=v;slSavedDocs=slClone((v&&v.docs)||slSavedDocs||{});
    if(mine()||!slDocs){slDocs=slClone(slSavedDocs);slT=(v&&v.tree)||slT}}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
- slRender()}
+ slRender();slChTree()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
  if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
  if(dt.slef&&slDocs){const[f,id]=dt.slef.split(":");if(slPersonaSet(slDocs,id,f,e.target.value)){slD=null;slMsg="";slPOpen=id;slPreviewRefresh()}return}
