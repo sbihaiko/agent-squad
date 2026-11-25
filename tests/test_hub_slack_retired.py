@@ -122,7 +122,7 @@ def test_the_files_route_carries_the_save_preview(server, tmp_path, monkeypatch,
     (tmp_path / "checkout" / "docs" / "squad").mkdir(parents=True)
     (tmp_path / "profiles").mkdir()
     (tmp_path / "checkout" / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(COMMITTED, sort_keys=False))
-    (tmp_path / "profiles" / "4.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    (tmp_path / "profiles" / "checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
     monkeypatch.setattr(hub, "CHECKOUT", str(tmp_path / "checkout"))
     monkeypatch.setattr(hub, "PROFILE_NAME", "4")
     monkeypatch.setenv("SG_PROFILES_DIR", str(tmp_path / "profiles"))

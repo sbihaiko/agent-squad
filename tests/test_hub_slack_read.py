@@ -167,7 +167,7 @@ def test_the_read_view_resolves_the_profile_files_when_called_with_no_path(hub, 
     the profile folder's local one. The read resolves them through the policy module, never a rule of its own."""
     prof = tmp_path / "profiles"
     prof.mkdir()
-    (prof / "4.slack.local.yaml").write_text(yaml.safe_dump(LOCAL))
+    (prof / "checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL))
     checkout = tmp_path / "checkout"
     (checkout / "docs" / "squad").mkdir(parents=True)
     (checkout / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(COMMITTED))
@@ -177,9 +177,9 @@ def test_the_read_view_resolves_the_profile_files_when_called_with_no_path(hub, 
     monkeypatch.setenv("SG_PROJECT", "4")
     committed, local = hub.slack_yaml_paths()
     assert committed == checkout / "docs" / "squad" / "slack.yaml", committed
-    assert local == prof / "4.slack.local.yaml", local
+    assert local == prof / "checkout.slack.local.yaml", local
     out = hub.slack_overview()
-    assert out["files"] == {"committed": "slack.yaml", "local": "4.slack.local.yaml"}
+    assert out["files"] == {"committed": "slack.yaml", "local": "checkout.slack.local.yaml"}
     assert out["project"]["persona"] == "hal" and out["project"]["persona_name"] == "HAL9K"
 
 
