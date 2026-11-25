@@ -120,8 +120,14 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
     if scope not in binding["channels"]:
         raise Refused(f"channel {scope!r} is outside this session's project")
     state_dir = os.path.realpath(binding["state"])
+    if not os.path.isdir(state_dir):
+        raise Refused(f"the session's state folder {state_dir} does not exist")
     outbox = os.path.realpath(operators.outbox_path(binding["state"], scope))
-    if os.path.commonpath([state_dir, outbox]) != state_dir:
+    try:
+        inside = os.path.commonpath([state_dir, outbox]) == state_dir
+    except ValueError:                       # two paths on different mounts share no common prefix
+        inside = False
+    if not inside:
         raise Refused(f"the outbox {outbox} is outside the session's state folder {state_dir}")
     inbox = read_lines(operators.inbox_path(binding["state"], scope))
     if thread is None and scope == DM:
@@ -131,8 +137,11 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
         raise Refused(f"no pending inbox line in {scope} answers thread {thread!r}")
     line_channel = str(question.get("channel") or scope)
     if scope == DM:
-        own = str(binding.get("dm") or "") or str((inbox[0] if inbox else {}).get("channel") or "")
-        if not own or line_channel != own:
+        # A binding that names the one DM channel pins the answer there. A session started before its first DM arrived
+        # names none, so the answered line's own channel is the one the daemon posts to; the oldest line's channel is
+        # never that, since a later DM may carry another channel.
+        own = str(binding.get("dm") or "")
+        if own and line_channel != own:
             raise Refused(f"the DM line names channel {line_channel!r}, not this session's own DM channel {own!r}")
     elif line_channel != scope:
         raise Refused(f"the line in {scope} names channel {line_channel!r}, outside this session's project")

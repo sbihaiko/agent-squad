@@ -1146,3 +1146,24 @@ def test_an_answer_in_another_channels_outbox_fails_the_probe(tmp_path, monkeypa
     monkeypatch.setattr(probe, "cli_call", fake_cli)
     with pytest.raises(probe.ProbeFailed, match="outside the question's channel"):
         probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_binding_is_written_before_the_profile_is_built(tmp_path, monkeypatch):
+    """#2949 criterion (6): the live session's answer binding exists before the profile it runs under is built, so the
+    helper's own read never meets a file the probe created outside the profile's own scaffolding."""
+    probe = load("operator_probe")
+    seen = {}
+    real = probe.project_shape
+
+    def spy(work, ports):
+        seen["binding"] = (Path(work) / "answer" / "binding.json").is_file()
+        return real(work, ports)
+
+    monkeypatch.setattr(probe, "project_shape", spy)
+    _, _, _, _, _, _, profile = probe.profile_for(tmp_path, [8016])
+
+    assert seen["binding"] is True, "the answer binding was written after the profile was built"
+    binding = json.loads((tmp_path / "answer" / "binding.json").read_text())
+    assert binding["channels"] == list(probe.PROBE_CHANNELS), binding
+    assert binding["state"] == str(tmp_path / "state"), binding
+    assert profile.startswith("(version 1)")
