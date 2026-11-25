@@ -122,6 +122,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
 
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", fake_denials)
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
     monkeypatch.setattr(probe, "session", lambda *a, **k: (
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
@@ -352,6 +353,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     seen = {}
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
     monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
 
     def fake_session(work, profile, cli, proxy_url=None):
@@ -464,7 +466,7 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     assert checkout.is_dir() and not leak.exists()
 
 
-def scripted(probe, *, outbox_refused=False, inbox_line=None):
+def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False):
     """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
     case says otherwise."""
     inbox_line = probe.OWN_SENTINEL if inbox_line is None else inbox_line
@@ -482,6 +484,10 @@ def scripted(probe, *, outbox_refused=False, inbox_line=None):
         if cmd.startswith("cat "):
             return subprocess.CompletedProcess(args, 0, inbox_line + "\n", "")
         if cli == sys.executable:
+            if getattr(probe, "OPEN_FOR_WRITE", None) in args:
+                if config_open:
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             if probe.NETWORK_HOST in args:
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -534,6 +540,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     seen = []
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
     monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
 
     def fake_session(work, profile, cli, proxy_url=None):
@@ -687,6 +694,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     roles = []
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
     monkeypatch.setattr(probe, "session", lambda *a, **k: (
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
 
@@ -761,3 +769,40 @@ def test_the_roster_lists_the_session_under_the_short_id_it_printed(tmp_path):
     cli.chmod(0o755)
     assert probe.bg_listed(str(cli), "b5ccaeeb", str(tmp_path), "SQUAD-OPERATOR-x")
     assert not probe.bg_listed(str(cli), "b5ccaeeb", str(tmp_path), "SQUAD-OPERATOR-y")
+
+
+def owner_home(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    for name in ("settings.json", "CLAUDE.md"):
+        (home / ".claude" / name).write_text("owner file\n")
+    return home
+
+
+def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypatch):
+    """#2925: the probe tries a write to the owner's settings and CLAUDE.md under the profile, and each is refused."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+    assert sorted(os.path.basename(p) for p in tried) == ["CLAUDE.md", "settings.json"], tried
+    assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
+
+
+def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe, config_open=True))
+    with pytest.raises(probe.ProbeFailed, match="may write"):
+        probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+
+
+def test_the_real_profile_refuses_the_owners_claude_files(tmp_path, monkeypatch):
+    """The operator's own profile, applied by the kernel, refuses both writes on this machine."""
+    probe = load("operator_probe")
+    if sys.platform != "darwin" or not os.path.exists("/usr/bin/sandbox-exec"):
+        pytest.skip("the kernel bound is macOS only")
+    profile = probe.profile_text([str(tmp_path / "out.jsonl")], str(tmp_path / "inboxes"), [])
+    home = os.path.realpath(os.path.expanduser("~"))
+    tried = probe.config_denials(tmp_path, profile, home=home)
+    assert tried, "this machine holds no owner Claude file to try"
