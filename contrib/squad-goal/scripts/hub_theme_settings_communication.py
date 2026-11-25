@@ -331,7 +331,7 @@ def _slack_inherit(resolution, key, committed_doc=None):
         value, source = resolution["language"], resolution["language_source"]
     return {"value": "", "label": f"Inherit ({_slack_text(value) or 'none'} · from {_slack_text(source)})"}
 
-def _slack_persona_options(P, committed_doc, empty):
+def _slack_persona_choices(P, committed_doc, empty):
     """The empty choice first, then every persona the project declares in its committed file: the file the edit writes,
     and the list the policy validates a persona id against (ADR-0177)."""
     out = [empty]
@@ -350,7 +350,7 @@ def _slack_default_rows(P, committed_doc, empties, values):
     empty choice names the value it inherits (#2845)."""
     return [{"key": "persona", "label": "Persona",
              "controls": [_slack_pick("persona", values.get("persona") or "",
-                                      _slack_persona_options(P, committed_doc, empties["persona"]))]},
+                                      _slack_persona_choices(P, committed_doc, empties["persona"]))]},
             {"key": "language", "label": "Language",
              "controls": [_slack_pick("language", values.get("language") or "",
                                       _slack_language_options(P, empties["language"]))]}]
@@ -499,7 +499,7 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
          "controls": [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
         {"key": "persona", "label": "Persona", "doc": owner_doc, "file": owner_file,
          "controls": [_slack_pick("persona", owner.get("persona") or "",
-                                  _slack_persona_options(P, committed_doc, _slack_inherit(inherited, "persona", committed_doc)))]},
+                                  _slack_persona_choices(P, committed_doc, _slack_inherit(inherited, "persona", committed_doc)))]},
         {"key": "language", "label": "Language", "doc": owner_doc, "file": owner_file,
          "controls": [_slack_pick("language", owner.get("language") or "",
                                   _slack_language_options(P, _slack_inherit(inherited, "language")))]},
