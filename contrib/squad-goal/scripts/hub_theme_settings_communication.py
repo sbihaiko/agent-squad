@@ -12,15 +12,44 @@ def slack_policy():
     return SP
 
 def slack_yaml_paths():
-    """The committed `slack.yaml` at the checkout root and this profile's local file (SPEC 2682). A profile that names no
-    checkout reads no committed file, and one that names no project reads no local file."""
+    """The committed `slack.yaml` and this profile's local file (SPEC 2682). A profile that names no checkout reads no
+    committed file, and one that names no project reads no local file."""
     root = pathlib.Path(CHECKOUT) if CHECKOUT else None
     d = profiles_dir()
     # The local file is named for the checkout folder, as slackpolicy.check and the guest runner name it; SG_PROJECT
     # holds the board number (#2899).
     project = (root.name if root else "") or PROFILE_NAME
     local = slack_policy().local_path(str(d), project) if d is not None and project else None
-    return (root / SLACK_YAML_REL if root else None), (pathlib.Path(local) if local else None)
+    committed = _slack_committed_path(str(root)) if root else None
+    return committed, (pathlib.Path(local) if local else None)
+
+def _slack_hub_worktree_file():
+    """The committed file the hub's own landing worktree holds, or None when that worktree holds no file. The hub saves
+    the committed file in that worktree and lands it from there, so a read after a save takes the landed document from
+    it, never from the loop checkout's file, whose branch may stand behind the landing branch (issue #2920)."""
+    try:
+        wt, why = slack_worktree()
+    except Exception:
+        return None
+    if why or not wt: return None
+    p = pathlib.Path(wt) / SLACK_YAML_REL
+    try:
+        return p if p.is_file() else None
+    except OSError:
+        return None
+
+def _slack_committed_path(checkout=None):
+    """The committed file a read takes for one checkout: the copy of the hub's own landing worktree when the checkout is
+    the hub's checkout and that worktree holds the file, else the checkout's own file (issue #2920)."""
+    own = CHECKOUT or os.environ.get("SG_CHECKOUT") or ""
+    try:
+        same = bool(checkout) and bool(own) and pathlib.Path(checkout).resolve() == pathlib.Path(own).resolve()
+    except (OSError, ValueError):
+        same = False
+    if same:
+        saved = _slack_hub_worktree_file()
+        if saved is not None: return saved
+    return pathlib.Path(checkout) / SLACK_YAML_REL if checkout else None
 
 def _slack_name(path, fallback):
     return pathlib.Path(path).name if path else fallback
@@ -734,7 +763,7 @@ def _slack_seat(slug, checkout, project):
     try: P = slack_policy()
     except Exception:
         return None
-    cp = pathlib.Path(checkout) / SLACK_YAML_REL if checkout else None
+    cp = _slack_committed_path(checkout) if checkout else None
     lp = None
     d = profiles_dir()
     if d is not None and (project or slug):

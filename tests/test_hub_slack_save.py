@@ -439,6 +439,61 @@ def test_a_dirty_derived_worktree_refuses_the_save_with_no_file_changed(hub, tmp
     assert git(origin, "rev-parse", "dev") == git(derived, "rev-parse", "HEAD")   # no new land
 
 
+def _walk(node):
+    yield node
+    for child in node.get("children") or []:
+        yield from _walk(child)
+
+
+def test_the_read_after_a_save_shows_the_saved_file_and_the_next_save_keeps_it(hub, tmp_path, monkeypatch):
+    """One save writes the committed file in the hub's own worktree and lands it in dev. The loop checkout stands on
+    another branch and holds the file as it was, so a read that took the file from the checkout would drop the saved
+    channel and the next save would land the old document (issue #2920). The read takes the file from the hub's
+    worktree, so the tree and the documents keep the channel, and the next save lands nothing."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    _, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin, "loop-checkout")
+    git(loop, "checkout", "-q", "-b", "stg")
+    stale = copy.deepcopy(COMMITTED)
+    stale["workspaces"][0]["channels"] = []
+    (loop / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(stale, sort_keys=False))
+    git(loop, "add", "--", "docs/squad/slack.yaml")
+    git(loop, "commit", "-q", "-m", "the checkout stands on its own branch")
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    (prof / "loop-checkout.sh").write_text(
+        f': "${{SG_REPO:=x/loop-checkout}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=loop-checkout}}"; '
+        f': "${{SG_CHECKOUT:={loop}}}"; : "${{SG_SQUAD:={ROOT}}}"\n')
+    (prof / "loop-checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "PROFILE_NAME", "loop-checkout")
+    before = hub.slack_overview()
+    assert [c["name"] for w in before["workspaces"] if w["file"] == "slack.yaml" for c in w["channels"]] == [], \
+        before["workspaces"]
+    added = copy.deepcopy(COMMITTED)
+    added["workspaces"][0]["channels"].append({"id": "C0NEWCH001", "name": "new-room", "mode": "listen"})
+    out = hub.slack_files_set({"committed": added, "local": LOCAL, "confirm": True})
+    assert "err" not in out, out
+    assert out["sha"], out
+    read = hub.slack_overview()
+    names = [c["name"] for w in read["workspaces"] for c in w["channels"]]
+    assert "new-room" in names, names
+    assert read["docs"]["committed"] == added, read["docs"]["committed"]
+    project = next(n for n in _walk(read["tree"]["root"]) if n.get("name") == "loop-checkout")
+    chans = [n["name"] for n in _walk(project) if n.get("kind") == "channel"]
+    assert "#new-room" in chans, chans
+    again = hub.slack_files_set({"committed": read["docs"]["committed"], "local": read["docs"]["local"],
+                                 "confirm": True})
+    assert "err" not in again, again
+    assert git(origin, "rev-parse", "dev") == out["sha"], "a later save landed over the earlier one"
+    assert again.get("committed_unchanged") is True, again
+    derived = tmp_path / "state" / "slack-worktree"
+    assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == added
+
+
 def test_a_named_worktree_the_hub_did_not_create_is_never_advanced(hub, tmp_path, monkeypatch):
     """The hub advances only the worktree it derives for itself. A worktree the owner names by hand keeps its HEAD: the
     save refuses a worktree that stands behind origin/dev rather than resetting it (issue #2763)."""
