@@ -1,6 +1,6 @@
 #!/bin/sh
-# seconds: 1.91
-# Guard: issue #2940. latency_probe.py measures an inbox append's way to a session and prints one line per reading.
+# seconds: 2.26
+# Guard: issue #2940. contrib/voice/latency_probe.py, beside operators.py it measures, prints one line per reading.
 #
 # A stand-in CLI follows the probe's own brief in shell, so this suite measures the probe with no model, no key and no
 # network. The stand-in polls the inbox and answers its ts, exactly as the brief asks a live session to do. A probe
@@ -9,6 +9,7 @@
 # by this suite.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
+probe="$here/../../voice/latency_probe.py"
 PY="${PYTHON:-python3}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/latency-probe.XXXXXX")
@@ -49,7 +50,7 @@ exit 0
 STUB
 chmod +x "$stub"
 
-out=$("$PY" "$here/latency_probe.py" --state "$T/state" --work "$T/work" --cli "$stub" --no-sandbox \
+out=$("$PY" "$probe" --state "$T/state" --work "$T/work" --cli "$stub" --no-sandbox \
       --target 1 --deadline 30 --timeout 30 2>&1) || fail "the probe exited non-zero: $(printf '%s' "$out" | tail -3)"
 printf '%s\n' "$out" | grep -Eq '^monitor: [0-9]+\.[0-9]{3}s ' || fail "no monitor reading: $out"
 printf '%s\n' "$out" | grep -Eq '^session: [0-9]+\.[0-9]{3}s ' || fail "no session reading: $out"
@@ -58,11 +59,11 @@ printf '%s\n' "$out" | grep -Eq '^session: [0-9]+\.[0-9]{3}s ' || fail "no sessi
 silent="$T/claude-silent"
 printf '#!/bin/sh\nif [ "$1" = stop ]; then exit 0; fi\necho cafebabe\nexit 0\n' > "$silent"
 chmod +x "$silent"
-"$PY" "$here/latency_probe.py" --state "$T/state2" --work "$T/work2" --cli "$silent" --no-sandbox \
+"$PY" "$probe" --state "$T/state2" --work "$T/work2" --cli "$silent" --no-sandbox \
      --target 1 --deadline 1 --timeout 1 >/dev/null 2>&1 && fail "a session that never answers passed the probe"
 
 # The real CLI never runs unwrapped: the bound is the measurement's premise.
-"$PY" "$here/latency_probe.py" --state "$T/state3" --work "$T/work3" --cli claude --no-sandbox \
+"$PY" "$probe" --state "$T/state3" --work "$T/work3" --cli claude --no-sandbox \
      >/dev/null 2>&1 && fail "the probe ran the real CLI with no kernel bound"
 
 echo "test-latency-probe: ok"
