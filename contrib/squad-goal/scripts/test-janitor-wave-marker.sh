@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 1.28
+# seconds: 0.67
 # Rule V reads every `auto/wave-*` marker and strips one of a few prefixes to name its run. `auto/wave-entry-<run>` is the epoch
 # the first child that entered the wave wrote (wave.sh, ADR-0145 rule 16), and its name starts with `wave-`: the rule stripped
 # that prefix, read `entry-<run>`, found no run by that name and deleted the entry clock of a live run (#2473). `wave-recut-<run>`

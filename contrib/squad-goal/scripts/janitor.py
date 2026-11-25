@@ -27,7 +27,7 @@
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
     Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  U  an auto/disp-<n> marker whose named run or request is no longer live (no active-runs.txt entry and no run folder under the run root names it) and whose issue's ledger records the owner's rearm newer than the marker's mtime, with no pending card write: the marker is dropped (#1586), so the frontier answers the issue startable again. The card is rule R's and the dispatch count is rule O's, so U writes one line and nothing else; a live run, an older rearm and a pending card write (ADR-0165) each hold the marker. `auto/taken-*` is rule T's own case (ADR-0166) and is never read.
- V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>`, `wave-ceiling-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, and a folder a live process works, stay.
+ V  a wave marker of a run that ended: `auto/wave-<run>`, `wave-start-<run>`, `wave-ceiling-<run>` and `wave-pause-<run>` stand for the run's landing pass, and the loop lands a wave only for a line of active-runs.txt. A run that left the listing can never land it again, and the marker stayed for ever (1325 of them, #2140). The pass drops the markers of a run no line names and no live process works, and names each one; a listed run's wave, a folder a live process works (any `.../runs/<run>`), and a marker younger than SG_WAVE_MARKER_GRACE_SECONDS (300 s) stay (#2847).
  W  a run whose child started on a blocker's approved tip (`STACK TIP:` in its request, #2260) and whose blocker left Batching without a landing: the blocker's card reads a column before Batching and no work branch of its stands in the landing branch, so the child's commits sit on a branch the base may never hold.
     The one column set is the board definition's, read through `board_columns.from_batching`, so this rule and stack.sh never disagree. The landing is proven by remote ancestry (`git merge-base --is-ancestor`), and an unread compare holds the run: no run is stopped on a fact nobody read.
     The pass stops the run, writes the killed verdict `stack_base_left_landing:#<blocker>`, drops the dispatch markers of its issues and writes the reoffer marker of each, so the frontier builds them again once the blocker is startable. A blocker still in Batching or Testing, a blocker whose work reached the landing branch, and a run cut from the base keep the run.
@@ -435,6 +435,9 @@ def mark_killed(f, reason=None):
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
     _run(["python3", "-m", "squad.killed", str(f)] + ([str(reason)] if reason else []), env=env)
 TAKEOVER_SECONDS = float(os.environ.get("SG_TAKEOVER_SECONDS", "1800") or 1800)
+# V: a wave marker younger than this many seconds stands with no listing line (#2847). The launch lists a run before it cuts
+# the wave, and the grace covers a pass that read the listing before that line and a launch older than that order.
+WAVE_MARKER_GRACE_SECONDS = float(os.environ.get("SG_WAVE_MARKER_GRACE_SECONDS", "300") or 300)
 GATE = re.compile(r"gate\.sh\b")   # a gate process (`gate.sh`, `fast-gate.sh`): a run inside one is doing work or waiting its turn, never stuck (#1191)
 # A gate process older than this is itself overdue: every bound the loop gives a gate is shorter (ADR-0163), so
 # it is no evidence that the run is working, and the takeover bound applies again (#1390).
@@ -457,6 +460,9 @@ def open_call_in_time(i):   # T: an open call still inside the deadline it recor
     return False
 def _now(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
+def inside_run(name):   # V: the processes that work a run folder named `name` wherever it sits: `<checkout>/runs/<run>` or a frontier run's `worktrees/run/<stamp>/runs/<run>` (#2847)
+    tail = f"/runs/{name}"
+    return [q for q, c in cwd.items() if c.endswith(tail) or (tail + "/") in c]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue|this issue was deleted", re.I)   # the 410 status or GitHub's stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
@@ -754,18 +760,25 @@ if not dry: _active_runs_module().rewrite(act, names, lines)
 # for ever (1325 of them on 2026-11-17, #2140). The pass drops the wave markers of a run no line names and no live process
 # works, and names each one; the wave of a live run, or of a folder a live process works, stays. Each marker names its run
 # through its known prefix, the entry clock `wave-entry-<run>` included, so a live run's clock and recut marker stay (#2473).
+# A marker younger than the grace stands, and the live names come from a fresh read of the listing too: a launch that
+# appended its line after this pass read the list is a live run, and its wave stays (#2847).
 if (st / "auto").is_dir():
     live_names = set()
     for r in lines:
         lf = folder(r); live_names.add(lf.name)
         li = live.get(lf.name) or read(lf)
         if li: live_names.add(li["run_id"])
+    for r in (act.read_text().split() if act.exists() else []):
+        if r not in names: live_names.add(pathlib.Path(r).name)   # a line this pass never judged: new work, never an ended run
+    wave_cutoff = now - WAVE_MARKER_GRACE_SECONDS
     for wp in sorted((st / "auto").glob("wave-*")):
         # The known prefixes come first and the bare `wave-` last, so the entry clock `wave-entry-<run>` and the recut marker
         # `wave-recut-<run>` name their run, not `entry-<run>` or `recut-<run>` (#2473).
         wrun = next((wp.name[len(k):] for k in ("wave-start-", "wave-ceiling-", "wave-pause-", "wave-entry-", "wave-recut-", "wave-") if wp.name.startswith(k)), "")
         if not wrun or wrun in live_names: continue
-        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
+        mt = marker_mtime(wp)
+        if mt is None or mt > wave_cutoff: continue   # gone already, or young: the run's line may be on its way (#2847)
+        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside_run(wrun)): continue
         say(f"WAVE-DROPPED {wp.name}: its run is not in active-runs and no process works its folder, so the wave can no longer land")
         if not dry: wp.unlink(missing_ok=True)
     # V2 (#2185): a landing marker `auto/wland-<run>` answers whether a run already landed, and `wave.sh` reads it only for a
@@ -778,7 +791,7 @@ if (st / "auto").is_dir():
         if wrun.startswith("tries-"): wrun = wrun[len("tries-"):]
         if not wrun.startswith("run-") or wrun in live_names: continue
         if (st / "auto" / f"wland-{wrun}.queued").exists(): continue
-        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside(co / "runs" / wrun)): continue
+        if any(LIVE.search(procs.get(q, (0, ""))[1]) for q in inside_run(wrun)): continue
         mt = marker_mtime(wp)
         if mt is None or mt > cutoff: continue
         say(f"WLAND-DROPPED {wp.name}: its run is not in active-runs, no process works its folder and no queue waits for it")

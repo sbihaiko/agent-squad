@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 6.08
+# seconds: 8.95
 # Regression test: launch.py writes the squad's stdout/stderr into the run folder as launch.log, and keeps the copy
 # live until the squad exits, because that is when a refused start writes its reason (Refs #1503). Offline: stub
 # caffeinate/uv so squad "starts" a folder, refuses after the folder exists, and exits.
