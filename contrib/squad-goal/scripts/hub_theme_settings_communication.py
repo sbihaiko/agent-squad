@@ -2035,3 +2035,92 @@ def _slack_second_guest(P, defect):
     reason = getattr(P, "SECOND_GUEST_REASON", None) or SECOND_GUEST_SAY
     return reason in defect.reason
 
+
+# --- Slack people by their own names (SPEC 2682 #2911). A Slack user knows a person by email or by @name, never by a
+# user id, so the members editor asks for one of those and the hub resolves it through the workspace's own connection.
+# The local file still stores ids, because the policy reads ids. The directory read is kept per workspace for a window,
+# so a page render asks Slack at most once per window. A token never leaves the reader; an error names the scope or the
+# connection the owner can fix.
+SLACK_PEOPLE_SECS = 300.0
+SLACK_EMAIL_SCOPE = "users:read.email"
+SLACK_NO_MATCH = "No Slack user matches"
+SLACK_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SLACK_PEOPLE = {}   # workspace id -> {"at", "users"}
+_SLACK_PEOPLE_LOCK = threading.Lock()
+
+def _slack_person(user):
+    """One person as the page names it: the display name, else the real name, and the @name."""
+    p = user.get("profile") or {}
+    handle = _slack_text(user.get("name"))
+    name = _slack_text(p.get("display_name") or p.get("real_name") or user.get("real_name") or handle)
+    return {"id": _slack_text(user.get("id")), "handle": handle, "name": name}
+
+def _slack_api_error(d):
+    if d.get("error") == "missing_scope":
+        return f"the Slack connection lacks the scope {d.get('needed') or 'this read needs'}"
+    return f"Slack answered {d.get('error') or 'an error'}"
+
+def _slack_people_conn(ws):
+    """(token, error): the connection of this host, and only when it belongs to the workspace the member names."""
+    if not KEYCHAIN: return None, "no Slack connection on this host"
+    token = slack_token()
+    if not token: return None, "no Slack connection on this host"
+    try: d = slack_api(token, "auth.test")
+    except Exception: return None, "the Slack connection did not answer"
+    if not isinstance(d, dict) or not d.get("ok"): return None, "the Slack connection refused"
+    if ws and _slack_text(d.get("team_id")) != ws: return None, "no Slack connection to this workspace on this host"
+    return token, None
+
+def _slack_people_directory(ws, token):
+    """(people, error): every person of the workspace, bots left out, kept for one window."""
+    now = time.monotonic()
+    with _SLACK_PEOPLE_LOCK:
+        ent = _SLACK_PEOPLE.get(ws)
+        if ent and now - ent["at"] < SLACK_PEOPLE_SECS: return ent["users"], None
+    people, cursor = [], ""
+    for _ in range(50):   # 50 pages of 200: a workspace past 10 000 people is cut, never a loop without end
+        method = "users.list?limit=200" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else "")
+        try: d = slack_api(token, method)
+        except Exception: return [], "the Slack connection did not answer"
+        if not isinstance(d, dict) or not d.get("ok"): return [], _slack_api_error(d if isinstance(d, dict) else {})
+        people += [_slack_person(u) for u in d.get("members") or []
+                   if isinstance(u, dict) and not u.get("deleted") and not u.get("is_bot") and u.get("id") != "USLACKBOT"]
+        cursor = _slack_text((d.get("response_metadata") or {}).get("next_cursor"))
+        if not cursor: break
+    with _SLACK_PEOPLE_LOCK:
+        _SLACK_PEOPLE[ws] = {"at": now, "users": people}
+    return people, None
+
+def slack_people_post(body):
+    """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and
+    `{workspace, ids}` answers the name of each id the directory knows. A workspace this host has no connection to
+    answers `manual`, so the page offers the raw id field instead."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    ws = _slack_text(body.get("workspace")).strip()
+    token, err = _slack_people_conn(ws)
+    if err: return {"err": err, "manual": True, "matches": []}
+    ids = body.get("ids")
+    if isinstance(ids, list):
+        people, err = _slack_people_directory(ws, token)
+        if err: return {"err": err, "people": {}}
+        by_id = {p["id"]: p for p in people}
+        return {"err": None, "people": {i: by_id[i] for i in map(_slack_text, ids) if i in by_id}}
+    q = _slack_text(body.get("q")).strip()
+    if not q: return {"err": "type an email or an @name", "matches": []}
+    if SLACK_EMAIL.match(q):
+        try: d = slack_api(token, "users.lookupByEmail?email=" + urllib.parse.quote(q))
+        except Exception: return {"err": "the Slack connection did not answer", "matches": []}
+        if not isinstance(d, dict) or not d.get("ok"):
+            e = (d or {}).get("error") if isinstance(d, dict) else None
+            if e == "missing_scope":
+                return {"err": f"Email lookup needs the Slack scope {SLACK_EMAIL_SCOPE}; type the @name instead", "matches": []}
+            if e == "users_not_found": return {"err": SLACK_NO_MATCH, "matches": []}
+            return {"err": _slack_api_error(d if isinstance(d, dict) else {}), "matches": []}
+        return {"err": None, "matches": [_slack_person(d.get("user") or {})]}
+    people, err = _slack_people_directory(ws, token)
+    if err: return {"err": err, "matches": []}
+    key = q.lstrip("@").casefold()
+    exact = [p for p in people if key in (p["handle"].casefold(), p["name"].casefold())]
+    found = exact or [p for p in people if key in p["handle"].casefold() or key in p["name"].casefold()]
+    if not found: return {"err": SLACK_NO_MATCH, "matches": []}
+    return {"err": None, "matches": found[:8]}

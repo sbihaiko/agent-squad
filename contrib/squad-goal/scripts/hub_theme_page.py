@@ -524,12 +524,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    the fields on one line, the actions wrap beside each other, and the user ids field keeps its whole value. A narrow
    panel stacks each field under its own label, so no value is clipped. */
 #sbody .slroledet .slevr{display:grid;grid-template-columns:minmax(140px,16ch) minmax(200px,1fr) minmax(120px,16ch) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--line)}
-#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(90px,.8fr) minmax(150px,1.5fr) minmax(170px,1.6fr) minmax(90px,.8fr) minmax(120px,1.2fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) minmax(150px,1.2fr) minmax(110px,.8fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
 #sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slad input[data-slroleid],#sbody .slad input[data-slmus]{flex:1 1 220px}
-#sbody .slad input[data-slmalias]{flex:1 1 150px}
+#sbody .slad input[data-slmwho]{flex:1 1 220px}#sbody .slwho{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;min-width:0}#sbody .slperson{overflow-wrap:anywhere}#sbody .slwhonote{flex-basis:100%;font-size:var(--fs-caption)}#sbody .sladv summary{color:var(--mute);cursor:pointer;font-size:var(--fs-caption)}#sbody .slwhomsg{margin:4px 0 0}#sbody .slwhomsg.err{color:var(--err)}#sbody .slwhopick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 #sbody .slad select[data-slmws]{flex:1 1 190px}   /* a phone puts the workspace on its own line, so its team id is never cut */
 #sbody .slad select[data-slmch]{flex:1 1 240px}
 #sbody .slad select[data-slmrole]{flex:1 1 120px}
@@ -1809,8 +1809,8 @@ const slChIdsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},sl
 const slChannelsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
  for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(w&&String(w.id)===String(wsId))for(const c of (Array.isArray(w.channels)?w.channels:[]))if(c&&c.id)out.push(c);return out};
 const slWsOpt=id=>{let lab="";for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
- for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(!lab&&w&&String(w.id)===String(id)&&w.label)lab=String(w.label);return lab?`${lab} · ${id}`:id};
-const slChOpt=(wsId,id)=>{const c=slChannelsOf(wsId).find(x=>String(x.id)===String(id));return c&&c.name?`#${c.name} · ${id}`:id};
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(!lab&&w&&String(w.id)===String(id)&&w.label)lab=String(w.label);return lab||id};   // a person reads a workspace by its label, never its id (#2911)
+const slChOpt=(wsId,id)=>{const c=slChannelsOf(wsId).find(x=>String(x.id)===String(id));return c&&c.name?`#${c.name}`:id};
 const slOptsV=(ids,labelOf,cur)=>ids.map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(labelOf(x))}</option>`).join("");
 const slRoleIds=()=>slRoleRows().map(x=>String((x||{}).id||"")).filter(Boolean);
 const slActionList=()=>Array.isArray(slR&&slR.role_actions)?slR.role_actions:[];
@@ -1821,13 +1821,28 @@ const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],ac
  +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
  +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
-const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,al=typeof m.alias==="string"?m.alias:"",us=(Array.isArray(m.users)?m.users:[]).join(", ");
+/* Members by name (#2911): a Slack user knows a person by email or @name, never by a user id. The row shows each
+   person's display name and @name, which the hub reads from the workspace's own connection, and the add row takes an
+   email or an @name that the hub resolves to the id the local file stores. A workspace this host has no connection to
+   keeps a raw id field under "Slack ids", the one place an id shows. */
+let slPeople={},slPeopleAsk={},slPeopleManual={},slWhoMsg="",slWhoPick=[];
+const slPersonOf=(ws,id)=>(slPeople[ws]||{})[id]||null;
+function slPeopleNeed(){if(typeof fetch!=="function")return;const want={};
+ for(const m of slMemberRows()){const ws=String((m&&m.workspace)||"");for(const u of (Array.isArray(m&&m.users)?m.users:[]))if(!slPersonOf(ws,u))(want[ws]=want[ws]||[]).push(String(u))}
+ for(const ws of Object.keys(want)){if(slPeopleAsk[ws])continue;slPeopleAsk[ws]=true;   // one ask per workspace per page view
+  fetch("/api/slack/people",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,ids:want[ws]})})
+  .then(r=>r.json()).then(o=>{if(o&&o.manual)slPeopleManual[ws]=true;slPeople[ws]={...(slPeople[ws]||{}),...((o&&o.people)||{})};slRender()}).catch(()=>{})}}
+const slPersonChip=(ws,u,m,k,n)=>{const p=slPersonOf(ws,u);   // an unread person keeps the row's alias only when the row names one person
+ return p?`<span class=slperson><b>${esc(p.name||p.handle)}</b>${p.handle?` <span class=m>@${esc(p.handle)}</span>`:""}</span>`
+  :`<span class=slperson><b>${esc(n===1&&m&&m.alias?m.alias:n===1?"A Slack member":"Slack member "+(k+1))}</b></span>`};
+const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,ws=String(m.workspace||""),us=Array.isArray(m.users)?m.users:[];
+ const ids=slPeopleManual[ws]?`<details class=sladv><summary>${esc("Slack ids")}</summary><input data-sle="${at("users")}" value="${slA(us.join(", "))}" aria-label="member ${n}: Slack ids"></details>`:"";
  return `<div class="sle slmembdet" role=group aria-label="member ${n} fields"><div class=slevr role=row>`
- +`<span role=cell data-l="Alias"><span class=slalias><input data-sle="${at("alias")}" value="${slA(al)}" placeholder="alias" aria-label="member ${n}: alias">${al?"":`<span class=m>no alias</span>`}<span class=m>${slA(us)}</span></span></span>`
+ +`<span role=cell data-l="Person"><span class=slwho>${us.length?us.map((u,k)=>slPersonChip(ws,u,m,k,us.length)).join(""):`<span class=m>${esc("nobody yet")}</span>`}`
+ +(us.length&&us.some(u=>!slPersonOf(ws,u))?`<span class="m slwhonote">${esc(slPeopleManual[ws]?"names not readable on this host":"reading the names")}</span>`:"")+`${ids}</span></span>`
  +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOptsV(slWsIds(),slWsOpt,m.workspace)}</select></span>`
  +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOptsV(slChIdsOf(m.workspace),c=>slChOpt(m.workspace,c),m.channel)}</select></span>`
  +`<span role=cell data-l="Role"><select data-sle="${at("role")}" aria-label="member ${n}: role">${slOpts(slRoleIds(),m.role)}</select></span>`
- +`<span role=cell data-l="User ids"><input data-sle="${at("users")}" value="${slA((Array.isArray(m.users)?m.users:[]).join(", "))}" placeholder="U0..., U0..." aria-label="member ${n}: user ids"></span>`
  +`<span role=cell><button data-slrmmem="${i}" aria-label="remove member ${n}">Remove</button></span></div></div>`};
 function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.committed,lf=r.files.local;
  let h=`<h5 class=slws>Roles ${slTag(cf)}</h5>`;
@@ -1835,12 +1850,29 @@ function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.c
  h+=`<div class=slad><input data-slroleid placeholder="role id" aria-label="new role id"><button data-sladdrole>Add role</button></div>`;
  h+=`<h5 class=slws>Members ${slTag(lf)}</h5>`;
  h+=ms.length?ms.map(slMemberEditRow).join(""):`<p class=m>${esc("No member: the roles name no user.")}</p>`;
- const w0=slWsIds()[0]||"";
- return h+`<div class=slad><input data-slmalias placeholder="alias" aria-label="new member alias">`
+ const w0=slWsIds()[0]||"";slPeopleNeed();
+ const pick=slWhoPick.length?`<div class=slwhopick role=group aria-label="${slA("Choose the person")}">${slWhoPick.map(p=>`<button type=button data-slmpick="${slA(p.id)}">${esc(p.name||p.handle)} <span class=m>@${esc(p.handle)}</span></button>`).join("")}</div>`:"";
+ const manual=slPeopleManual[w0]?`<details class=sladv><summary>${esc("Slack ids")}</summary><input data-slmus aria-label="new member Slack id"></details>`:"";
+ return h+`<div class=slad><input data-slmwho placeholder="email or @name" aria-label="new member: email or @name">`
  +`<select data-slmws aria-label="new member Slack workspace">${slOptsV(slWsIds(),slWsOpt,"")}</select>`
  +`<select data-slmch aria-label="new member channel">${slOptsV(slChIdsOf(w0),c=>slChOpt(w0,c),"")}</select>`
  +`<select data-slmrole aria-label="new member role">${slOpts(slRoleIds(),"")}</select>`
- +`<input data-slmus placeholder="U0..." aria-label="new member user ids"><button data-sladdmem>Add member</button></div>`}
+ +`<button data-sladdmem>Add member</button>${manual}</div>`
+ +(slWhoMsg?`<p class="slwhomsg${slWhoMsg.startsWith("!")?" err":""}" role=status>${esc(slWhoMsg.replace(/^!/,""))}</p>`:"")+pick}
+let slWhoAt=null;   // the workspace, channel and role the add row held when the owner asked
+function slMemberAdd(at,p){slPeople[at.workspace]={...(slPeople[at.workspace]||{}),[p.id]:p};slWhoMsg="";slWhoPick=[];slWhoAt=null;
+ slOp({kind:"add",doc:"local",path:["members"],value:{workspace:at.workspace,channel:at.channel,role:at.role,users:p.id,alias:p.handle||p.name||""}})}
+function slMemberAddAsk(){const g=s=>{const el=document.querySelector(s);return el?String(el.value||"").trim():""};
+ const at={workspace:g("[data-slmws]"),channel:g("[data-slmch]"),role:g("[data-slmrole]")},who=g("[data-slmwho]"),raw=g("[data-slmus]");
+ if(raw){slMemberAdd(at,{id:raw,handle:"",name:""});return}   // the one raw path: a workspace this host cannot read
+ if(!who){slWhoMsg="!Type an email or an @name.";slRender();return}
+ slWhoMsg="Looking up "+who;slWhoPick=[];slWhoAt=at;slRender();
+ fetch("/api/slack/people",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:at.workspace,q:who})})
+ .then(r=>r.json()).then(o=>{if(o&&o.manual)slPeopleManual[at.workspace]=true;const ms=(o&&o.matches)||[];
+  if(ms.length===1){slMemberAdd(at,ms[0]);return}
+  if(ms.length>1){slWhoPick=ms;slWhoMsg="Several people match. Choose one.";slRender();return}
+  slWhoMsg="!"+((o&&o.err)||"No Slack user matches");slRender()})
+ .catch(()=>{slWhoMsg="!The hub did not answer.";slRender()})}
 function slDocOp(attr,el){const p=attr.split(":"),v=el.type==="checkbox"?!!el.checked:el.value;
  if(p[0]==="role"||p[0]==="member"){const i=+p[1];   // a role edits the committed file and a member the local one (#2699)
   if(p[0]==="role"&&p[2]==="act"){const a=p.slice(3).join(":"),row=slRoleRows()[i]||{},cur=Array.isArray(row.actions)?row.actions.slice():[];
@@ -1963,9 +1995,8 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
   if(dt.sladdrole!==undefined){const el=document.querySelector("[data-slroleid]");
    slOp({kind:"add",doc:"committed",path:["roles"],value:{id:el?String(el.value||""):"",actions:[]}});return}   // #2699
   if(dt.slrmrole!==undefined){slOp({kind:"remove",doc:"committed",path:["roles",+dt.slrmrole]});return}
-  if(dt.sladdmem!==undefined){const g=s=>{const el=document.querySelector(s);return el?String(el.value||""):""};
-   slOp({kind:"add",doc:"local",path:["members"],value:{workspace:g("[data-slmws]"),channel:g("[data-slmch]"),
-    role:g("[data-slmrole]"),users:g("[data-slmus]"),alias:g("[data-slmalias]")}});return}
+  if(dt.sladdmem!==undefined){slMemberAddAsk();return}   // the person is named by email or @name (#2911)
+  if(dt.slmpick!==undefined){const p=slWhoPick.find(x=>x.id===dt.slmpick);if(p&&slWhoAt)slMemberAdd(slWhoAt,p);return}
   if(dt.slrmmem!==undefined){slOp({kind:"remove",doc:"local",path:["members",+dt.slrmmem]});return}}
  if(!b)return;
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
