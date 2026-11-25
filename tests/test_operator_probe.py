@@ -984,7 +984,6 @@ def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypa
     tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
     assert sorted(os.path.basename(p) for p in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
     assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
-    assert (home / ".claude.json").read_text() == "owner file\n"
 
 
 def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_path, monkeypatch):

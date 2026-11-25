@@ -301,8 +301,8 @@ def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inbox
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
-# Files the owner's next, unsandboxed session loads: settings and CLAUDE.md under `~/.claude`, and the MCP
-# configuration beside it (#2942).
+# Files the owner's next, unsandboxed session loads: settings and CLAUDE.md under the Claude home (`~/.claude`), and
+# the MCP configuration beside it (#2942).
 OWNER_FILES = ("settings.json", "CLAUDE.md")
 OWNER_GLOBAL = ".claude.json"   # the owner's global config: the MCP servers its next session starts (#2942, #2963)
 OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates

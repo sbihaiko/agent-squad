@@ -1226,13 +1226,18 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
     assert "/memory" in text[allow:], "a project memory folder stays writable"
 
 
-def test_the_profile_refuses_a_write_to_the_owner_mcp_configuration(tmp_path, monkeypatch):
-    """#2942: `~/.claude.json` holds the owner's MCP server settings, and the owner's next, unsandboxed session reads
-    it. The session still writes its Claude home, and that one file is refused after the allow."""
+def test_the_cli_keeps_its_own_state_in_the_config_root_and_the_owner_global_config_file_is_refused(tmp_path, monkeypatch):
+    """#2942, #2963: the CLI writes its runtime state under the operator's own config root, so the owner's global
+    config file needs no write grant, and the profile refuses it. The config root holds the CLI's login too: auth
+    moves with `CLAUDE_CONFIG_DIR`, and the empty secure-storage dir keeps the owner's keychain entry (measured,
+    CLI 2.1.332)."""
     op = operators(tmp_path, monkeypatch)
     home = os.path.realpath(os.path.expanduser("~"))
+    config = str(tmp_path / "config")
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
-                           config=str(tmp_path / "config"))
+                           config=config)
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(subpath "{os.path.realpath(config)}")' in write, write
     allow = text.index(f'(subpath "{home}/.claude")')
     rule = f'(deny file-write* (literal "{home}/.claude.json"))'
     assert rule in text.splitlines(), text
