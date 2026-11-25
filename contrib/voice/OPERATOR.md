@@ -61,6 +61,16 @@ from the active `slack.yaml` revision of the project that owns the channel.
 The one-minute poll is retired. No cron entry, no launchd agent and no `watch.py` run is scheduled for the session: the
 Monitor alone wakes it, and a line the daemon writes is the only thing that starts a turn.
 
+## When the session dies
+
+The supervisor (`com.squad.operators`) reads each session's transcript every five minutes. A session whose last turn
+ended in an API error, or that takes no turn on a new inbox line within ten minutes, is dead. The supervisor stops it
+and starts a fresh one in the same pass.
+
+A fresh session starts its Monitor at `tail -n 0`, so it skips the inbox lines already there. When the restarted scope
+has an inbox line with no answer, the supervisor writes one line to `$VOICE_STATE/operators.err` that names the scope.
+Answer the message in Slack again, and the new session takes it.
+
 ## Setup
 
 The owner creates the workspace, the app and the tokens. Run `python3 contrib/voice/setup_wizard.py` for each step and
