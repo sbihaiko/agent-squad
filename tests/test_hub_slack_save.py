@@ -78,12 +78,13 @@ def git(cwd, *args):
     return r.stdout.strip()
 
 
-def worktree(tmp_path, committed=None):
-    """A git worktree the hub owns, one commit above origin/dev, and the bare origin it fetches and pushes."""
-    origin = tmp_path / "origin.git"
+def worktree(tmp_path, committed=None, name=""):
+    """A git worktree the hub owns, one commit above origin/dev, and the bare origin it fetches and pushes. `name`
+    separates a second fixture repository from the first, so one test holds two origins."""
+    origin = tmp_path / f"origin{name}.git"
     subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, timeout=60)
     git(origin, "symbolic-ref", "HEAD", "refs/heads/dev")
-    wt = tmp_path / "hub-wt"
+    wt = tmp_path / f"hub-wt{name}"
     wt.mkdir()
     git(wt, "init", "-q", "-b", "dev")
     git(wt, "config", "user.name", "fixture")
@@ -492,6 +493,79 @@ def test_the_read_after_a_save_shows_the_saved_file_and_the_next_save_keeps_it(h
     assert again.get("committed_unchanged") is True, again
     derived = tmp_path / "state" / "slack-worktree"
     assert yaml.safe_load((derived / "docs" / "squad" / "slack.yaml").read_text()) == added
+
+
+@pytest.mark.heavy
+def test_a_read_after_an_out_of_band_landing_shows_the_branch_and_the_next_save_keeps_it(hub, tmp_path, monkeypatch):
+    """A save lands its commit in dev, then another actor lands a later change in the same branch. The hub's own
+    worktree stands behind origin/dev, so a read must show the branch's document, never the worktree's older copy:
+    otherwise the next save sends the old document and undoes the other actor's land (issue #2920)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    _, origin = worktree(tmp_path)
+    loop = clone(tmp_path, origin, "loop-checkout")
+    git(loop, "checkout", "-q", "-b", "stg")
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    (prof / "loop-checkout.sh").write_text(
+        f': "${{SG_REPO:=x/loop-checkout}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=loop-checkout}}"; '
+        f': "${{SG_CHECKOUT:={loop}}}"; : "${{SG_SQUAD:={ROOT}}}"\n')
+    (prof / "loop-checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.delenv("SG_SLACK_WORKTREE", raising=False)
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "PROFILE_NAME", "loop-checkout")
+    added = copy.deepcopy(COMMITTED)
+    added["workspaces"][0]["channels"].append({"id": "C0NEWCH001", "name": "new-room", "mode": "listen"})
+    out = hub.slack_files_set({"committed": added, "local": LOCAL, "confirm": True})
+    assert "err" not in out, out
+    assert out["sha"], out
+    later = clone(tmp_path, origin, "other-checkout")
+    theirs = copy.deepcopy(added)
+    theirs["workspaces"][0]["channels"].append({"id": "C0EXT00001", "name": "external-room", "mode": "listen"})
+    (later / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(theirs, sort_keys=False))
+    git(later, "add", "--", "docs/squad/slack.yaml")
+    git(later, "commit", "-q", "-m", "an out-of-band landing in dev")
+    git(later, "push", "-q", "origin", "HEAD:dev")
+    landed = git(origin, "rev-parse", "dev")
+    derived = tmp_path / "state" / "slack-worktree"
+    assert git(derived, "rev-parse", "HEAD") != landed   # the hub's worktree stands behind the branch
+    read = hub.slack_overview()
+    names = [c["name"] for w in read["workspaces"] for c in w["channels"]]
+    assert "new-room" in names and "external-room" in names, names
+    assert read["docs"]["committed"] == theirs, read["docs"]["committed"]
+    again = hub.slack_files_set({"committed": read["docs"]["committed"], "local": read["docs"]["local"],
+                                 "confirm": True})
+    assert "err" not in again, again
+    assert git(origin, "rev-parse", "dev") == landed, "a later save undid the out-of-band landing"
+
+
+@pytest.mark.heavy
+def test_the_read_never_takes_the_file_of_a_worktree_of_another_repository(hub, tmp_path, monkeypatch):
+    """The hub worktree `SG_SLACK_WORKTREE` names belongs to another repository whose origin differs from the
+    checkout's. A read must take the checkout's committed file, never the foreign worktree's, so a save never lands
+    another repository's document in this profile's branch (issue #2920)."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    foreign, _ = worktree(tmp_path, committed=COMMITTED, name="-foreign")
+    own_doc = copy.deepcopy(COMMITTED)
+    own_doc["workspaces"][0]["channels"][0]["name"] = "own-room"
+    _, own_origin = worktree(tmp_path, committed=own_doc, name="-own")
+    loop = clone(tmp_path, own_origin, "loop-checkout")
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    (prof / "loop-checkout.sh").write_text(
+        f': "${{SG_REPO:=x/loop-checkout}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=loop-checkout}}"; '
+        f': "${{SG_CHECKOUT:={loop}}}"; : "${{SG_SQUAD:={ROOT}}}"\n')
+    (prof / "loop-checkout.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(foreign))
+    monkeypatch.setenv("SG_CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "CHECKOUT", str(loop))
+    monkeypatch.setattr(hub, "PROFILE_NAME", "loop-checkout")
+    read = hub.slack_overview()
+    names = [c["name"] for w in read["workspaces"] for c in w["channels"]]
+    assert "own-room" in names and "proj-agent-squad" not in names, names
+    assert read["docs"]["committed"] == own_doc, read["docs"]["committed"]
 
 
 def test_a_named_worktree_the_hub_did_not_create_is_never_advanced(hub, tmp_path, monkeypatch):

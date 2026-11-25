@@ -13,34 +13,96 @@ def slack_policy():
 
 def slack_yaml_paths():
     """The committed `slack.yaml` and this profile's local file (SPEC 2682). A profile that names no checkout reads no
-    committed file, and one that names no project reads no local file."""
+    committed file, and one that names no project reads no local file. The committed path measures the landing branch
+    before it answers, so a read shows the branch's document (#2920)."""
     root = pathlib.Path(CHECKOUT) if CHECKOUT else None
+    committed = _slack_committed_path(str(root)) if root else None
+    return committed, _slack_local_path()
+
+def _slack_local_path():
+    """This profile's local file, or None: named for the checkout folder, as slackpolicy.check and the guest runner name
+    it; SG_PROJECT holds the board number, so it never names this file (#2899)."""
     d = profiles_dir()
-    # The local file is named for the checkout folder, as slackpolicy.check and the guest runner name it; SG_PROJECT
-    # holds the board number (#2899).
+    root = pathlib.Path(CHECKOUT) if CHECKOUT else None
     project = (root.name if root else "") or PROFILE_NAME
     local = slack_policy().local_path(str(d), project) if d is not None and project else None
-    committed = _slack_committed_path(str(root)) if root else None
-    return committed, (pathlib.Path(local) if local else None)
+    return pathlib.Path(local) if local else None
+
+_SLACK_ORIGIN_CACHE = {}   # (worktree, checkout) -> same origin: the remote URL of a repository does not change
+
+def _slack_same_origin(wt):
+    """True when the hub worktree hangs from the same origin as the loop checkout, so its file is this profile's
+    document and never another repository's (issue #2920). The answer is kept per pair of paths."""
+    loop = _slack_repo()
+    if not loop: return False
+    key = (str(wt), str(loop))
+    if key in _SLACK_ORIGIN_CACHE: return _SLACK_ORIGIN_CACHE[key]
+    a = _slack_git(wt, "remote", "get-url", "origin")
+    b = _slack_git(loop, "remote", "get-url", "origin")
+    ua = a.stdout.strip() if a.returncode == 0 else ""
+    ub = b.stdout.strip() if b.returncode == 0 else ""
+    if not ua or not ub:
+        return False   # an absent worktree answers nothing and is never kept: a save may create it later
+    ok = ua == ub
+    _SLACK_ORIGIN_CACHE[key] = ok
+    return ok
+
+def _slack_landing_tip(wt):
+    """(tip, head, error): the landing branch tip the hub worktree knows and its HEAD. It fetches origin/<land> first,
+    so a landing made elsewhere is seen; an error names the worktree the read could not measure."""
+    r = _slack_git(wt, "fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
+    if r.returncode:
+        return None, None, f"the hub worktree {wt} could not fetch origin/{LAND}: {(r.stderr or r.stdout).strip()}"
+    t = _slack_git(wt, "rev-parse", f"origin/{LAND}", "HEAD")
+    if t.returncode:
+        return None, None, f"the hub worktree {wt} has no origin/{LAND}"
+    lines = t.stdout.split()
+    if len(lines) < 2:
+        return None, None, f"the hub worktree {wt} has no HEAD"
+    return lines[0], lines[1], None
+
+def _slack_landing_file(wt, tip):
+    """The committed file as the landing branch tip holds it, written under the hub state directory, outside every
+    repository, so a read shows the branch's document even when the hub worktree stands behind it (issue #2920).
+    Returns the path, or None when the tip holds no file the read can take."""
+    r = _slack_git(wt, "show", f"{tip}:{SLACK_YAML_REL.as_posix()}")
+    if r.returncode:
+        return None
+    p = pathlib.Path(STATE) / SLACK_COMMITTED_DIR / tip / SLACK_YAML_REL
+    err = _slack_atomic(p, r.stdout)
+    if err:
+        log_once(f"[slack] the landed Slack file was not staged at {p}: {err}")
+        return None
+    return p
 
 def _slack_hub_worktree_file():
-    """The committed file the hub's own landing worktree holds, or None when that worktree holds no file. The hub saves
-    the committed file in that worktree and lands it from there, so a read after a save takes the landed document from
-    it, never from the loop checkout's file, whose branch may stand behind the landing branch (issue #2920)."""
+    """The committed file the hub's own landing worktree holds, or None when no such file is fresh. The hub saves the
+    committed file in that worktree and lands it from there, so a read after a save takes the landed document from it,
+    never from the loop checkout's file, whose branch may stand behind the landing branch (issue #2920). The worktree
+    answers only when it hangs from the checkout's own origin and its HEAD holds the current origin/<land> tip; when it
+    stands behind, the read takes the file from the landing commit itself, so a document an external landing wrote is
+    never dropped."""
     try:
         wt, why = slack_worktree()
-    except Exception:
+    except (OSError, ValueError) as e:
+        log_once(f"[slack] the hub worktree did not resolve: {type(e).__name__}: {e}")
         return None
     if why or not wt: return None
-    p = pathlib.Path(wt) / SLACK_YAML_REL
-    try:
-        return p if p.is_file() else None
-    except OSError:
+    wt = pathlib.Path(wt)
+    if not _slack_same_origin(wt): return None
+    p = wt / SLACK_YAML_REL
+    tip, head, err = _slack_landing_tip(wt)
+    if err:
+        log_once(f"[slack] {err}; the read falls back to the checkout file")
         return None
+    if head == tip or _slack_git(wt, "merge-base", "--is-ancestor", tip, "HEAD").returncode == 0:
+        return p if p.is_file() else None
+    return _slack_landing_file(wt, tip)
 
 def _slack_committed_path(checkout=None):
     """The committed file a read takes for one checkout: the copy of the hub's own landing worktree when the checkout is
-    the hub's checkout and that worktree holds the file, else the checkout's own file (issue #2920)."""
+    the hub's checkout and that worktree holds a file fresh to the landing branch, else the checkout's own file
+    (issue #2920)."""
     own = CHECKOUT or os.environ.get("SG_CHECKOUT") or ""
     try:
         same = bool(checkout) and bool(own) and pathlib.Path(checkout).resolve() == pathlib.Path(own).resolve()
@@ -1161,6 +1223,7 @@ def slack_overview(committed=None, local=None):
 SLACK_WT_ENV = "SG_SLACK_WORKTREE"   # the worktree the hub owns for the committed file: never the loop checkout
 SLACK_WT_DIR = "slack-worktree"      # under the profile's state directory when the environment names no worktree (#2763)
 SLACK_REGISTRY = "slack-saved.json"  # in the loop state directory, outside every repository
+SLACK_COMMITTED_DIR = "slack-committed"  # under it: the landed document a read stages when the hub worktree stands behind
 
 def slack_registry_path():
     """The saved-sha registry: one local file in the loop state directory, outside every repository."""
@@ -1380,7 +1443,11 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
     commits and lands the committed file in the hub's own worktree. Returns the diff, the landed sha, and both files
     read back, so the change applies at once."""
     if not isinstance(body, dict): return {"err": "bad request"}
-    if committed is None and local is None: committed, local = slack_yaml_paths()
+    # The save's own target is the hub worktree, which `_slack_provision` makes fresh before any write, so this path
+    # takes the checkout's committed path and spends no landing-tip fetch on it (#2920).
+    if committed is None and local is None:
+        local = _slack_local_path()
+        committed = pathlib.Path(CHECKOUT) / SLACK_YAML_REL if CHECKOUT else None
     if local is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
     new_c, new_l = body.get("committed"), body.get("local")
     if not isinstance(new_c, dict) or not isinstance(new_l, dict):
