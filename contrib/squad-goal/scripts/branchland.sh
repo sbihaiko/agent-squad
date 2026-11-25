@@ -133,7 +133,11 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc red base gaid cap
       lcout=$(bash "$here/wave.sh" landconflict "$br" "$(/usr/bin/git -C "$SG_CHECKOUT" rev-parse -q --verify "refs/sg-gate/$land" 2>/dev/null)" "$sha" "$files" 2>&1)   # captured whole: a pipe to head would kill wave.sh with SIGPIPE mid-round
       printf '%s\n' "$lcout" | head -5
       say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; fi
+    # (#2866) The round rebases on a ref the remote still has. The kept marker of a wave entry names the wave branch, and the loop
+    # deletes that branch when the wave lands. A ref that is gone gives a rebase that changes nothing, so the round names
+    # origin/$land, the ref this conflict was found with. The remote answers, never the checkout: a tracking ref outlives its branch.
     if [ -s "$SG_STATE/auto/kept-$rbk" ]; then rbref=$(head -1 "$SG_STATE/auto/kept-$rbk")
+      [ -n "$(/usr/bin/git ls-remote "$remote" "refs/heads/${rbref#origin/}" 2>/dev/null)" ] || rbref="origin/$land"
       python3 "$here/revformat.py" --round-review "$land" "$rbref" "$files" > "$SG_STATE/review-$rbk.md"; printf '%s\n' "$sha" > "$SG_STATE/review-$rbk.sha"; rm -f "$SG_STATE/review-$rbk.base"; fi
     say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
