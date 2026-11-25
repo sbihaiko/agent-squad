@@ -1873,6 +1873,7 @@ class Daemon:
             "channel": event.get("channel"),
             "language": decision.language,
             "persona": decision.persona.name if decision.persona else None,
+            "tone": decision.tone,
             "role": decision.role,
         }
         if event.get("files"):

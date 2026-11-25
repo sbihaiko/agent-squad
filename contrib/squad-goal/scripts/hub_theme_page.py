@@ -1748,7 +1748,7 @@ function slTPreview(n){const p=n.permissions;if(!p||!n.ref)return "";
  const cur=known?slSnd.sender:senders[0].v;   // a sender the channel no longer offers falls back to its first option
  const opts=senders.map(s=>`<option value="${slA(s.v)}"${s.v===cur?" selected":""}>${esc(s.t)}</option>`).join("");
  const got=slSnd&&slSnd.node===n.id&&slSnd.sender===cur?slSnd.data:null;
- const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
+ const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language],["Tone",g.tone]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
  const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id&&slSnd.sender===cur?`<p class=m>Reading the decision.</p>`:"");
  return `<div class=setblk data-blk=preview data-theme=slk><h3 class=blkh>Try a sender</h3><div class=slpvbox>`
  +`<label class=slf><span>Sender</span><select data-slp-sender="${slA(n.id)}" aria-label="Sender">${opts}</select></label>${out}</div></div>`}
@@ -1844,8 +1844,8 @@ const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=
 const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
 const slAddWs=()=>`<div class=slad><select data-slwsclass aria-label="new workspace class"><option value=owned>owned · app installed</option><option value=guest>guest · connector</option></select><input data-slwsid placeholder="team id" aria-label="new workspace id"><input data-slwslabel placeholder="label" aria-label="new workspace label"><input data-slwsapp placeholder="app" aria-label="new workspace app"><button data-sladdws>Add Slack workspace</button></div>`;
 const slOpenBtn=(key,label)=>`<button data-slopen="${key}">${slOpen===key?"Close":"Edit"}</button>`;
-/* The roles and members editor (SPEC 2682 #2699). The owner edits a role's id, its actions and its deploy list, and the
-   members of a role in one format: Slack workspace, channel, role and user ids. The actions come from the hub's read,
+/* The roles and members editor (SPEC 2682 #2699). The owner edits a role's id, its actions, its deploy list and its
+   tone, and the members of a role in one format: Slack workspace, channel, role and user ids. The actions come from the hub's read,
    never a copy in the view, and every rule stays with the hub and the policy module (ADR-0177): the edit posts one
    operation, and the hub refuses an action outside the list, a member that is not a user id, a channel outside the
    member's workspace, and `prod` in a deploy list. A role lives in the committed file and a member in the local one, so
@@ -1867,11 +1867,13 @@ const slOptsV=(ids,labelOf,cur)=>ids.map(x=>`<option value="${slA(x)}"${x===cur?
 const slRoleIds=()=>slRoleRows().map(x=>String((x||{}).id||"")).filter(Boolean);
 const slActionList=()=>Array.isArray(slR&&slR.role_actions)?slR.role_actions:[];
 const slDeployList=x=>Array.isArray(x)?x:(x&&typeof x==="object"&&Array.isArray(x.environments)?x.environments:[]);
-const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],acts=slActionList(),n=i+1;
+const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],acts=slActionList(),n=i+1,mute=!!(x&&x.ignore===true),off=mute?" disabled":"";   // an ignore role grants nothing, so its actions and deploy are off (#2929)
  return `<div class="sle slroledet" role=group aria-label="role ${n} fields"><div class=slevr role=row>`
  +`<span role=cell data-l="Role"><input data-sle="role:${i}:id" value="${slA((x&&x.id)||"")}" size=16 aria-label="role ${n}: id"></span>`
- +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
- +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
+ +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""}${off} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
+ +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg"${off} aria-label="role ${n}: deploy"></span>`
+ +`<span role=cell data-l="Tone"><input data-sle="role:${i}:tone" value="${slA((x&&x.tone)||"")}" placeholder="inherit"${off} aria-label="role ${n}: tone"></span>`
+ +`<span role=cell data-l="Ignore"><label class=slchk><input type=checkbox data-sle="role:${i}:ignore"${mute?" checked":""} aria-label="role ${n}: ignore all messages"> Ignore all messages</label></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
 /* Members by name (#2911): a Slack user knows a person by email or @name, never by a user id. The row shows each
    person's display name and @name, which the hub reads from the workspace's own connection, and the add row takes an
@@ -1927,6 +1929,8 @@ function slMemberAddAsk(){const g=s=>{const el=document.querySelector(s);return 
  .catch(()=>{slWhoMsg="!The hub did not answer.";slRender()})}
 function slDocOp(attr,el){const p=attr.split(":"),v=el.type==="checkbox"?!!el.checked:el.value;
  if(p[0]==="role"||p[0]==="member"){const i=+p[1];   // a role edits the committed file and a member the local one (#2699)
+  if(p[0]==="role"&&p[2]==="ignore"){const set=(f,x)=>({kind:"set",doc:"committed",path:["roles",i,f],value:x});   // an ignore role grants nothing (#2929)
+   return v?[set("actions",[]),set("deploy",[]),set("ignore",true)]:set("ignore",false)}
   if(p[0]==="role"&&p[2]==="act"){const a=p.slice(3).join(":"),row=slRoleRows()[i]||{},cur=Array.isArray(row.actions)?row.actions.slice():[];
    const next=v?(cur.indexOf(a)>=0?cur:cur.concat([a])):cur.filter(x=>x!==a);
    return {kind:"set",doc:"committed",path:["roles",i,"actions"],value:next}}
@@ -1955,7 +1959,8 @@ function slEditHtml(){const docs=[["committed",slDocsCur().committed],["local",s
    s+=`</tbody></table>`+(chans.length?"":`<p class=m>${esc("No channel in this Slack workspace.")}</p>`)+slAddCh(d,i);
    return s}).join("")});
  return h+slAddWs()}
-function slDocEdit(attr,el){const op=slDocOp(attr,el);if(op)slOp(op)}
+async function slDocEdit(attr,el){const op=slDocOp(attr,el);if(!op)return;
+ for(const o of [].concat(op)){await slOp(o);if(slMsg.startsWith("!"))break}}   // a list of ops runs in order and stops at the first refusal
 async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
  if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)

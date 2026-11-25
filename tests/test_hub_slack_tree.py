@@ -927,16 +927,20 @@ def test_a_person_in_two_accepted_roles_gets_a_note_naming_the_membership_the_po
 def test_the_preview_answers_an_owned_member_a_guest_member_a_stranger_a_bot_and_an_own_post(hub, tmp_path):
     owned = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
     assert owned == {"err": None, "decision": "inbox", "role": "manager", "actions": "status, logs",
-                     "reply": "bot", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, owned
+                     "reply": "bot", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                     "tone": "Calm and direct."}, owned
     guest = preview(hub, tmp_path, workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
     assert guest == {"err": None, "decision": "proposal", "role": "manager", "actions": "status, logs",
-                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US"}, guest
+                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US",
+                     "tone": "Warm and patient."}, guest
     stranger = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0STRANGER")
     assert stranger == {"err": None, "decision": "data", "role": "none", "actions": "none",
-                        "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, stranger
+                        "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                        "tone": "Calm and direct."}, stranger
     bot = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", bot="1")
     assert bot == {"err": None, "decision": "data", "role": "manager", "actions": "none",
-                   "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, bot
+                   "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                   "tone": "Calm and direct."}, bot
     own = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", own="1")
     assert own["decision"] == "ignore" and own["reply"] == "none", own
 
@@ -1026,6 +1030,29 @@ def test_the_preview_route_reads_an_unknown_workspace_or_channel_as_unknown(hub,
     assert ws["decision"] == "unknown" and ws["err"], ws
     ch = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0NOPE", user="U0X", sender_type="stranger")
     assert ch["decision"] == "unknown" and ch["err"], ch
+
+
+def test_the_preview_shows_the_tone_the_sender_gets(hub, tmp_path):
+    """#2927 criterion 9: the sender preview names the combined tone, the persona's and then the sender's role's."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["roles"][0]["tone"] = "Short sentences."
+    got = preview(hub, tmp_path, committed, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert got["tone"] == "Calm and direct. Short sentences.", got
+
+
+def test_the_sender_preview_draws_a_tone_tile(hub, tmp_path):
+    """#2927 criterion 9 on the page: the answer the route returns is drawn as one tile, so the owner reads the tone a
+    sender gets before the files are saved."""
+    out = read(hub, tmp_path)
+    data = {"decision": "inbox", "role": "manager", "actions": "status", "reply": "bot",
+            "mark": "*HAL9K's Msg*", "language": "pt-BR", "tone": "Calm and direct. Short sentences."}
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel=\"c0.p0.w1.c0\";"
+            + f"slSnd={{node:\"c0.p0.w1.c0\",sender:\"U0CLIENT01\",data:{json.dumps(data)}}};"
+            + "slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    html = json.loads(_node(body))
+    preview_html = html[html.index("Try a sender"):]
+    assert "Tone" in preview_html, preview_html[:800]
+    assert "Calm and direct. Short sentences." in preview_html, preview_html[:800]
 
 
 def test_the_preview_senders_are_the_accepted_members_only(hub, tmp_path):

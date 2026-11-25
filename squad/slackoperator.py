@@ -160,11 +160,11 @@ def decision_document(decision):
 
 
 def line_prompt(scope, line, repo, state):
-    """The brief of one line's session: this line only, its channel, its language, persona and role, and the outbox.
-    It names no earlier message and no monitor, because the next message starts its own session."""
+    """The brief of one line's session: this line only, its channel, its language, persona, tone and role, and the
+    outbox. It names no earlier message and no monitor, because the next message starts its own session."""
     where = "the owner's direct messages" if scope == "dm" else f"project channel {scope}"
     outbox = os.path.join(state, "outboxes", f"{scope}.jsonl")
-    fields = {key: line[key] for key in ("id", "ts", "user", "channel", "language", "persona", "role", "text")
+    fields = {key: line[key] for key in ("id", "ts", "user", "channel", "language", "persona", "tone", "role", "text")
               if key in line}
     return f"""You are the Slack operator session for {where}. You answer one message, then the session ends.
 
@@ -172,8 +172,7 @@ This is your message, as one JSON line:
 {json.dumps(fields, ensure_ascii=False, sort_keys=True)}
 
 Rules:
-- Answer the owner in the language of the channel ({line.get("language") or "the owner's language"}), in the tone of the
-  persona ({line.get("persona") or "the project persona"}).
+- Answer the owner in the language of the channel ({line.get("language") or "the owner's language"}), in this tone: {line.get("tone") or "the project persona's tone"}.
 - Deliver the answer by appending ONE JSON line to {outbox}:
   {{"thread_ts":"{line.get("ts")}", "text":"<the answer>"}}
 - Never post to Slack directly: the voiced daemon posts your outbox line, and the Slack tool hook allows reads only.

@@ -80,6 +80,25 @@ def test_an_inbox_line_carries_the_channel_language_the_persona_and_the_caller_r
     assert box[0]["role"] == "manager"
 
 
+def test_an_inbox_line_carries_the_combined_tone(tmp_path):
+    """#2927: the operator session reads the tone from the line itself, so the daemon writes the persona's tone and the
+    tone the sender's role adds after it."""
+    mod = voiced()
+    client = FakeClient()
+    _, got = configure(tmp_path, mod, client, [REPO])
+    channel = got["channels"][REPO]["id"]
+    committed, local = slack_files(channel)
+    committed["roles"][0]["tone"] = "Short sentences."
+    mod.State(str(tmp_path)).save_active_revision(
+        REPO, {"repo": REPO, "sha": SHA, "revision": committed, "local": local})
+
+    _, daemon, _ = drive_daemon(tmp_path, [socket_message(channel)], client=client)
+
+    box = lines(daemon.state.inbox_for(channel))
+    assert len(box) == 1
+    assert box[0]["tone"] == "Calm and direct. Short sentences.", box
+
+
 def test_an_event_the_decision_ignores_writes_no_inbox_line(tmp_path):
     """Criterion (2): the daemon's own post comes back on the socket and the decision ignores it, so no line is added."""
     mod = voiced()
