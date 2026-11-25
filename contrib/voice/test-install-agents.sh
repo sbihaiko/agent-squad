@@ -19,8 +19,9 @@ mkfix() {
   git -C "$T/src" -c user.name=t -c user.email=t@t commit -qam promoted; B=$(git -C "$T/src" rev-parse HEAD)
   git clone -q --bare "$T/src" "$T/origin.git"
   printf '#!/bin/bash\necho "$*" >> "%s"\n' "$T/launchctl.log" > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
+  mkdir -p "$T/profiles"; : > "$T/profiles/example.sh"
   export SG_DEPLOY="$T/deploy" SG_DEPLOY_REMOTE="$T/origin.git" SG_LAUNCH_DIR="$T/LaunchAgents" LAUNCHCTL="$T/bin/launchctl"
-  export VOICE_STATE="$T/state" VOICE_OWNER=U0TEST SG_PYTHON="$(command -v python3)"
+  export VOICE_STATE="$T/state" VOICE_OWNER=U0TEST SG_PYTHON="$(command -v python3)" SG_PROFILES_DIR="$T/profiles"
 }
 mkfix; trap 'rm -rf "$T"' EXIT
 V="$T/LaunchAgents/com.squad.voiced.plist"; O="$T/LaunchAgents/com.squad.operators.plist"
@@ -36,6 +37,10 @@ plutil -lint "$V" "$O" >/dev/null || fail "a plist does not lint"
 case "$(key "$V" ProgramArguments.1)" in "$T/deploy/"*) ;; *) fail "voiced runs outside the deployment checkout";; esac
 case "$(key "$O" ProgramArguments.1)" in "$T/deploy/"*) ;; *) fail "operators runs outside the deployment checkout";; esac
 grep -qF "$V" "$T/launchctl.log" && grep -qF "$O" "$T/launchctl.log" || fail "install did not load both agents"
+# #2957: each agent reads the projects from SG_PROFILES_DIR, so both plists must carry it; the deploy's own profiles
+# folder holds only example.sh, and an agent that falls back to it finds no project.
+[ "$(key "$V" EnvironmentVariables.SG_PROFILES_DIR)" = "$T/profiles" ] || fail "voiced plist lacks SG_PROFILES_DIR"
+[ "$(key "$O" EnvironmentVariables.SG_PROFILES_DIR)" = "$T/profiles" ] || fail "operators plist lacks SG_PROFILES_DIR"
 
 cp "$V" "$T/v1"; cp "$O" "$T/o1"; pins_before=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
 bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "a second install exited non-zero"
@@ -43,6 +48,13 @@ cmp -s "$V" "$T/v1" && cmp -s "$O" "$T/o1" || fail "a second install changed a p
 [ "$(git -C "$T/deploy" rev-parse HEAD)" = "$B" ] || fail "a second install moved the checkout"
 pins_after=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
 [ "$pins_before" = "$pins_after" ] || fail "a second install grew the pin history"
+# #2957: with SG_PROFILES_DIR unset the install names the live profiles folder, never the deploy's own example-only one.
+env -u SG_PROFILES_DIR bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "an install without SG_PROFILES_DIR exited non-zero"
+for P in "$V" "$O"; do
+  dir=$(key "$P" EnvironmentVariables.SG_PROFILES_DIR) || fail "$(basename "$P") lacks the default SG_PROFILES_DIR"
+  case "$dir" in */squad-goal/scripts/profiles) ;; *) fail "default SG_PROFILES_DIR is $dir, not the live profiles folder";; esac
+  case "$dir" in "$T/deploy"/*) fail "default SG_PROFILES_DIR points into the deploy checkout";; esac
+done
 
 git -C "$T/src" checkout -q -b side
 echo side > "$T/src/side.txt"; git -C "$T/src" add side.txt
