@@ -45,6 +45,9 @@ Answer each inbox line through the shipped `answer` helper, and through nothing 
 The DM session passes `--scope dm` and may omit `--thread` to answer the newest line. A channel whose active
 `slack.yaml` revision declares a persona passes its id in `--persona`, and the brief names that id inline.
 
+Pass `--text` and `--speech` as single-quoted literals, or via `--text "$(cat <<'EOF' ... EOF)"`, so a quote, a
+backtick or `$(...)` in the answer never breaks the command or runs extra shell.
+
 The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
 `VOICE_ANSWER_BINDING`: the state folder, the channels of the session's project, and the DM channel for the DM
