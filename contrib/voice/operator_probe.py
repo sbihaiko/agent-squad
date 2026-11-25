@@ -389,15 +389,28 @@ def answer_lines(path):
     return out
 
 
+def check_answer_call(calls):
+    """The live session's one command is the shipped helper (#2949): exactly one Bash call, and that call runs
+    `answer.py` with the scope, the thread and the text. A line that appears from any other command proves nothing."""
+    bash = [call for call in calls if call.get("name") == "Bash"]
+    if len(bash) != 1:
+        raise ProbeFailed(f"the live session made {len(bash)} Bash calls, not exactly one running the helper")
+    command = str((bash[0].get("input") or {}).get("command") or "")
+    for part in ("answer.py", "--scope", "--thread", "--text"):
+        if part not in command:
+            raise ProbeFailed(f"the live session's one command does not run the helper: {command!r}")
+    return command
+
+
 def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
     """Prove a live session answers through the shipped helper (#2949).
 
     One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
-    and the live session is asked to run the helper exactly. The helper's one outbox line must thread under that
-    question, and no other channel's outbox may take a line."""
+    and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
+    outbox line must thread under the question, and no other channel's outbox may take a line. The phase appends to
+    each outbox and never truncates one, so a denial's control line an earlier phase wrote stays for its verdict."""
     scope = PROBE_CHANNELS[0]
-    for outbox in outboxes:
-        Path(outbox).write_text("")          # a denial's control line is not an answer
+    held = {str(outbox): Path(outbox).read_text() for outbox in outboxes}
     question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
                 "text": ANSWER_QUESTION, "language": "en-US"}
     with open(own_inboxes[0], "a", encoding="utf-8") as f:
@@ -407,7 +420,11 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
     args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
             "--model", MODEL]
-    cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+    _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+    check_answer_call(tool_calls(events))
+    for path, before in held.items():
+        if not Path(path).read_text().startswith(before):
+            raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
     answers = answer_lines(outboxes[0])
     if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
         raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")

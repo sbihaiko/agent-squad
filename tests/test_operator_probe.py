@@ -964,8 +964,18 @@ def test_the_answer_prompt_names_the_shipped_helper():
     assert "Bash tool" in text and "no change to any argument" in text, text
 
 
+def helper_command(probe):
+    """The one command the live session is asked to run."""
+    return f'{sys.executable} {probe.HELPER} --scope {probe.PROBE_CHANNELS[0]} --thread {probe.PROBE_THREAD} --text "{probe.ANSWER_TEXT}"'
+
+
+def answer_event(probe, command=None):
+    """The stream-json events of a session whose one Bash call runs the shipped helper."""
+    return events_of([("Bash", {"command": command or helper_command(probe)}, "answer: wrote one line to the outbox")])
+
+
 def test_the_answer_phase_proves_a_live_session_answered_through_the_helper(tmp_path, monkeypatch):
-    """#2949 criterion (6): the live session's own call writes the one bound line, and the probe accepts it."""
+    """#2949 criterion (6): the live session's one Bash call runs the shipped helper, and its line is the one answer."""
     probe = load("operator_probe")
     outboxes, own = answer_folders(tmp_path, probe)
     seen = {}
@@ -975,7 +985,7 @@ def test_the_answer_phase_proves_a_live_session_answered_through_the_helper(tmp_
         seen["question"] = own[0].read_text()
         with open(outboxes[0], "a", encoding="utf-8") as f:
             f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
-        return {}, {}, []
+        return {}, {}, answer_event(probe)
 
     monkeypatch.setattr(probe, "cli_call", fake_cli)
     probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
@@ -985,11 +995,78 @@ def test_the_answer_phase_proves_a_live_session_answered_through_the_helper(tmp_
     assert probe.PROBE_THREAD in seen["question"], seen["question"]
 
 
+def test_a_session_that_writes_the_line_without_the_helper_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): a line the session appends itself, with no helper call, proves nothing."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, []
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="Bash"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_a_session_whose_own_command_writes_the_outbox_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): the one Bash call must run the helper, never append to the outbox by hand."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe, f'echo "{probe.ANSWER_TEXT}" >> "{outboxes[0]}"')
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="does not run the helper"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_a_session_that_runs_two_bash_calls_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): one answer is one helper call, so a second Bash call is unproven."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    events = answer_event(probe) + answer_event(probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, events
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="2 Bash calls"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_phase_keeps_the_denial_control_lines(tmp_path, monkeypatch):
+    """#2949 criterion (6): the answer phase never erases a line an earlier phase's verdict rests on."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    for outbox in outboxes:
+        outbox.write_text("answered\n")          # each denial phase's own control line
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert outboxes[0].read_text().startswith("answered\n")
+    assert outboxes[1].read_text() == "answered\n"
+
+
 def test_a_live_session_that_answers_no_pending_line_fails_the_probe(tmp_path, monkeypatch):
     """#2949 criterion (6): a session that writes nothing leaves the probe unproven, never passed."""
     probe = load("operator_probe")
     outboxes, own = answer_folders(tmp_path, probe)
-    monkeypatch.setattr(probe, "cli_call", lambda *a, **k: ({}, {}, []))
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
     with pytest.raises(probe.ProbeFailed, match="did not answer through the helper"):
         probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
 
@@ -1003,7 +1080,7 @@ def test_an_answer_in_another_channels_outbox_fails_the_probe(tmp_path, monkeypa
         for outbox in outboxes:
             with open(outbox, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
-        return {}, {}, []
+        return {}, {}, answer_event(probe)
 
     monkeypatch.setattr(probe, "cli_call", fake_cli)
     with pytest.raises(probe.ProbeFailed, match="outside the question's channel"):
