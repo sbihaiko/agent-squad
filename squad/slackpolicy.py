@@ -137,6 +137,12 @@ def _deploy_identity(file, doc, out):
         out.append(_defect(file, "project.deploy.command", "the project identity names the deploy command"))
 
 
+def _tone(file, key, value, out):
+    """A tone holds at most TONE_MAX characters, whether a persona row or a role row carries it."""
+    if value is not None and len(str(value)) > TONE_MAX:
+        out.append(_defect(file, key, f"a tone holds at most {TONE_MAX} characters ({len(str(value))} given)"))
+
+
 def _personas(file, doc, out):
     for i, persona in enumerate(_rows(doc.get("personas"))):
         base = f"personas[{i}]"
@@ -145,9 +151,7 @@ def _personas(file, doc, out):
         voice = persona.get("voice")
         if voice is not None and voice not in GEMINI_VOICES:
             out.append(_defect(file, f"{base}.voice", f"voice {voice!r} is not a Gemini voice"))
-        tone = persona.get("tone")
-        if tone is not None and len(str(tone)) > TONE_MAX:
-            out.append(_defect(file, f"{base}.tone", f"a tone holds at most {TONE_MAX} characters ({len(str(tone))} given)"))
+        _tone(file, f"{base}.tone", persona.get("tone"), out)
 
 
 def _roles(file, doc, out):
@@ -164,6 +168,7 @@ def _roles(file, doc, out):
                 if str(action) not in actions:
                     out.append(_defect(file, f"roles[{i}].actions[{j}]",
                                        f"action {action!r} is not one of {', '.join(actions)}"))
+        _tone(file, f"roles[{i}].tone", role.get("tone"), out)
 
 
 def _members(file, doc, out, local):
