@@ -49,6 +49,7 @@ usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
 """
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -450,17 +451,21 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
     and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
     outbox line must thread under the question, and no other channel's outbox may take a line. The phase appends to
     each outbox and never truncates one, so a denial's control line an earlier phase wrote stays for its verdict. It
-    owns the one inbox it appends its own question to, so it truncates that file back to its earlier length before it
-    returns, even when the phase fails: `bg_session` and `guest_sessions` reuse this state folder, and neither may read
-    a question this phase left behind."""
+    owns the one inbox it appends its own question to, so it deletes exactly the bytes it appended before it returns,
+    even when the phase fails: `bg_session` and `guest_sessions` reuse this state folder, and neither may read a
+    question this phase left behind. When a line reached that inbox during the phase, the file no longer ends at the
+    appended question, so the phase fails and leaves every line in place instead of deleting a real message."""
     scope = PROBE_CHANNELS[0]
     held = {str(outbox): Path(outbox).read_text() for outbox in outboxes}
     inbox = Path(own_inboxes[0])
     inbox_before = inbox.stat().st_size if inbox.exists() else 0
     question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
                 "text": ANSWER_QUESTION, "language": "en-US"}
-    with open(inbox, "a", encoding="utf-8") as f:
-        f.write(json.dumps(question) + "\n")
+    appended = (json.dumps(question) + "\n").encode("utf-8")
+    with open(inbox, "ab") as f:
+        f.write(appended)
+        f.flush()
+        os.fsync(f.fileno())
     try:
         binding = write_binding(work)
         command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
@@ -483,8 +488,25 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
             raise ProbeFailed(f"the live session answered outside the question's channel: {other} gained {fresh} line(s)")
         return answers
     finally:
-        with open(inbox, "r+b") as f:
-            f.truncate(inbox_before)       # the question this phase appended is its own; no later phase answers it
+        restore_inbox(inbox, inbox_before, appended)
+
+
+def restore_inbox(inbox, before, appended):
+    """Delete exactly the bytes the answer phase appended (#2949 review). Under an exclusive lock, the file must still
+    end at that question: a line the daemon appended meanwhile moves the end, so the phase fails and leaves the file
+    whole rather than deleting a real message."""
+    with open(inbox, "r+b") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - len(appended)))
+        tail = f.read()
+        if size != before + len(appended) or tail != appended:
+            raise ProbeFailed(f"a line was appended to the inbox {inbox} during the answer phase, so the phase left "
+                              "it in place instead of truncating a real message")
+        f.truncate(before)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def check_session(init, result):

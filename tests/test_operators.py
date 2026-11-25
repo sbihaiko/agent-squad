@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from tests.proxystop import track_starts
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +73,7 @@ def operators(tmp_path, monkeypatch):
     module.LOCK_WAIT = 0.2        # a contended lock stands aside at once, so a case never spends the 1 s line on it
     (tmp_path / "repo").mkdir(exist_ok=True)       # the DM session's own checkout: the agent-squad repository
     (tmp_path / "state").mkdir(exist_ok=True)      # the state folder the daemon keeps its record and queues under
+    pinned_dm_record(tmp_path / "state", "D0AAAAAA1")   # the daemon pinned the owner's DM channel
     return module
 
 
@@ -214,7 +217,7 @@ def test_a_start_binds_the_session_to_its_project_for_the_answer_helper(tmp_path
 
 
 def test_a_dm_start_binds_the_session_to_the_one_dm_channel(tmp_path, monkeypatch):
-    """#2949 criterion (2): the DM session's binding names the DM channel, so a dm inbox line that names a project
+    """#2949 criterion (2): the DM session's binding names the pinned DM channel, so a dm inbox line that names another
     channel cannot carry that channel into the dm outbox."""
     op = operators(tmp_path, monkeypatch)
     seen = {}
@@ -227,12 +230,34 @@ def test_a_dm_start_binds_the_session_to_the_one_dm_channel(tmp_path, monkeypatc
     state = tmp_path / "state"
     (state / "inboxes").mkdir(parents=True)
     (tmp_path / "repo").mkdir(exist_ok=True)
-    line = {"id": "dm:1", "ts": "1762500000.000100", "user": "UPROBE0001", "channel": "D0AAAAAA1", "text": "hi"}
+    pinned_dm_record(state, "D0AAAAAA1")           # the supervisor's own record, never an inbox line
+    line = {"id": "dm:1", "ts": "1762500000.000100", "user": "UPROBE0001", "channel": "D0ZZZZZZ", "text": "hi"}
     (state / "inboxes" / "dm.jsonl").write_text(json.dumps(line) + "\n")
     op.start("dm", str(state), str(tmp_path / "repo"))
     binding = json.loads(Path(seen["VOICE_ANSWER_BINDING"]).read_text())
     assert binding["channels"] == ["dm"], binding
     assert binding["dm"] == "D0AAAAAA1", binding
+
+
+def pinned_dm_record(state, channel):
+    """The supervisor's pinned DM record at `<state>/operators/sessions/dm.json` (#2949): the one channel the daemon
+    may post a DM answer to."""
+    folder = state / "operators" / "sessions"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "dm.json").write_text(json.dumps({"dm": channel}))
+
+
+def test_a_dm_binding_refuses_with_no_pinned_record(tmp_path, monkeypatch):
+    """Blocking 2 (#2949): the binding path never takes an inbox line's channel as the DM channel; with no pinned
+    record it refuses to bind a DM, and the refusal names the missing record."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True)
+    (state / "operators" / "sessions" / "dm.json").unlink()    # no pinned record was written yet
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0AAAAAA1"}) + "\n")
+
+    with pytest.raises(op.Refused, match="pinned DM channel"):
+        op.binding(str(state), {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": []})
 
 
 def test_the_brief_names_the_helper_as_the_one_command_a_session_runs(tmp_path, monkeypatch):
@@ -686,6 +711,21 @@ def test_a_session_is_marked_by_its_name_never_by_its_working_directory(tmp_path
     assert not [c for c in calls(tmp_path) if c.startswith("stop")], "an unmarked session was stopped"
     assert op.carried("SQUAD-OPERATOR-acme-widget") == "acme-widget"
     assert op.carried("a person's own session") is None and op.carried("") is None
+
+
+def test_a_pass_with_no_pinned_dm_record_keeps_its_projects(tmp_path, monkeypatch, capsys):
+    """Blocking 2 (#2949): a DM start refuses to bind with no pinned record, and that refusal never takes the pass
+    down: the project still starts, and one log line names the missing record."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    (tmp_path / "state" / "operators" / "sessions" / "dm.json").unlink()    # the owner's DM was never pinned
+
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+
+    assert list(record(tmp_path)) == ["acme-widget"], record(tmp_path)
+    assert "pinned DM channel" in capsys.readouterr().err
 
 
 def test_the_record_is_written_after_each_start(tmp_path, monkeypatch):
@@ -1262,6 +1302,7 @@ def test_a_started_session_keeps_its_state_in_the_operator_config_root(tmp_path,
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8016")
     (tmp_path / "home").mkdir()
+    pinned_dm_record(tmp_path / "state", "D0AAAAAA1")
     op.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
     root = op.config_root(str(tmp_path / "state"))
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == root, seen["env"]
@@ -1356,6 +1397,7 @@ def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, c
     broken queue stays visible instead of silently dropping the DM channel."""
     op = operators(tmp_path, monkeypatch)
     state = tmp_path / "state"
+    (state / "operators" / "sessions" / "dm.json").unlink()     # a state with no pinned record yet
     (state / "inboxes").mkdir(parents=True, exist_ok=True)
     (state / "inboxes" / "dm.jsonl").write_text('{"channel": "D0AAAAAA1"}\nnot json\n')
 
@@ -1371,7 +1413,6 @@ def test_a_contradicting_dm_line_never_changes_the_pinned_channel(tmp_path, monk
     channel never moves the session's binding. `dm_channel` reads the record first and logs the fallback it took."""
     op = operators(tmp_path, monkeypatch)
     state = tmp_path / "state"
-    (state / "operators" / "sessions").mkdir(parents=True)
     (state / "operators" / "sessions" / "dm.json").write_text(json.dumps({"dm": "D0AAAAAA1"}))
     (state / "inboxes").mkdir(parents=True)
     (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0ZZZZZZ"}) + "\n")
@@ -1384,6 +1425,7 @@ def test_dm_channel_pinned_reads_no_inbox_line(tmp_path, monkeypatch):
     the channel of an inbox line that anything may have written."""
     op = operators(tmp_path, monkeypatch)
     state = tmp_path / "state"
+    (state / "operators" / "sessions" / "dm.json").unlink()     # a state with no pinned record yet
     (state / "inboxes").mkdir(parents=True)
     (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0AAAAAA1"}) + "\n")
 
@@ -1472,6 +1514,7 @@ def test_a_dm_binding_names_the_dm_scope_and_the_helper_accepts_it(tmp_path, mon
     answer never exits 2 on a malformed binding."""
     op = operators(tmp_path, monkeypatch)
     state = str(tmp_path / "state")
+    pinned_dm_record(Path(state), "D0AAAAAA1")
 
     path = op.binding(state, {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": []})
 

@@ -231,6 +231,18 @@ def test_the_line_is_durable_before_the_ack(tmp_path):
     assert len(seen_at_ack) == 1, "the inbox line is not on disk when Slack is acknowledged"
 
 
+def test_an_owner_dm_pins_its_channel_for_the_answer_helper(tmp_path):
+    """#2949 Blocking 2: the daemon pins the owner's DM channel in the record the answer binding reads, and a first
+    pin wins, so a later DM event on another channel never moves where a DM answer posts."""
+    drive(tmp_path, [message_event(channel="D0OWNER", ts="1762500001.000200")])
+    record = tmp_path / "operators" / "sessions" / "dm.json"
+    assert json.loads(record.read_text())["dm"] == "D0OWNER"
+
+    drive(tmp_path, [message_event(channel="D0OTHER", ts="1762500001.000300", envelope_id="env-3")])
+
+    assert json.loads(record.read_text())["dm"] == "D0OWNER", "a later DM event moved the pinned channel"
+
+
 def test_the_slow_transcription_does_not_block_the_event_loop(tmp_path):
     """A Gemini call runs off the loop's thread, so websocket pings are answered while a clip is transcribed."""
     transcriber = FakeTranscriber(text="off the loop")

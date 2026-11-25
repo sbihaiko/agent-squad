@@ -794,6 +794,27 @@ class State:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
                 self._stamp_schema()
 
+    def pin_dm(self, channel):
+        """Pin the owner's DM channel (#2949): the one channel a DM answer may carry. The daemon sees the DM's own
+        channel in the owner's event, and a first pin wins, so a later event or an inbox line never moves it."""
+        if not channel:
+            return
+        folder = os.path.join(self.dir, "operators", "sessions")
+        path = os.path.join(folder, f"{DM}.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                if (json.load(f) or {}).get("dm"):
+                    return
+        except (OSError, ValueError):
+            pass
+        os.makedirs(folder, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"dm": str(channel)}, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
     @property
     def inbox_path(self):
         """The DM's inbox: one scope beside the channels, keyed `dm` like any other."""
@@ -2693,6 +2714,8 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
+        if target == self.state.inbox_path:
+            self.state.pin_dm(record.get("channel"))   # the DM's own channel, seen in the owner's event
         self.record_audit(record, "inbox", text)
         self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""),
                            record["id"])
