@@ -265,7 +265,7 @@ def slack_registry_path(env=None):
     return os.path.join(state, SLACK_REGISTRY) if state else ""
 
 
-def hub_registries(projects=None):
+def hub_registries(projects=None, env=None):
     """repository -> the registry path of that project's own profile, read from the hub seam's entries (#2961).
 
     Every profile's hub writes its saves to its own state directory, so one registry per project is the only rule that
@@ -275,7 +275,7 @@ def hub_registries(projects=None):
     out = {}
     for entry in (hub_projects() if projects is None else projects):
         repo = str((entry or {}).get("repo") or "").strip()
-        path = project_registry(entry) if repo else ""
+        path = project_registry(entry, env) if repo else ""
         if path:
             out[repo] = path
     return out
@@ -295,6 +295,19 @@ def project_registry(entry, env=None):
         return named
     state = str((entry or {}).get("state") or "").strip()
     return os.path.join(state, SLACK_REGISTRY) if state else ""
+
+
+def hub_registry_seam(projects=None, env=None):
+    """The registry callable `main` hands the daemon, or None when no profile names a registry (#2695, #2961).
+
+    `SG_SLACK_REGISTRY` names one file for every project, so it puts the saved-sha check in force whatever the hub lists.
+    Else a project's own state directory puts the check in force for that project alone. A machine that names neither
+    keeps the older behaviour with the check out of force, so no channel is refused for want of a save.
+    """
+    env = os.environ if env is None else env
+    if (env.get(SLACK_REGISTRY_ENV) or "").strip():
+        return project_registry
+    return project_registry if hub_registries(projects, env) else None
 
 
 def listed_revisions(path):
@@ -1577,15 +1590,29 @@ class Daemon:
         """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
 
         Saving in the hub is the owner's approval, and a commit author is forgeable, so only a sha the project's own
-        profile lists is an authority (#2695). A project absent from the answer names no registry, so the check is out
-        of force for it alone.
+        profile lists is an authority (#2695). The answer covers every project the hub seam lists, not only this pass's
+        arguments, so a project outside one pass still gets its registry read. A project absent from the answer names
+        no registry, so the check is out of force for it alone.
         """
         if self.registry is None:
             return {}
-        out = {}
+        entries = {}
+        for repo in (self.state.channels() or {}):
+            repo = str(repo or "").strip()
+            if repo:
+                entries[repo] = {"repo": repo}
+        if self.configs is not None:
+            for entry in self.configs() or ():
+                repo = str((entry or {}).get("repo") or "").strip()
+                if repo:
+                    entries[repo] = entry
         for entry in projects or ():
             repo = str((entry or {}).get("repo") or "").strip()
-            path = self.registry(entry) if repo else ""
+            if repo:
+                entries[repo] = entry
+        out = {}
+        for repo, entry in entries.items():
+            path = self.registry(entry)
             if path:
                 out[repo] = listed_revisions(path)
         return out
@@ -2818,7 +2845,7 @@ def main(argv):
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
                     client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    registry=project_registry,
+                    registry=hub_registry_seam(projects),
                     synthesizer=lambda script, voice=None, tone=None:
                         spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),

@@ -1708,15 +1708,23 @@ def commit(repo, text):
 def revision_daemon(tmp_path, client=None, log=None, registry=None):
     """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives.
 
-    A `registry` path puts the saved-sha check in force for every project (#2695); none leaves the daemon as one whose
-    machine names no registry, so the older cases read the revision load alone.
+    A `registry` path puts the saved-sha check in force for every project (#2695). A `registry` mapping instead puts
+    each repository's own file in force for that repository alone (#2961), so one project's save never approves
+    another's. None leaves the daemon as one whose machine names no registry, so the older cases read the revision
+    load alone.
     """
     mod = voiced()
     lines = log if log is not None else []
+
+    def registry_for(entry):
+        if isinstance(registry, dict):
+            return str(registry.get(str((entry or {}).get("repo") or ""), ""))
+        return str(registry)
+
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
                         transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=lines.append if isinstance(lines, list) else lines, client=client,
-                        registry=(lambda entry: str(registry)) if registry is not None else None)
+                        registry=registry_for if registry is not None else None)
     return mod, daemon, lines
 
 
@@ -2455,6 +2463,27 @@ def test_the_same_revision_is_accepted_after_the_hub_lists_it(tmp_path):
     active = daemon.state.active_revision("acme/app")
     assert active["sha"] == moved
     assert active["revision"]["project"]["language"] == "es-ES"
+
+
+def test_a_per_project_registry_approves_only_its_own_repository(tmp_path):
+    """#2961: one registry per repository approves that repository alone.
+
+    Alpha's registry lists beta's sha too, and beta's registry lists nothing, so beta stays refused while alpha becomes
+    active. The case drives the mapping form of the helper, so a first-project-wins regression fails it."""
+    alpha = git_project(tmp_path, SLACK_VALID, name="alpha")
+    beta = git_project(tmp_path, SLACK_VALID.replace("C0PROJ0001", "C0BETA0001"), name="beta")
+    sha_a = git(alpha, "rev-parse", "refs/remotes/origin/dev")
+    sha_b = git(beta, "rev-parse", "refs/remotes/origin/dev")
+    registries = {"acme/alpha": str(saved_registry(tmp_path / "a", sha_a, sha_b)),
+                  "acme/beta": str(saved_registry(tmp_path / "b"))}
+    _, daemon, _ = revision_daemon(tmp_path, registry=registries)
+
+    daemon.refresh_slack(projects=[{"repo": "acme/alpha", "checkout": str(alpha)},
+                                   {"repo": "acme/beta", "checkout": str(beta)}])
+
+    active = daemon.state.active_revision("acme/alpha")
+    assert active is not None and active["sha"] == sha_a
+    assert daemon.state.active_revision("acme/beta") is None, "alpha's registry approved beta's revision"
 
 
 def unlisted_project_daemon(tmp_path, mod, client):
