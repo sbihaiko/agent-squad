@@ -4,7 +4,7 @@ Vendored from the `slack-hal9k` skill, so this repository runs and times the pip
 with `python3 -m squad.skillpath --script reply.py` (squad/skillpath.py) and never by a path.
 
 usage: reply.py <project> <text...> [--speech "<short spoken summary>"] [--thread <ts>] [--channel <id|name>]
-                [--voice Kore] [--no-audio] [--bot-service S]
+                [--voice Charon] [--no-audio] [--bot-service S]
 
 This is the mention pattern the owner asked for: a longer, readable text answer, and a short audio clip that says the
 same in a few sentences. The text goes out first because it is what a reader scans; the voice is synthesized after it, so
@@ -85,12 +85,12 @@ def spoken(text):
 
 def main(argv):
     if len(argv) < 2:
-        print("usage: reply.py <project> <text...> [--speech ...] [--thread ts] [--channel id] [--voice Kore] [--no-audio]",
+        print("usage: reply.py <project> <text...> [--speech ...] [--thread ts] [--channel id] [--voice Charon] [--no-audio]",
               file=sys.stderr)
         return 2
     project, rest = argv[0], list(argv[1:])
     speech = thread = wanted = service = None
-    voice, audio = "Kore", True
+    voice, audio = "Charon", True
     words = []
     i = 0
     while i < len(rest):
