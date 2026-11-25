@@ -484,6 +484,25 @@ def test_the_printed_plist_names_the_live_profiles_folder_when_none_is_given(tmp
     assert env["SG_PROFILES_DIR"].text == str(tmp_path / "mine")
 
 
+def test_print_profiles_default_names_the_one_folder_constant(monkeypatch, capsys):
+    """#2957: install-agents.sh reads its default from the daemon's own constant, so one place names the folder. The
+    flag prints LIVE_PROFILES and needs no state folder, so the install reads it before it writes a plist."""
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    mod = voiced()
+    code = mod.main(["--print-profiles-default"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == mod.LIVE_PROFILES
+    assert mod.LIVE_PROFILES == str(Path.home() / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles")
+
+
+def test_install_agents_reads_its_profiles_default_from_the_daemon():
+    """#2957: one constant names the profiles folder. install-agents.sh asks the daemon for its default instead of
+    carrying its own copy, so a moved folder is one edit."""
+    src = (VOICE / "install-agents.sh").read_text()
+    assert "--print-profiles-default" in src
+    assert "skills/squad-goal/scripts/profiles" not in src
+
+
 # --- one channel per hub project (#1484)
 
 def configure(tmp_path, mod, client, repos):

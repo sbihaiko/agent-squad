@@ -1,6 +1,7 @@
 """The `voiced` daemon: one owner DM becomes one transcribed inbox line, and a stranger's message stays data.
 
 usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]
+       [--print-profiles-default]
 
 The daemon holds one long-lived Socket Mode connection (`apps.connections.open` with the app token), so Slack pushes
 each `message.im` event instead of the operator polling for it. For every event it does one of three things:
@@ -2815,9 +2816,13 @@ def main(argv, projects=hub_projects):
         elif a == "--print-plist":
             print_plist = True
             i += 1
+        elif a == "--print-profiles-default":
+            # install-agents.sh reads its default from this one constant, so the folder is named in one place (#2957).
+            sys.stdout.write(LIVE_PROFILES + "\n")
+            return 0
         else:
-            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]",
-                  file=sys.stderr)
+            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]"
+                  " [--print-profiles-default]", file=sys.stderr)
             return 2
     try:
         state = State(state_dir)

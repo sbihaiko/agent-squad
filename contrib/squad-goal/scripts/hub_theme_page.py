@@ -1722,10 +1722,11 @@ function slChNeed(a){if(typeof fetch!=="function"||!a)return;const ws=String(a.w
  fetch("/api/slack/channels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,named:a.named||[]})})
  .then(r=>r.json()).then(o=>{slChList[ws]=o||{err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})
  .catch(()=>{slChList[ws]={err:"the channel list could not be read",manual:true,channels:[]};slChAsk[ws]=false;slRender()})}
-/* The tree asks which mapped channels Slack still lists (#2955) once the tree is read, never while it is painted: a render
-   writes nothing, so a paint never opens a request of its own. */
-function slChTree(){const walk=n=>{if(!n)return;if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);(n.children||[]).forEach(walk)};
- slTRoots().forEach(walk)}
+/* The tree asks which mapped channels Slack still lists (#2955) and fills the add pane's list once the tree is read,
+   never while it is painted: a render writes nothing, so a paint never opens a request of its own. The add target asks
+   too, so a workspace that offers the pane and no read target still reads its list (#2957). */
+function slChTree(){const walk=n=>{if(!n)return;if(n.kind==="workspace"){if(n.channel_read)slChNeed(n.channel_read);
+ if(n.channel_add)slChNeed(n.channel_add)}(n.children||[]).forEach(walk)};slTRoots().forEach(walk)}
 function slTChAdd(n){const a=n&&n.kind==="workspace"&&n.channel_add;if(!a)return "";const key=`${a.doc}:${a.ws}`,l=slChList[String(a.workspace||"")];
  const list=l&&Array.isArray(l.channels)?l.channels:[];
  const pick=list.length?`<div class=slad><select data-sltchpick="${slA(key)}" aria-label="channel to add">${list.map(c=>`<option value="${slA(c.id)}">#${esc(c.name)}</option>`).join("")}</select><button type=button data-sltaddch="${slA(key)}">Add channel</button></div>`
@@ -2034,7 +2035,7 @@ async function slDocEdit(attr,el){const op=slDocOp(attr,el);if(!op)return;
 async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
  if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)
- catch(x){slMsg="!the edit failed"}slRender()}
+ catch(x){slMsg="!the edit failed"}slRender();slChTree()}   // an edit may plant a new workspace, whose add pane needs its list (#2957)
 const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
  value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
 const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
