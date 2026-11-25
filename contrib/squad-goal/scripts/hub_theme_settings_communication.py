@@ -119,6 +119,13 @@ def _slack_name(path, fallback):
 def _slack_text(value):
     return "" if value is None else str(value)
 
+def _slack_channel_name(value):
+    """A channel name as the file stores it and the row shows it: no space around the text and no leading `#`
+    (SPEC 2682 #2941). The hub holds this format rule, so the view hands the typed text and the hub decides what the
+    file keeps (ADR-0137)."""
+    text = _slack_text(value).strip()
+    return text[1:].strip() if text.startswith("#") else text
+
 def _slack_dicts(value):
     """The mappings of a list with the position each one holds in its own document, so the editor addresses a row by
     the place it holds in the file it writes (#2698), and a malformed entry never shifts another row's address."""
@@ -647,7 +654,8 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
     `send_grant`, `draft_for`, every poll setting, transcription and the voice reply) writes the local file. Each row
     names its file, and a control carries the field name alone: the operation addresses the channel by its Slack id,
     never by its place in a list. Every value choice comes from the policy module, the empty choice of a persona or
-    language names the value it inherits, and the Watch row marks each value the channel does not name (#2845)."""
+    language names the value it inherits, and the Watch row marks each value the channel does not name (#2845). The
+    Name row opens the list (#2941): it shows the stored name with no leading `#`, and its edit writes the same file."""
     ws_id, ch_id = group["id"], ch["id"]
     owner_doc = "committed" if ch["file"] == cf else "local"
     owner_file = cf if owner_doc == "committed" else lf
@@ -661,6 +669,10 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
                 "value": ", ".join(_slack_text(x) for x in values) if isinstance(values, list) else ""}
 
     rows = [
+        # The channel's name opens its settings (#2941): the row shows the stored name with no leading `#`, and its chip
+        # names the file that holds the channel row, the same file an edit of the row writes.
+        {"key": "name", "label": "Name", "doc": owner_doc, "file": owner_file,
+         "controls": [_slack_written("name", _slack_channel_name(owner.get("name")))]},
         {"key": "mode", "label": "Mode", "doc": owner_doc, "file": owner_file,
          "controls": [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
         {"key": "persona", "label": "Persona", "doc": owner_doc, "file": owner_file,
@@ -691,18 +703,18 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
               for name, label in fields]
     watch.append(_slack_named(_slack_written("poll.thread_open", poll.get("thread_open") or "",
                                              defaults.get("thread_open")), "Thread open"))
-    rows.insert(3, {"key": "delivery", "label": "Delivery", "doc": "local", "file": lf,
+    rows.insert(4, {"key": "delivery", "label": "Delivery", "doc": "local", "file": lf,
                     "controls": [_slack_named(_slack_pick("speak", local.get("speak") or "draft",
                                                           list(P.FIELD_SPEAK)), "Answer as"),
                                  _slack_named(_slack_written("send_grant", local.get("send_grant") or ""),
                                               "Send grant")],
                     "note": f"granted {local['send_grant']} by the hub" if local.get("send_grant")
                     else "no grant: a reply leaves as a draft"})
-    rows.insert(4, {"key": "draft_for", "label": "Always draft for", "doc": "local", "file": lf,
+    rows.insert(5, {"key": "draft_for", "label": "Always draft for", "doc": "local", "file": lf,
                     "controls": [names("draft_for", local.get("draft_for"))]})
-    rows.insert(6, {"key": "watch", "label": "Watch", "doc": "local", "file": lf, "controls": watch,
+    rows.insert(7, {"key": "watch", "label": "Watch", "doc": "local", "file": lf, "controls": watch,
                     "note": _slack_poll_note(mode, defaults, poll)})
-    rows.insert(7, {"key": "audio", "label": "Audio", "doc": "local", "file": lf,
+    rows.insert(8, {"key": "audio", "label": "Audio", "doc": "local", "file": lf,
                     "controls": [_slack_named(_slack_pick("transcribe", local.get("transcribe") or "off",
                                                           list(P.FIELD_TRANSCRIBE)), "Transcribe a clip"),
                                  {"field": "voice_reply", "kind": "check", "label": "Voice reply",
@@ -1001,6 +1013,13 @@ def _slack_read_value(control):
         return _slack_text(value)
     return _slack_text(value) or "none"
 
+def _slack_read_control(control):
+    """One edit control as the read-only control of another project's node (#2919): its value, and the control's own
+    label when it carries one, so a row with two controls shows each control's label and never the row's twice (#2941)."""
+    out = {"field": control.get("field"), "kind": "read", "value": _slack_read_value(control)}
+    if control.get("label"): out["label"] = control["label"]
+    return out
+
 def _slack_tree_elsewhere(node, hub):
     """A project node of another profile and its subtree, read-only (#2919): the page edits its own project's files
     only, so each control becomes the value of that project's own files, no add or remove target stays, and every node
@@ -1009,8 +1028,7 @@ def _slack_tree_elsewhere(node, hub):
         n["elsewhere"] = hub
         n.pop("channel_add", None); n.pop("channel_remove", None)
         for row in (n.get("settings") or {}).get("rows") or []:
-            row["controls"] = [{"field": c.get("field"), "kind": "read", "value": _slack_read_value(c)}
-                               for c in row.get("controls") or []]
+            row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]
 
 def _slack_walk(node):
     yield node
@@ -1980,6 +1998,8 @@ def _slack_field_value(field, value):
         return value, None
     if not isinstance(value, str):
         return None, f"{field} is a string"
+    if field == "name":
+        return _slack_channel_name(value), None   # the typed text is stripped of its space and its leading `#` (#2941)
     return value, None
 
 
