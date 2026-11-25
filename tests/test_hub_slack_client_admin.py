@@ -186,6 +186,43 @@ def test_the_remove_question_names_the_project_and_the_client(hub, tmp_path, mon
     assert "beta" in ask["text"] and "One" in ask["text"], ask
 
 
+def test_the_change_questions_name_the_project_and_the_client(hub, tmp_path, monkeypatch):
+    """Acceptance 3, 6, 12 and 14: the hub answers its own question, and every target reads by its display name, never
+    by its raw project id. The roster is the hub's; the stub gives one project a label apart from its id."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "projects": ["alpha", "beta"]}],
+         {"alpha": FOLLOWER, "beta": OTHER, "gamma": FOLLOWER})
+    seats, rerr = hub._slack_roster_checked()
+    assert rerr is None
+    named = [{**s, "label": {"beta": "Beta project", "gamma": "Gamma project"}.get(s["id"], s["label"])}
+             for s in seats]
+    monkeypatch.setattr(hub, "_slack_roster_checked", lambda cache=0.0: (named, None))
+    add = hub.slack_clients_post({"op": "add_project", "client": "one", "project": "gamma"})
+    assert add.get("saved") is False and "Gamma project" in add["ask"] and "One" in add["ask"], add
+    assert "gamma" not in add["ask"], "the add question names the project, never its raw id"
+    rem = hub.slack_clients_post({"op": "remove_project", "client": "one", "project": "beta"})
+    assert rem.get("saved") is False and "Beta project" in rem["ask"] and "One" in rem["ask"], rem
+    assert "beta" not in rem["ask"], "the remove question names the project, never its raw id"
+    dele = hub.slack_clients_post({"op": "delete_client", "client": "one"})
+    assert "One" in dele["ask"] and "Beta project" in dele["ask"] and "alpha" in dele["ask"], dele
+
+
+def test_an_add_client_mints_its_id_over_the_map_it_writes(hub, tmp_path, monkeypatch):
+    """Acceptance 8: the id comes from the map the write reads, so a name taken between the read and the write takes the
+    next free number instead of answering a success for a client the map did not take."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "projects": []},
+                    {"id": "two", "name": "Two", "projects": []}],
+                   {"alpha": FOLLOWER})
+    stale = [{"id": "one", "name": "One", "default_persona": None, "projects": []}]
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: (stale, None))
+    out = hub.slack_clients_post({"op": "add_client", "name": "Two", "persona": "", "confirm": True})
+    assert out.get("err") is None and out.get("saved") is True, out
+    assert out["client"] == "two-2", "the id the map took, not the id of the stale read"
+    doc = yaml.safe_load((prof / "clients.local.yaml").read_text())
+    assert [c["id"] for c in hub.slack_clients_module().normalize(doc)] == ["one", "two", "two-2"], doc
+
+
 def test_a_post_without_confirm_answers_the_question_and_writes_nothing(hub, tmp_path, monkeypatch):
     """Acceptance 6 and 12: a question comes before the write, so a body without `confirm` changes no file."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
@@ -337,26 +374,56 @@ def test_the_project_pane_shows_remove_from_client_and_the_one_question(hub, tmp
     got = _fetched(hub, out, "c0.p1", script)
     assert "beta" in got["html"] and "One" in got["html"], got["html"][-800:]
     assert "Confirm" in got["html"], got["html"][-800:]
-    assert got["bodies"] and got["bodies"][0]["op"] == "remove_project", got["bodies"]
+    assert len(got["bodies"]) == 1, "the question posts nothing; only the confirm writes"
+    assert got["bodies"][0]["op"] == "remove_project", got["bodies"]
     assert got["bodies"][0]["confirm"] is True and got["bodies"][0]["project"] == "beta", got["bodies"]
 
 
-def test_an_add_client_control_posts_the_typed_name_and_the_default_persona(hub, tmp_path, monkeypatch):
-    """Acceptance 9: the control posts the typed name and the chosen default persona, and the change is confirmed."""
+def test_the_add_client_control_asks_the_hub_before_it_writes(hub, tmp_path, monkeypatch):
+    """Acceptance 9: the click posts the typed name and the default persona without `confirm`, the hub's question is
+    drawn, and the confirm posts the same body with the flag."""
     wire(tmp_path, monkeypatch, hub,
          [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}],
          {"alpha": FOLLOWER})
     out = hub.slack_overview()
-    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{BODIES.push(JSON.parse(o.body));'
-              'return Promise.resolve({status:200,json:()=>Promise.resolve({saved:true})})};'
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve('
+              'b.confirm===true?{saved:true}:{saved:false,ask:"Add the client Two?"})})};'
               'const EL={slcname:{value:"Two"},slcpersona:{value:"amber",options:[{text:"Amber"}],selectedIndex:0}};'
               'globalThis.document={getElementById:id=>EL[id]||null};'
               '(async()=>{slRender();slMapAddClient();await new Promise(r=>setTimeout(r,20));'
-              "console.log(JSON.stringify(BODIES))})()")
-    bodies = _fetched(hub, out, "c0", script)
-    assert bodies and bodies[0]["op"] == "add_client", bodies
-    assert bodies[0]["name"] == "Two" and bodies[0]["persona"] == "amber", bodies
-    assert bodies[0]["persona_name"] == "Amber" and bodies[0]["confirm"] is True, bodies
+              'const h=STORE["#sbody"].innerHTML;slMapConfirm();await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({html:h,bodies:BODIES}))})()')
+    got = _fetched(hub, out, "c0", script)
+    assert [b["op"] for b in got["bodies"]] == ["add_client", "add_client"], got["bodies"]
+    first, second = got["bodies"]
+    assert first.get("confirm") is not True, "the first click writes nothing before the question"
+    assert first["name"] == "Two" and first["persona"] == "amber" and first["persona_name"] == "Amber", first
+    assert "Add the client Two?" in got["html"], got["html"][-800:]
+    assert second["confirm"] is True and second["name"] == "Two", second
+
+
+def test_the_add_project_control_asks_the_hub_before_it_writes(hub, tmp_path, monkeypatch):
+    """Acceptance 2, 3 and 8: the click posts the picked project without `confirm`, the hub's question is drawn, and the
+    confirm posts the same body with the flag."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}],
+         {"alpha": FOLLOWER, "beta": OTHER})
+    out = hub.slack_overview()
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve('
+              'b.confirm===true?{saved:true}:{saved:false,ask:"Add beta to One?"})})};'
+              'const EL={slclproject:{value:"beta"}};globalThis.document={getElementById:id=>EL[id]||null};'
+              '(async()=>{slRender();slMapAddProject("c0");await new Promise(r=>setTimeout(r,20));'
+              'const h=STORE["#sbody"].innerHTML;slMapConfirm();await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({html:h,bodies:BODIES}))})()')
+    got = _fetched(hub, out, "c0", script)
+    assert [b["op"] for b in got["bodies"]] == ["add_project", "add_project"], got["bodies"]
+    first, second = got["bodies"]
+    assert first.get("confirm") is not True, "the first click writes nothing before the question"
+    assert first["client"] == "one" and first["project"] == "beta", first
+    assert "Add beta to One?" in got["html"], got["html"][-800:]
+    assert second["confirm"] is True and second["project"] == "beta", second
 
 
 def test_a_new_client_lists_the_hub_personas_as_its_default(hub, tmp_path, monkeypatch):

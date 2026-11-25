@@ -1661,7 +1661,7 @@ function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
 function slClientPick(){clearTimeout(slProposeT);slProposeT=setTimeout(()=>{slProposeT=null;slPropose(slTsel,true)},SL_COMMIT_MS);slBarSync()}   // one burst of picks is one save of each project (#2908)
 const slTRefused=n=>{const bad=(n.proposal||[]).filter(r=>r.action==="refused");if(!bad.length)return "";   // only a project the save could not write is named (#2908)
  return `<div class="mx err sltbad" role=status><b>${esc("Not written")}</b><ul>${bad.map(r=>`<li>${esc(r.label||r.project)}: ${esc(String(r.result||"").replace(/^refused: /,""))}</li>`).join("")}</ul></div>`};
-const slTClient=n=>{if(n.kind!=="client")return "";
+const slTClient=n=>{if(n.kind!=="client"||n.own)return "";   // the page of one unnamed project draws no client map chrome (#2922)
  const opts=n.persona_options||[],cur=n.default_persona||"";
  const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
  // The Add project control lists the hub's free projects by name, and Delete client asks the hub's one question (#2922).
@@ -1678,16 +1678,19 @@ const slTClient=n=>{if(n.kind!=="client")return "";
    and the client. */
 const slTClientActions=n=>n.kind!=="project"||!n.ask?""
  :`<div class=sltacts><button type=button data-slcask="${slA(n.id)}">${esc("Remove from client")}</button></div>`;
-/* The one question a remove or a delete asks (#2922): the hub's text, with Confirm and Keep. */
-const slTConfirm=n=>{if(!slConfirm||!n.ask||slConfirm.id!==n.id)return "";
+/* The one question a change asks (#2922): the hub's text, with Confirm and Keep. The question a node carries needs no
+   post; the one the route answers for Add project or Add client lands on the node the owner is looking at. */
+const slTConfirm=n=>{if(!slConfirm||(slConfirm.id&&(!n||slConfirm.id!==n.id)))return "";
  return `<div class="mx sltconfirm" role=alertdialog aria-label="${slA("Confirm")}"><p>${esc(slConfirm.text)}</p>`
  +`<div class=sltacts><button type=button data-slcconfirm>${esc("Confirm")}</button><button type=button data-slccancel>${esc("Keep")}</button></div></div>`};
 /* The Add client control of the tree (#2922): a name and a default persona, and the hub makes the client from them. */
 const slTNewPersonas=()=>(slT&&slT.new_client_personas)||[];
 function slTAddClient(){const pers=slTNewPersonas();
+ // A hub whose projects declare no persona draws the name alone: an empty select would offer a default persona that
+ // does not exist, and the client joins the map with none (#2922).
+ const sel=pers.length?`<select id=slcpersona aria-label="${slA("Default persona")}">${pers.map(o=>`<option value="${slA(o.id)}">${esc(o.name)}</option>`).join("")}</select>`:"";
  return `<div class="slad sltnew"><input id=slcname aria-label="${slA("Client name")}" placeholder="${slA("client name")}">`
- +`<select id=slcpersona aria-label="${slA("Default persona")}">${pers.map(o=>`<option value="${slA(o.id)}">${esc(o.name)}</option>`).join("")}</select>`
- +`<button type=button data-slcadd>${esc("Add client")}</button></div>`}
+ +sel+`<button type=button data-slcadd>${esc("Add client")}</button></div>`}
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
  const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note||[],
@@ -1814,16 +1817,19 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
 /* The client map's own changes (#2922): add a project, remove a project, add a client, delete a client. Every change is
    one confirmed POST to the client route, and the hub writes the map and answers; the view then reads the tree again,
    so what it draws is the hub's answer. The list, the targets and the question are the hub's (ADR-0137, ADR-0177). */
-function slMapAsk(id){const n=slTNode(id);slConfirm=n&&n.ask?n.ask:null;slRender()}   // the one question a remove or a delete asks
+function slMapAsk(id){const n=slTNode(id);slConfirm=n&&n.ask?{id:n.id,text:n.ask.text,body:n.ask}:null;slRender()}   // the one question a remove or a delete asks
 function slMapKeep(){slConfirm=null;slRender()}
+/* One change posts its body as it stands, so the hub answers its one question before any write; the confirm posts the
+   same body with the flag (#2922). A body that carries `confirm` on the first click would skip the question. */
 function slMapPost(body){slSaving=true;slMsg="";slBarSync();
  const fail=m=>{slSaving=false;slMsg="!"+m;slRender()};
- fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({},body,{confirm:true}))})
+ fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
  .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
  .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client map was not saved");return}
+  if(o.saved===false&&o.ask){slSaving=false;slConfirm={id:slTsel,text:o.ask,body:body};slRender();return}   // the hub's question, drawn before the write
   slSaving=false;slConfirm=null;slMsg="saved";slLoad()})   // the tree is read again, so the drawn tree is the hub's
  .catch(()=>fail("the client map was not saved: the hub did not answer"))}
-function slMapConfirm(){if(slConfirm)slMapPost(slConfirm)}
+function slMapConfirm(){if(slConfirm)slMapPost(Object.assign({},slConfirm.body,{confirm:true}))}
 function slMapAddProject(id){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclproject");
  if(el&&el.value)slMapPost({op:"add_project",client:(slTNode(id)||{}).client||"",project:el.value})}
 function slMapAddClient(){const d=typeof document!=="undefined"?document:null,

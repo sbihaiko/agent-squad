@@ -766,17 +766,17 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
 SLACK_TREE_SETUP = ({"id": "owned", "label": "Add owned workspace"}, {"id": "guest", "label": "Add guest workspace"})
 
 def _slack_tree_failed(message):
-    """The tree of a read that could not resolve the policy: one node that carries the reason, its Now tiles at zero,
-    the reason as its one defect, and the two setup choices. A broken module never costs the reader the shape, and the
-    tree draws no client the map does not name (#2922)."""
+    """The tree of a read that could not resolve the policy: one project-level node that carries the reason, its Now
+    tiles at zero, the reason as its one defect, and the two setup choices. The node carries no client field, so a
+    broken policy read never draws a client the map does not name (#2922)."""
     label = _slack_project_label()
-    client = {"id": "c0", "level": 1, "kind": "client", "name": label, "state": "error", "client": "",
-              "default_persona": "", "badges": [], "children": [], "defects": [], "setup": list(SLACK_TREE_SETUP),
-              "now": [{"key": key, "value": "0", "tone": "neutral"} for key in ("Workspaces", "Channels", "Personas", "Events")],
-              "persona_options": [], "add_projects": [], "detail": {"title": label, "sub": "", "text": ""}}
+    node = {"id": "p0", "level": 1, "kind": "project", "name": label, "state": "error",
+            "badges": [], "children": [], "defects": [message], "setup": list(SLACK_TREE_SETUP),
+            "now": [{"key": key, "value": "0", "tone": "neutral"} for key in ("Workspaces", "Channels", "Personas", "Events")],
+            "detail": {"title": label, "sub": "", "text": ""}}
     return {"err": message, "files": {"committed": "slack.yaml", "local": "slack.local.yaml"}, "defects": [message],
-            "empty": True, "guest_slot": None, "notice": None, "clients": [client], "root": client,
-            "new_client_personas": [], "counts": {"clients": 1, "projects": 0, "channels": 0}}
+            "empty": True, "guest_slot": None, "notice": None, "clients": [node], "root": node,
+            "new_client_personas": [], "counts": {"clients": 0, "projects": 0, "channels": 0}}
 
 
 def slack_clients_module():
@@ -1044,7 +1044,7 @@ def _slack_clients_tree_for(P, seats, here=None, own=False):
     if not groups and own and len(seats) == 1:
         # The page of one project whose map names no client draws that project under its own name: that page has no Add
         # project list to wait in. The node is the project's own, never a client the map does not name (#2922).
-        groups = [{"id": "", "name": seats[0]["label"], "default_persona": None,
+        groups = [{"id": "", "name": seats[0]["label"], "default_persona": None, "own": True,
                    "projects": [{"id": seats[0]["id"], "follows": True}]}]
     by_id = {s["id"]: s for s in seats}
     # The Add project list: the hub's projects no client names, by project name. The same list reaches every client.
@@ -1071,6 +1071,7 @@ def _slack_clients_tree_for(P, seats, here=None, own=False):
         seats_of = [by_id[e["id"]] for e in g["projects"]]
         held = [p["name"] for p in children]
         node = {"id": f"c{i}", "level": 1, "kind": "client", "name": g["name"], "client": g["id"],
+                "own": bool(g.get("own")),   # the page of one unnamed project is no client: it draws no client chrome
                 "default_persona": personal["id"] if personal else "",
                 "state": "empty" if not g["projects"] else "ok",
                 "badges": [_slack_badge(personal["name"])] if personal else [], "defects": [],
@@ -1707,6 +1708,12 @@ def slack_clients_post(body):
 # hub's (ADR-0137, ADR-0177). A body without `confirm` answers the one question and writes nothing.
 CLIENT_MAP_OPS = ("add_project", "remove_project", "add_client", "delete_client")
 
+def _slack_project_name(roster, project_id):
+    """The display name one project of the roster carries, else its id: a question names a project the way the tree
+    does, never by its raw id (#2922, ADR-0137)."""
+    return next((_slack_text(s.get("label")) for s in roster
+                 if s.get("id") == project_id and s.get("label")), "") or project_id
+
 def _clients_map_write(change):
     """The raw client map, changed by `change(CL, doc)`, written whole or not at all (ADR-0030). Returns an error, or
     None. The file is local to the profile folder, so no client name or id enters a repository."""
@@ -1744,7 +1751,8 @@ def _slack_clients_op(body):
         if pid not in known: return {"err": f"this hub holds no project {pid!r}"}
         if pid not in CL.free_projects(clients, known):
             return {"err": f"{pid!r} is already a project of a client; remove it there first"}
-        if not confirm: return {"err": None, "saved": False, "ask": f"Add {pid} to {client['name']}?"}
+        name = _slack_project_name(roster, pid)
+        if not confirm: return {"err": None, "saved": False, "ask": f"Add {name} to {client['name']}?"}
         err = _clients_map_write(lambda C, doc: C.with_project(doc, cid, pid))
         return {"err": err} if err else {"err": None, "saved": True, "client": cid, "project": pid}
     if op == "remove_project":
@@ -1753,7 +1761,8 @@ def _slack_clients_op(body):
         if not pid: return {"err": "project: a body that names one"}
         if pid not in [p["id"] for p in client["projects"]]:
             return {"err": f"{client['name']} holds no project {pid!r}"}
-        ask = f"Remove {pid} from {client['name']}?"
+        roster, _ = _slack_roster_checked(PREVIEW_ROSTER_SECONDS)   # a broken roster costs the display name, never the remove
+        ask = f"Remove {_slack_project_name(roster, pid)} from {client['name']}?"
         if not confirm: return {"err": None, "saved": False, "ask": ask}
         err = _clients_map_write(lambda C, doc: C.without_project(doc, cid, pid))
         return {"err": err} if err else {"err": None, "saved": True, "client": cid, "project": pid}
@@ -1770,13 +1779,24 @@ def _slack_clients_op(body):
         if pid and pid not in [o["id"] for o in options]:
             return {"err": f"the hub holds no persona {pid!r}"}
         if not pname: pname = next((o["name"] for o in options if o["id"] == pid), pid)
-        nid = CL.new_client_id(clients, name)
         if not confirm: return {"err": None, "saved": False, "ask": f"Add the client {name}?"}
-        err = _clients_map_write(lambda C, doc: C.with_client(doc, nid, name, pid, pname))
-        return {"err": err} if err else {"err": None, "saved": True, "client": nid}
+        made = {}
+        def change(C, doc):
+            # The id is minted over the map this write reads, never the read above: a name whose slug was taken between
+            # the read and the write takes the next free number, and a client the map truly refused is an error (#2922).
+            nid = C.new_client_id(C.normalize(doc), name)
+            out = C.with_client(doc, nid, name, pid, pname)
+            made.update({"id": nid, "ok": any(c["id"] == nid for c in C.normalize(out))})
+            return out
+        err = _clients_map_write(change)
+        if err: return {"err": err}
+        if not made.get("ok"):
+            return {"err": f"the client map did not take the new client {made.get('id')!r}"}
+        return {"err": None, "saved": True, "client": made["id"]}
     # delete_client
     if client is None: return {"err": f"the client map names no client {cid!r}" if cid else "client: a body that names one"}
-    held = [p["id"] for p in client["projects"]]
+    roster, _ = _slack_roster_checked(PREVIEW_ROSTER_SECONDS)
+    held = [_slack_project_name(roster, p["id"]) for p in client["projects"]]
     ask = f"Delete {client['name']}? Its projects return to the Add project list" + (f": {', '.join(held)}." if held else ".")
     if not confirm: return {"err": None, "saved": False, "ask": ask}
     err = _clients_map_write(lambda C, doc: C.without_client(doc, cid))
