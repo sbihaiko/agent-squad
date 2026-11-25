@@ -634,6 +634,17 @@ def read_schema(directory):
     return version
 
 
+def revision_channel_ids(revision):
+    """Every channel id one Slack revision names, across its workspaces (#2925)."""
+    ids = []
+    for workspace in (revision or {}).get("workspaces") or []:
+        for row in (workspace or {}).get("channels") or [] if isinstance(workspace, dict) else []:
+            cid = str((row or {}).get("id") or "") if isinstance(row, dict) else ""
+            if cid and cid not in ids:
+                ids.append(cid)
+    return ids
+
+
 def slack_record_path(state_dir, repo):
     """The file one project's active Slack revision lives in, named by the repository it belongs to.
 
@@ -658,16 +669,25 @@ def scope_identity(state_dir, scope):
         return slackpolicy.DEFAULT_LANGUAGE, None
     if not isinstance(channels, dict):
         return slackpolicy.DEFAULT_LANGUAGE, None
+    def record_of(name):
+        try:
+            with open(slack_record_path(state_dir, name), encoding="utf-8") as f:
+                got = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return got if isinstance(got, dict) and got.get("revision") else None
+
     repo = next((name for name, entry in channels.items()
                  if isinstance(entry, dict) and str(entry.get("id")) == str(scope)), None)
+    record = record_of(repo) if repo else None
     if not repo:
-        return slackpolicy.DEFAULT_LANGUAGE, None
-    try:
-        with open(slack_record_path(state_dir, repo), encoding="utf-8") as f:
-            record = json.load(f)
-    except (OSError, ValueError):
-        return slackpolicy.DEFAULT_LANGUAGE, None
-    if not isinstance(record, dict) or not record.get("revision"):
+        # A channel the registry does not name belongs to the project whose active revision names it (#2925).
+        for name in channels:
+            got = record_of(name)
+            if got and str(scope) in revision_channel_ids(got["revision"]):
+                record = got
+                break
+    if not record:
         return slackpolicy.DEFAULT_LANGUAGE, None
     return slackpolicy.identity(record["revision"], record.get("local") or {}, scope)
 
@@ -923,9 +943,19 @@ class State:
         self._registry_read = True
 
     def channel_for(self, channel_id):
-        """The repository one project channel belongs to, or None for the DM and any channel no project owns."""
+        """The repository one project channel belongs to, or None for the DM and any channel no project owns.
+
+        The registry names the channel the daemon created for each project, and a project's active revision may name
+        more channels of its own: each of them belongs to that project too, so its message reaches its own inbox (#2925).
+        """
+        if not channel_id:
+            return None
         for repo, entry in self.channels().items():
             if entry.get("id") == channel_id:
+                return repo
+        for repo in self.channels():
+            active = self.active_revision(repo)
+            if active and str(channel_id) in revision_channel_ids(active.get("revision")):
                 return repo
         return None
 
@@ -1723,10 +1753,11 @@ class Daemon:
             return False
 
     def inbox_path_of(self, event):
-        """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
+        """The inbox one message belongs to: its own channel's when a project owns the channel, the DM's for an im, else
+        None. Each channel of a project has its own inbox, which the project session watches (#2925)."""
         repo = self.state.channel_for(event.get("channel"))
         if repo:
-            return self.state.inbox_for(self.state.channels()[repo]["id"])
+            return self.state.inbox_for(str(event.get("channel")))
         if (event.get("channel_type") or "im") == "im":
             return self.state.inbox_path
         return None

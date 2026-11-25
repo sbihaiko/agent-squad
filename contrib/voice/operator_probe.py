@@ -208,6 +208,29 @@ def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inbox
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
+OWNER_FILES = ("settings.json", "CLAUDE.md")   # files the owner's next, unsandboxed session loads from ~/.claude
+OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates
+
+
+def config_denials(work, profile, home=None):
+    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925).
+
+    The check opens the file for append and writes nothing, and it never creates a file, so a profile that let it through
+    changes nothing on disk. A file the machine does not hold cannot be tried, and is skipped. Returns the files tried."""
+    root = Path(home or os.path.realpath(Path.home())) / ".claude"
+    tried = []
+    for name in OWNER_FILES:
+        path = root / name
+        if not path.is_file():
+            continue
+        done = sandboxed(profile, sys.executable, ["-c", OPEN_FOR_WRITE, str(path)], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a denial did not happen: the session may write {path}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ""))
+        tried.append(str(path))
+    return tried
+
+
 def denied(done):
     """True when the kernel itself ran the command and refused it: a run that failed for another reason is no denial."""
     return done.returncode != 0 and DENIED in (done.stderr or "")
@@ -469,6 +492,7 @@ def run_probe(work, cli):
     controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
     if loopback:
         check_denials(*denials(checkout, profile, leak, other_inbox, port, **controls))
+        config_denials(checkout, profile)
         init, result = session(checkout, profile, cli)
         check_session(init, result)
         bg_session(checkout, profile, cli)
@@ -476,6 +500,7 @@ def run_probe(work, cli):
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
         check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, **controls))
+        config_denials(checkout, profile)
         check_proxy_refuses(proxy)
         init, result = session(checkout, profile, cli, proxy.url)
         check_session(init, result)

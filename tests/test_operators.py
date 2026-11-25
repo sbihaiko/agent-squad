@@ -257,13 +257,15 @@ def test_ensure_names_the_session_it_started_and_the_one_it_kept(tmp_path, monke
 
 
 def test_ensure_that_started_no_session_exits_non_zero_and_names_the_project(tmp_path, monkeypatch, capsys):
-    """Criterion 4: no live session and no start is a failure the caller acts on, never a silent no-op. The record
-    holds an id the CLI does not list, and a miss under MISSING_PASSES starts nothing on this pass."""
+    """Criterion 4: no live session and no start is a failure the caller acts on, never a silent no-op. Re-anchored
+    (#2925): an ensure now replaces a dead session at once, so the case that starts nothing is a project whose last stop
+    failed and still waits for its retry."""
     op = operators(tmp_path, monkeypatch)
     hub(tmp_path, monkeypatch, op, ["acme/widget"])
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
     (tmp_path / "state" / "operators.json").write_text(json.dumps(
-        {"acme-widget": {"id": "dddddddd-0000-0000-0000-000000000001", "pid": 9, "started": 1}}))
+        {"acme-widget": {"id": "dddddddd-0000-0000-0000-000000000001", "pid": 9, "started": 1,
+                         "stop": {"tries": 1, "next": time.time() + 600}}}))
     scenario(tmp_path, [])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 2
     assert not started(tmp_path), f"a project with no listed session was started: {started(tmp_path)}"
@@ -728,7 +730,7 @@ def test_a_session_whose_last_turn_failed_with_an_api_error_is_restarted(tmp_pat
     (tmp_path / "state" / "operators.json").write_text(json.dumps(
         {"acme-widget": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
     scenario(tmp_path, [live])
-    transcript(tmp_path, found["acme/widget"], [API_ERROR], mtime=time.time() - 60)
+    transcript(tmp_path, found["acme/widget"], [API_ERROR], mtime=time.time() - 60, sid=live["sessionId"])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     assert f"stop {live['sessionId']}" in calls(tmp_path), "the dead session was never stopped"
     assert len([c for c in started(tmp_path) if "acme/widget" in c]) == 1, "no replacement started"
@@ -746,7 +748,8 @@ def test_a_session_that_takes_no_turn_after_a_new_inbox_line_is_restarted(tmp_pa
         {"acme-widget": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
     scenario(tmp_path, [live])
     transcript(tmp_path, found["acme/widget"], [{"type": "assistant", "message": {
-        "id": "m0", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 1, "output_tokens": 1}}}], mtime=now - 3600)
+        "id": "m0", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 1, "output_tokens": 1}}}], mtime=now - 3600,
+        sid=live["sessionId"])
     inbox(tmp_path, "C0AAAAAA1", mtime=now - 600)
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     assert f"stop {live['sessionId']}" in calls(tmp_path), "a session that took no turn was never stopped"
@@ -765,7 +768,8 @@ def test_a_session_that_answered_the_new_inbox_line_is_never_restarted(tmp_path,
     scenario(tmp_path, [live])
     inbox(tmp_path, "C0AAAAAA1", mtime=now - 3600)
     transcript(tmp_path, found["acme/widget"], [{"type": "assistant", "message": {
-        "id": "m0", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 1, "output_tokens": 1}}}], mtime=now - 600)
+        "id": "m0", "model": "claude-sonnet-5-5", "usage": {"input_tokens": 1, "output_tokens": 1}}}], mtime=now - 600,
+        sid=live["sessionId"])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
     assert not [c for c in calls(tmp_path) if c.startswith("stop")], "a live session was stopped"
     assert not started(tmp_path), "a live session was replaced"
@@ -781,7 +785,7 @@ def test_a_restart_with_no_answer_alerts_once_and_names_the_project(tmp_path, mo
     (tmp_path / "state" / "operators.json").write_text(json.dumps(
         {"acme-widget": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
     scenario(tmp_path, [live])
-    transcript(tmp_path, found["acme/widget"], [API_ERROR], mtime=now - 60)
+    transcript(tmp_path, found["acme/widget"], [API_ERROR], mtime=now - 60, sid=live["sessionId"])
     inbox(tmp_path, "C0AAAAAA1", mtime=now - 600)
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     err = capsys.readouterr().err
