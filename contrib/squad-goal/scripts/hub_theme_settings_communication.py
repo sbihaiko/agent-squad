@@ -12,15 +12,106 @@ def slack_policy():
     return SP
 
 def slack_yaml_paths():
-    """The committed `slack.yaml` at the checkout root and this profile's local file (SPEC 2682). A profile that names no
-    checkout reads no committed file, and one that names no project reads no local file."""
+    """The committed `slack.yaml` and this profile's local file (SPEC 2682). A profile that names no checkout reads no
+    committed file, and one that names no project reads no local file. The committed path measures the landing branch
+    before it answers, so a read shows the branch's document (#2920)."""
     root = pathlib.Path(CHECKOUT) if CHECKOUT else None
+    committed = _slack_committed_path(str(root)) if root else None
+    return committed, _slack_local_path()
+
+def _slack_local_path():
+    """This profile's local file, or None: named for the checkout folder, as slackpolicy.check and the guest runner name
+    it; SG_PROJECT holds the board number, so it never names this file (#2899)."""
     d = profiles_dir()
-    # The local file is named for the checkout folder, as slackpolicy.check and the guest runner name it; SG_PROJECT
-    # holds the board number (#2899).
+    root = pathlib.Path(CHECKOUT) if CHECKOUT else None
     project = (root.name if root else "") or PROFILE_NAME
     local = slack_policy().local_path(str(d), project) if d is not None and project else None
-    return (root / SLACK_YAML_REL if root else None), (pathlib.Path(local) if local else None)
+    return pathlib.Path(local) if local else None
+
+_SLACK_ORIGIN_CACHE = {}   # (worktree, checkout) -> same origin: the remote URL of a repository does not change
+
+def _slack_same_origin(wt):
+    """True when the hub worktree hangs from the same origin as the loop checkout, so its file is this profile's
+    document and never another repository's (issue #2920). The answer is kept per pair of paths."""
+    loop = _slack_repo()
+    if not loop: return False
+    key = (str(wt), str(loop))
+    if key in _SLACK_ORIGIN_CACHE: return _SLACK_ORIGIN_CACHE[key]
+    a = _slack_git(wt, "remote", "get-url", "origin")
+    b = _slack_git(loop, "remote", "get-url", "origin")
+    ua = a.stdout.strip() if a.returncode == 0 else ""
+    ub = b.stdout.strip() if b.returncode == 0 else ""
+    if not ua or not ub:
+        return False   # an absent worktree answers nothing and is never kept: a save may create it later
+    ok = ua == ub
+    _SLACK_ORIGIN_CACHE[key] = ok
+    return ok
+
+def _slack_landing_tip(wt):
+    """(tip, head, error): the landing branch tip the hub worktree knows and its HEAD. It fetches origin/<land> first,
+    so a landing made elsewhere is seen; an error names the worktree the read could not measure."""
+    r = _slack_git(wt, "fetch", "-q", "origin", f"+refs/heads/{LAND}:refs/remotes/origin/{LAND}")
+    if r.returncode:
+        return None, None, f"the hub worktree {wt} could not fetch origin/{LAND}: {(r.stderr or r.stdout).strip()}"
+    t = _slack_git(wt, "rev-parse", f"origin/{LAND}", "HEAD")
+    if t.returncode:
+        return None, None, f"the hub worktree {wt} has no origin/{LAND}"
+    lines = t.stdout.split()
+    if len(lines) < 2:
+        return None, None, f"the hub worktree {wt} has no HEAD"
+    return lines[0], lines[1], None
+
+def _slack_landing_file(wt, tip):
+    """The committed file as the landing branch tip holds it, written under the hub state directory, outside every
+    repository, so a read shows the branch's document even when the hub worktree stands behind it (issue #2920).
+    Returns the path, or None when the tip holds no file the read can take."""
+    r = _slack_git(wt, "show", f"{tip}:{SLACK_YAML_REL.as_posix()}")
+    if r.returncode:
+        return None
+    p = pathlib.Path(STATE) / SLACK_COMMITTED_DIR / tip / SLACK_YAML_REL
+    err = _slack_atomic(p, r.stdout)
+    if err:
+        log_once(f"[slack] the landed Slack file was not staged at {p}: {err}")
+        return None
+    return p
+
+def _slack_hub_worktree_file():
+    """The committed file the hub's own landing worktree holds, or None when no such file is fresh. The hub saves the
+    committed file in that worktree and lands it from there, so a read after a save takes the landed document from it,
+    never from the loop checkout's file, whose branch may stand behind the landing branch (issue #2920). The worktree
+    answers only when it hangs from the checkout's own origin and its HEAD holds the current origin/<land> tip; when it
+    stands behind, the read takes the file from the landing commit itself, so a document an external landing wrote is
+    never dropped."""
+    try:
+        wt, why = slack_worktree()
+    except (OSError, ValueError) as e:
+        log_once(f"[slack] the hub worktree did not resolve: {type(e).__name__}: {e}")
+        return None
+    if why or not wt: return None
+    wt = pathlib.Path(wt)
+    if not _slack_same_origin(wt): return None
+    p = wt / SLACK_YAML_REL
+    tip, head, err = _slack_landing_tip(wt)
+    if err:
+        log_once(f"[slack] {err}; the read falls back to the checkout file")
+        return None
+    if head == tip or _slack_git(wt, "merge-base", "--is-ancestor", tip, "HEAD").returncode == 0:
+        return p if p.is_file() else None
+    return _slack_landing_file(wt, tip)
+
+def _slack_committed_path(checkout=None):
+    """The committed file a read takes for one checkout: the copy of the hub's own landing worktree when the checkout is
+    the hub's checkout and that worktree holds a file fresh to the landing branch, else the checkout's own file
+    (issue #2920)."""
+    own = CHECKOUT or os.environ.get("SG_CHECKOUT") or ""
+    try:
+        same = bool(checkout) and bool(own) and pathlib.Path(checkout).resolve() == pathlib.Path(own).resolve()
+    except (OSError, ValueError):
+        same = False
+    if same:
+        saved = _slack_hub_worktree_file()
+        if saved is not None: return saved
+    return pathlib.Path(checkout) / SLACK_YAML_REL if checkout else None
 
 def _slack_name(path, fallback):
     return pathlib.Path(path).name if path else fallback
@@ -247,8 +338,12 @@ def slack_sample(body, client=None):
 def _slack_project_label():
     return str(os.environ.get("SG_PROJECT") or PROFILE_NAME or "project")
 
+# A workspace class reads in the owner's words in a badge (#2912); the files and the policy keep `owned` and `guest`.
+SLACK_CLASS_WORDS = {"owned": "our workspace", "guest": "guest workspace"}
+
 def _slack_badge(text, tone="neutral", kind="class"):
-    return {"text": _slack_text(text), "tone": tone, "kind": kind}
+    text = _slack_text(text)
+    return {"text": SLACK_CLASS_WORDS.get(text, text) if kind == "class" else text, "tone": tone, "kind": kind}
 
 def _slack_tile(key, value, sub="", tone="neutral"):
     return {"key": key, "value": _slack_text(value), "sub": _slack_text(sub), "tone": tone}
@@ -281,7 +376,7 @@ def _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf):
                 if cid in group["named"]:
                     continue
                 group["named"].add(cid)
-                group["channels"].append({"id": cid, "row": ch, "file": file, "index": ci, "ws": row})
+                group["channels"].append({"id": cid, "row": ch, "file": file, "index": ci, "ws": row, "ws_index": i})
     return groups
 
 def _slack_tree_channel_row(group, ch_id):
@@ -445,8 +540,8 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
     channel of a refused workspace carries the refusal alone, never a send, bot or listen badge."""
     ws, ws_id, ch_id = group["ws"], group["id"], ch["id"]
-    merged = _slack_tree_channel_row(group, ch_id)
-    name = _slack_text(merged.get("name") or ch_id)
+    merged = _slack_tree_channel_row(group, ch_id) or dict(ch["row"])   # a row with no Slack id merges with nothing
+    name = _slack_text(merged.get("name") or _slack_real_id(ch_id) or "unnamed channel")
     announcement = [_slack_text(x) for x in merged.get("announce") or ()] if isinstance(merged.get("announce"), list) else []
     label = _slack_text(ws.get("label") or ws_id)
     icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
@@ -463,8 +558,10 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     if P.channel_class(ws, merged) != _slack_group_class(group, lf):
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
+    listen_only = _slack_text(merged.get("mode") or "listen") == "listen"
     if not members:
-        badges.append(_slack_badge("no one", "warn", "noone"))
+        # A listen-only channel answers nobody by design, so its badge is a fact and not a warning (#2912).
+        badges.append(_slack_badge("nobody can ask", "neutral" if listen_only else "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -479,15 +576,69 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
     note = P.channel_note(merged, members, announcement)
+    permissions = _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged)
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
-            "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
-                       "note": note}}
+            "conversation": _slack_channel_conversation(persona, merged, members, listen_only, announcement,
+                                                        permissions, reply_value),
+            "permissions": permissions,
+            "detail": {"title": f"#{name}", "sub": label, "text": "", "note": note,
+                       "verdict": _slack_channel_verdict(persona, merged, members, listen_only)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
+    # The channel node removes its own row and opens the channel in the Slack web client (#2918).
+    node["channel_remove"] = {"doc": "committed" if ch["file"] == cf else "local", "ws": ch["ws_index"],
+                              "index": ch["index"], "name": f"#{name}"}
+    node["open"] = _slack_channel_url(ws_id, ch_id)
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
     return node
+
+
+def _slack_channel_verdict(persona, merged, members, listen_only):
+    """The channel detail's first sentence (#2912): will the persona answer people here, and who. The hub writes it from
+    the policy's answers, so the view holds no rule (ADR-0137)."""
+    who = persona.name if persona else "The agent"
+    count = "1 person" if len(members) == 1 else f"{len(members)} people"
+    roles = " or ".join(_slack_text(r) for r in merged.get("roles") or ())
+    if listen_only:
+        return (f"{who} posts nothing here: a message from the {count} who {'holds' if len(members) == 1 else 'hold'} {roles} becomes a proposal in your DM."
+                if members else f"{who} only listens here and answers nobody.")
+    if not members:
+        return f"Nobody can ask {who} here: no member holds a role this channel accepts."
+    return f"{who} answers {count} here: anyone who holds {roles}."
+
+
+def _slack_channel_conversation(persona, merged, members, listen_only, announcement, permissions, reply):
+    """The channel detail's short conversation (#2917): what happens in the channel as a Slack user sees it. Each line is
+    {side, who, text, tone}: `in` is a person who writes, `out` the persona, `sys` a plain fact between them. The hub
+    writes every line from the policy's answers, so the view holds no rule (ADR-0137)."""
+    who = persona.name if persona else "The agent"
+    accepted = [r for r in permissions.get("roles") or () if r.get("accepted")]
+    roles = [_slack_text(r) for r in merged.get("roles") or ()]
+    actions = list(dict.fromkeys(_slack_text(a) for r in accepted for a in r.get("actions") or ()))
+    ask = actions[0] if actions else "status"
+    line = lambda side, by, text, tone="": {"side": side, "who": by, "text": text, "tone": tone}   # noqa: E731
+    out = []
+    if members:
+        count = "1 person" if len(members) == 1 else f"{len(members)} people"
+        holds = "holds" if len(members) == 1 else "hold"
+        out.append(line("in", f"someone who holds {roles[0]}", f"@{who} {ask}?"))
+        if listen_only:
+            out.append(line("sys", "", f"{who} stays quiet here. A proposal with the {roles[0]} actions reaches your DM.",
+                            "quiet"))
+        else:
+            draft = reply == "draft"
+            out.append(line("out", who, f"Here is the {ask}: …", "draft" if draft else ""))
+            fact = f"{who} answers the {count} who {holds} {' or '.join(roles)}. They can ask for: {', '.join(actions)}."
+            out.append(line("sys", "", fact + (" Each answer waits as a draft for your review." if draft else ""),
+                            "quiet"))
+    else:
+        out.append(line("sys", "", "Nobody here holds a role this channel accepts.", "quiet"))
+    out.append(line("in", "anyone else", f"@{who} deploy now"))
+    out.append(line("sys", "", f"{who} reads it and never obeys it. No reply.", "quiet"))
+    if announcement:
+        out.append(line("out", who, f"Draft for your review: {', '.join(announcement)}.", "draft"))
+    return out
 
 
 def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf):
@@ -558,6 +709,17 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
                                   "value": bool(local.get("voice_reply"))}]})
     return rows
 
+def _slack_real_id(value):
+    """A Slack id the files name, never the placeholder key a row with no id stands on."""
+    text = _slack_text(value)
+    return "" if not text or text.startswith("\0") else text
+
+def _slack_channel_url(ws_id, ch_id):
+    """The channel in the Slack web client, or "" when the workspace or the channel names no Slack id (#2918)."""
+    ws_id, ch_id = _slack_real_id(ws_id), _slack_real_id(ch_id)
+    if not ws_id or not ch_id: return ""
+    return f"https://app.slack.com/client/{urllib.parse.quote(ws_id)}/{urllib.parse.quote(ch_id)}"
+
 def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held, refused_keys, defects, cf, lf):
     """One workspace node: its class tile, its persona and language, the guest slot it holds, the validation defects
     that name it and its channels. A refused workspace states its one defect and its channels carry no transport."""
@@ -587,8 +749,14 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
+    # The workspace node adds a channel to the row that leads it; the hub lists the Slack ids the files already name,
+    # so the channel list never offers one twice (#2918).
+    channel_add = None if refused or not _slack_real_id(ws_id) else {
+        "doc": "committed" if group["file"] == cf else "local", "ws": group["index"], "workspace": ws_id,
+        "named": [c for c in (_slack_real_id(x["id"]) for x in group["channels"]) if c]}
     return {"id": node_id, "level": 3, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
+            "channel_add": channel_add,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
             "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
@@ -678,7 +846,7 @@ def _slack_seat(slug, checkout, project):
     try: P = slack_policy()
     except Exception:
         return None
-    cp = pathlib.Path(checkout) / SLACK_YAML_REL if checkout else None
+    cp = _slack_committed_path(checkout) if checkout else None
     lp = None
     d = profiles_dir()
     if d is not None and (project or slug):
@@ -818,6 +986,36 @@ def _slack_here(seat, seats, here):
     try: return bool(path) and pathlib.Path(path).resolve() == pathlib.Path(here).resolve()
     except OSError: return False
 
+def _slack_read_value(control):
+    """The text a read-only control shows for one edit control: a select's chosen label, a check's yes or no, a text's
+    value. The empty choice of a select names what it inherits, so a read never shows a blank."""
+    kind, value = control.get("kind"), control.get("value")
+    if kind == "select":
+        opts = [o if isinstance(o, dict) else {"value": o, "label": o} for o in control.get("options") or ()]
+        hit = next((o for o in opts if _slack_text(o.get("value")) == _slack_text(value)), None)
+        return _slack_text((hit or {}).get("label") or value)
+    if kind == "check":
+        return "yes" if value in (True, "true", "yes", "1") else "no"
+    if kind == "read":
+        return _slack_text(value)
+    return _slack_text(value) or "none"
+
+def _slack_tree_elsewhere(node, hub):
+    """A project node of another profile and its subtree, read-only (#2919): the page edits its own project's files
+    only, so each control becomes the value of that project's own files, no add or remove target stays, and every node
+    names the page that edits it."""
+    for n in [node] + [d for d in _slack_walk(node) if d is not node]:
+        n["elsewhere"] = hub
+        n.pop("channel_add", None); n.pop("channel_remove", None)
+        for row in (n.get("settings") or {}).get("rows") or []:
+            row["controls"] = [{"field": c.get("field"), "kind": "read", "value": _slack_read_value(c)}
+                               for c in row.get("controls") or []]
+
+def _slack_walk(node):
+    yield node
+    for child in node.get("children") or []:
+        yield from _slack_walk(child)
+
 def _slack_clients_tree_for(P, seats, here=None):
     """The tree over the given seats: Client > Project > Workspace > Channel, the clients from the local map and one
     Unassigned node for the projects no client names."""
@@ -840,8 +1038,10 @@ def _slack_clients_tree_for(P, seats, here=None):
             built = _slack_project_node(P, seat, f"c{i}.p{j}")
             built["node"]["here"] = _slack_here(seat, seats, here)
             built["node"]["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
+            if not built["node"]["here"]:
+                _slack_tree_elsewhere(built["node"], built["node"]["hub"])
             built["node"]["badges"] = list(built["node"]["badges"]) + [
-                _slack_badge("follows default", "muted", "follow") if entry["follows"]
+                _slack_badge("inherits from client", "muted", "follow") if entry["follows"]
                 else _slack_badge("own persona", "neutral", "follow")]
             children.append(built["node"])
             with_slack += 1 if CL.has_slack(seat["committed"], seat["local"]) else 0
@@ -1076,6 +1276,7 @@ def slack_overview(committed=None, local=None):
 SLACK_WT_ENV = "SG_SLACK_WORKTREE"   # the worktree the hub owns for the committed file: never the loop checkout
 SLACK_WT_DIR = "slack-worktree"      # under the profile's state directory when the environment names no worktree (#2763)
 SLACK_REGISTRY = "slack-saved.json"  # in the loop state directory, outside every repository
+SLACK_COMMITTED_DIR = "slack-committed"  # under it: the landed document a read stages when the hub worktree stands behind
 
 def slack_registry_path():
     """The saved-sha registry: one local file in the loop state directory, outside every repository."""
@@ -1295,7 +1496,11 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
     commits and lands the committed file in the hub's own worktree. Returns the diff, the landed sha, and both files
     read back, so the change applies at once."""
     if not isinstance(body, dict): return {"err": "bad request"}
-    if committed is None and local is None: committed, local = slack_yaml_paths()
+    # The save's own target is the hub worktree, which `_slack_provision` makes fresh before any write, so this path
+    # takes the checkout's committed path and spends no landing-tip fetch on it (#2920).
+    if committed is None and local is None:
+        local = _slack_local_path()
+        committed = pathlib.Path(CHECKOUT) / SLACK_YAML_REL if CHECKOUT else None
     if local is None: return {"err": "no profile in force: SG_PROFILE and SG_PROFILES_DIR name none"}
     new_c, new_l = body.get("committed"), body.get("local")
     if not isinstance(new_c, dict) or not isinstance(new_l, dict):
@@ -2090,6 +2295,45 @@ def _slack_people_directory(ws, token):
     with _SLACK_PEOPLE_LOCK:
         _SLACK_PEOPLE[ws] = {"at": now, "users": people}
     return people, None
+
+SLACK_CHANNELS_SECS = 300.0
+_SLACK_CHANNELS = {}   # workspace id -> {"at", "channels"}
+_SLACK_CHANNELS_LOCK = threading.Lock()
+
+def _slack_channel_directory(ws, token):
+    """(channels, error): every channel of the workspace the connection reads, archived ones left out, kept for one
+    window."""
+    now = time.monotonic()
+    with _SLACK_CHANNELS_LOCK:
+        ent = _SLACK_CHANNELS.get(ws)
+        if ent and now - ent["at"] < SLACK_CHANNELS_SECS: return ent["channels"], None
+    channels, cursor = [], ""
+    for _ in range(50):   # 50 pages of 200: a workspace past 10 000 channels is cut, never a loop without end
+        method = ("conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=200"
+                  + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+        try: d = slack_api(token, method)
+        except Exception: return [], "the Slack connection did not answer"
+        if not isinstance(d, dict) or not d.get("ok"): return [], _slack_api_error(d if isinstance(d, dict) else {})
+        channels += [{"id": _slack_text(c.get("id")), "name": _slack_text(c.get("name") or c.get("id"))}
+                     for c in d.get("channels") or [] if isinstance(c, dict) and c.get("id") and not c.get("is_archived")]
+        cursor = _slack_text((d.get("response_metadata") or {}).get("next_cursor"))
+        if not cursor: break
+    channels.sort(key=lambda c: c["name"].casefold())
+    with _SLACK_CHANNELS_LOCK:
+        _SLACK_CHANNELS[ws] = {"at": now, "channels": channels}
+    return channels, None
+
+def slack_channels_post(body):
+    """POST /api/slack/channels: `{workspace, named}` answers the workspace's channels by name, the ones `named` holds
+    left out (#2918). A workspace this host cannot read answers `manual`, so the page offers the raw id field."""
+    if not isinstance(body, dict): return {"err": "bad request", "manual": True, "channels": []}
+    ws = _slack_text(body.get("workspace")).strip()
+    token, err = _slack_people_conn(ws)
+    if err: return {"err": err, "manual": True, "channels": []}
+    channels, err = _slack_channel_directory(ws, token)
+    if err: return {"err": err, "manual": True, "channels": []}
+    named = {_slack_text(x) for x in body.get("named") or [] } if isinstance(body.get("named"), list) else set()
+    return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named]}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and
