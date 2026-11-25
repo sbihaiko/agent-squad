@@ -1167,3 +1167,64 @@ def test_the_answer_binding_is_written_before_the_profile_is_built(tmp_path, mon
     assert binding["channels"] == list(probe.PROBE_CHANNELS), binding
     assert binding["state"] == str(tmp_path / "state"), binding
     assert profile.startswith("(version 1)")
+
+
+# The answer phase's own proof (#2949 review): the one Bash call is exactly the helper's argv and exits 0, and an
+# earlier phase's JSON line in another outbox never reads as this session's stray answer.
+
+def expected_helper_argv(probe):
+    return [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+            "--text", probe.ANSWER_TEXT]
+
+
+def test_the_answer_call_must_be_exactly_the_helper_argv():
+    """A command that carries the helper's substrings plus another command proves nothing: the argv is parsed and
+    compared whole."""
+    probe = load("operator_probe")
+    command = f'{helper_command(probe)} ; rm -rf "/tmp/leak"'
+    calls = probe.tool_calls(events_of([("Bash", {"command": command}, "answer: wrote one line")]))
+
+    with pytest.raises(probe.ProbeFailed, match="exactly"):
+        probe.check_answer_call(calls, expected_helper_argv(probe))
+
+
+def test_the_answer_call_must_run_the_helper_with_its_exact_arguments():
+    """The exact argv passes; one changed argument is refused."""
+    probe = load("operator_probe")
+    good = probe.tool_calls(events_of([("Bash", {"command": helper_command(probe)}, "answer: wrote one line")]))
+    assert probe.check_answer_call(good, expected_helper_argv(probe))
+
+    changed = f'{helper_command(probe).replace(probe.PROBE_THREAD, "1.1")}'
+    calls = probe.tool_calls(events_of([("Bash", {"command": changed}, "answer: wrote one line")]))
+    with pytest.raises(probe.ProbeFailed, match="exactly"):
+        probe.check_answer_call(calls, expected_helper_argv(probe))
+
+
+def test_a_helper_call_that_exits_nonzero_fails_the_probe():
+    """The Bash tool_result carries the call's own failure, so a helper that refused its line proves nothing."""
+    probe = load("operator_probe")
+    events = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_0", "name": "Bash", "input": {"command": helper_command(probe)}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_0", "is_error": True,
+             "content": [{"type": "text", "text": "answer: refused: no pending inbox line"}]}]}},
+    ]
+    with pytest.raises(probe.ProbeFailed, match="exit"):
+        probe.check_answer_call(probe.tool_calls(events), expected_helper_argv(probe))
+
+
+def test_an_earlier_json_line_in_another_outbox_does_not_fail_the_phase(tmp_path, monkeypatch):
+    """The phase compares each other outbox against its own earlier content, so a JSON control line an earlier phase
+    wrote is no answer of this session."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    outboxes[1].write_text(json.dumps({"control": "denial phase"}) + "\n")
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
