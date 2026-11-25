@@ -367,13 +367,24 @@ def answer_prompt(command):
             "the single word done:\n" + shlex.join(command))
 
 
-def answer_binding(work, channels):
-    """The binding file a session start writes (#2949): its state folder and the channels of its project alone."""
+def write_binding(work, channels=PROBE_CHANNELS):
+    """The binding file a session start writes (#2949): its state folder and the channels of its project alone. The
+    helper reads it under the same profile the live session runs under, so the folder and the file exist before the
+    profile is built and never sit outside the scaffolding the profile covers."""
     folder = work / "answer"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "binding.json"
     path.write_text(json.dumps({"key": PROBE_KEY, "state": str(work / "state"), "channels": list(channels)}))
     return path
+
+
+def profile_for(work, ports):
+    """The profile one live session runs under, built after its answer binding exists (#2949).
+
+    The binding folder and file are written first, so the profile is built over a folder the session already owns; then
+    `project_shape` writes the queues and returns the shape and the profile."""
+    write_binding(work)
+    return project_shape(work, ports)
 
 
 def answer_lines(path):
@@ -415,7 +426,7 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
                 "text": ANSWER_QUESTION, "language": "en-US"}
     with open(own_inboxes[0], "a", encoding="utf-8") as f:
         f.write(json.dumps(question) + "\n")
-    binding = answer_binding(work, PROBE_CHANNELS)
+    binding = write_binding(work)
     command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
     args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
@@ -648,7 +659,7 @@ def project_shape(work, ports):
 def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = profile_for(work, [port])
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, port, other_checkout=other_checkout, **controls))
         config_denials(checkout, profile)
@@ -659,7 +670,7 @@ def run_probe(work, cli):
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [proxy.port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = profile_for(work, [proxy.port])
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, other_checkout=other_checkout,
                                **controls))

@@ -1088,3 +1088,18 @@ def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeyp
     monkeypatch.setenv("FAKE_NEW", "abcdefab")
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
     assert record(tmp_path)["acme-widget"]["id"] == "abcdefab", record(tmp_path)
+
+
+def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, capsys):
+    """#2949 criterion (2): `dm_channel` reads the inbox tail and reports one line for a corrupt line it skips, so a
+    broken queue stays visible instead of silently dropping the DM channel."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True, exist_ok=True)
+    (state / "inboxes" / "dm.jsonl").write_text('{"channel": "D0AAAAAA1"}\nnot json\n')
+
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+    err = capsys.readouterr().err
+    assert "dm.jsonl" in err and "corrupt" in err, err
+    assert err.count("operators: skipped") == 1, err
