@@ -159,6 +159,16 @@ def _project_actions(file, doc, out):
             out.append(_defect(file, f"project.actions.{action}", "the project declares one non-empty command"))
 
 
+def _local_project_actions(file, doc, out):
+    """A local file declares no action command, whatever it holds (ADR-0177): the row lives in the committed file, so an
+    empty mapping or a shape the reader cannot use is a defect that names the local file and says where the row
+    belongs."""
+    project = doc.get("project")
+    if isinstance(project, dict) and "actions" in project:
+        out.append(_defect(file, "project.actions",
+                           "project.actions lives in the committed slack.yaml, and the local file declares none"))
+
+
 def project_actions(committed, local):
     """The commands the project declares for its actions, action id to command, or an empty mapping (#2939). Only the
     committed file declares one: the local file never widens what a role may run (ADR-0177)."""
@@ -397,6 +407,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     _deploy_identity("slack.yaml", committed, out)
     _guard("slack.yaml", committed, out)
     _project_actions("slack.yaml", committed, out)
+    _local_project_actions(local_name, local, out)
     events = {str(row.get("id")) for row in _rows(committed.get("events")) if row.get("id") is not None}
     for file, doc in ours:
         _announce(file, doc, events, out)

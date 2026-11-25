@@ -504,11 +504,13 @@ def action_line(state, unit):
                 '  {"channel":"<the DM inbox line\'s channel>","text":"Proposal: <the action, one line>"}.')
     return ("When a message asks for an action, never run a command: append ONE request line to the outbox of the "
             "line's channel, and the daemon's executor checks the sender's role and runs it:\n"
-            '  {"action":"<the action id>","arguments":{<the arguments the action takes, or {}>},'
+            '  {"kind":"action-request","at":<the epoch second, from `date +%s`>,"action":"<the action id>",'
+            '"arguments":{<the arguments the action takes, or {}>},'
             '"sender":"<the inbox line\'s user>","channel":"<the inbox line\'s channel>",'
             '"source":"<the inbox line\'s id>","thread_ts":"<the inbox line\'s ts>"}\n'
             "  The action ids, and the roles that grant them, come from the project's Slack files; the executor's "
-            "answer reaches the channel as a reply in the thread.")
+            "answer reaches the channel as a reply in the thread. The executor runs a request only while it is fresh, "
+            "so write the line at once.")
 
 
 def monitor_lines(state, unit):
