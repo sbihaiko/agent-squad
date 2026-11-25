@@ -2835,3 +2835,60 @@ def test_two_action_watchers_never_run_a_pass_at_once():
 
     asyncio.run(drive())
     assert peak and max(peak) == 1
+
+
+def test_the_drain_never_posts_a_line_that_names_the_request_kind(tmp_path):
+    """Finding 15 (BLOCKING 1): a line whose raw text names the reserved `action-request` kind is never posted as an
+    answer, even when its shape fails the request test, so the request's arguments never reach the channel."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    # The kind carries a trailing space, so `is_request` reads the line as an answer; the raw text still names the
+    # request kind, and the line must never reach the channel.
+    outbox.write_text(json.dumps({"kind": "action-request ", "text": "deploy with the secret token",
+                                  "thread_ts": "1762500100.000100"}) + "\n")
+    client = FakeClient()
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=client)
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert client.posts() == [], client.posts()
+
+
+def test_the_drain_logs_a_skipped_request_line(tmp_path):
+    """Finding 16 (DEBT 3): a request line the drain skips is one log line that names its channel and its source, so a
+    silent skip is never mistaken for a quiet channel."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps({"kind": "action-request", "action": "status", "arguments": {},
+                                  "sender": OWNER, "channel": "C0PROJ0001",
+                                  "source": "C0PROJ0001:1762500100.000100"}) + "\n")
+    logged = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=logged.append, client=FakeClient())
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert any("C0PROJ0001" in line and "C0PROJ0001:1762500100.000100" in line and "request" in line
+               for line in logged), logged
+
+
+def test_the_action_pass_logs_a_quiet_heartbeat(tmp_path, monkeypatch):
+    """Finding 16 (DEBT 3): the action pass logs one heartbeat line every N empty passes, so a pass that does nothing is
+    still visible in the daemon log."""
+    mod = voiced()
+    monkeypatch.setattr(mod, "ACTION_HEARTBEAT", 2)
+    state = mod.State(str(tmp_path))
+    logged = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=logged.append, client=FakeClient())
+    assert daemon.run_action_requests() == 0
+    assert not any("action pass" in line for line in logged), logged
+    assert daemon.run_action_requests() == 0
+    assert any("action pass" in line for line in logged), logged
