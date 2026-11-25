@@ -78,6 +78,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import xml.sax.saxutils
 from datetime import datetime
@@ -113,6 +114,9 @@ VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
+GUARD_WINDOW = 60.0                   # the guard counts one sender's messages in this window (#2947)
+GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
+AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
@@ -714,6 +718,7 @@ class State:
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
         self.latency_path = os.path.join(directory, "answer-latency.jsonl")
         self.announced_path = os.path.join(directory, "announced.jsonl")
+        self.audit_path = os.path.join(directory, "audit.jsonl")
         self.release_events_path = os.path.join(directory, releases.RECORD)
         self.slack_dir = os.path.join(directory, "slack")
         self._seen = None
@@ -1094,6 +1099,11 @@ class State:
         self._append(self.other_path, record)
         self._remember(record["id"])
 
+    def append_audit(self, record):
+        """One audit line per message, with no secret in it (#2947). The audit is not the seen ledger, so it remembers
+        no id: a message already recorded stays recorded when the audit line is the only write."""
+        self._append(self.audit_path, record)
+
 
 def read_lines(path):
     """The JSON lines of one state file, skipping a half line a crash left behind."""
@@ -1422,6 +1432,8 @@ class Daemon:
         self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
         self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
+        self._guard_hits = {}    # (channel, user) -> monotonic moments of the messages inside the guard window (#2947)
+        self._guard_replied = {}  # (channel, user) -> the monotonic moment of the last refusal reply (#2947)
 
     def app_of(self, channel):
         """The app id that owns one channel, or None when no active document names it."""
@@ -1786,6 +1798,77 @@ class Daemon:
         except Exception as x:      # noqa: BLE001 - a start that fails is a log line, never a lost inbox line
             self.log(f"voiced: the operator start for {repo} failed: {type(x).__name__}: {x}")
             return False
+
+    def guard_settings(self, channel):
+        """The guard block of the project that owns one channel, or the plugin defaults. A channel with no active
+        revision, such as the DM, takes the defaults, so the operator session stays bounded whatever the file names."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        committed = active.get("revision") if active else None
+        return slackpolicy.guard(committed or {})
+
+    def size_reason(self, channel, text):
+        """`size` when one message body is longer than the channel's `max_chars`, else None. The size rule removes the
+        `read_wrappers` substrings first, so a wrapper never counts against the sender (#2947)."""
+        guard = self.guard_settings(channel)
+        body = slackpolicy.readable(text, guard.get("read_wrappers"))
+        return "size" if len(body) > int(guard["max_chars"]) else None
+
+    def guard_reason(self, channel, user, text, now=None):
+        """`rate` or `size` when the guard refuses one message, else None. The size rule runs first, and the rate rule
+        counts the messages of one sender in one channel inside the window; a refused message still counts, so a flood
+        stays refused (#2947). `now` is the monotonic moment, so a test passes its own clock."""
+        now = time.monotonic() if now is None else now
+        reason = self.size_reason(channel, text)
+        if reason:
+            return reason
+        key = (str(channel), str(user))
+        hits = [moment for moment in self._guard_hits.get(key, []) if now - moment < GUARD_WINDOW]
+        if len(hits) >= int(self.guard_settings(channel)["rate"]):
+            self._guard_hits[key] = hits
+            return "rate"
+        hits.append(now)
+        self._guard_hits[key] = hits
+        return None
+
+    def answer_refused(self, record, decision, reason):
+        """One refusal reply to a refused sender, at most one per channel in ten minutes (#2947). The reply names the
+        reason class, `rate` or `size`, and it is one sentence. A `listen` channel receives no post."""
+        key = (str(record.get("channel")), str(record.get("user")))
+        now = time.monotonic()
+        last = self._guard_replied.get(key)
+        if last is not None and now - last < GUARD_REPLY_WINDOW:
+            return
+        if decision is not None and decision.reply is None:
+            return
+        self._guard_replied[key] = now
+        sentence = ("Your message was refused: rate. You sent more messages than this channel accepts in one minute."
+                    if reason == "rate" else
+                    "Your message was refused: size. Your message is longer than this channel accepts.")
+        try:
+            self.answer(record, one_sentence(sentence))
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a lost record or a lost ack
+            self.log(f"voiced: refusal reply refused: {type(x).__name__}: {x}")
+
+    def refuse(self, record, decision, reason, text):
+        """Record one refused message: its audit line first, then the one refusal reply the sender may hear (#2947). A
+        refused message writes no inbox line."""
+        self.record_audit(record, "refused", text, reason)
+        self.answer_refused(record, decision, reason)
+        self.log(f"voiced: refused {reason} for {record.get('id')}")
+
+    def record_audit(self, record, decision, text, reason=None):
+        """One audit line for one message: its time, sender id, role, channel, decision and reason class, and at most
+        `AUDIT_TEXT_MAX` characters of redacted text (#2947)."""
+        self.state.append_audit({
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "user": record.get("user"),
+            "role": record.get("role"),
+            "channel": record.get("channel"),
+            "decision": decision,
+            "reason": reason,
+            "text": redacted_text(text),
+        })
 
     def inbox_path_of(self, event):
         """The inbox one message belongs to: its own channel's when a project owns the channel, the DM's for an im, else
@@ -2208,6 +2291,7 @@ class Daemon:
             record["text"] = text
             record["error"] = refusal
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
@@ -2215,6 +2299,7 @@ class Daemon:
                 record["text"] = text
             record["error"] = "unknown channel: no project owns it"
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
         if decision.kind == slackpolicy.IGNORE:
             return "ignored"
@@ -2222,7 +2307,14 @@ class Daemon:
             if text:
                 record["text"] = text
             self.state.append_other(record)
+            self.record_audit(record, "data", text)
             return "other"
+        # The guard runs before any clip download or inbox write, so a flood or an oversized message never reaches
+        # the operator session (#2947).
+        reason = self.guard_reason(event.get("channel"), event.get("user"), text)
+        if reason:
+            self.refuse(record, decision, reason, text)
+            return "refused"
         clip = audio_file(event)
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
@@ -2238,6 +2330,7 @@ class Daemon:
                 record["answer"] = one_sentence(record["error"])
                 record["bytes"] = x.size
                 self.state.append_other(record)
+                self.record_audit(record, "failed", text, "size")
                 self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
@@ -2246,6 +2339,7 @@ class Daemon:
                 record["error"] = f"{kind} failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
+                self.record_audit(record, "failed", text)
                 self.answer_failed_clip(record, decision)
                 # The step and the reason, so a certificate failure reads as a download or a transcription failure and
                 # never as one vague type. `safe_reason` drops a URL query and every key-like value (#2933).
@@ -2255,10 +2349,17 @@ class Daemon:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
             record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
+        # A clip's transcript is measured by the same size rule as the text, so a long transcript is refused too.
+        reason = self.size_reason(event.get("channel"), text) if clip else None
+        if reason:
+            self.refuse(record, decision, reason, text)
+            return "refused"
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
+        self.record_audit(record, "inbox", text)
         self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""),
                            record["id"])
         return "inbox"
@@ -2352,6 +2453,15 @@ _URL = re.compile(r"https?://[^\s\"']*")
 _KEY_PARAM = re.compile(r"(?i)\b(key|token|api[_-]?key|x-goog-api-key|access_token|sig|signature|secret)=[^\s&,;\"']*")
 # A bare secret with a known provider prefix, with no `key=` before it (#2933).
 _TOKEN_PREFIX = re.compile(r"\b(?:xox[baprs]-|AIza|ghp_|sk-)[A-Za-z0-9_\-]*")
+
+
+def redacted_text(text):
+    """At most `AUDIT_TEXT_MAX` characters of one message for the audit, with every URL, key-like value and bare token
+    removed, so the audit line never carries a secret (#2947)."""
+    out = _URL.sub("<url>", str(text or ""))
+    out = _KEY_PARAM.sub(lambda m: m.group(1) + "=<redacted>", out)
+    out = _TOKEN_PREFIX.sub("<redacted>", out)
+    return " ".join(out.split())[:AUDIT_TEXT_MAX]
 
 
 def safe_reason(error):
