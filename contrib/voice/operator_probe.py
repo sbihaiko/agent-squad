@@ -61,7 +61,7 @@ sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
 import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
-from operators import SECRET_DIRS, TOOLS, marked_name, profile_text  # noqa: E402
+from operators import SECRET_DIRS, TOOLS, daemon_root, marked_name, profile_text, service_env  # noqa: E402
 
 from squad import slackwriter  # noqa: E402
 
@@ -85,6 +85,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
 NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
+SERVICE_CONNECT = "import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])"
 UNTRUSTED = "not trusted"               # the CLI's own words for a folder it never trusted: the probe names the folder
 
 # The guest sessions (#2716). The stand-in connector's server is named `slack`, the hooks' default server.
@@ -332,6 +333,25 @@ def denied(done):
     return done.returncode != 0 and DENIED in (done.stderr or "")
 
 
+def service_denial(work, profile, service=None):
+    """Prove that the profile reaches one project's own background service and no other (#2943).
+
+    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. A
+    connect inside the project's own root is allowed, so there the kernel's "no such file" is the answer the probe
+    expects. Returns the shared path tried."""
+    shared = os.path.join(daemon_root(), "control.sock")
+    done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
+    if not denied(done):
+        raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
+                          + (f": {done.stderr.strip()}" if done.returncode else ""))
+    if service:
+        own = os.path.join(str(service), "control.sock")
+        got = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, own], work, DENIAL_DEADLINE)
+        if DENIED in (got.stderr or ""):
+            raise ProbeFailed(f"the profile refuses the project's own service {own}: a --bg session cannot start there")
+    return shared
+
+
 def model_endpoint(env=None):
     """The host, the port and whether it is loopback, for the endpoint the CLI sends its model calls to.
 
@@ -393,12 +413,13 @@ def bg_id(stdout):
     return None
 
 
-def bg_listed(cli, sid, work, name):
+def bg_listed(cli, sid, work, name, service=None):
     """True when the CLI lists the session id under `name` in its live roster: the background service answered, and the
     session carries the operator token in its name (#2925). A session whose cwd is a project checkout is told apart
-    from a person's own session by that name alone."""
-    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
-                          env={**os.environ, **config_env()})
+    from a person's own session by that name alone. A service root reads that project's own service (#2943)."""
+    env = {**os.environ, **config_env(), **(service_env(service) if service else {})}
+    done = subprocess.run([cli, *BG_LIST], cwd=work, env=env, capture_output=True, text=True, timeout=DEADLINE,
+                          check=False)
     try:
         rows = json.loads(done.stdout or "[]")
     except ValueError:
@@ -425,23 +446,27 @@ def bg_failure(done, work):
     return message
 
 
-def bg_session(work, profile, cli, proxy_url=None, name=None):
+def bg_session(work, profile, cli, proxy_url=None, name=None, service=None):
     """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
     session id, and lists that id under the marked name (#2925). A service the profile refuses, or a name the roster
-    does not report, fails here, as it does in the supervisor."""
+    does not report, fails here, as it does in the supervisor. A service root keeps that service under the project's
+    own root (#2943), the way the supervisor starts it."""
     name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
+    if service:
+        proxy_env.update(service_env(service))
     done = sandboxed(profile, cli, ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"], work,
                      BG_DEADLINE, {**proxy_env, **config_env()})
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
         raise ProbeFailed(bg_failure(done, work))
     try:
-        if not bg_listed(cli, sid, work, name):
+        if not bg_listed(cli, sid, work, name, service):
             raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
     finally:
-        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
-                       env={**os.environ, **config_env()})
+        stop_env = {**os.environ, **config_env(), **(service_env(service) if service else {})}
+        subprocess.run([cli, "stop", sid], cwd=work, env=stop_env, capture_output=True, text=True, timeout=DEADLINE,
+                       check=False)
 
 
 def expected_control(role):
@@ -566,15 +591,17 @@ def guest_sessions(work, profile, cli, proxy_url=None):
 
 def project_shape(work, ports):
     """The folders one live project session owns: its checkout, one outbox per channel, one inbox per channel, another
-    project's inbox it must never read, another project's checkout it must never read (#2951), and a folder outside every
-    grant for the write denial (#2925). `ports` names the loopback ports the model route uses."""
+    project's inbox it must never read, another project's checkout it must never read (#2951), a folder outside every
+    grant for the write denial (#2925), and the project's own background service root (#2943). `ports` names the
+    loopback ports the model route uses."""
     checkout = work / "checkout"
     other_checkout = work / "other-checkout"
     outboxes = [work / "state" / "outboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     own_inboxes = [work / "state" / "inboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
-    for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent):
+    service = work / "state" / "operators" / "services" / PROBE_KEY
+    for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent, service):
         folder.mkdir(parents=True, exist_ok=True)
     leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
     for outbox in outboxes:
@@ -584,34 +611,37 @@ def project_shape(work, ports):
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
                            checkout=str(checkout), others=[str(other_checkout)], ports=ports,
-                           config=str(config_root()))
-    return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile
+                           config=str(config_root()), service=str(service))
+    return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
 def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = project_shape(work, [port])
         prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, port, other_checkout=other_checkout, **controls))
         config_denials(checkout, profile)
+        service_denial(checkout, profile, service)
         init, result = session(checkout, profile, cli)
         check_session(init, result)
-        bg_session(checkout, profile, cli)
+        bg_session(checkout, profile, cli, service=service)
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [proxy.port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = project_shape(
+            work, [proxy.port])
         prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, other_checkout=other_checkout,
                                **controls))
         config_denials(checkout, profile)
+        service_denial(checkout, profile, service)
         check_proxy_refuses(proxy)
         init, result = session(checkout, profile, cli, proxy.url)
         check_session(init, result)
-        bg_session(checkout, profile, cli, proxy.url)
+        bg_session(checkout, profile, cli, proxy.url, service=service)
         guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
 
@@ -636,7 +666,8 @@ def main(argv=None):
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, the model "
           f"route's loopback port open and every other loopback port refused; each own outbox took a write and each own "
           f"inbox gave its line; .env, the Slack local file, another project's checkout and each credential folder the "
-          f"home holds refused, the own checkout read); {route}; session tools {TOOLS}, "
+          f"home holds refused, the own checkout read; the shared background service refused and the project's own "
+          f"service in reach); {route}; session tools {TOOLS}, "
           f"dontAsk, cap ${SPEND}; a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
           f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
