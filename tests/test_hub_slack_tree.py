@@ -108,6 +108,31 @@ def tree(hub, tmp_path, committed=None, local=None):
     return read(hub, tmp_path, committed, local)["tree"]
 
 
+def test_a_workspace_only_the_local_file_names_reads_guest_everywhere(hub, tmp_path):
+    """A workspace row that only the local file holds is guest, since the local file never holds an owned workspace;
+    the tree badge, the class tile and both Workspaces tiles say so with one rule (#2904)."""
+    local = {"workspaces": [{"id": "T0GUEST009", "label": "partner", "channels": [
+        {"id": "C0GUEST009", "name": "partner-room", "class": "guest", "mode": "listen"}]}]}
+    out = read(hub, tmp_path, local=local)
+    root = out["tree"]["root"]
+    ws = by_name(root, "partner")
+    assert [b["text"] for b in ws["badges"]][:1] == ["guest"], ws["badges"]
+    assert tiles(ws)["Class"]["value"] == "guest", tiles(ws)
+    assert "guest" not in [b["text"] for b in by_name(root, "#partner-room")["badges"]], "the channel repeats no class"
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "2 · 1 owned · 1 guest", tiles(root)
+    assert out["now"][0]["value"] == "2 · 1 owned · 1 guest", out["now"][0]
+    assert [w["class"] for w in out["workspaces"]] == ["owned", "guest"], out["workspaces"]
+
+
+def test_an_owned_workspace_with_a_guest_channel_counts_as_owned_in_the_project_tile(hub, tmp_path):
+    """The project tile counts a workspace by the class its badge shows, so an owned workspace with one guest channel
+    is one owned workspace (#2904)."""
+    local = {"workspaces": [{"id": "T0TEAM0001", "channels": [
+        {"id": "C0SAND0001", "name": "guest-sandbox", "class": "guest", "mode": "listen"}]}]}
+    root = tree(hub, tmp_path, local=local)["root"]
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "1 · 1 owned · 0 guest", tiles(root)
+
+
 def walk(node):
     yield node
     for child in node.get("children") or []:
