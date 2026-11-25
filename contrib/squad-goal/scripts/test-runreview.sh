@@ -35,6 +35,8 @@ case "\${STUB_VERDICT:-APPROVE}" in
   *) printf '**VERDICT: %s**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding%s\n## Nits\n- c.py:3 a nit\n' "\$STUB_VERDICT" "\${STUB_EXTRA:+
 - \$STUB_EXTRA}" > "$T/st/review-\$key.md";;
 esac
+# a fix round that resolves the previous findings: one new Blocking finding, and each resolved bullet (#2959)
+[ -n "\${STUB_NEW:-}" ] && printf '**VERDICT: CHANGES**\n## Blocking\n- %s\n## Resolved\n%s\n' "\$STUB_NEW" "\$STUB_RESOLVED" > "$T/st/review-\$key.md"
 git rev-parse HEAD > "$T/st/review-\$key.sha"; printf 'wave/%s\n' "\$1" > "$T/st/review-\$key.base"
 echo "\$br \$(git rev-parse --short=9 HEAD) VERDICT: \${STUB_VERDICT:-APPROVE}"
 EOF
@@ -206,5 +208,23 @@ reset; out=$(SG_CHILD_KIND=coding STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&
   && ok "N: a coding child is requeued once, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
 reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "N: a child of no named kind is a code child" || ko "N: unnamed kind exit $rc: $out"
+
+# P) #2959: the review fact keeps the key of each Blocking finding, and a round whose Resolved section lists the key of every
+# previous Blocking finding restarts the streak at 1, so a branch that fixes each round's findings is never frozen.
+st() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@"; }
+reset; rm -f "$T/gh.log"
+(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=1 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+res='- a.py:1 first finding
+- b.py:2 second finding'
+for r in 2 3 4; do
+  (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_VERDICT=CHANGES STUB_NEW="n$r.py:1 new finding $r" STUB_RESOLVED="$res" bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+  res="- n$r.py:1 new finding $r"
+done
+pj=$(st read 'x/y#7' review)
+nk=$(printf '%s' "$pj" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["verdicts"][0].get("keys") or []))' 2>/dev/null)
+[ "$nk" = 2 ] && ok "P: the review fact stores one key per Blocking finding" || ko "P: keys '$nk' in '$pj'"
+[ "$(printf '%s' "$pj" | python3 -c 'import json,sys; print(json.load(sys.stdin)["changes"])' 2>/dev/null)" = 1 ] \
+  && [ "$(st read 'x/y#7' state)" != needs-human ] && [ ! -s "$T/gh.log" ] \
+  && ok "P: rounds that resolve the previous findings restart the streak and freeze nothing" || ko "P: review '$pj' state '$(st read 'x/y#7' state)'"
 
 rm -rf "$T"; exit $fail
