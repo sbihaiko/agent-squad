@@ -569,8 +569,13 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     devices = literals((os.devnull, devnull))
     claude = f"{home}/.claude"
     # The CLI writes its own runtime under ~/.claude, so the folder stays writable. Every file there that the owner's
-    # next, unsandboxed session loads is refused after it, and so is `~/.claude.json`, the owner's MCP configuration
-    # (#2925, #2942): Seatbelt applies the last matching rule.
+    # next, unsandboxed session loads is refused after it: Seatbelt applies the last matching rule.
+    #
+    # The global config file beside that folder stays writable, as it was before #2942: the CLI writes its own state
+    # there at start, so a refusal takes a write the CLI needs. A per-session config root (`CLAUDE_CONFIG_DIR`) moves
+    # that state, and holds the CLI's login too: a session under one is not logged in (measured, CLI 2.1.332), and
+    # only the owner's credential would restore it. So the file's power to add an MCP server the owner's next,
+    # unsandboxed session starts stays open, and #2963 names that gap for the CLI side.
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
@@ -584,10 +589,8 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
-        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude"){service_write})',
-        # The owner's MCP configuration sits beside the Claude home, never inside it, so the allow above never covered
-        # it and no deny could follow. The owner's next, unsandboxed session loads it (#2942).
-        f'(deny file-write* (literal "{home}/.claude.json"))',
+        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude") '
+        f'(literal "{home}/.claude.json"){service_write})',
         *[f'(deny file-write* (literal "{claude}/{name}"))' for name in CLAUDE_LOADED_FILES],
         f"(deny file-write* {loaded_dirs} {memory} {top_md})",
         f"(deny file-read* {creds})",

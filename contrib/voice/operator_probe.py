@@ -284,13 +284,14 @@ def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inbox
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
-# Files the owner's next, unsandboxed session loads: two under `~/.claude`, and the MCP configuration beside it (#2942).
-OWNER_FILES = (".claude/settings.json", ".claude/CLAUDE.md", ".claude.json")
+# Files the owner's next, unsandboxed session loads from the Claude home (#2925). The global config file beside it stays
+# out: the CLI writes its own state there, so the profile grants it, and #2963 names that gap for the CLI side (#2942).
+OWNER_FILES = (".claude/settings.json", ".claude/CLAUDE.md")
 OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates
 
 
 def config_denials(work, profile, home=None):
-    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925, #2942).
+    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925).
 
     The check opens the file for append and writes nothing, and it never creates a file, so a profile that let it through
     changes nothing on disk. A file the machine does not hold cannot be tried, and is skipped. Returns the files tried."""

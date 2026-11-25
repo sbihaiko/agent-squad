@@ -961,20 +961,17 @@ def owner_home(tmp_path):
     (home / ".claude").mkdir(parents=True)
     for name in ("settings.json", "CLAUDE.md"):
         (home / ".claude" / name).write_text("owner file\n")
-    (home / ".claude.json").write_text("owner file\n")     # the owner's MCP configuration (#2942)
     return home
 
 
 def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypatch):
-    """#2925, #2942: the probe tries a write to the owner's settings, CLAUDE.md and MCP configuration under the
-    profile, and each is refused."""
+    """#2925: the probe tries a write to the owner's settings and CLAUDE.md under the profile, and each is refused."""
     probe = load("operator_probe")
     home = owner_home(tmp_path)
     monkeypatch.setattr(probe, "sandboxed", scripted(probe))
     tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
-    assert sorted(os.path.basename(p) for p in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
+    assert sorted(os.path.basename(p) for p in tried) == ["CLAUDE.md", "settings.json"], tried
     assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
-    assert (home / ".claude.json").read_text() == "owner file\n"
 
 
 def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_path, monkeypatch):
