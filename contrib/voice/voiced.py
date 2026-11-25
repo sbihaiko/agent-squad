@@ -50,8 +50,8 @@ Before any of it, the daemon checks the line (#2948): it must answer a pending i
 of every link, and its text may not pass the channel's `answer_max_chars`. A refused line posts nothing and writes one row
 to `$VOICE_STATE/audit.jsonl` with its reason class.
 
-An outbox line whose `kind` is `action-request` is an action request, never an answer (#2939). The daemon posts no such
-line: its action pass (`squad/slackactions.py`) runs in the daemon's own process, outside every session and its
+An outbox line whose top-level `kind` is exactly `action-request` is an action request, never an answer (#2939); an
+answer that mentions the kind in its text is still an answer. The daemon posts no request line: its action pass (`squad/slackactions.py`) runs in the daemon's own process, outside every session and its
 sandbox. The pass checks the request against the policy decision, runs the command the project declares, appends one
 reply in the thread and one audit line. It reads only the outbox of a channel a project owns, never the DM outbox, and
 it runs no request older than a few minutes. The session never runs a command itself.
@@ -1145,9 +1145,10 @@ def read_lines(path):
 
 
 def names_request_kind(text):
-    """True when one outbox line's raw text carries the reserved request kind. The test reads the text before the parse,
-    so a malformed or oddly shaped request line still never reaches the channel as an answer."""
-    return '"kind"' in text and slackactions.KIND in text
+    """True when one outbox line that is not JSON names the reserved request kind as its own `kind` value. Only a line
+    the parse cannot read reaches this test: a line that parses is read by `slackactions.is_request`, so an answer that
+    mentions the kind in plain text is posted, never skipped."""
+    return re.search(r'"kind"\s*:\s*"' + re.escape(slackactions.KIND) + r'"', text) is not None
 
 
 def request_source(text):
@@ -1163,10 +1164,11 @@ def request_source(text):
 
 
 def read_outbox_answers(path):
-    """The answer lines of one outbox and the raw lines that name the request kind, as `(answers, requests)`.
+    """The answer lines of one outbox and the raw lines that are action requests, as `(answers, requests)`.
 
-    The request kind is read from the raw text, before the JSON parse, so a line that names it never becomes an answer
-    whatever its shape. A half line a crash left behind is skipped."""
+    A line that parses is a request only when `slackactions.is_request` reads the reserved kind on it, so an answer that
+    mentions the kind in plain text is still an answer. A raw-kind test covers only a line the parse cannot read, so a
+    malformed request line never reaches the channel either. A half line a crash left behind is skipped."""
     answers, requests = [], []
     try:
         with open(path, encoding="utf-8") as f:
@@ -1174,14 +1176,17 @@ def read_outbox_answers(path):
                 text = raw.strip()
                 if not text:
                     continue
-                if names_request_kind(text):
-                    requests.append(text)
-                    continue
                 try:
                     record = json.loads(text)
                 except ValueError:
+                    if names_request_kind(text):
+                        requests.append(text)
                     continue
-                if isinstance(record, dict):
+                if not isinstance(record, dict):
+                    continue
+                if slackactions.is_request(record):
+                    requests.append(text)
+                else:
                     answers.append(record)
     except OSError:
         pass
@@ -2307,10 +2312,6 @@ class Daemon:
                 self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
                 continue
             for record in records:
-                if slackactions.is_request(record):
-                    # An action request is not an answer: the action pass runs it and appends its own reply line
-                    # (#2939). This drain never posts the request text.
-                    continue
                 cid = (record.get("channel") or channel or "").strip()
                 refusal = self.refused_channels.get(cid)
                 if refusal:      # a channel two projects claim is held, never posted, and is told once
