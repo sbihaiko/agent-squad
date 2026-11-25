@@ -42,14 +42,20 @@ Answer each inbox line through the shipped `answer` helper, and through nothing 
     python3 <agent-squad>/contrib/voice/answer.py --scope "<the inbox line's channel>" \
         --thread "<the inbox line's ts>" --text "<the answer>" [--speech "<a summary>"] [--persona <id>]
 
+The DM session passes `--scope dm` and may omit `--thread` to answer the newest line. A channel whose active
+`slack.yaml` revision declares a persona passes its id in `--persona`, and the brief names that id inline.
+
 The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
 `VOICE_ANSWER_BINDING`: the state folder, the channels of the session's project, and the DM channel for the DM
 session. The helper refuses a channel outside that project and a thread that matches no pending inbox line, so an
 answer never lands in another channel or under a stale thread. A line must also name a channel of the project: a
 project line names its own channel, and a DM line names the binding's one DM channel. The helper reuses the binding
-rule of the Slack policy module (`squad/slackpolicy.py`). It is the only gate on the answer path: `voiced` posts the
-line as it reads it and checks no rule again. Never append to an outbox yourself.
+rule of the Slack policy module (`squad/slackpolicy.py`). `voiced` checks the same rule again before it posts a line,
+so a line with no pending inbox line stays in the outbox. Never append to an outbox yourself.
+
+One session answers a channel, and every helper append takes an exclusive flock on the outbox while every inbox read
+takes a shared one, so two writers never interleave a line.
 
 One outbox line is one answer:
 
@@ -86,8 +92,9 @@ request older than a few minutes. The daemon's checked executor reads it outside
 The executor asks the policy whether the sender's role lists the action, runs the command the project declares for that
 action id, and appends one reply in the thread. It never runs the text of the message.
 
-The DM session also calls the helper once more for the same line, with a text that starts with `Proposal:`. A project
-session cannot write the DM outbox, so it proposes nothing.
+The DM session also calls the helper once more for the same line, with the same `--scope` and `--thread`, and with a
+text that starts with `Proposal:`. The inbox keeps the question, so the second call answers the same pending line, and
+its proposal line lands beside the answer. A project session cannot write the DM outbox, so it proposes nothing.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:
 the kernel refuses the settings files, every top-level Markdown file, the skills, agents, commands, hooks, plugins,
