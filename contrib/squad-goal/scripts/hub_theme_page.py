@@ -2062,8 +2062,9 @@ $("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlR
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
 $("#sundo").onclick=()=>slUndoLast();$("#sretry").onclick=()=>{const f=slRetryFn;slRetryFn=null;if(f)f()};
-// A pending Slack edit or a save in flight asks the browser's leave prompt before the page closes (#2908).
-window.addEventListener("beforeunload",e=>{if(slDirty()||slSaving||slProposeT){e.preventDefault();e.returnValue=""}});
+// A pending Slack edit or a save in flight asks the browser's leave prompt before the page closes (#2908). A page run with no
+// window, as a test runs it in node, skips the prompt (#2914).
+if(typeof window!=="undefined"&&typeof window.addEventListener==="function")window.addEventListener("beforeunload",e=>{if(slDirty()||slSaving||slProposeT){e.preventDefault();e.returnValue=""}});
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
