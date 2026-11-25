@@ -869,6 +869,22 @@ def test_a_stop_falls_back_to_the_cli_own_service_for_a_session_an_older_build_s
     assert seen[1] is None
 
 
+def test_a_stop_that_fails_under_the_projects_own_service_is_never_retried_on_the_shared_one(tmp_path, monkeypatch):
+    """#2943: only a session its own service never held may fall back. Any other refusal is the real answer, and a
+    retry against the shared service could stop a foreign session whose id collides, or hide the failure."""
+    op = operators(tmp_path, monkeypatch)
+    seen = []
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        seen.append(env)
+        raise op.Refused("stop exited 1: the service is not running")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    with pytest.raises(op.Refused):
+        op.stop("aaaaaaaa", str(tmp_path / "service"))
+    assert len(seen) == 1, seen
+
+
 def test_a_stop_that_both_services_refuse_is_named(tmp_path, monkeypatch):
     """A stop no service confirms raises Refused, so the pass keeps ownership and retries later."""
     op = operators(tmp_path, monkeypatch)
@@ -1370,14 +1386,14 @@ def test_the_pass_reads_the_operator_roster_and_the_owner_roster(tmp_path, monke
 
 def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_path, monkeypatch):
     """A session of the owner's roster carries a token of an earlier build: the stop reaches it after the operator's own
-    roster refuses the id."""
+    roster answers that it holds no such session."""
     op = operators(tmp_path, monkeypatch)
     tried = []
 
     def fake_call(argv, cwd=None, timeout=None, env=None):
         tried.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
         if env is not None:
-            raise op.Refused("no such session")
+            raise op.Refused(f"stop exited 1: {op.NO_SUCH_SESSION} 'abababab'")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(op, "call", fake_call)

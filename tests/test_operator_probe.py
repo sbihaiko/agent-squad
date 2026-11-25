@@ -647,6 +647,17 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     assert checkout.is_dir() and other_checkout.is_dir() and not leak.exists()
 
 
+def test_the_probe_builds_its_service_root_the_way_the_supervisor_does(tmp_path):
+    """#2943: the probe's service root comes from `operators.service_root`, the one a live `start()` grants, so a change
+    to that layout moves the probe with it instead of leaving it green on a shape no start produces."""
+    probe = load("operator_probe")
+    operators = load("operators")
+    _, _, _, _, _, _, service, profile = probe.project_shape(tmp_path, [8016])
+    expected = operators.service_root(str(tmp_path / "state"), probe.PROBE_KEY)
+    assert os.path.realpath(service) == expected, (service, expected)
+    assert f'(subpath "{expected}")' in profile, profile
+
+
 def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1, service_open=False):
     """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
     case says otherwise. `port` is the one loopback port the model route uses; every other port is refused (#2951)."""
