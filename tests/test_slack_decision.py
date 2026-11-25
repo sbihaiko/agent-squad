@@ -236,3 +236,41 @@ def test_a_decision_carries_the_environments_the_role_lists_for_deploy():
     assert S.decide(committed, local, message(), NOW).deploy == ("stg", "stage")
     committed["roles"][0].pop("deploy")
     assert S.decide(committed, local, message(), NOW).deploy == ()
+
+
+def test_a_decision_carries_the_persona_tone_then_the_role_tone():
+    """#2927 criterion 3: the answer carries the persona's base tone, then the tone the sender's role adds."""
+    committed, local = files()
+    committed["roles"][0]["tone"] = "Short sentences."
+    assert S.decide(committed, local, message(), NOW).tone == "Calm and direct. Short sentences."
+
+
+def test_a_role_with_no_tone_gives_the_persona_tone_alone():
+    """#2927 criterion 4: the role is optional, and a role that names no tone adds nothing."""
+    assert decide(message()).role == "manager"
+    assert decide(message()).tone == "Calm and direct."
+
+
+def test_a_sender_with_no_role_gets_the_persona_tone_alone():
+    """#2927 criterion 6: a message from someone the channel grants no role carries the persona tone alone."""
+    d = decide(message(user="U0STRANGER"))
+    assert d.role is None and d.tone == "Calm and direct."
+
+
+def test_two_roles_give_the_tone_of_the_role_with_the_most_actions():
+    """#2927 criterion 5: a sender who holds two roles on one channel takes the tone of the role with the most actions.
+    The colleague row comes first, so a first-row answer would name `Playful.` and not `Short sentences.`."""
+    committed, local = files()
+    committed["roles"][0]["tone"] = "Short sentences."
+    committed["roles"][1]["tone"] = "Playful."
+    local["members"].insert(0, {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                                "users": ["U0OWNER001"]})
+    assert S.decide(committed, local, message(), NOW).tone == "Calm and direct. Short sentences."
+
+
+def test_the_combined_tone_puts_a_period_between_the_persona_and_the_role():
+    """#2927: the two tones read as two sentences, so a persona tone that ends in no period still closes its sentence."""
+    committed, local = files()
+    committed["personas"][0]["tone"] = "Calm and direct"
+    committed["roles"][0]["tone"] = "Short sentences."
+    assert S.decide(committed, local, message(), NOW).tone == "Calm and direct. Short sentences."
