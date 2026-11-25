@@ -218,6 +218,19 @@ def test_a_member_that_names_no_workspace_is_refused():
     assert "members[0].workspace" in keys(defects), defects
 
 
+def test_a_member_alias_is_an_optional_string_and_grants_the_same_users():
+    """A member row carries an optional alias in the local file (issue #2873). A member with or without one grants the
+    same users, and an alias that is not a string is refused by its key."""
+    committed, local = files()
+    member = local["members"][0]
+    granted = S.resolved_members(local, member["workspace"], member["channel"], [member["role"]])
+    member["alias"] = "alias-a"
+    assert S.validate(committed, local) == [], S.validate(committed, local)
+    assert S.resolved_members(local, member["workspace"], member["channel"], [member["role"]]) == granted
+    member["alias"] = ["alias-a"]
+    assert "members[0].alias" in keys(S.validate(committed, local)), S.validate(committed, local)
+
+
 def test_a_send_grant_in_the_committed_file_is_refused():
     # The grant is written only by the hub, in the local file, with the date of the grant.
     committed, local = files()

@@ -1396,7 +1396,7 @@ SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announ
 # alone (ADR-0177). The file a row lives in is a placement rule here; the value's own rule stays in the policy module,
 # which validates the edited documents below.
 SLACK_ROLE_FIELDS = ("id", "actions", "deploy")
-SLACK_MEMBER_FIELDS = ("workspace", "channel", "role", "users")
+SLACK_MEMBER_FIELDS = ("workspace", "channel", "role", "users", "alias")
 ROLE_IN_COMMITTED = "the roles of the project live in the committed file"
 MEMBER_IN_LOCAL = "the members of a role live in the local file"
 SLACK_GUEST_FIELDS = ("speak", "transcribe", "voice_reply", "poll", "draft_for", "send_grant")
@@ -1657,7 +1657,8 @@ def _slack_key_taken(rows, row, key, skip=None):
     return False
 
 
-def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id_required=False, unique_key=None):
+def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id_required=False, unique_key=None,
+                      optional=()):
     """One operation over a plain row list: a role in the committed file, or a member in the local one (#2699). The
     Add control starts `blank`, a field outside `fields` is refused, and an edited value's shape is checked before
     the policy module judges its content. The row is built from a fresh mapping, so a refused operation never rewrites
@@ -1680,6 +1681,7 @@ def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id
             if field not in value: continue
             ok, why, checked = _slack_row_value_ok([root, len(rows or ()), field], value[field], field)
             if not ok: return f"{file_name}: {why}", False, None
+            if field in optional and not checked.strip(): continue
             row[field] = checked
         if id_required and not str(row.get("id") or "").strip():
             return f"{file_name}: {root}: the role names its id", False, None
@@ -1711,7 +1713,8 @@ def _slack_place_rows(kind, path, value, doc, fields, file_name, root, blank, id
         return f"{file_name}: {_slack_key(path[:-1])}: the row is a mapping", False, None
     if unique_key and field == unique_key and _slack_key_taken(rows, {field: checked}, unique_key, skip=path[1]):
         return f"{file_name}: {_slack_key(path)}: the {unique_key} {checked!r} is already taken", False, None
-    row[field] = checked
+    if field in optional and not checked.strip(): row.pop(field, None)
+    else: row[field] = checked
     return None, True, path[1]
 
 
@@ -1765,7 +1768,8 @@ def _slack_place(P, op, docs, local_name):
             return f"{local_name}: {MEMBER_IN_LOCAL}", False
         err, changed, touched = _slack_place_rows(kind, path, value, docs["local"], SLACK_MEMBER_FIELDS, local_name,
                                                   "members",
-                                                  {"workspace": "", "channel": "", "role": "", "users": []})
+                                                  {"workspace": "", "channel": "", "role": "", "users": []},
+                                                  optional=("alias",))
         if err: return err, False
         if touched is None: return None, changed
         return _slack_member_row_check(docs, touched, local_name), changed
