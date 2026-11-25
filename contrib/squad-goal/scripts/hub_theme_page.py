@@ -1558,7 +1558,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
    in a Now block of tiles. The hub answers every value from the policy module and the client map module; the view
    constructs, binds and moves the focus, and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow
    keys, Home and End. */
-let slT=null,slTsel="",slTopen={},slTF="",slTshow=false,slProposeT=null;
+let slT=null,slTsel="",slTopen={},slTF="",slTshow=false,slProposeT=null,slConfirm=null;   // slConfirm: the hub's one question before a remove or a delete (#2922)
 function slTRoots(){if(!slT)return [];return slT.clients||(slT.root?[slT.root]:[])}
 function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.children||[]).map(walk).find(Boolean)||null);
  for(const r of slTRoots()){const hit=walk(r);if(hit)return hit}return null}
@@ -1601,6 +1601,11 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  for(const el of document.querySelectorAll("[data-slt]"))el.addEventListener("click",e=>{const id=el.getAttribute("data-slt"),n=slTNode(id);
   if(e.target&&e.target.closest&&e.target.closest(".sltarrow")&&n&&n.children&&n.children.length){slTGo({focus:id,toggle:id});return}slTPick(id)});
  for(const el of document.querySelectorAll("[data-slt-setup]"))el.addEventListener("click",()=>slSetup(el.getAttribute("data-slt-setup")));
+ for(const el of document.querySelectorAll("[data-slcask]"))el.addEventListener("click",()=>slMapAsk(el.getAttribute("data-slcask")));   // one question before a remove or a delete (#2922)
+ for(const el of document.querySelectorAll("[data-slcconfirm]"))el.addEventListener("click",()=>slMapConfirm());
+ for(const el of document.querySelectorAll("[data-slccancel]"))el.addEventListener("click",()=>slMapKeep());
+ for(const el of document.querySelectorAll("[data-slcaddproj]"))el.addEventListener("click",()=>slMapAddProject(el.getAttribute("data-slcaddproj")));
+ for(const el of document.querySelectorAll("[data-slcadd]"))el.addEventListener("click",()=>slMapAddClient());
  const sel=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
  if(sel)sel.addEventListener("change",slClientPick);   // a client's default saves its project writes by itself (#2908)
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
@@ -1659,10 +1664,30 @@ const slTRefused=n=>{const bad=(n.proposal||[]).filter(r=>r.action==="refused");
 const slTClient=n=>{if(n.kind!=="client")return "";
  const opts=n.persona_options||[],cur=n.default_persona||"";
  const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
- const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div></div>`;
+ // The Add project control lists the hub's free projects by name, and Delete client asks the hub's one question (#2922).
+ const free=n.client?(n.add_projects||[]):[];   // a node the map does not name has no map to change (#2922)
+ const add=!n.client?"":(free.length
+  ?`<div class="slad sltadd"><select id=slclproject aria-label="${slA("Project to add")}">${free.map(p=>`<option value="${slA(p.id)}">${esc(p.name)}</option>`).join("")}</select><button type=button data-slcaddproj="${slA(n.id)}">${esc("Add project")}</button></div>`
+  :`<p class=m>${esc("No project waits to be added.")}</p>`);
+ const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div>`+add+`</div>`;
+ const del=n.ask?`<div class=sltacts><button type=button class=sltdanger data-slcask="${slA(n.id)}">${esc("Delete client")}</button></div>`:"";
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
- +slTRefused(n)+projects};
+ +slTRefused(n)+projects+del};
+/* The project's one control (#2922): Remove from client. The question it shows is the hub's, and it names the project
+   and the client. */
+const slTClientActions=n=>n.kind!=="project"||!n.ask?""
+ :`<div class=sltacts><button type=button data-slcask="${slA(n.id)}">${esc("Remove from client")}</button></div>`;
+/* The one question a remove or a delete asks (#2922): the hub's text, with Confirm and Keep. */
+const slTConfirm=n=>{if(!slConfirm||!n.ask||slConfirm.id!==n.id)return "";
+ return `<div class="mx sltconfirm" role=alertdialog aria-label="${slA("Confirm")}"><p>${esc(slConfirm.text)}</p>`
+ +`<div class=sltacts><button type=button data-slcconfirm>${esc("Confirm")}</button><button type=button data-slccancel>${esc("Keep")}</button></div></div>`};
+/* The Add client control of the tree (#2922): a name and a default persona, and the hub makes the client from them. */
+const slTNewPersonas=()=>(slT&&slT.new_client_personas)||[];
+function slTAddClient(){const pers=slTNewPersonas();
+ return `<div class="slad sltnew"><input id=slcname aria-label="${slA("Client name")}" placeholder="${slA("client name")}">`
+ +`<select id=slcpersona aria-label="${slA("Default persona")}">${pers.map(o=>`<option value="${slA(o.id)}">${esc(o.name)}</option>`).join("")}</select>`
+ +`<button type=button data-slcadd>${esc("Add client")}</button></div>`}
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
  const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note||[],
@@ -1673,8 +1698,8 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
- +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button>${n.open?` <a class=sltopen href="${slA(n.open)}" target=_blank rel=noopener>Open in Slack</a>`:""}</p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTElsewhere(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+(n.elsewhere?"":slTPreview(n))+slTChRm(n)}
+ +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button>${n.open?` <a class=sltopen href="${slA(n.open)}" target=_blank rel=noopener>Open in Slack</a>`:""}</p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`+slTConfirm(n)
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTClientActions(n)+slTElsewhere(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+(n.elsewhere?"":slTPreview(n))+slTChRm(n)}
 /* A node of another profile's project is read-only here: the page edits its own project's files only (#2919). */
 const slTElsewhere=n=>n&&n.elsewhere&&n.kind!=="project"?`<p class=slttext>${esc("Edited on ")}<a href="${slA(n.elsewhere)}">${esc((slTPath(n.id).find(x=>x.kind==="project")||{}).name||"its project")}${esc("'s page")}</a>.</p>`:"";
 /* Add and remove a channel from its own tree node (#2918). The hub names the row each edit writes and lists the
@@ -1767,9 +1792,9 @@ function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
   kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};for(const r of roots)walk(r,[]);
  const lost=(Array.isArray(T.unknown_projects)&&T.unknown_projects.length)
   ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+T.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
- return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
+ return `<div class="slttop${slTshow&&roots.length?" sltshow":""}"><div class=sltcol>`   // an empty tree keeps its column: Add client is the one way out of it (#2922)
  +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
- +slTSlot(T.guest_slot)
+ +slTSlot(T.guest_slot)+slTAddClient()
  +`<div role=tree aria-label="Slack tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
@@ -1786,6 +1811,26 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
   if(confirm){n.default_persona=pid;slMsg=o.partial?"saved in part · a project was not written":"saved"}   // the refused projects are named in the pane (#2908)
   slRender()})
  .catch(()=>fail("the client default could not be saved: the hub did not answer"))}
+/* The client map's own changes (#2922): add a project, remove a project, add a client, delete a client. Every change is
+   one confirmed POST to the client route, and the hub writes the map and answers; the view then reads the tree again,
+   so what it draws is the hub's answer. The list, the targets and the question are the hub's (ADR-0137, ADR-0177). */
+function slMapAsk(id){const n=slTNode(id);slConfirm=n&&n.ask?n.ask:null;slRender()}   // the one question a remove or a delete asks
+function slMapKeep(){slConfirm=null;slRender()}
+function slMapPost(body){slSaving=true;slMsg="";slBarSync();
+ const fail=m=>{slSaving=false;slMsg="!"+m;slRender()};
+ fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({},body,{confirm:true}))})
+ .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client map was not saved");return}
+  slSaving=false;slConfirm=null;slMsg="saved";slLoad()})   // the tree is read again, so the drawn tree is the hub's
+ .catch(()=>fail("the client map was not saved: the hub did not answer"))}
+function slMapConfirm(){if(slConfirm)slMapPost(slConfirm)}
+function slMapAddProject(id){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclproject");
+ if(el&&el.value)slMapPost({op:"add_project",client:(slTNode(id)||{}).client||"",project:el.value})}
+function slMapAddClient(){const d=typeof document!=="undefined"?document:null,
+ name=d&&d.getElementById&&d.getElementById("slcname"),sel=d&&d.getElementById&&d.getElementById("slcpersona"),
+ typed=name?String(name.value||"").trim():"";if(!typed)return;   // a name is what makes a client (#2922)
+ const picked=sel&&sel.options&&sel.options[sel.selectedIndex];
+ slMapPost({op:"add_client",name:typed,persona:sel?String(sel.value||""):"",persona_name:String((picked&&picked.text)||(sel&&sel.value)||"")})}
 /* A tone becomes a class token only from a fixed set, and only a set each CSS rule draws: `err` has its rule, and any
    other tone is neutral, never a token of its own (#2842). */
 const slTTone=t=>t==="err"?t:"neutral";

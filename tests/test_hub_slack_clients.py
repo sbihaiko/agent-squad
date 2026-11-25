@@ -148,15 +148,15 @@ def test_the_tree_shows_a_client_over_a_project_a_workspace_and_a_channel(hub, t
     assert ch["children"] == []
 
 
-def test_a_project_in_no_client_appears_under_one_unassigned_node(hub, tmp_path, monkeypatch):
+def test_a_project_in_no_client_appears_under_no_unassigned_node(hub, tmp_path, monkeypatch):
+    """Re-anchored (#2922): the tree draws clients only, so a project no client names waits in the Add project list."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
                    [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}],
                    {"alpha": FOLLOWER, "beta": OWN})
     out = hub.slack_tree()
     names = [c["name"] for c in clients_tree(out)]
-    assert names == ["One", "Unassigned"], names
-    unassigned = clients_tree(out)[1]
-    assert [p["name"] for p in unassigned["children"]] == ["beta"], unassigned["children"]
+    assert names == ["One"], names
+    assert [p["id"] for p in clients_tree(out)[0]["add_projects"]] == ["beta"], clients_tree(out)[0]
 
 
 def test_the_client_map_lives_in_the_profile_folder_and_never_in_a_checkout(hub, tmp_path, monkeypatch):
@@ -573,7 +573,7 @@ def test_the_tree_reads_the_local_file_named_for_the_checkout_and_not_the_board_
     local = {"version": 1, "workspaces": [{"id": "T0GUEST001", "label": "visit", "channels": [
         {"id": "C0GUEST001", "name": "visit-room", "class": "guest", "mode": "listen", "persona": "blue"}]}]}
     (prof / "alpha.slack.local.yaml").write_text(yaml.safe_dump(local, sort_keys=False))
-    client_map(prof, [])
+    client_map(prof, [{"id": "one", "name": "One", "projects": ["alpha"]}])   # #2922: the tree draws no unnamed project
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
     monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "ambient-checkout"))
     monkeypatch.setattr(hub, "STATE", tmp_path / "state")
