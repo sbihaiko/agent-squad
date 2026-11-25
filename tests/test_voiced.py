@@ -2598,3 +2598,43 @@ def test_a_start_that_cannot_spawn_is_one_log_line_and_no_raise(tmp_path, monkey
     monkeypatch.setattr(mod.subprocess, "Popen", refuse)
     assert mod.start_operator(str(tmp_path / "state"), "acme/app", log=logged.append) is False
     assert logged and "acme/app" in logged[0] and "failed" in logged[0], logged
+
+
+ACTION_DOCS = {
+    "version": 1,
+    "project": {"language": "en-US", "persona": "hal", "actions": {"status": "echo the project is green"}},
+    "personas": [{"id": "hal", "name": "HAL9K", "voice": "Kore", "tone": "Calm."}],
+    "roles": [{"id": "manager", "actions": ["status"]}],
+    "workspaces": [{"id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+                    "channels": [{"id": "C0PROJ0001", "mode": "listen+speak", "roles": ["manager"]}]}],
+}
+ACTION_LOCAL = {"version": 1, "members": [{"workspace": "T0TEAM0001", "channel": "C0PROJ0001",
+                                           "role": "manager", "users": [OWNER]}]}
+
+
+def test_an_action_request_line_is_never_posted_and_the_pass_runs_it(tmp_path):
+    """#2939: the drain posts no request text, the pass runs the request outside the session, and its reply goes out."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    request = {"action": "status", "arguments": {}, "sender": OWNER, "channel": "C0PROJ0001",
+               "source": "C0PROJ0001:1762500100.000100", "thread_ts": "1762500100.000100"}
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps(request) + "\n")
+    client = FakeClient()
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=client)
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    daemon.action_documents = lambda channel: (ACTION_DOCS, ACTION_LOCAL)
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert client.posts() == [], "the drain posted the request text"
+    assert daemon.run_action_requests() == 1
+    assert asyncio.run(daemon.drain_outboxes()) == 1
+    posted = [p for p in client.posts() if p.get("text") == "the project is green"]
+    assert posted and posted[0]["thread_ts"] == "1762500100.000100"
+    audit = [json.loads(line) for line in (tmp_path / "actions-audit.jsonl").read_text().splitlines()]
+    assert audit[0]["action"] == "status" and audit[0]["sender"] == OWNER and audit[0]["exit"] == 0

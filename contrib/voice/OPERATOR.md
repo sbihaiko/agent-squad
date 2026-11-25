@@ -69,10 +69,14 @@ It reads every outbox on its own. The session makes no Slack call and waits for 
 ## Reads and answers, never acts
 
 The session reads and answers. It never acts: it writes no file, runs no command and makes no Slack write, and the
-kernel refuses all three. When a message asks for an action, the session answers in that channel that it only reads.
+kernel refuses all three. When a message asks for an action, the session writes one action request to the outbox of the
+line's channel. The request is one JSON line with `action`, `arguments`, `sender`, `channel`, `source` (the inbox line
+id) and `thread_ts`. The daemon's checked executor reads it outside the session and outside its sandbox. The executor
+asks the policy whether the sender's role lists the action, runs the command the project declares for that action id,
+and appends one reply in the thread. It never runs the text of the message.
+
 The DM session also appends one proposal line to its own outbox. The proposal line carries the DM channel and one line
-of text that starts with `Proposal:`. A project session cannot write the DM outbox, so it proposes nothing; the
-executor that runs an action is #2939.
+of text that starts with `Proposal:`. A project session cannot write the DM outbox, so it proposes nothing.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:
 the kernel refuses the settings files, every top-level Markdown file, the skills, agents, commands, hooks, plugins,
