@@ -112,9 +112,9 @@ def lock_waits(state: Path) -> list[tuple[int, str, int]]:
         except OSError:
             continue
         fields = text.strip().split("\t")
-        if len(fields) != 3:
+        if len(fields) not in (3, 4):   # serial.sh adds the waiter's priority as a fourth field (#2887)
             continue
-        since, lock, pid = fields
+        since, lock, pid = fields[:3]
         if not (since.isdigit() and pid.isdigit() and lock):
             continue
         if machine_caps.alive(int(pid)):

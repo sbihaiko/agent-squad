@@ -10,10 +10,10 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # does not inherit the mode, so a lock it takes inside waits as usual.
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
-# A waiter also records that it is queued, in `$SG_STATE/locks/waiting/<lock>-<pid>`: one line, `<epoch> TAB <lock> TAB <pid>`,
-# written on arrival (#2883) and removed when the lock is taken or the waiter exits. It is the only reading of "queued for
-# the lock" the live check has (spec 1163): a slot waiter whose every slot holder sits in that queue is a child starved by a
-# queued slot holder, and the check reports it. Guard: test-serial.sh, test-live-check.sh.
+# A waiter also records that it is queued, in `$SG_STATE/locks/waiting/<lock>-<pid>`: one line of four fields,
+# `<epoch> TAB <lock> TAB <pid> TAB <priority>`, written on arrival (#2883) and removed when the lock is taken or the waiter
+# exits. It is the only reading of "queued for the lock" the live check has (spec 1163): a slot waiter whose every slot
+# holder sits in that queue is a child starved by a queued slot holder, and the check reports it. Guard: test-serial.sh, test-live-check.sh.
 # A fourth field carries the waiter's priority (`SG_SERIAL_PRIORITY=1`): the landing's gate is the delivery that ends a run, so a
 # waiter that carries one is first out of the queue (ADR-0164, #1858). The queue is in order (#2883): priority first, then the
 # older epoch, then the lower pid on a tie. Every process that asks for the lock writes its marker on arrival, before it looks,
