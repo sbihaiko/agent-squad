@@ -13,6 +13,7 @@ import fcntl
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1431,6 +1432,97 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
     assert client.posts(), "the text answer never went out, so the voice path was never exercised"
     assert log, "a refused voice is a log line"
     assert all(secret not in line for line in log), "a log line holds the key"
+
+
+def test_a_refused_tts_names_a_cause_code_never_the_provider_message(tmp_path):
+    """Criterion (1) of #2956: the production TTS path raises a cause code, so the log names the cause while the
+    provider's own message — which can carry a key — never leaves `spoken_clip`."""
+    mod = voiced()
+    path = tmp_path / "clip.wav"
+
+    def fake_mkstemp(prefix="", suffix=""):
+        return os.open(path, os.O_CREAT | os.O_WRONLY), str(path)
+
+    class FakeTTS:
+        @staticmethod
+        def synth(key, script, voice, out, tone=""):
+            return None, "400 refused key AIza-SECRET-GEMINI-KEY"
+
+    mod.tempfile.mkstemp, was = fake_mkstemp, mod.tempfile.mkstemp
+    sys.modules["tts"] = FakeTTS
+    try:
+        mod.spoken_clip("the-key", "the answer")
+    except mod.SpeechError as caught:
+        assert caught.cause == "refused", f"the cause code is {caught.cause!r}"
+        assert "AIza-SECRET" not in str(caught), "the provider message reached the exception text"
+    else:
+        raise AssertionError("a refused TTS raised no SpeechError")
+    finally:
+        mod.tempfile.mkstemp = was
+        sys.modules.pop("tts", None)
+    assert mod.speech_cause("400 refused key AIza-SECRET-GEMINI-KEY") == "refused"
+    assert mod.speech_cause("RESOURCE_EXHAUSTED") == "resource_exhausted"
+    assert mod.speech_cause("no audio in the answer") == "no_audio"
+    assert mod.speech_cause(None) == "no_audio"
+
+
+def test_a_speech_failure_names_its_cause_once_per_run(tmp_path):
+    """Criterion (2) of #2956: one cause is one log line however many answers the refused voice fails, and a second
+    cause earns its own line. The line names the cause code, never the answer's text."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+    causes = ["resource_exhausted", "resource_exhausted", "no_audio", "no_audio"]
+
+    def synth(script, **kwargs):
+        raise mod.SpeechError(causes.pop(0) if causes else "no_audio")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    append_outbox(state.outbox_for(app["id"]),
+                  {"text": f"One {secret}. Two."}, {"text": f"Three {secret}. Four."})
+    asyncio.run(daemon.drain_outboxes())
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: SpeechError: resource_exhausted",
+                       "voiced: speech skipped: SpeechError: no_audio"], f"one line per cause, got {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("Three" not in line and "Two" not in line for line in log), "a log line holds the answer's text"
+
+
+def test_a_speech_failure_with_no_cause_code_logs_its_class_once(tmp_path):
+    """Criterion (2) of #2956: an exception that carries no cause code is one line naming its class, once per run, and
+    never its own message."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def synth(script, **kwargs):
+        raise RuntimeError(f"400 refused key {secret}")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."}, {"text": "Three. Four."})
+    asyncio.run(daemon.drain_outboxes())
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: RuntimeError"], f"one cause is one line, got {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the exception's message"
 
 
 def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
