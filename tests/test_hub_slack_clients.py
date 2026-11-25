@@ -567,3 +567,24 @@ def test_a_project_the_client_names_but_the_hub_does_not_know_is_named_under_the
     assert tree["unknown_projects"] == ["ghost"], tree.get("unknown_projects")
     html = render(hub, out)
     assert re.search(r"(?i)not on this hub", html) and "ghost" in html, html[-800:]
+
+
+def test_the_tree_reads_the_local_file_named_for_the_checkout_and_not_the_board_number(hub, tmp_path, monkeypatch):
+    """#2899: a profile's SG_PROJECT holds the board number. The local file is named for the checkout folder, as
+    slackpolicy.check and the guest runner name it, so a workspace the local file alone holds shows in the tree."""
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    co, _ = seat(tmp_path, "alpha", FOLLOWER)
+    (prof / "alpha.sh").write_text(
+        f': "${{SG_REPO:=x/alpha}}"; : "${{SG_OWNER:=x}}"; : "${{SG_PROJECT:=3}}"; '
+        f': "${{SG_CHECKOUT:={co}}}"; : "${{SG_SQUAD:={ROOT}}}"\n')
+    local = {"version": 1, "workspaces": [{"id": "T0GUEST001", "label": "visit", "channels": [
+        {"id": "C0GUEST001", "name": "visit-room", "class": "guest", "mode": "listen", "persona": "blue"}]}]}
+    (prof / "alpha.slack.local.yaml").write_text(yaml.safe_dump(local, sort_keys=False))
+    client_map(prof, [])
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "ambient-checkout"))
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    out = hub.slack_tree()
+    assert by_name(out, "visit")["kind"] == "workspace"
+    assert not (prof / "3.slack.local.yaml").exists()
