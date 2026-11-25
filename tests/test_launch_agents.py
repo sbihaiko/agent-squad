@@ -10,12 +10,18 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
 AGENTS = ("install-agents", "rollback-agents", "uninstall-agents")
+# Each script and its suite by repository path, so the delta selector names this guard for a change to any of them (#2957).
+SCRIPTS = ("contrib/voice/install-agents.sh", "contrib/voice/rollback-agents.sh", "contrib/voice/uninstall-agents.sh",
+           "contrib/voice/test-install-agents.sh", "contrib/voice/test-rollback-agents.sh",
+           "contrib/voice/test-uninstall-agents.sh")
 
 
 def test_each_agent_script_is_named_and_has_its_test_beside_it():
     for name in AGENTS:
         assert (VOICE / f"{name}.sh").is_file(), f"{name}.sh is missing"
         assert (VOICE / f"test-{name}.sh").is_file(), f"test-{name}.sh is missing beside {name}.sh"
+    for script in SCRIPTS:
+        assert (ROOT / script).is_file(), f"{script} is missing"
 
 
 @pytest.mark.macos_bound   # launchctl and plists: the suites need the macOS userland the loop runs on (ADR-0139)
