@@ -1109,6 +1109,54 @@ def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_p
     assert posted_at - written <= TEXT_TARGET, "the text was not posted inside 3 s of the outbox line"
 
 
+def test_an_answered_message_records_its_latency_from_the_slack_ts_to_the_post(tmp_path):
+    """Criterion (3): each answered message writes the seconds from its own Slack ts to the answer's post ts.
+
+    The question lands at Slack ts 1762500000.000100 and the answer posts at 1762500009.000900 (the fake client's own
+    ts), so the recorded latency is 9.0008 s: a literal worked example, never a second computation of the code's own.
+    """
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    question_ts = "1762500000.000100"     # the inbox line's Slack ts, which the answer threads under
+    answer_ts = "1762500009.000900"       # the ts Slack returns for the posted answer, FakeClient's own
+    append_outbox(daemon.state.inbox_for(app["id"]),
+                  {"id": f"{app['id']}:{question_ts}", "ts": question_ts, "user": OWNER,
+                   "channel": app["id"], "text": "What colour?", "language": "en"})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"thread_ts": question_ts, "text": "Green."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert lines(daemon.state.latency_path) == [
+        {"id": f"{app['id']}:{question_ts}", "channel": app["id"], "question_ts": question_ts,
+         "answer_ts": answer_ts, "seconds": 9.0008}]
+
+
+def test_an_unthreaded_answer_records_the_oldest_inbox_line_it_still_owes(tmp_path):
+    """Criterion (3), the unthreaded line: an answer that names no thread ts still records a latency, against the oldest
+    inbox line of its channel that no recorded latency answers yet, so the record never guesses a newer message."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.inbox_for(app["id"]),
+                  {"id": f"{app['id']}:1762500000.000100", "ts": "1762500000.000100", "user": OWNER,
+                   "channel": app["id"], "text": "First.", "language": "en"},
+                  {"id": f"{app['id']}:1762500002.000200", "ts": "1762500002.000200", "user": OWNER,
+                   "channel": app["id"], "text": "Second.", "language": "en"})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "Answer to the first."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [row["question_ts"] for row in lines(daemon.state.latency_path)] == ["1762500000.000100"]
+    assert lines(daemon.state.latency_path)[0]["id"] == f"{app['id']}:1762500000.000100"
+
+
 def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_text_post(tmp_path):
     """Criterion (2), the split and the parallelism: the first sentence is one clip, the rest another, and the first
     synthesis starts together with the text post, so a slow Slack write cannot hold the voice."""
