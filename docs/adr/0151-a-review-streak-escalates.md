@@ -11,6 +11,10 @@ A child that the reviewer sends back again and again spends money and produces n
 ## Decision
 
 1. **Three consecutive CHANGES verdicts on one issue send it to needs-human** (`frozen:owner`, ADR-0029) instead of another dispatch.
+   The freeze posts its own issue comment, never the edited status comment: an edited comment keeps the time of its first
+   post, so the timeline would show it above the fix rounds. The comment names the head the last review read, the streak
+   count and the total of reviews of the issue, with the last Blocking findings. One head gets at most one freeze comment,
+   so a freeze after a rearm at the same head repeats nothing.
 2. **Identical findings twice stop the fix cycle.** The next attempt uses a stronger coder model.
    A fix round that writes no artifact is the same finding unanswered, not a new finding (ADR-0134 reads a round that
    changed nothing by its fingerprint). It is the finding's first repetition, so it moves the coder at once: the round

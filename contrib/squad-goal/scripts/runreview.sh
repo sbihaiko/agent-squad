@@ -20,8 +20,8 @@
 # BLOCKED, or CHANGES with no fix round on offer, requeues as above. SG_REQUEUE_CAP in wave.sh stays the outer bound.
 # A requeue frees the issue while other children of the same run are still live; that is accepted.
 # Every APPROVE and CHANGES verdict is a `review` fact in the issue's ledger (ADR-0151, ADR-0149): three CHANGES verdicts in
-# a row end the issue needs-human, so the card takes frozen:owner over the column its work reached, one status comment names
-# the last findings, and the run holds the child with no requeue (ADR-0029); identical findings twice move the next fix round
+# a row end the issue needs-human, so the card takes frozen:owner over the column its work reached, one comment of its own
+# names the head the last review read and its findings (#2960), and the run holds the child with no requeue (ADR-0029); identical findings twice move the next fix round
 # one place down the coder chain. An APPROVE resets the streak. A BLOCKED verdict enters no streak.
 # The review takes one `reviews` slot of the machine-wide budget (squad/caps.py), waiting for it: caps says so on one line.
 # Stdout is the review (the run record keeps it as the gate's findings).
@@ -79,10 +79,24 @@ else lv=; fi
 if [ "$lv" = frozen ]; then
   lout=$(gh_send -X POST "repos/$SG_REPO/issues/$iss/labels" -f "labels[]=frozen:owner" 2>&1) \
     || printf 'RUNREVIEW %s: the freeze of #%s was refused: %s\n' "$child" "$iss" "$lout" >&2
-  f=$(sg_cq_status "$iss" reviewstreak 2>/dev/null) && {
-    printf 'SQUAD-NEEDS-HUMAN: the reviews of this issue asked for changes in a row, so the loop stops building it (ADR-0151). The card is frozen for the owner (frozen:owner); removing the label and rearming the issue lets it start again. Last findings at %s:\n\n' "$head"
-    awk 'NR==1{next} /^## /{b=($0 ~ /^## Blocking/)} b' "$md" | /usr/bin/grep -v '^## Blocking' | /usr/bin/grep -v '^[[:space:]]*$'
-  } > "$f"
+  # The freeze posts its own comment (#2960), never the edited status comment: an edited comment keeps the time of the first
+  # review, so the timeline would show it above the fix rounds and the last head would look unreviewed. The comment names the
+  # head the last review read, and a marker keeps it to one comment per head, so a freeze after a rearm repeats nothing.
+  rsha=$(head -1 "$SG_STATE/review-$key.sha" 2>/dev/null); rsha=${rsha:-$head}
+  mk="$SG_STATE/auto/reviewfreeze-$iss"
+  if [ "$(cat "$mk" 2>/dev/null)" != "$rsha" ]; then
+    rj=$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" read "$SG_REPO#$iss" review 2>/dev/null)
+    streak=$(printf '%s' "$rj" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("changes", "?"))
+except Exception: print("?")' 2>/dev/null)
+    total=$(printf '%s' "$rj" | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin).get("verdicts") or []))
+except Exception: print("?")' 2>/dev/null)
+    f=$(sg_cq_file "$iss-reviewfreeze-${rsha:0:9}.md" 2>/dev/null) && {
+      printf 'SQUAD-NEEDS-HUMAN: %s CHANGES verdicts in a row, of %s reviews of this issue, so the loop stops building it (ADR-0151). The card is frozen for the owner (frozen:owner); removing the label and rearming the issue lets it start again. Last findings at %s:\n\n' "${streak:-?}" "${total:-?}" "$rsha"
+      awk 'NR==1{next} /^## /{b=($0 ~ /^## Blocking/)} b' "$md" | /usr/bin/grep -v '^## Blocking' | /usr/bin/grep -v '^[[:space:]]*$'
+    } > "$f.tmp" && mv "$f.tmp" "$f" && printf '%s\n' "$rsha" > "$mk"
+  fi
   echo "RUNREVIEW $run $child: the review streak ended #$iss needs-human, so the run holds its child (frozen:owner)" >&2
   exit 1
 fi
