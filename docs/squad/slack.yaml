@@ -18,31 +18,17 @@ events:
 - id: prod_release
   template: 'Subiu para producao: {items}.'
 roles:
-- id: QA
+- id: viewer
   actions:
   - status
   - logs
-  - request_investigation
-- id: Devel
-  actions:
-  - status
-  - logs
-  - request_work
-  - request_investigation
-- id: Product
-  actions:
-  - status
-  - request_work
-  - approve_and_move
-- id: Admin
+- id: maintainer
   actions:
   - status
   - logs
   - request_work
   - request_investigation
   - approve_and_move
-- id: Ignored
-  ignore: true
 workspaces:
 - id: T0CFRFR05RU
   label: bihaiko
@@ -57,22 +43,8 @@ workspaces:
     language: pt-BR
     persona: hal
     roles:
-    - QA
-    - Devel
-    - Product
-    - Admin
-    - Ignored
+    - viewer
+    - maintainer
     announce:
     - stg_release
     - prod_release
-  - id: C0CKUATLG67
-    name: hal-guest-sandbox
-    mode: listen
-    language: pt-BR
-    persona: hal
-    roles:
-    - QA
-    - Devel
-    - Product
-    - Admin
-    - Ignored
