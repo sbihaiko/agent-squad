@@ -381,6 +381,33 @@ def test_a_role_deploy_list_is_saved_from_the_typed_field(hub, tmp_path):
     assert out["committed"]["roles"][0]["deploy"] == ["stg", "stage"], out["committed"]
 
 
+def test_the_owner_edits_a_role_tone(hub, tmp_path):
+    """#2927 criterion 8: the tone field of a role saves into the committed `slack.yaml`, and the other fields stay."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["roles", 0, "tone"],
+                               "value": "Short sentences."}, local=with_member())
+    assert out["err"] is None, out
+    assert out["committed"]["roles"][0] == {"id": "manager", "actions": ["status", "logs"],
+                                            "tone": "Short sentences."}, out["committed"]
+
+
+def test_a_blank_role_tone_leaves_no_key(hub, tmp_path):
+    """#2927 criterion 4: a role with no tone gives the persona tone alone, so a blank field leaves no key behind."""
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["tone"] = "Short sentences."
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["roles", 0, "tone"], "value": ""},
+               committed=committed, local=with_member())
+    assert out["err"] is None, out
+    assert "tone" not in out["committed"]["roles"][0], out["committed"]
+
+
+def test_the_editor_refuses_a_role_tone_over_the_limit(hub, tmp_path):
+    """#2927 criterion 2 through the editor: the refusal names the key the owner edited, and nothing changes."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "committed", "path": ["roles", 0, "tone"],
+                               "value": "x" * 301}, local=with_member())
+    assert out["err"] and "roles[0].tone" in out["err"], out
+    assert "tone" not in out["committed"]["roles"][0], out["committed"]
+
+
 def test_a_role_edit_in_the_local_file_is_refused(hub, tmp_path):
     """Criterion 1 from the other side: the roles of the project live in the committed file, so a role edit that names
     the local file is refused."""
@@ -746,6 +773,23 @@ def test_the_roles_editor_draws_the_id_a_checkbox_per_action_and_the_deploy(hub)
     assert not re.search(r'data-sle="role:0:act:approve_and_move"[^>]* checked', html), html
     assert 'data-sle="role:0:deploy"' in html, html
     assert "data-sladdrole" in html and "data-slrmrole" in html, html
+
+
+def test_the_roles_editor_draws_one_tone_field_per_role(hub):
+    """#2927 criterion 8 on the page: each role is one row with a field for its tone, and a role of the file shows the
+    tone it holds."""
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["tone"] = "Short sentences."
+    html = roles_html(hub, committed=committed)
+    assert 'data-sle="role:0:tone"' in html and 'value="Short sentences."' in html, html
+    assert 'data-sle="role:1:tone"' in html, html
+
+
+def test_a_role_tone_edit_builds_a_committed_operation(hub):
+    """#2927 criterion 8 on the page: a tone edit goes to the committed document at the role's own tone path."""
+    op = doc_op(hub, "role:0:tone", {"type": "text", "value": "Short sentences."})
+    assert op == {"kind": "set", "doc": "committed", "path": ["roles", 0, "tone"],
+                  "value": "Short sentences."}, op
 
 
 def test_the_members_editor_draws_the_four_fields_of_one_format(hub):
