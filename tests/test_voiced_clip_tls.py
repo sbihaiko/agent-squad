@@ -90,10 +90,8 @@ def test_a_failed_download_logs_the_step_and_the_reason(tmp_path):
     daemon = daemon_with(tmp_path, mod, downloader=downloader, log=log)
     daemon.handle(clip_event())
 
-    failures = [line for line in log if "CERTIFICATE_VERIFY_FAILED" in line]
-    assert failures, log
-    assert any("download" in line for line in failures), log
-    assert any("transcription" not in line for line in failures), log
+    assert any("download" in line and "CERTIFICATE_VERIFY_FAILED" in line for line in log), log
+    assert not any("transcrib" in line for line in log), log
 
 
 def test_a_failed_transcription_logs_the_step_and_the_reason(tmp_path):
@@ -107,15 +105,7 @@ def test_a_failed_transcription_logs_the_step_and_the_reason(tmp_path):
     daemon = daemon_with(tmp_path, mod, transcriber=transcriber, log=log)
     daemon.handle(clip_event())
 
-    failures = [line for line in log if "CERTIFICATE_VERIFY_FAILED" in line]
-    assert failures, log
-    assert any("transcribe" in line for line in failures), log
-    assert any(likely_network_absent(line) for line in failures), log
-
-
-def likely_network_absent(line):
-    """True: the line carries no URL query, so no signed query can ride with the failure into the log."""
-    return "?" not in line
+    assert any("transcribe" in line and "CERTIFICATE_VERIFY_FAILED" in line and "?" not in line for line in log), log
 
 
 def test_a_urlerror_reason_never_carries_a_key_or_a_url_query_into_the_log(tmp_path):
@@ -136,6 +126,30 @@ def test_a_urlerror_reason_never_carries_a_key_or_a_url_query_into_the_log(tmp_p
     assert "CERTIFICATE_VERIFY_FAILED" in text, log
     assert key not in text, "a log line holds the key"
     assert query not in text, "a log line holds the URL query"
+
+
+def test_a_log_line_redacts_a_url_path_token_and_a_bare_key_prefix(tmp_path):
+    """Criterion (5): a token in a URL path, or a bare key with a known prefix, never enters the log line.
+
+    The query is not the only place a secret hides: a provider message can carry the whole URL, whose path holds the
+    token, or the key alone with no `key=` before it. The reason is kept, the URL and the key are not."""
+    mod = voiced()
+    log = []
+    path_token = "xoxb-PATH-SECRET"
+    bare_key = "AIzaBARE-SECRET"
+    reason = f"CERTIFICATE_VERIFY_FAILED for https://files.slack.com/files-pri/{path_token} and {bare_key}"
+
+    def downloader(url):
+        raise URLError(OSError(reason))
+
+    daemon = daemon_with(tmp_path, mod, downloader=downloader, log=log)
+    daemon.handle(clip_event())
+
+    text = "\n".join(log)
+    assert "CERTIFICATE_VERIFY_FAILED" in text, log
+    assert path_token not in text, log
+    assert bare_key not in text, log
+    assert "https://" not in text, "a log line holds a whole URL, so a token in its path can ride with it"
 
 
 def test_the_record_names_the_step_that_failed(tmp_path):

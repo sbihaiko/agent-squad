@@ -2094,19 +2094,25 @@ def daemon_context(log=None):
     return _DAEMON_CONTEXT
 
 
+# A whole URL: its query or its path may hold a token, so the log keeps the reason and never the address (#2933).
+_URL = re.compile(r"https?://[^\s\"']*")
 _KEY_PARAM = re.compile(r"(?i)\b(key|token|api[_-]?key|x-goog-api-key|access_token|sig|signature|secret)=[^\s&,;\"']*")
+# A bare secret with a known provider prefix, with no `key=` before it (#2933).
+_TOKEN_PREFIX = re.compile(r"\b(?:xox[baprs]-|AIza|ghp_|sk-)[A-Za-z0-9_\-]*")
 
 
 def safe_reason(error):
-    """The reason of one failed HTTPS call, with any URL query and key-like value removed (#2933).
+    """The reason of one failed HTTPS call, with every URL, query, key-like value and bare token removed (#2933).
 
-    A provider or verification message may carry the URL it failed on, and that URL may carry a query. The log keeps
-    the reason and drops the query and every `key=` or `token=` value, so a secret never enters a log line.
+    A provider or verification message may carry the URL it failed on, whose query or path holds a secret, or the key
+    alone with no `key=` before it. The log keeps the reason and drops the whole URL, every `key=` or `token=` value
+    and every known token prefix, so a secret never enters a log line.
     """
     reason = getattr(error, "reason", None)
     text = str(reason if reason is not None else type(error).__name__)
-    text = re.sub(r"\?[^\s\"']*", "", text)
+    text = _URL.sub("<url>", text)
     text = _KEY_PARAM.sub(lambda m: m.group(1) + "=<redacted>", text)
+    text = _TOKEN_PREFIX.sub("<redacted>", text)
     return (text.strip() or type(error).__name__)[:160]
 
 
