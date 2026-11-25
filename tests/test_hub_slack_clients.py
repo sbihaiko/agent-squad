@@ -464,6 +464,7 @@ def test_a_preview_posts_the_personas_display_name(hub, tmp_path, monkeypatch):
     assert bodies[0].get("persona_name") == "Blue", bodies
 
 
+@pytest.mark.heavy   # two real repositories and their worktrees: 2.6 s here, over the unmarked line
 def test_a_client_save_under_a_worktree_named_by_the_environment_lands_each_project_from_its_own_tree(
         hub, tmp_path, monkeypatch):
     """`SG_SLACK_WORKTREE` names the base, and each project of a client save gets its own worktree under it, so two
