@@ -810,7 +810,15 @@ def _slack_persona_options(P, seats):
     return out
 
 
-def _slack_clients_tree_for(P, seats):
+def _slack_here(seat, seats, here):
+    """True for the project whose files this hub page reads: the one seat of a single-project tree, else the seat whose
+    committed file is the page's own (#2906). Its node carries the project's personas, roles and events."""
+    if here is None: return len(seats) == 1
+    path = seat.get("committed_path")
+    try: return bool(path) and pathlib.Path(path).resolve() == pathlib.Path(here).resolve()
+    except OSError: return False
+
+def _slack_clients_tree_for(P, seats, here=None):
     """The tree over the given seats: Client > Project > Workspace > Channel, the clients from the local map and one
     Unassigned node for the projects no client names."""
     try: CL = slack_clients_module()
@@ -830,6 +838,8 @@ def _slack_clients_tree_for(P, seats):
         for j, entry in enumerate(g["projects"]):
             seat = by_id[entry["id"]]
             built = _slack_project_node(P, seat, f"c{i}.p{j}")
+            built["node"]["here"] = _slack_here(seat, seats, here)
+            built["node"]["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
             built["node"]["badges"] = list(built["node"]["badges"]) + [
                 _slack_badge("follows default", "muted", "follow") if entry["follows"]
                 else _slack_badge("own persona", "neutral", "follow")]
@@ -888,7 +898,7 @@ def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects
     return _slack_clients_tree_for(P, [seat])
 
 
-def slack_tree(committed=None, local=None):
+def slack_tree(committed=None, local=None, here=None):
     """The tree of the Communication theme (SPEC 2682 #2824, #2827): Client > Project > Workspace > Channel, each node
     with its badges and its Now tiles. Called with no path, it reads the projects of every profile the hub knows; called
     with one project's two documents, it draws that project alone. Every resolved value comes from the policy module
@@ -907,7 +917,7 @@ def slack_tree(committed=None, local=None):
     try: P = slack_policy()
     except Exception as e:
         return _slack_tree_failed(f"the Slack rules module did not resolve: {type(e).__name__}: {e}")
-    return _slack_clients_tree_for(P, _slack_roster())
+    return _slack_clients_tree_for(P, _slack_roster(), here)
 
 
 def _slack_flag(value):
@@ -1046,7 +1056,7 @@ def slack_overview(committed=None, local=None):
     out["poll_default_mode"] = P.POLL_DEFAULT_MODE
     out["previews"] = _slack_reply_previews(P, committed_doc, local_doc)
     # The tree (#2824): one read of the same two files, node by node, from the policy module alone.
-    out["tree"] = slack_tree(committed, local) if explicit else slack_tree()
+    out["tree"] = slack_tree(committed, local) if explicit else slack_tree(here=committed)
     return out
 
 # --- Settings > Communication, the save path (SPEC 2682 #2694). The theme saves the two files it reads: the profile's

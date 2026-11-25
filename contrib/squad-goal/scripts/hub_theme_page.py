@@ -1451,9 +1451,7 @@ function slReadHtml(r){if(!r)return "";
  const cf=r.files.committed,lf=r.files.local,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
  row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or,   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
  ban=(r.defects||[]).length?`<p class="mx err" role=status>${r.defects.map(d=>esc(d)).join(" ")}</p>`:"";   // a defect is a message above the sections, never a page of its own
- let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>${ban}`   // the block names the files under its one title, before the four sections
- +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
- +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
+ let h=`<div class=setblk data-blk=read data-theme=slk>${ban}`;   // the project node's detail holds this block, under its own Settings (#2906)
  h+=slPersonaSection(r);
  h+=(slDocs?`<section class=slsec><h4>Roles <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>${slRolesEditHtml(r)}</section>`
   :slSec("Roles",cf,["Role","Actions"],
@@ -1530,7 +1528,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
  if(!slT&&slR&&slR.tree)slT=slR.tree;   // a fresh read plants the tree; a staged edit keeps its own until the save (#2846)
  if(slT&&!slTNode(slTsel))slTsel=(slTRoots()[0]||{}).id||"";   // a reload that dropped the selected node falls back to the first client
  const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
- let h=slTreeHtml()+slReadHtml(slR);
+ let h=slTreeHtml()+(slTHere()?"":slReadHtml(slR));   // the project's personas, roles and events live in its own node (#2906)
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
  b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar();
  const n=slTNode(slTsel);   // a client's selected default proposes its writes once; a hub without the route is not asked again (#2827)
@@ -1541,6 +1539,13 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
    keys, Home and End. */
 let slT=null,slTsel="",slTopen={},slTF="",slTshow=false,slProposeT=null;
 function slTRoots(){if(!slT)return [];return slT.clients||(slT.root?[slT.root]:[])}
+function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.children||[]).map(walk).find(Boolean)||null);
+ for(const r of slTRoots()){const hit=walk(r);if(hit)return hit}return null}
+/* A project node's own files (#2906): the page's project carries its personas, roles, workspaces and events under its
+   Settings; another project names the page that edits them, so no section reads as global. */
+function slTProject(n){if(!n||n.kind!=="project")return "";
+ if(n.here)return slReadHtml(slR);
+ return n.hub?`<p class=slttext>${esc("Its personas, roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
@@ -1643,7 +1648,7 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTPerms(n)+slTPreview(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
    the field, never the row's place in a list, so the save writes the row that carries the id. A control shows the value
