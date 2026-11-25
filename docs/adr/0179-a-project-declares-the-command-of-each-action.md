@@ -24,12 +24,17 @@ the grant and the arguments against the policy decision.
    every operator session and outside the session's sandbox. It reads the request, asks `squad/slackpolicy.decide` for
    the sender's decision, and hands the request to `squad/slackexecutor.execute`, which checks it whole: the sender, the
    role, the request's action against the actions the role grants, the arguments against the ones the action takes, and
-   the deploy environment against the role's deploy list. The pass reads
+   the deploy environment against the role's deploy list. The decision grants the role's whole action set, never one
+   action a message names, so the text of a message adds no grant of its own. The pass reads
    only the outbox of a channel a project owns and never the DM outbox, so a line in any other outbox never runs. A
    request older than a small window is stale and never runs, so a line a crashed pass left behind cannot act on a
    channel long after its message. The line's `at` is the session's number, so the daemon reads it against its own
-   clock: a line more than a small tolerance in the future never runs, and neither does a line whose outbox the daemon
-   did not read within the window, because the daemon can then vouch for no age of it.
+   clock: a line more than a small tolerance in the future never runs. The daemon keeps its own time of every reading
+   of an outbox, and every pass renews it, a pass that finds no new byte included, so a quiet outbox never ages the
+   requests that follow. A line the daemon finds past a place it read longer than the window ago has no age the daemon
+   can vouch for, so it never runs, and neither does a line past a kept place that carries no time of its reading. A
+   first read and a read of a rotated outbox take a bounded tail, and each writes one audit line that names the byte
+   range it did not read and the count, so no request is dropped without a record.
 3. **The command comes from the project, never from a message.** The committed `slack.yaml` declares one command per
    action id under `project.actions`, and the project identity declares the deploy command. The executor builds no
    command from message text, no argument of a request reaches a command line, and the declared command runs as one argv
@@ -46,10 +51,13 @@ the grant and the arguments against the policy decision.
    time, the sender, the role, the channel, the action, the exit code and one error that explains the exit (an empty
    error on a success). A request is run once, by a ledger beside the state, and the ledger's key is the parsed request
    (the action, the arguments, the sender, the channel and the source), never the raw line, so a line with another field
-   never runs the same request twice. A reply that cannot be written is recorded in the audit and kept for the next
-   pass, so the reply still leaves and the command never runs again. The ledger line carries the audit row's fields
-   before the run, and every audit row carries the key, so a crash that cuts a run short still gets its row from the
-   next pass, naming the unfinished command.
+   never runs the same request twice. The thread a reply reaches is no part of the key: the ledger records the reply and
+   the thread it reached, so two lines that differ only in their thread run the command once and each thread still gets
+   its reply. A reply that cannot be written is recorded in the audit and kept for the next pass, so the reply still
+   leaves and the command never runs again. A kept reply goes only to the outbox of a channel a project owns; one whose
+   channel a project no longer names waits for the window from its own time, then is dropped, and each such refusal is
+   one log line. The ledger line carries the audit row's fields before the run, and every audit row carries the key,
+   so a crash that cuts a run short still gets its row from the next pass, naming the unfinished command.
 
 ## Consequences
 

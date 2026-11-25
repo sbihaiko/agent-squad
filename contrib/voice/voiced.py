@@ -136,6 +136,7 @@ RELEASE_POLL = 30.0                   # how long a release event waits for its n
 ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 ACTION_HEARTBEAT = 60                 # empty action passes between two heartbeat log lines (#2939)
+BROKEN_LINE_BYTES = 200                # bytes of a line that is no JSON the drain keeps in its skip record
 GUARD_WINDOW = 60.0                   # the guard counts one sender's messages in this window (#2947)
 GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
 AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
@@ -1187,10 +1188,46 @@ def read_lines(path):
 
 
 def names_request_kind(text):
-    """True when one outbox line that is not JSON names the reserved request kind as its own `kind` value. Only a line
-    the parse cannot read reaches this test: a line that parses is read by `slackactions.is_request`, so an answer that
-    mentions the kind in plain text is posted, never skipped."""
-    return re.search(r'"kind"\s*:\s*"' + re.escape(slackactions.KIND) + r'"', text) is not None
+    """True when one outbox line that is not JSON names the reserved request kind as its own top-level `kind` key. Only
+    a line the parse cannot read reaches this test: a line that parses is read by `slackactions.is_request`, so an
+    answer that mentions the kind in plain text is posted, never skipped. A kind inside a string value of the line is a
+    mention too, so the line is no request and the drain records it as not JSON.
+
+    The line is walked with a small scanner, because no parse reads it: a string is skipped whole, braces follow the
+    depth, and the kind counts only as a key of the object's own top level."""
+    depth = 0
+    i = 0
+    size = len(text)
+    wanted = '"' + slackactions.KIND + '"'
+    while i < size:
+        char = text[i]
+        if char == '"':
+            j = i + 1
+            while j < size:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            if depth == 1 and text[i + 1:j] == "kind":
+                k = j + 1
+                while k < size and text[k] in " \t":
+                    k += 1
+                if k < size and text[k] == ":":
+                    k += 1
+                    while k < size and text[k] in " \t":
+                        k += 1
+                    if text.startswith(wanted, k):
+                        return True
+            i = j + 1
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+        i += 1
+    return False
 
 
 def request_source(text):
@@ -1206,12 +1243,14 @@ def request_source(text):
 
 
 def read_outbox_answers(path):
-    """The answer lines of one outbox and the raw lines that are action requests, as `(answers, requests)`.
+    """The answer lines of one outbox, the raw lines that are action requests, and the raw lines that are no JSON, as
+    `(answers, requests, broken)`.
 
     A line that parses is a request only when `slackactions.is_request` reads the reserved kind on it, so an answer that
-    mentions the kind in plain text is still an answer. A raw-kind test covers only a line the parse cannot read, so a
-    malformed request line never reaches the channel either. A half line a crash left behind is skipped."""
-    answers, requests = [], []
+    mentions the kind in plain text is still an answer. A top-level kind test covers only a line the parse cannot read,
+    so a malformed request line never reaches the channel either. A half line a crash left behind is no request, so its
+    first bytes go to `broken` and the drain records why it is not JSON."""
+    answers, requests, broken = [], [], []
     try:
         with open(path, encoding="utf-8") as f:
             for raw in f:
@@ -1223,6 +1262,8 @@ def read_outbox_answers(path):
                 except ValueError:
                     if names_request_kind(text):
                         requests.append(text)
+                    else:
+                        broken.append(text[:BROKEN_LINE_BYTES])
                     continue
                 if not isinstance(record, dict):
                     continue
@@ -1232,7 +1273,7 @@ def read_outbox_answers(path):
                     answers.append(record)
     except OSError:
         pass
-    return answers, requests
+    return answers, requests, broken
 
 
 def message_id(event):
@@ -2372,11 +2413,15 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            records, requests = read_outbox_answers(path)
+            records, requests, broken = read_outbox_answers(path)
             for raw in requests:
                 # An action request is not an answer: the pass runs it and appends its own reply line (#2939). The raw
                 # line is named in the log, so a skip is never silent.
                 self.log(f"voiced: action request not posted: channel {channel or DM} source {request_source(raw)}")
+            for raw in broken:
+                # A line no JSON cannot be posted and is no request: the log keeps its first bytes, so a malformed line
+                # is never dropped silently.
+                self.log(f"voiced: outbox line skipped, the line is not JSON: channel {channel or DM}: {raw}")
             if records and channel and not self.channel_accepts_answer(channel):
                 # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
                 self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
@@ -2443,6 +2488,7 @@ class Daemon:
             self.action_documents,
             now or datetime.now(),
             outbox_for=self.state.outbox_for,
+            log=self.log,
         )
         for run in runs:
             self.log(f"voiced: action {run.action or 'none'} for {run.sender} in {run.channel} exited {run.exit}")

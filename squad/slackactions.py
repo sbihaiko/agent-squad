@@ -9,11 +9,14 @@ accident is still an answer.
 
 The pass reads only the outbox of a channel the daemon says a project owns, and never the DM outbox: the DM session
 proposes, and a proposal is the owner's to start. A request older than `REQUEST_WINDOW` seconds never runs, so a line a
-crashed pass left behind cannot act on a channel long after its message. The line's `at` is the session's number, so
-the daemon reads it against its own clock and never trusts it whole: a line that names a time more than
-`FUTURE_TOLERANCE` seconds ahead never runs, because a session clock ahead by a window would keep every line fresh, and
-neither does a line whose outbox the daemon did not read within the window, because its age is then unknown. A refused
-line is recorded in the audit and dropped; it never reaches the executor.
+crashed pass left behind cannot act on a channel long after its message.
+The pass trusts no age whole, and the reason is the number the session writes:
+the line's `at` is the session's number, so the daemon reads it against its own clock and never trusts it whole. A line
+that names a time more than `FUTURE_TOLERANCE` seconds ahead never runs, because a session clock ahead by a window would
+keep every line fresh. The daemon keeps its own time of each reading of an outbox, so a line it finds past a place it
+read longer than the window ago never runs, because its age is then unknown; a kept place that carries no time at all
+leaves the daemon no age to vouch for, so a line past it never runs either. A refused line is recorded in the audit and
+dropped; it never reaches the executor.
 
 The pass is the checked executor. It runs in the daemon's own process, which is outside the session and outside the
 session's sandbox, and it runs every command itself; no text of a message ever reaches a command line. For each
@@ -35,17 +38,19 @@ deploy command from the project identity. Only the four text actions and `deploy
 
 The command is the project's own declaration, reviewed in its history; the executor never builds one from the message.
 The grant the executor checks is the decision `decide` returned for the inbox line: one role, its actions and its reply
-path decide both what the pass asks and what the executor allows, so the request's action adds no grant of its own.
+path decide both what the pass asks and what the executor allows, so the request's action adds no grant of its own. The
+decision grants the role's whole action set, never one action the text names, and the executor refuses a request whose
+action is not in that set, so the text of the message grants nothing the role does not.
 
-A request is run once: a ledger of the requests already handled lives in `<state>/actions-handled.jsonl`, one JSON line
-per handled key, and the key names the parsed request (the action, the arguments, the sender, the channel and the
-source), so two requests that share the source and the action but differ in their arguments still run once each, and
-two lines that parse alike never run twice whatever else they carry. The key is written with fsync, together with the
-audit row's fields, before the reply, the audit line and the command itself. Each pass also keeps its place in every
-outbox in `<state>/actions-offsets.json`, with the daemon's own time of that reading, so a pass reads only the bytes
-appended since the last one and knows how long the outbox went unread; a pass that keeps no place, and one whose outbox
-rotated below its place, reads a bounded tail of the outbox. The ledger, never the offset, is what decides that a
-request already ran.
+A request is run once, and the ledger's key decides which request it is:
+the key names the parsed request (the action, the arguments, the sender, the channel and the source), so two requests that share the source and the action but differ in their arguments still run once each, and two lines that parse alike never run twice whatever else they carry.
+The key is written with fsync, together with the audit row's fields, before the reply, the audit line and the command
+itself. The ledger also records the thread each reply reached, so two lines that differ only in `thread_ts` run the
+command once and each thread still gets its reply. Each pass also keeps its place in every outbox in
+`<state>/actions-offsets.json`, with the daemon's own time of that reading, so a pass reads only the bytes appended
+since the last one and knows how long the outbox went unread; a pass that keeps no place, and one whose outbox rotated
+below its place, reads a bounded tail of the outbox and writes one audit line naming the bytes it did not read. The
+ledger, never the offset, is what decides that a request already ran.
 
 Every audit row carries the handled key. A run a crash cut short leaves its key and its fields in the ledger and no
 audit row, so the next pass writes that row and names the unfinished command, and the key keeps a later pass from
@@ -321,15 +326,17 @@ def _inbox_line(state, channel, source):
     return _Inbox(state).line(channel, source)
 
 
-def _stale(record, now_ts, observed=None):
+def _stale(record, now_ts, observed=None, anchored=False):
     """The reason a request line is too old to run, or None.
 
     The session supplies the line's `at`, so the daemon reads it against its own clock and never trusts it whole. A line
     with no usable `at` never runs, and neither does one more than `FUTURE_TOLERANCE` ahead of the daemon: a session
     clock ahead by a window would otherwise keep every line fresh, and a forged future `at` would hide a replay. A line
     older than `REQUEST_WINDOW` never runs either, so a request a crashed pass left behind cannot act on a channel long
-    after its message. `observed` is the daemon's own reading of when it last read this outbox: a line found past a
-    place the daemon read longer than the window ago has no age the daemon can vouch for, so it never runs."""
+    after its message. `observed` is the daemon's own time of the reading that placed the keep the line was found past,
+    so the line was written after that reading: a line found past a place the daemon read longer than the window ago has
+    no age the daemon can vouch for, so it never runs. `anchored` says the daemon kept a place but no time of the
+    reading, so it can vouch for no age of the lines past that place either."""
     try:
         at = float(record.get("at"))
     except (TypeError, ValueError):
@@ -339,6 +346,9 @@ def _stale(record, now_ts, observed=None):
                 "tolerance, so the daemon never trusts its age")
     if now_ts - at > REQUEST_WINDOW:
         return f"the request is older than the {REQUEST_WINDOW:.0f} s window"
+    if anchored:
+        return ("the daemon kept a place in this outbox and no time it read it, so it can vouch for no age of this "
+                "line")
     if observed is not None and now_ts - observed > REQUEST_WINDOW:
         return (f"the daemon did not read this outbox within the {REQUEST_WINDOW:.0f} s window, so the age of this "
                 "line is unknown")
@@ -438,17 +448,25 @@ def _new_rows(path, offset):
 
 def _request_lines(state, project_of, now, offsets=None):
     """Every new request line of every outbox in file order, as `(path, line index, record, reason)`, where `reason`
-    names why a line never runs and is None for a line the pass runs. Returns `(lines, ends)`, where `ends` is the place
-    each outbox was read through and the daemon's time of it, so the caller keeps both once every line is handled.
+    names why a line never runs and is None for a line the pass runs. Returns `(lines, ends, skips)`, where `ends` is the
+    place each outbox was read through and the daemon's time of that reading, so the caller keeps both once every line is
+    handled, and `skips` names every byte range a first or rotated read left unread, so no request is dropped without a
+    record.
 
     A pass reads only the bytes appended since the last one (`offsets`), so its cost follows the new requests, never the
     whole history. The pass reads only the outbox of a channel a project owns, so a request line in any other outbox
     never runs. The DM outbox never carries a request, and a line older than the window is stale. A line whose channel
     is not the channel of its outbox is refused too, so a request never acts on a channel other than the one its
-    session can write. A first read and a read of a rotated outbox carry no observation of the daemon's own, so the
-    line's age rests on its `at` alone."""
+    session can write.
+
+    The reading time is the daemon's own, and every pass renews it, even a pass that finds no new byte: a quiet outbox
+    the daemon just looked at leaves the next request inside the window. The lines of one pass all lie past the place
+    the previous pass's reading kept, so they were written after that reading, and that reading is the age bound they
+    carry: an answer appended beside a request never renews the request's age. A first read and a read of a rotated
+    outbox carry no reading of the daemon's own, so the line's age rests on its `at` alone."""
     out = []
     ends = {}
+    skips = []
     now_ts = now.timestamp()
     for path in sorted(glob.glob(os.path.join(state, DEFAULT_OUTBOXES, "*.jsonl"))):
         key = os.path.splitext(os.path.basename(path))[0]
@@ -463,13 +481,19 @@ def _request_lines(state, project_of, now, offsets=None):
             size = os.path.getsize(path)
         except OSError:
             size = 0
-        # A place past the file's size is a rotation: the tail read is a first read, so it carries no observation.
+        # A place past the file's size is a rotation: the tail read is a first read, so it carries no reading of the
+        # daemon's own. A kept place that carries no time leaves the daemon no age to vouch for the lines past it.
         rotated = kept.get("offset") is None or int(kept["offset"]) > size
         observed = None if rotated else kept.get("at")
-        rows, end = _new_rows(path, _tail_start(path) if rotated else kept["offset"])
-        # The daemon observed the outbox now when its place moved; a place that stayed where it was keeps the time of
-        # the reading that placed it, so a partial line never resets the clock that ages it.
-        ends[path] = {"offset": end, "at": now_ts if rotated or end != kept.get("offset") else observed}
+        anchored = not rotated and kept.get("at") is None
+        start = _tail_start(path) if rotated else kept["offset"]
+        rows, end = _new_rows(path, start)
+        if rotated and start:
+            # The tail read began after byte zero, so the bytes before it are never read. One audit line names them.
+            skips.append((key, 0, start, start))
+        # The daemon read this outbox now, so its own time of this reading is the bound the next pass's lines carry; a
+        # pass that reads no new byte still renews it, so a quiet outbox never ages the requests that follow.
+        ends[path] = {"offset": end, "at": now_ts}
         for i, row in enumerate(rows):
             try:
                 record = json.loads(row.decode("utf-8"))
@@ -481,9 +505,9 @@ def _request_lines(state, project_of, now, offsets=None):
             if why is None and str(record.get("channel") or "") != key:
                 why = f"the request names channel {record.get('channel')!r}, not the channel of its outbox {key!r}"
             if why is None:
-                why = _stale(record, now_ts, observed)
+                why = _stale(record, now_ts, observed, anchored)
             out.append((path, i, record, why))
-    return out, ends
+    return out, ends, skips
 
 
 class Ledger:
@@ -494,6 +518,7 @@ class Ledger:
     def __init__(self, path):
         self.path = str(path)
         self._values = None
+        self._replies = {}
 
     def values(self):
         if self._values is None:
@@ -508,9 +533,33 @@ class Ledger:
                     got = json.loads(row)
                 except ValueError:
                     continue
-                if isinstance(got, dict) and got.get("key"):
-                    self._values.add(str(got["key"]))
+                if not isinstance(got, dict) or not got.get("key"):
+                    continue
+                key = str(got["key"])
+                self._values.add(key)
+                reply = got.get("reply")
+                if isinstance(reply, dict):
+                    # A delivery line carries the reply and the thread it reached, so a later line for the same key in
+                    # another thread still gets the reply without running the command again.
+                    self._replies.setdefault(key, {"reply": reply, "threads": set()})
+                    self._replies[key]["reply"] = reply
+                    if got.get("thread"):
+                        self._replies[key]["threads"].add(str(got["thread"]))
         return self._values
+
+    def delivery(self, key):
+        """The reply one handled key left, and the threads it already reached, or None for a key that left none."""
+        self.values()
+        return self._replies.get(str(key))
+
+    def record_delivery(self, key, reply, thread):
+        """Record one reply a handled request delivered into a thread, so a second line for the same thread is never
+        posted twice and a line in another thread still gets the reply."""
+        self.values()
+        _append_line(self.path, {"key": str(key), "thread": str(thread), "reply": dict(reply)})
+        got = self._replies.setdefault(str(key), {"reply": dict(reply), "threads": set()})
+        got["reply"] = dict(reply)
+        got["threads"].add(str(thread))
 
     def has(self, key):
         return str(key) in self.values()
@@ -576,9 +625,14 @@ def _write_lines(path, records):
     os.replace(tmp, path)
 
 
-def _send_pending(path, outbox_for):
+def _send_pending(path, outbox_for, project_of, now, log=None):
     """Deliver every reply a failed write left behind, then clear it. A reply that cannot be written stays for the next
-    pass, so a full disk delays a reply and never loses it."""
+    pass, so a full disk delays a reply and never loses it.
+
+    A reply goes only to the outbox of a channel a project owns, so a pending row never writes an outbox no session
+    reads. A row whose channel a project no longer names is kept for `REQUEST_WINDOW` seconds from the row's own time
+    and then dropped, and each such refusal is one log line. A row that reads as an action request is dropped too: a
+    reply is never a request, so a corrupted row never injects one."""
     if not os.path.exists(path):
         return
     try:
@@ -586,6 +640,7 @@ def _send_pending(path, outbox_for):
             rows = f.read().splitlines()
     except OSError:
         return
+    now_ts = now.timestamp()
     left = []
     for row in rows:
         try:
@@ -594,8 +649,22 @@ def _send_pending(path, outbox_for):
             continue
         if not isinstance(got, dict) or not isinstance(got.get("reply"), dict):
             continue
+        channel = str(got.get("channel") or "")
+        if is_request(got["reply"]):
+            if log is not None:
+                log(f"the pending reply of channel {channel!r} reads as an action request, so it is dropped")
+            continue
+        if not project_of(channel):
+            at = _float_or_none(got.get("at"))
+            held = at is not None and now_ts - at <= REQUEST_WINDOW
+            if log is not None:
+                log(f"the pending reply of channel {channel!r}: no project owns that channel, so it is "
+                    f"{'held' if held else 'dropped'}")
+            if held:
+                left.append(got)
+            continue
         try:
-            _append_line(outbox_for(str(got.get("channel") or "")), got["reply"])
+            _append_line(outbox_for(channel), got["reply"])
         except OSError:
             left.append(got)
     try:
@@ -698,17 +767,40 @@ def _run_one(record, state, project_of, documents, now, runner, outbox_for, inbo
                reply, "" if outcome.ran else str((outcome.record or {}).get("error") or ""))
 
 
-def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
+def _redeliver(ledger, key, record, inbox, outbox_for):
+    """Deliver the reply of a handled request into the thread of a second line that names the same request in another
+    thread, or return None. The command never runs again; the ledger's delivery of the key names the reply and the
+    threads it already reached, so each distinct thread gets the reply exactly once."""
+    delivery = ledger.delivery(key)
+    if not delivery or not delivery.get("threads"):
+        return None
+    channel = str(record.get("channel") or "")
+    line = inbox.line(channel, str(record.get("source") or ""))
+    thread = str((line or {}).get("ts") or record.get("thread_ts") or "")
+    if not thread or thread in delivery["threads"]:
+        return None
+    reply = {**delivery["reply"], "thread_ts": thread}
+    try:
+        _append_line(outbox_for(channel), reply)
+    except OSError:
+        return None
+    ledger.record_delivery(key, delivery["reply"], thread)
+    return reply
+
+
+def run_pass(state, project_of, documents, now, runner=None, outbox_for=None, log=None):
     """One pass: run every request line no earlier pass ran or refused, then record it.
 
     `project_of(channel)` names the project that owns a channel; the pass reads the outbox of a channel it names and no
     other. `documents(channel)` answers the `(committed, local)` pair of that project's Slack files. `runner` is the
     command runner the pass uses, `subprocess.run` by default, so the pass runs each declared command itself, in the
     daemon's process and outside every session. `outbox_for(channel)` names the outbox file the reply goes to,
-    `<state>/outboxes/<channel>.jsonl` by default.
+    `<state>/outboxes/<channel>.jsonl` by default. `log(line)` records one line of a refusal with no other record,
+    `None` by default.
 
-    A line that never runs is recorded in the audit with its reason and is not returned. Returns one `Run` per request
-    this pass ran, in file order."""
+    A line that never runs is recorded in the audit with its reason and is not returned. A line whose request already
+    ran is not returned either, but its thread still gets the reply. Returns one `Run` per request this pass ran, in
+    file order."""
     state = os.path.abspath(state)
     runner = runner or subprocess.run
     outbox_for = outbox_for or (lambda channel: os.path.join(state, DEFAULT_OUTBOXES, f"{channel}.jsonl"))
@@ -716,15 +808,24 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
     audit_path = os.path.join(state, AUDIT)
     offsets_path = os.path.join(state, OFFSETS)
     pending_path = os.path.join(state, PENDING)
-    _send_pending(pending_path, outbox_for)   # a reply a failed write left behind goes out before any new request
+    _send_pending(pending_path, outbox_for, project_of, now, log)   # a reply a failed write left goes out first
     _heal(ledger, audit_path)                 # a run a crash cut short keeps its audit row, and its command never reruns
     offsets = _load_offsets(offsets_path)
-    lines, ends = _request_lines(state, project_of, now, offsets)
+    lines, ends, skips = _request_lines(state, project_of, now, offsets)
+    for channel, first, last, count in skips:
+        # A first read and a rotated read take a bounded tail, so the bytes before it are never read. One audit line
+        # names the range, so a request before the tail is never dropped without a record (#2939 review, D4).
+        _append_line(audit_path, {"time": now.isoformat(), "sender": "", "role": "", "channel": channel, "action": "",
+                                  "key": "", "exit": 1, "skipped": {"from": first, "to": last, "bytes": count},
+                                  "error": f"the read did not read {count} bytes before this outbox's tail, so no "
+                                           "request there runs"})
     inbox = _Inbox(state)
     runs = []
     for _, _, record, why in lines:
         key = _key(record)
         if ledger.has(key):
+            if why is None:
+                _redeliver(ledger, key, record, inbox, outbox_for)
             continue
         # The handled key carries the fields of the audit row before the command runs, with fsync, so a crash after any
         # of the reply, the audit line and the command never runs the request a second time and never loses its row
@@ -744,12 +845,15 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
         try:
             if run.reply is not None:
                 _append_line(outbox_for(run.channel), run.reply)
+                # The ledger records the thread the reply reached, so a later line that names the same request in
+                # another thread is answered without a second run.
+                ledger.record_delivery(key, run.reply, run.reply.get("thread_ts"))
         except OSError as e:
             # The reply write failed: the audit still records the run, and the reply waits for the next pass, so a full
             # disk delays a reply and never loses it (#2939 review, findings 2 and 4).
             exit_code = 1
             error = f"the reply was not written: {type(e).__name__}: {e}"
-            _append_line(pending_path, {"channel": run.channel, "reply": run.reply})
+            _append_line(pending_path, {"channel": run.channel, "reply": run.reply, "at": now.timestamp()})
         finally:
             # The audit line is written whatever the reply write did, so a crash after the reply never loses the record.
             _append_line(audit_path, {**before, "key": key, "sender": run.sender, "role": run.role,

@@ -2896,8 +2896,9 @@ def test_the_drain_posts_an_answer_that_mentions_the_request_kind_in_plain_text(
 
 
 def test_an_unparseable_line_that_names_the_request_kind_is_never_posted(tmp_path):
-    """Finding 3 (DEBT): a line that is not JSON but names the reserved `action-request` kind as its own key is still a
-    request, so it never reaches the channel as an answer."""
+    """Finding 3 (DEBT) and D5: a line that is not JSON is a request only when the reserved `action-request` kind is
+    one of its own top-level keys. A line cut short whose text merely mentions the kind is no request, so the drain
+    records the skip with the first bytes of the line and the reason that it is not JSON, and never posts it."""
     mod = voiced()
     state = mod.State(str(tmp_path))
     (tmp_path / "inboxes").mkdir(exist_ok=True)
@@ -2906,13 +2907,19 @@ def test_an_unparseable_line_that_names_the_request_kind_is_never_posted(tmp_pat
          "text": "what is the status?"}) + "\n")
     outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
     outbox.parent.mkdir(exist_ok=True)
-    outbox.write_text('{"kind": "action-request", "text": "deploy with the secret token", broken\n')
+    outbox.write_text('{"kind": "action-request", "text": "deploy with the secret token", broken\n'
+                      '{"text": "the \\"kind\\": \\"action-request\\" line is documented", broken\n')
     client = FakeClient()
+    logged = []
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
-                        downloader=lambda url: b"", log=lambda line: None, client=client)
+                        downloader=lambda url: b"", log=logged.append, client=client)
     state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
     assert asyncio.run(daemon.drain_outboxes()) == 0
     assert client.posts() == [], client.posts()
+    assert any("action request not posted" in line for line in logged), logged
+    not_json = [line for line in logged if "the line is not JSON" in line]
+    assert len(not_json) == 1, logged
+    assert "the " in not_json[0] and "line is documented" in not_json[0], not_json
 
 
 def test_the_drain_logs_a_skipped_request_line(tmp_path):

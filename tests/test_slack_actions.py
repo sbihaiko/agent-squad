@@ -10,7 +10,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -70,12 +70,15 @@ class Runner:
         return Done()
 
 
-def inbox(state, user=OWNER, text="what is the status?", channel=CHANNEL, mid=MID):
-    """Write one inbox line, as the daemon writes it (#2687)."""
+def inbox(state, user=OWNER, text="what is the status?", channel=CHANNEL, mid=MID, ts="1762500100.000100"):
+    """Write one inbox line, as the daemon writes it (#2687). A `ts` of None writes a line with no thread ts, so a
+    request's own `thread_ts` is what names the thread it answers."""
     path = os.path.join(state, "inboxes", f"{channel}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    row = {"id": mid, "ts": "1762500100.000100", "user": user, "channel": channel,
+    row = {"id": mid, "user": user, "channel": channel,
            "language": "en-US", "persona": "HAL9K", "role": "", "text": text}
+    if ts is not None:
+        row["ts"] = ts
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
     return row
@@ -333,17 +336,19 @@ def test_a_failed_reply_write_keeps_the_audit_line_and_the_reply_for_the_next_pa
 
 
 def test_two_request_lines_that_parse_alike_but_differ_in_thread_ts_run_once(tmp_path):
-    """Finding 1 (BLOCKING): the handled key names the parsed request, so two lines that parse to the same action,
-    arguments, sender, channel and source never run the declared command twice, even when their thread ts differs."""
+    """Finding B2: the handled key names the parsed request, so two lines that parse to the same action, arguments,
+    sender, channel and source never run the declared command twice. The reply still reaches each thread, though: the
+    ledger records the reply thread, so a second message in another thread is answered once and the command runs once."""
     state = str(tmp_path)
-    inbox(state)
+    inbox(state, ts=None)                       # no thread on the line, so each request names its own thread
     ask(state, thread_ts="1.0")
-    ask(state, thread_ts="1.000000")
+    ask(state, thread_ts="2.0")
     runner = Runner()
     runs = run(state, runner)
     assert len(runner.calls) == 1, runner.calls
     assert len(runs) == 1
-    assert len(replies(state)) == 1
+    assert sorted(row["thread_ts"] for row in replies(state)) == ["1.0", "2.0"], replies(state)
+    assert len(audit(state)) == 1, audit(state)
 
 
 def test_a_rotated_outbox_reads_only_a_bounded_tail(tmp_path, monkeypatch):
@@ -407,14 +412,17 @@ def test_the_project_identity_environment_bounds_a_deploy_on_top_of_the_roles_li
 
 
 def test_a_request_whose_sender_is_not_the_sender_of_the_line_is_refused(tmp_path):
-    """Criterion 3: the sender of the request must be the sender of the inbox line, or a session could act for a peer."""
+    """Criterion 3 and finding D7: the sender of the request must be the sender of the inbox line, or a session could
+    act for a peer. The executor's request carries no sender at all (`slackexecutor.py:98-105`), so this check is the
+    pass's own, and it fires before the executor runs even when the sender's role grants the action."""
     state = str(tmp_path)
     inbox(state, user=PEER)
-    ask(state, sender=OWNER)
+    ask(state, sender=OWNER)                    # the owner is a manager, so the role grants `status`
     runner = Runner()
     runs = run(state, runner)
     assert runner.calls == []
     assert runs[0].exit == 1 and "identity" in runs[0].error
+    assert "grant" not in runs[0].error, "the identity refusal came after the grant was read"
 
 
 def test_a_request_for_an_action_with_no_declared_command_names_the_missing_source(tmp_path):
@@ -525,17 +533,23 @@ def test_the_pass_reads_only_the_inbox_of_the_request_channel(tmp_path):
 
 
 def test_the_handled_ledger_appends_one_line_per_key(tmp_path):
-    """The ledger appends one JSON line per handled key, so a pass never rewrites its whole list for one request."""
+    """The ledger appends one key line per handled request, and one delivery line per thread its reply reached, so a
+    pass never rewrites its whole list for one request."""
     state = str(tmp_path)
     inbox(state)
     ask(state)
     run(state, Runner())
     path = os.path.join(state, A.HANDLED)
-    lines = [line for line in open(path, encoding="utf-8").read().splitlines() if line.strip()]
-    assert len(lines) == 1 and json.loads(lines[0])["key"]
+
+    def lines():
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    keys = [row for row in lines() if "audit" in row]
+    assert len(keys) == 1 and keys[0]["key"], lines()
+    assert [row["thread"] for row in lines() if "thread" in row] == ["1762500100.000100"], lines()
     run(state, Runner())
-    lines = [line for line in open(path, encoding="utf-8").read().splitlines() if line.strip()]
-    assert len(lines) == 1
+    assert len([row for row in lines() if "audit" in row]) == 1, lines()
 
 
 def test_a_declared_command_of_a_request_action_runs(tmp_path):
@@ -705,7 +719,7 @@ def test_the_handled_key_names_the_whole_request_line(tmp_path):
     A.run_pass(state, lambda channel: PROJECT, documents_here, NOW, runner=Runner(stdout="done"))
     path = os.path.join(state, A.HANDLED)
     with open(path, encoding="utf-8") as f:
-        keys = [json.loads(line)["key"] for line in f if line.strip()]
+        keys = [json.loads(line)["key"] for line in f if line.strip() and "audit" in json.loads(line)]
     assert len(keys) == 2 and keys[0] != keys[1], keys
 
 
@@ -722,6 +736,20 @@ def test_a_deploy_request_from_a_status_only_role_is_refused_by_the_action_grant
     assert runs[0].exit == 1
     assert runs[0].error.startswith("grant:"), runs[0].error
     assert "deploy" in runs[0].error and "colleague" in runs[0].error
+
+
+def test_the_grant_comes_from_the_role_never_from_the_text_of_the_line(tmp_path):
+    """Finding D8: `decide` grants the role's whole action set (`slackpolicy.py:1212`), never one action the text names,
+    and the executor refuses a request whose action is not in that set (`slackexecutor.py:235`). So a line whose text
+    asks for a deploy while the request names `status` runs `status`, because the manager's role grants it, and the text
+    adds no grant of its own."""
+    state = str(tmp_path)
+    inbox(state, user=OWNER, text="please deploy to stg")
+    ask(state, action="status", sender=OWNER)
+    runner = Runner()
+    runs = run(state, runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1, runner.calls
 
 
 def test_the_declared_command_runs_as_one_argv_without_a_shell(tmp_path):
@@ -937,8 +965,9 @@ def test_a_request_the_daemon_did_not_observe_within_the_window_never_runs(tmp_p
 
 
 def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
-    """Finding 14 (DEBT 6): the first pass of a state with no kept place reads a bounded tail of each outbox, so a long
-    answer history costs one bounded read and a request at the very start never runs."""
+    """Finding 14 (DEBT 6) and D4: the first pass of a state with no kept place reads a bounded tail of each outbox, so a
+    long answer history costs one bounded read; the tail it skips is named in one audit line, so a request before the
+    tail is never dropped without a record of the bytes the pass did not read."""
     state = str(tmp_path)
     path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -953,3 +982,89 @@ def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
     runs = run(state, runner)
     assert [r.action for r in runs] == ["status"], runs
     assert len(runner.calls) == 1
+    skipped = [row for row in audit(state) if row.get("skipped")]
+    assert len(skipped) == 1, audit(state)
+    assert skipped[0]["skipped"]["bytes"] > 0 and skipped[0]["skipped"]["from"] == 0, skipped[0]
+    assert "did not read" in skipped[0]["error"], skipped[0]["error"]
+
+
+def test_a_quiet_outbox_read_again_keeps_its_observation_fresh(tmp_path):
+    """Finding B1: the daemon's observation of an outbox is the time of its last reading, so a pass that finds no new
+    bytes still renews it. A request appended after a long quiet stretch runs, because the daemon read the outbox a
+    moment before it, never a window before it."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8"):
+        pass                                                                 # an outbox the first pass reads as empty
+    empty = lambda channel: PROJECT                                         # noqa: E731
+    runner = Runner()
+    A.run_pass(state, empty, documents, NOW, runner=runner)                 # the first pass keeps the place
+    later = NOW + timedelta(hours=1)
+    A.run_pass(state, empty, documents, later, runner=runner)               # a quiet pass reads no new byte
+    ask(state, at=later.timestamp())
+    runs = A.run_pass(state, empty, documents, later + timedelta(seconds=20), runner=runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1, runner.calls
+
+
+def test_a_line_in_an_outbox_whose_kept_place_carries_no_reading_time_never_runs(tmp_path):
+    """Finding B1: a kept place that carries no time of its reading leaves the daemon no age to vouch for, so a line
+    found past it never runs, whatever its own `at` claims."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # the place a pass kept, with no time beside it
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0}}))
+    ask(state, at=NOW.timestamp())
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    row = audit(state)[0]
+    assert "no time" in row["error"] or "vouch" in row["error"], row["error"]
+
+
+def test_a_stale_request_behind_an_answer_appended_between_passes_never_runs(tmp_path):
+    """Finding D6: the observation belongs to the byte region the daemon read, so an answer appended between two passes
+    never renews the age of a stale request that shares that region. The request does not run."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8"):
+        pass                                                                  # an outbox the first pass reads as empty
+    runner = Runner()
+    A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)     # the first pass keeps the place
+    later = NOW + timedelta(seconds=A.REQUEST_WINDOW + 60)
+    ask(state, at=NOW.timestamp())                                              # a stale line, written long ago
+    with open(path, "a", encoding="utf-8") as f:                                # an answer appended in the same region
+        f.write(json.dumps({"thread_ts": "1762500100.000100", "channel": CHANNEL, "text": "an answer"}) + "\n")
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, later, runner=runner)
+    assert runs == (), runs
+    assert runner.calls == []
+    assert any("older than" in row["error"] for row in audit(state)), audit(state)
+
+
+def test_a_pending_reply_whose_channel_no_project_owns_is_held_and_then_dropped(tmp_path):
+    """Finding D3: a pending reply never reaches an outbox of a channel no project owns. A fresh row is kept for the
+    next pass and a row past the window is dropped, and each refusal is one log line."""
+    state = str(tmp_path)
+    gone = "C0GONE0001"
+    pending_path = os.path.join(state, A.PENDING)
+    fresh = {"channel": gone, "reply": {"thread_ts": "1.0", "channel": gone, "text": "hi"},
+             "at": NOW.timestamp()}
+    stale = {"channel": gone, "reply": {"thread_ts": "2.0", "channel": gone, "text": "hi"},
+             "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}
+    A._write_lines(pending_path, [fresh, stale])
+    log = []
+    project_of = lambda channel: "" if channel == gone else PROJECT             # noqa: E731
+    A.run_pass(state, project_of, documents, NOW, runner=Runner(), log=log.append)
+    assert not os.path.exists(os.path.join(state, A.DEFAULT_OUTBOXES, f"{gone}.jsonl")), "an ownerless outbox was written"
+    with open(pending_path, encoding="utf-8") as f:
+        left = [json.loads(line) for line in f if line.strip()]
+    assert [row["reply"]["thread_ts"] for row in left] == ["1.0"], left     # the fresh row waits, the stale one is gone
+    assert sum("no project owns" in line for line in log) == 2, log
