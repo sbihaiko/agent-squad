@@ -2722,14 +2722,21 @@ async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
 async def watch_actions(daemon, stop=None, interval=ACTION_POLL):
     """Run each new action request as soon as the session writes it, until `stop` is set.
 
-    The pass runs in a worker thread, so a slow declared command never holds the socket loop. A failed pass is a log
-    line, never a watcher that stops running actions.
+    The pass runs in a worker thread, so a slow declared command never holds the socket loop. One guard belongs to the
+    daemon, so only one pass is in flight at a time even with two watchers: a slow declared command never lets a second
+    pass start and re-attempt the line the first is still running. A failed pass is a log line, never a watcher that
+    stops running actions.
     """
+    guard = getattr(daemon, "action_pass_guard", None)
+    if guard is None:
+        guard = asyncio.Lock()
+        daemon.action_pass_guard = guard
     while not (stop is not None and stop.is_set()):
-        try:
-            await asyncio.to_thread(daemon.run_action_requests)
-        except Exception as x:      # noqa: BLE001 - one bad request is a log line, never a daemon that stops acting
-            daemon.log(f"voiced: action pass failed: {type(x).__name__}: {str(x)[:120]}")
+        async with guard:
+            try:
+                await asyncio.to_thread(daemon.run_action_requests)
+            except Exception as x:  # noqa: BLE001 - one bad request is a log line, never a daemon that stops acting
+                daemon.log(f"voiced: action pass failed: {type(x).__name__}: {str(x)[:120]}")
         await asyncio.sleep(interval)
 
 

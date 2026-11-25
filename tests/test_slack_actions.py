@@ -10,6 +10,8 @@ import json
 import os
 from datetime import datetime
 
+import pytest
+
 from squad import slackactions as A
 
 WORKSPACE = "T0TEAM0001"
@@ -49,13 +51,15 @@ LOCAL = {"version": 1, "members": [
 
 
 class Runner:
-    """The command runner the pass calls, in the daemon's own process. It records every command it is asked to run."""
+    """The command runner the pass calls, in the daemon's own process. It records every command it is asked to run, and
+    the process that calls it, so a test can tell a run in the caller from a run handed to another process."""
 
     def __init__(self, code=0, stdout="the project is green"):
-        self.code, self.stdout, self.calls = code, stdout, []
+        self.code, self.stdout, self.calls, self.pids = code, stdout, [], []
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
+        self.pids.append(os.getpid())
 
         class Done:
             returncode = self.code
@@ -138,7 +142,9 @@ def test_the_declared_command_runs_outside_the_session_through_the_caller(tmp_pa
     assert len(runs) == 1
     assert [command for command, _ in runner.calls] == [STATUS_COMMAND]
     assert runner.calls[0][1].get("shell") is True
-    assert "claude-sandboxed" not in open(A.__file__, encoding="utf-8").read()
+    # The command runs through the caller's runner, in the caller's own process: the runner records the process that
+    # calls it, so a pass that handed the command to another process would name a different pid.
+    assert runner.pids == [os.getpid()]
 
 
 def test_a_sender_whose_role_lists_the_action_gets_the_result_as_a_thread_reply(tmp_path):
@@ -225,7 +231,7 @@ def test_each_action_run_writes_one_audit_line(tmp_path):
     ask(state)
     run(state, Runner())
     assert audit(state) == [{"time": NOW.isoformat(), "sender": OWNER, "role": "manager", "channel": CHANNEL,
-                             "action": "status", "exit": 0}]
+                             "action": "status", "exit": 0, "error": ""}]
 
 
 def test_a_refused_request_writes_its_audit_line_too(tmp_path):
@@ -258,6 +264,31 @@ def test_a_request_is_run_once(tmp_path):
     assert runs == ()
     assert len(runner.calls) == 1
     assert len(replies(state)) == 1
+
+
+def test_a_crash_after_the_reply_never_runs_the_declared_command_twice(tmp_path):
+    """Finding 1: the pass records the handled key before the reply and before the command, so a pass that dies after it
+    wrote the reply leaves the key recorded and a later pass never runs the declared command a second time."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    real = A._append_line
+
+    def crash_on_the_reply(path, record):
+        real(path, record)
+        if "thread_ts" in record:       # the reply line: the old order wrote it before the handled key
+            raise RuntimeError("the pass died after the reply")
+
+    A._append_line = crash_on_the_reply
+    try:
+        with pytest.raises(RuntimeError):
+            run(state, runner)
+    finally:
+        A._append_line = real
+    assert len(replies(state)) == 1
+    run(state, runner)
+    assert len(runner.calls) == 1
 
 
 def test_a_request_whose_sender_is_not_the_sender_of_the_line_is_refused(tmp_path):
@@ -423,3 +454,118 @@ def test_the_decision_keeps_a_message_of_a_bot_out_of_the_executor(tmp_path):
     A.run_pass(state, lambda channel: PROJECT, local_only_documents, NOW, runner=runner)
     assert runner.calls == []
     assert "role" in replies(state)[0]["text"]
+
+
+def test_a_second_pass_reads_only_the_new_bytes_of_each_outbox(tmp_path):
+    """Finding 2: the pass keeps its place in each outbox beside the ledger, so a pass reads only the bytes appended
+    since the last one and a request that arrives later still runs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    run(state, runner)
+    path = os.path.join(state, A.OFFSETS)
+    assert os.path.exists(path), "the pass kept no place in the outbox"
+    second = "C0PROJ0001:1762500200.000200"
+    inbox(state, text="and again?", mid=second)
+    ask(state, source=second)
+    runs = run(state, runner)
+    assert len(runs) == 1 and len(runner.calls) == 2
+
+
+def test_an_outbox_shorter_than_its_kept_place_is_read_from_the_start(tmp_path):
+    """Finding 2: an outbox a rotation shrank below its kept place is read from the start, never from a byte past its
+    end."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("x" * 5000 + "\n")          # a long line the pass skips, so the kept place sits past any request
+    run(state, Runner())
+    fresh = "C0PROJ0001:1762500300.000300"
+    line = inbox(state, text="start over", mid=fresh)
+    request = A.request_record("status", channel=CHANNEL, sender=OWNER, source=fresh, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(request) + "\n")
+    assert line["id"] == fresh and os.path.getsize(path) < 400
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1 and len(runner.calls) == 1
+
+
+def test_the_handled_key_is_the_inbox_line_and_the_action(tmp_path):
+    """Finding 8: the ledger keys one request on the inbox line it answers and its action, so the key is small and the
+    inbox line is found once per pass."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    path = os.path.join(state, A.HANDLED)
+    with open(path, encoding="utf-8") as f:
+        keys = [json.loads(line)["key"] for line in f if line.strip()]
+    assert keys == [f"{MID}|status"]
+
+
+def test_the_reply_of_an_action_that_never_runs_through_project_actions_names_it(tmp_path):
+    """Finding 3: `approve_and_move` and `loop_control` keep their own executor path, so a request for one refuses and
+    the reply states that no `project.actions` command stands in for the source it needs."""
+    state = str(tmp_path)
+    inbox(state, text="move the card")
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["actions"] = ["approve_and_move"]
+    ask(state, action="approve_and_move", arguments={"card": "1", "to": "Doing"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "project.actions" in replies(state)[0]["text"]
+
+
+def test_an_unaddressed_request_in_an_addressed_only_channel_runs_no_command(tmp_path):
+    """Finding 6: the grant the executor checks is the decision the policy computed from the inbox line, so a channel
+    that answers only an addressed message runs no action for a message that addresses no persona."""
+    state = str(tmp_path)
+    inbox(state, text="what is the status?")
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and runs[0].error.startswith("reply:")
+    assert audit(state)[0]["error"].startswith("reply:")
+
+
+def test_every_audit_line_carries_an_error_field_that_names_why_it_exited(tmp_path):
+    """Finding 9: the audit alone says why a run exited nonzero, so every line carries an `error`: empty on success, the
+    executor's refusal, the policy's reason, or the code of a declared command that failed."""
+    state = str(tmp_path)
+    inbox(state, text="what is the status?")
+    ask(state)
+    run(state, Runner(code=3, stdout="deploy failed"))
+    row = audit(state)[0]
+    assert "error" in row and "3" in row["error"]
+
+    other = str(tmp_path / "refused")
+    os.makedirs(other)
+    inbox(other, user=STRANGER)
+    ask(other, sender=STRANGER)
+    run(other)
+    assert audit(other)[0]["error"].startswith("identity:")
+
+    stale = str(tmp_path / "stale")
+    os.makedirs(stale)
+    inbox(stale)
+    ask(stale, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    run(stale)
+    assert "older" in audit(stale)[0]["error"]
+
+    green = str(tmp_path / "green")
+    os.makedirs(green)
+    inbox(green)
+    ask(green)
+    run(green)
+    assert audit(green)[0]["error"] == ""
+
