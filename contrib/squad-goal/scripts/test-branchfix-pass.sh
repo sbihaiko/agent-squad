@@ -61,6 +61,10 @@ r=$(fp)
 q=$(head -1 "$T/launch.log" 2>/dev/null)
 case "$q" in *"CUT FROM: gui/7-x"*) ok "2350 the request names one base, the work-branch tip (CUT FROM)";; *) ko "2350 the request names no work-branch tip: '$q'";; esac
 case "$q" in *"check out origin/"*) ko "2350 the request names a second base: '$q'";; *) ok "2350 the request sends the child to the branch its worktree holds";; esac
+# (#2864) both wordings tell the child that its worktree branch is named squad/<run>/..., differs from the work branch by design, and is
+# never checked, switched or created; the router passes that sentence on verbatim.
+case "$q" in *"squad/<run>/"*"differs from gui/7-x by design"*) ok "2864 the ordinary round names the worktree branch and says it differs by design";; *) ko "2864 the ordinary round names no worktree branch: '$q'";; esac
+case "$q" in *"never check, switch or create a branch"*"verbatim"*) ok "2864 the ordinary round forbids a branch change and asks the router to pass it verbatim";; *) ko "2864 no verbatim no-branch sentence: '$q'";; esac
 # (#1374) the round is marked as a fix run, so the final gate proves its commands in the child's tree, never in the target
 [ "$(head -1 "$T/fix.log" 2>/dev/null)" = 1 ] && ok "the round is launched marked as a fix run (#1374)" || ko "SG_FIX_RUN did not reach launch.py"
 /usr/bin/grep -q 'one entry for the child below' "$T/launch.log" && ok "the request asks for one child in the spawns list, as an autofix request does" || ko "no spawn instruction in the request"
@@ -213,6 +217,7 @@ r=$(OPEN="30" fp)
 q=$(/usr/bin/grep "work branch $rb " "$T/launch.log")
 [ "$(n "$rb")" = 1 ] && ok "a kept rebase branch gets one fix run" || ko "a kept rebase branch dispatched $(n "$rb") times: '$r'"
 case "$q" in *"REBASE ROUND"*"rebase the branch it has checked out on origin/dev"*) ok "the round's wording names the ref the round rebases on";; *) ko "the round's wording: '$q'";; esac
+case "$q" in *"squad/<run>/"*"differs from $rb by design"*"never check, switch or create a branch"*"verbatim"*) ok "2864 the rebase round names the worktree branch and forbids a branch change";; *) ko "2864 the rebase round names no worktree branch: '$q'";; esac
 rid=$(cat "$T/st/auto/branchfix-fix_30-rebase-r1-"* 2>/dev/null)
 tg2=$T/tg2; rm -rf "$tg2"; $G clone -q "$T/origin.git" "$tg2" 2>/dev/null
 (cd "$tg2" && $G checkout -q -b "squad/run/$rid" origin/dev && echo rb > rb30 && $G add rb30 && $G -c user.email=a@b -c user.name=t commit -q -m "the round (Refs #30)")
