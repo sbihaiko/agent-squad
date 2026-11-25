@@ -2,6 +2,7 @@
 bound. A fake CLI never stands in for the permission boundary, so the denial cases run the real sandbox-exec profile.
 """
 import importlib.util
+import json
 import os
 import socket
 import subprocess
@@ -748,3 +749,15 @@ def test_the_stand_in_connector_reports_each_call_it_runs():
     assert text.startswith("FAKE-SLACK-CALLED ")
     assert json.loads(text.split(" ", 1)[1]) == {"tool": "slack_send_message_draft",
                                                  "arguments": {"channel": "C1", "text": "t"}}
+
+
+def test_the_roster_lists_the_session_under_the_short_id_it_printed(tmp_path):
+    """`claude --bg` prints the short id, and the real roster carries it as `id` beside the full `sessionId`. The
+    probe finds the session by the id it was printed, whichever field holds it."""
+    probe = load("operator_probe")
+    cli = tmp_path / "claude"
+    row = {"id": "b5ccaeeb", "sessionId": "b5ccaeeb-b48a-44b5-818e-540ff3b0476a", "name": "SQUAD-OPERATOR-x"}
+    cli.write_text("#!/bin/sh\nprintf '%s' '" + json.dumps([row]) + "'\n")
+    cli.chmod(0o755)
+    assert probe.bg_listed(str(cli), "b5ccaeeb", str(tmp_path), "SQUAD-OPERATOR-x")
+    assert not probe.bg_listed(str(cli), "b5ccaeeb", str(tmp_path), "SQUAD-OPERATOR-y")

@@ -789,3 +789,40 @@ def test_a_restart_with_no_answer_alerts_once_and_names_the_project(tmp_path, mo
     assert err.count("alert") == 1, f"the restarted project raised {err.count('alert')} alerts: {err!r}"
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     assert capsys.readouterr().err.count("alert") == 0, "the same unanswered line alerted twice"
+
+
+def real_row(checkout, key, short, started=1000, pid=None):
+    """A row in the shape the real CLI lists: `id` is the short id that `claude --bg` prints and `claude stop` takes,
+    and `sessionId` is the full id that starts with it."""
+    return {"id": short, "sessionId": f"{short}-0000-4000-8000-000000000001", "pid": pid or abs(hash(short)) % 60000,
+            "startedAt": started, "name": f"SQUAD-OPERATOR-{key}", "cwd": str(checkout), "kind": "background"}
+
+
+def test_a_session_the_record_names_by_its_short_id_is_kept(tmp_path, monkeypatch):
+    """The record holds the short id `claude --bg` printed. A pass that finds the real CLI's row under that id keeps the
+    session: it never counts it missing and never starts a second one."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    live = real_row(found["acme/widget"], "acme-widget", "cccccccc", started=int(time.time()))
+    (tmp_path / "state" / "operators.json").write_text(json.dumps(
+        {"acme-widget": {"id": "cccccccc", "pid": live["pid"], "started": live["startedAt"]}}))
+    scenario(tmp_path, [live])
+    for _ in range(3):
+        assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    assert not started(tmp_path), f"a live project was started again: {started(tmp_path)}"
+    held = json.loads((tmp_path / "state" / "operators.json").read_text())["acme-widget"]
+    assert held["id"] == "cccccccc" and not held.get("missing"), held
+
+
+def test_the_newer_of_two_sessions_is_stopped_by_its_short_id(tmp_path, monkeypatch):
+    """`claude stop` matches the short id alone; a full id answers "No session matching". The stop names the short id."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    old = real_row(found["acme/widget"], "acme-widget", "aaaaaaaa", started=100)
+    new = real_row(found["acme/widget"], "acme-widget", "bbbbbbbb", started=200)
+    scenario(tmp_path, [old, new])
+    op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget")
+    stops = [c for c in calls(tmp_path) if c.startswith("stop ")]
+    assert stops == ["stop bbbbbbbb"], stops
