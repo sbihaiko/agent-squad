@@ -558,7 +558,8 @@ class Decision(NamedTuple):
     set only for an event of a known `guest` channel, so it is None for an unknown channel and for `ignore`/`data` of a
     non-guest channel. `voice_reply` is true exactly when the `guest` channel asks for the reply also in audio, so a
     channel that does not ask carries no clip (story 70). `deploy` is the tuple of environments the caller's role lists
-    for the `deploy` action, and it is empty for a decision with no role (#2724)."""
+    for the `deploy` action, and it is empty for a decision with no role (#2724). `tone` is the persona's tone, then the
+    tone of the sender's role, and the persona's alone when the role names none (#2927)."""
     kind: str
     role: str | None
     actions: tuple
@@ -569,6 +570,7 @@ class Decision(NamedTuple):
     next_poll: datetime | None
     voice_reply: bool = False
     deploy: tuple = ()
+    tone: str = ""
 
 
 def _row_at(rows, key, value):
@@ -697,18 +699,25 @@ def identity(committed, local, channel_id):
     return _effective_language(committed, local, workspace, channel), effective_persona(committed, local, workspace, channel)
 
 
-def _member_role(local, workspace_id, channel_id, user, accepted):
-    """The role the local file gives this user in this channel, or None. A membership in a role the channel does not
-    accept grants nothing, so a stranger's message stays data. `accepted` is None for an unknown channel: no action is
-    granted there, so the decision reports the role the file names without an acceptance check."""
+def _member_roles(local, workspace_id, channel_id, user, accepted):
+    """Every role the local file gives this user in this channel, in file order. A membership in a role the channel does
+    not accept grants nothing, so a stranger's message stays data. `accepted` is None for an unknown channel: no action
+    is granted there, so the decision reports the roles the file names without an acceptance check."""
+    out = []
     for member in _rows(local.get("members")):
         if (str(member.get("workspace")), str(member.get("channel"))) != (workspace_id, channel_id):
             continue
         if user in {str(u) for u in member.get("users") or []}:
             role = str(member.get("role"))
             if accepted is None or role in accepted:
-                return role
-    return None
+                out.append(role)
+    return out
+
+
+def _member_role(local, workspace_id, channel_id, user, accepted):
+    """The first role the local file gives this user in this channel, or None."""
+    roles = _member_roles(local, workspace_id, channel_id, user, accepted)
+    return roles[0] if roles else None
 
 
 def _role_actions(committed, role):
@@ -729,6 +738,39 @@ def _role_deploy(committed, role):
                 return tuple(str(environment) for environment in items)
             return ()
     return ()
+
+
+def role_tone(committed, role):
+    """The tone a role row declares, or "" when the row names none or the file does not hold it (#2927)."""
+    for row in _rows((committed or {}).get("roles")):
+        if str(row.get("id")) == str(role):
+            return str(row.get("tone") or "").strip()
+    return ""
+
+
+def compose_tone(persona_tone, role_tone_text):
+    """The tone one answer carries: the persona's tone, then the role's tone as the next sentence. A role with no tone,
+    and a sender with no role, leave the persona's tone alone (#2927)."""
+    parts = [str(value).strip() for value in (persona_tone, role_tone_text) if str(value or "").strip()]
+    out = ""
+    for part in parts:
+        if not out:
+            out = part
+            continue
+        out = out if out[-1] in ".!?" else out + "."
+        out = f"{out} {part}"
+    return out
+
+
+def member_tone(committed, roles):
+    """The tone of the role with the most actions among the roles one sender holds on a channel. A tie keeps the first
+    role of the file order, so the answer never depends on which row the reader met first (#2927)."""
+    best, most = "", -1
+    for role in roles:
+        count = len(_role_actions(committed, role))
+        if count > most:
+            best, most = role_tone(committed, role), count
+    return best
 
 
 def can_speak(channel):
@@ -969,17 +1011,21 @@ def decide(committed, local, event, now, thread_state=None):
     persona = named or effective_persona(committed, local, workspace, channel)
     if channel is None:
         # An unknown channel grants nothing, but the decision still reports the role the files give the caller in it.
-        role = _member_role(local, workspace_id, channel_id, user, None) if workspace else None
-        return Decision(IGNORE, role, (), language, persona, None, False, None)
+        roles = _member_roles(local, workspace_id, channel_id, user, None) if workspace else []
+        role = roles[0] if roles else None
+        return Decision(IGNORE, role, (), language, persona, None, False, None, False, (),
+                        compose_tone(getattr(persona, "tone", ""), member_tone(committed, roles)))
     class_ = channel_class(workspace, channel)
     next_poll = now + timedelta(seconds=poll_interval(now, channel, thread_state)) if class_ == "guest" else None
     # Only a `guest` channel has `voice_reply`: an `owned` channel already speaks audio through the bot.
     voice = class_ == "guest" and bool(channel.get("voice_reply"))
-    role = _member_role(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
+    roles = _member_roles(local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
+    role = roles[0] if roles else None
+    tone = compose_tone(getattr(persona, "tone", ""), member_tone(committed, roles))
     if str(event.get("kind") or "message") != "message" or event.get("own"):
-        return Decision(IGNORE, role, (), language, persona, None, False, next_poll, voice)
+        return Decision(IGNORE, role, (), language, persona, None, False, next_poll, voice, (), tone)
     if event.get("bot") or event.get("external") or role is None:
-        return Decision(DATA, role, (), language, persona, None, False, next_poll, voice)
+        return Decision(DATA, role, (), language, persona, None, False, next_poll, voice, (), tone)
     reply = _reply_path(class_, channel, user)
     if named is None and str(channel.get("reply") or "all") == "addressed":
         # A `reply: addressed` channel answers only a message that addresses a persona. The decision keeps its role
@@ -987,7 +1033,7 @@ def decide(committed, local, event, now, thread_state=None):
         reply = None
     kind = PROPOSAL if class_ == "guest" else INBOX
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
-                    next_poll, voice, _role_deploy(committed, role))
+                    next_poll, voice, _role_deploy(committed, role), tone)
 
 
 # --- the one-time migration of the old per-profile Slack file (SPEC 2682 #2700, story 46) -------------
