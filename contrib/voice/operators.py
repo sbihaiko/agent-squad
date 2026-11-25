@@ -574,19 +574,26 @@ def binding(state, unit):
 
 def dm_channel(state):
     """The owner's DM channel: the channel of the newest line of the DM inbox, or "" (#2949). `voiced` writes only an
-    `im` event to that inbox, so every line there names the one DM channel the session may answer in."""
-    try:
-        with open(inbox_path(state, DM), encoding="utf-8") as f:
-            lines = [line for line in f.read().splitlines() if line.strip()]
-    except OSError:
-        return ""
-    for raw in reversed(lines):
+    `im` event to that inbox, so every line there names the one DM channel the session may answer in. Only the inbox
+    tail is read, since the newest line is at its end, and a corrupt line is reported once instead of skipped in
+    silence, so a broken queue stays visible."""
+    path = inbox_path(state, DM)
+    corrupt = 0
+    for raw in reversed(tail_lines(path, limit=65536)):
+        raw = raw.strip()
+        if not raw:
+            continue
         try:
             record = json.loads(raw)
         except ValueError:
+            corrupt += 1
             continue
         if isinstance(record, dict) and record.get("channel"):
+            if corrupt:
+                print(f"operators: skipped {corrupt} corrupt line(s) in the DM inbox {path}", file=sys.stderr)
             return str(record["channel"])
+    if corrupt:
+        print(f"operators: skipped {corrupt} corrupt line(s) in the DM inbox {path}", file=sys.stderr)
     return ""
 
 
