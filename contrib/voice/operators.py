@@ -78,6 +78,7 @@ ADOPT_PASSES = 2                         # a marked session no record names is a
 MISSING_PASSES = 2                       # a recorded session the CLI no longer lists is replaced after this many passes
 BACKOFF_MAX = 300.0                      # seconds, the ceiling of a failed stop's retry wait
 TURN_WAIT = 600.0                        # seconds a session may take to start a turn on a new inbox line (#2923)
+NO_SUCH_SESSION = "No session matching"  # the CLI's own words for an id the service it is asked does not hold
 PROJECTS = os.environ.get("VOICE_CLAUDE_PROJECTS") or os.path.join(os.path.expanduser("~"), ".claude", "projects")
 PROJECT_NAME_MAX = 200                   # Claude Code cuts a longer sanitized working directory to this length (#796)
 TOOLS = "Read,Monitor,TaskStop,Bash"
@@ -809,14 +810,17 @@ def stop(sid, state=None, service=None):
 
     The roster belongs to the CLI's config home, so the id is tried in the operator's own root first, then in the
     owner's, where a session of an earlier build carries the token (#2963). A session an older build started lives
-    under the owner's shared service, where the private root finds nothing, so a stop the private root refuses retries
-    the CLI's own service."""
+    under the owner's shared service, where the private root answers that it holds no such session, so that one
+    refusal retries the CLI's own service. Any other refusal is the real answer: a retry could stop a foreign session
+    whose id collides, or hide a service that is down. A stop both answers refuse raises Refused, and the caller keeps
+    ownership and retries later."""
     env = {**os.environ, **(cli_env(state) if state is not None else {}), **(service_env(service) if service else {})}
     env = env if (state is not None or service) else None
     try:
         call([CLI, "stop", sid], env=env)
-    except Refused:
-        if env is None:
+        return
+    except Refused as e:
+        if env is None or NO_SUCH_SESSION not in str(e):
             raise
         call([CLI, "stop", sid])             # the owner's roster and shared service: the session predates both roots
 

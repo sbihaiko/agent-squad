@@ -61,7 +61,7 @@ sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
 import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
-from operators import SECRET_DIRS, TOOLS, daemon_root, marked_name, profile_text, service_env  # noqa: E402
+from operators import SECRET_DIRS, TOOLS, daemon_root, marked_name, profile_text, service_env, service_root  # noqa: E402
 
 from squad import slackwriter  # noqa: E402
 
@@ -593,14 +593,15 @@ def project_shape(work, ports):
     """The folders one live project session owns: its checkout, one outbox per channel, one inbox per channel, another
     project's inbox it must never read, another project's checkout it must never read (#2951), a folder outside every
     grant for the write denial (#2925), and the project's own background service root (#2943). `ports` names the
-    loopback ports the model route uses."""
+    loopback ports the model route uses. The service root comes from `operators.service_root`, the one a live `start()`
+    grants this project under the same state, so the probe proves the supervisor's shape and not a copy of it."""
     checkout = work / "checkout"
     other_checkout = work / "other-checkout"
     outboxes = [work / "state" / "outboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     own_inboxes = [work / "state" / "inboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
-    service = work / "state" / "operators" / "services" / PROBE_KEY
+    service = Path(service_root(str(work / "state"), PROBE_KEY))
     for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent, service):
         folder.mkdir(parents=True, exist_ok=True)
     leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
