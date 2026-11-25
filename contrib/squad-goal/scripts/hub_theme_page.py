@@ -416,13 +416,15 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    node's Now block on the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its
    whole text in the tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay
    in view. A client holds its default persona and the proposed writes of a change. */
-#sbody .slttop{display:grid;grid-template-columns:minmax(200px,280px) minmax(0,1fr);gap:16px;align-items:start}
+#sbody .slttop{display:grid;grid-template-columns:minmax(200px,320px) minmax(0,1fr);gap:16px;align-items:start}   /* the tree pane holds a channel name and its badges whole, as the mock draws it (#2842) */
 #sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
 #sbody .sltnotice{margin:0 0 8px;padding:8px 10px;border:1px solid var(--tint-err-line);border-left:3px solid var(--err);border-radius:var(--radius-md);background:var(--tint-err);color:var(--fg);font-size:var(--fs-caption);line-height:1.4}
 #sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
 #sbody .sltguest b{color:var(--fg)}
 #sbody .sltguest.err{background:var(--tint-err);border-color:var(--tint-err-line);color:var(--err-strong)}   /* two guest slots, one served: the line is an alert */
 #sbody .sltguest.err b{color:var(--err-strong)}
+#sbody .sltguest.err{display:flex;gap:8px;align-items:flex-start;line-height:1.4}
+#sbody .sltguest.err .sltgi{flex:none;line-height:1.4}   /* the alert's warning glyph sits beside its two-line sentence */
 #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
 #sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
 #sbody .slti:hover{background:var(--inset)}
@@ -436,7 +438,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
 #sbody .sltkind{flex:0 0 14px;width:14px;height:14px;color:var(--mute)}
 #sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto}
+#sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto;min-width:0}   /* a badge keeps its whole word: the name gives way, never the badge (#2842) */
+#sbody .sltbadges .sltb{flex:0 0 auto;white-space:nowrap}   /* a badge is one word, never cut to a letter */
 #sbody .sltb{padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
 #sbody .sltb.err{color:var(--err);border-color:var(--err)}
 #sbody .sltb.warn{color:var(--warn);border-color:var(--tint-warn-line)}
@@ -1598,7 +1601,13 @@ function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone
  const cols=Math.min(tiles.length,5);   // the tile count names the row's columns: five for a channel, four for a workspace (#2841)
  return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow sltn${cols}">${tiles.join("")}</div></div>`:""}
 function slTNote(n){const t=(n.detail||{}).note;   /* the channel's one sentence under its tiles (#2842) */
- return t?`<p class=sltnote role=note><span class=sltni aria-hidden=true>ⓘ</span> ${esc(t)}</p>`:""}
+ return t?`<p class=sltnote><span class=sltni aria-hidden=true>ⓘ</span> ${esc(t)}</p>`:""}
+/* The guest slot line (#2842): one plain line when the machine serves one guest workspace, and an alert with its title
+   and its sentence when a second one is refused. Every value is text. */
+function slTSlot(s){if(!s)return "";
+ return s.tone==="err"&&s.title
+  ?`<div class="sltguest ${slTTone(s.tone)}" role=status><span class=sltgi aria-hidden=true>⚠</span><div><b>${esc(s.title)}</b><br>${esc(s.text||"")}</div></div>`
+  :(s.line?`<p class="sltguest ${slTTone(s.tone)}">${esc(s.line)}</p>`:"")}
 function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
@@ -1622,16 +1631,15 @@ const slTClient=n=>{if(n.kind!=="client")return "";
  +slTProp(n)+projects};
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
- const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note,
-  defects=dnote?`<p class="mx err sltdef" role=status>${esc(dnote)}</p>`
-   :(n.defects||[]).map(d=>`<p class="mx err sltdef" role=status>${esc(d)}</p>`).join("");   /* a defect shows in plain words (#2842) */
+ const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note||[],
+  reasons=dnote.length?dnote:(n.defects||[]),
+  defects=reasons.map(d=>`<p class="mx err sltdef" role=status>${esc(d)}</p>`).join("");   /* one plain reason per line (#2842) */
  const notice=n.notice?`<div class="mx err sltnotice" role=status><b>${esc(n.notice.title)}</b><br>${esc(n.notice.text)}</div>`:"";   // the second guest is bannered beside its project (#2827)
- const slot=n.guest_slot?`<p class=sltguest>${esc(n.guest_slot.line||"")}</p>`:"";
  return `<button type=button class=sltback data-slt-tree>${esc("Show the tree")}</button>`
  +`<nav class=sltcrumb aria-label="Breadcrumb">${crumb}</nav>`
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
- +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${slot}${defects}`
+ +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${defects}`
  +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
@@ -1698,7 +1706,7 @@ function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
   ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+T.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
  +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
- +(T.guest_slot?`<p class="sltguest ${slTTone(T.guest_slot.tone)}">${esc(T.guest_slot.line||"")}</p>`:"")
+ +slTSlot(T.guest_slot)
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
@@ -1716,8 +1724,9 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
   else{n.proposal_saved=false;n.proposal_partial=false;slMsg="the proposed writes are shown"}
   slRender()})
  .catch(()=>{n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!the proposed writes could not be read";slRender()})}
-/* A tone becomes a class token only from a fixed set: an unknown tone is neutral, never a token of its own (#2842). */
-const slTTone=t=>t==="err"||t==="warn"?t:"neutral";
+/* A tone becomes a class token only from a fixed set, and only a set each CSS rule draws: `err` has its rule, and any
+   other tone is neutral, never a token of its own (#2842). */
+const slTTone=t=>t==="err"?t:"neutral";
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}

@@ -909,18 +909,24 @@ def reply_label(channel, decision):
     return "never posts" if not can_speak(channel) else "none"
 
 
+ANNOUNCEMENT_NOTE = "Announcements post as drafts for your review."
+
+
 def channel_note(channel, members, announcement):
     """The one plain sentence the settings view prints under a channel's Now tiles, naming how a message resolves. A
     channel with no eligible member says a message stays data; a listen channel with a member names the proposal path;
-    a channel that speaks and has a member needs no note. The view draws this sentence and holds no copy of it."""
+    a channel that speaks and has a member says nothing of its own. The announcement clause follows every branch, so a
+    channel that subscribes to events always says what it does with them. The view draws this sentence and holds no
+    copy of it."""
     if not members:
         return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
                 "no reply.") if announcement else \
                "No member holds a role this channel accepts, so a message is read as data and gets no reply."
     if str((channel or {}).get("mode") or "listen") == "listen":
-        return ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
+        note = ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
                 "nothing is posted here.")
-    return ""
+        return f"{note} {ANNOUNCEMENT_NOTE}" if announcement else note
+    return ANNOUNCEMENT_NOTE if announcement else ""
 
 
 def transport(workspace, channel):
