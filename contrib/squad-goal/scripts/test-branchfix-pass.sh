@@ -368,4 +368,30 @@ r=$(OPEN="52" fp); rid=$(cat "$T/st/auto/branchfix-$sk-${S2:0:9}" 2>/dev/null)
 mkdir -p "$T/co/runs/$rid"; printf '{"event": "run_start", "target": "%s", "target_branch": "squad/run/%s"}\n' "$T/co" "$rid" > "$T/co/runs/$rid/record.jsonl"; touch -t 202001010000 "$T/co/runs/$rid/record.jsonl"
 r=$(OPEN="52" fp)
 [ ! -e "$T/st/auto/branchfix-push-$rid" ] && [ "$(cat "$T/st/auto/branchfix-$sk-${S2:0:9}" 2>/dev/null)" != "$rid" ] && ok "2571 a dead salvage round drops both markers" || ko "2571 a dead salvage round kept a marker: '$r'"
+# 28) (#2877) a kept marker names a wave ref, and wave.sh deletes the wave branch after the wave lands. Before the request, the pass
+#     asks the remote: a wave ref the remote does not have becomes origin/dev in the marker's line 1 and in the review, and the
+#     other marker lines stay. A wave ref the remote still has stays. A failing ls-remote changes nothing.
+wround() {   # wround <issue> <wave ref>: a kept branch whose marker and CHANGES review name the wave ref
+  local wb=fix/$1-wave-r1 wk=fix_$1-wave-r1; push "$wb"
+  printf '%s\nround 1\nsalvage-note keep me\n' "$2" > "$T/st/auto/kept-$wk"
+  python3 "$T/s/revformat.py" --round-review dev "$2" "a.sh" > "$T/st/review-$wk.md"; $O rev-parse "$wb" > "$T/st/review-$wk.sha"; }
+: > "$T/launch.log"; wround 60 origin/wave/run-gone; r=$(OPEN="60" fp); q=$(/usr/bin/grep "work branch fix/60-wave-r1 " "$T/launch.log")
+case "$q" in *"rebase the branch it has checked out on origin/dev,"*) ok "2877 a gone wave ref: the request rebases on origin/dev";; *) ko "2877 the request for a gone wave ref: '$q' '$r'";; esac
+[ "$(head -1 "$T/st/auto/kept-fix_60-wave-r1")" = origin/dev ] && [ "$(tail -n +2 "$T/st/auto/kept-fix_60-wave-r1")" = "round 1"$'\n'"salvage-note keep me" ] \
+  && ok "2877 the marker's line 1 names origin/dev and the other lines stay" || ko "2877 the marker: '$(cat "$T/st/auto/kept-fix_60-wave-r1")'"
+w=$(cat "$T/st/review-fix_60-wave-r1.md")
+case "$w" in *wave/run-gone*) ko "2877 the review still names the gone wave ref: '$w'";; *"on origin/dev"*) ok "2877 the review names origin/dev";; *) ko "2877 the review: '$w'";; esac
+: > "$T/launch.log"; $G -C "$T/w" push -q origin origin/dev:refs/heads/wave/run-live 2>/dev/null
+wround 61 origin/wave/run-live; r=$(OPEN="61" fp); q=$(/usr/bin/grep "work branch fix/61-wave-r1 " "$T/launch.log")
+[ "$(head -1 "$T/st/auto/kept-fix_61-wave-r1")" = origin/wave/run-live ] && case "$q" in *"on origin/wave/run-live,"*) true;; *) false;; esac \
+  && /usr/bin/grep -q wave/run-live "$T/st/review-fix_61-wave-r1.md" && ok "2877 a wave ref the remote still has stays unchanged" || ko "2877 a live wave ref changed: '$q' '$r'"
+cat > "$T/bin/lsfail" <<J
+#!/bin/bash
+case "\$*" in *ls-remote*refs/heads/wave/*) echo "fatal: unable to access" >&2; exit 128;; esac
+exec /usr/bin/git "\$@"
+J
+chmod +x "$T/bin/lsfail"; : > "$T/launch.log"; wround 62 origin/wave/run-unread; w0=$(cat "$T/st/review-fix_62-wave-r1.md")
+r=$(OPEN="62" SG_GIT="$T/bin/lsfail" fp)
+[ "$(head -1 "$T/st/auto/kept-fix_62-wave-r1")" = origin/wave/run-unread ] && [ "$(cat "$T/st/review-fix_62-wave-r1.md")" = "$w0" ] \
+  && ok "2877 a failing ls-remote changes neither the marker nor the review" || ko "2877 a failing ls-remote changed a file: '$(head -1 "$T/st/auto/kept-fix_62-wave-r1")' '$r'"
 exit $fail
