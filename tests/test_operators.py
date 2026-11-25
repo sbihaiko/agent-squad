@@ -356,6 +356,19 @@ def test_the_full_pass_never_fails_for_a_project_with_no_checkout(tmp_path, monk
     assert set(record(tmp_path)) == {"dm", "acme-widget"}, record(tmp_path)
 
 
+def test_a_pass_that_finds_no_project_names_the_channel_maps_mismatch(tmp_path, monkeypatch, capsys):
+    """#2957: the hub lists no project while the channel map names one, as a deploy whose profiles folder holds only
+    example.sh does. The pass starts nothing, and the error log names the mismatch instead of staying silent."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, [])                # the hub seam answers: no profile names a repository
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert set(record(tmp_path)) == {"dm"}, record(tmp_path)   # only the owner's own session starts
+    err = capsys.readouterr().err
+    assert "acme/widget" in err and "no project" in err, err
+
+
 def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tmp_path, monkeypatch):
     """Criterion 11: the kernel bound refuses every write outside the session's outboxes, the Claude runtime, and the
     CLI's own config root (#2963). The owner's global config file is granted to no one."""

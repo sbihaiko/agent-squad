@@ -1,6 +1,6 @@
 """The `voiced` daemon: one owner DM becomes one transcribed inbox line, and a stranger's message stays data.
 
-usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH]]
+usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]
 
 The daemon holds one long-lived Socket Mode connection (`apps.connections.open` with the app token), so Slack pushes
 each `message.im` event instead of the operator polling for it. For every event it does one of three things:
@@ -2566,9 +2566,13 @@ async def handle_envelope(daemon, envelope, ack):
     return outcome
 
 
-def plist_text(label, python, script, state_dir, owner, checkout):
-    """The launchd agent that restarts the daemon after a crash. Printing it loads nothing."""
+def plist_text(label, python, script, state_dir, owner, checkout, profiles=""):
+    """The launchd agent that restarts the daemon after a crash. Printing it loads nothing.
+
+    `profiles` is the folder the agent reads its projects from: the live copy's profiles folder, never the deploy's own,
+    which holds only `example.sh` (#2957). A caller that names none writes no SG_PROFILES_DIR."""
     esc = lambda v: xml.sax.saxutils.escape(str(v))  # noqa: E731
+    profiles_line = (f"<key>SG_PROFILES_DIR</key><string>{esc(profiles)}</string>\n" if profiles else "")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -2578,7 +2582,7 @@ def plist_text(label, python, script, state_dir, owner, checkout):
 <key>EnvironmentVariables</key><dict>
 <key>VOICE_STATE</key><string>{esc(state_dir)}</string>
 <key>VOICE_OWNER</key><string>{esc(owner)}</string>
-</dict>
+{profiles_line}</dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
 <key>ThrottleInterval</key><integer>10</integer>
@@ -2788,17 +2792,20 @@ def main(argv, projects=hub_projects):
     owner = None
     label = "com.agent-squad.voiced"
     python = sys.executable
+    profiles = ""
     print_plist = False
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--state", "--owner", "--label", "--python") and i + 1 < len(argv):
+        if a in ("--state", "--owner", "--label", "--python", "--profiles") and i + 1 < len(argv):
             if a == "--state":
                 state_dir = argv[i + 1]
             elif a == "--owner":
                 owner = argv[i + 1]
             elif a == "--label":
                 label = argv[i + 1]
+            elif a == "--profiles":
+                profiles = argv[i + 1]
             else:
                 python = argv[i + 1]
             i += 2
@@ -2806,7 +2813,7 @@ def main(argv, projects=hub_projects):
             print_plist = True
             i += 1
         else:
-            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH]]",
+            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]",
                   file=sys.stderr)
             return 2
     try:
@@ -2820,7 +2827,7 @@ def main(argv, projects=hub_projects):
         return 2
     if print_plist:
         sys.stdout.write(plist_text(label=label, python=python, script=os.path.abspath(__file__),
-                                    state_dir=state_dir, owner=owner,
+                                    state_dir=state_dir, owner=owner, profiles=profiles,
                                     checkout=os.path.abspath(os.path.join(HERE, "..", ".."))))
         return 0
     lock = open(os.path.join(state_dir, "voiced.lock"), "a")
