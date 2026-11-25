@@ -9,7 +9,9 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -21,10 +23,16 @@ VOICE = ROOT / "contrib" / "voice"
 FAKE = """#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 case "$1 $2" in
-  "agents --json") cat "$FAKE_SCENARIO"; exit 0 ;;
+  "agents --json")
+    if [ -s "$FAKE_STOPPED" ]; then
+      "$FAKE_PY" -c 'import json,sys
+ids=set(open(sys.argv[2]).read().split())
+print(json.dumps([a for a in json.load(open(sys.argv[1])) if a["sessionId"] not in ids]))' "$FAKE_SCENARIO" "$FAKE_STOPPED"
+    else cat "$FAKE_SCENARIO"; fi
+    exit 0 ;;
   "stop "*|"stop")
     if [ -s "$FAKE_FAIL_STOP" ]; then printf 'stop refused\\n' >&2; exit 1; fi
-    printf '' > "$FAKE_SCENARIO.stop"
+    printf '%s\\n' "$2" >> "$FAKE_STOPPED"
     exit 0 ;;
 esac
 case "$1" in
@@ -49,8 +57,11 @@ def operators(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.log"))
     monkeypatch.setenv("FAKE_SCENARIO", str(tmp_path / "scenario.json"))
+    monkeypatch.setenv("FAKE_STOPPED", str(tmp_path / "stopped-ids"))
     monkeypatch.setenv("FAKE_FAIL_STOP", str(tmp_path / "fail-stop"))
     monkeypatch.setenv("FAKE_NEW", "aaaaaaaa-0000-0000-0000-000000000001")
+    monkeypatch.setenv("FAKE_PY", sys.executable)
+    module.PROJECTS = str(tmp_path / "projects")   # the transcript seam: no test reads the owner's transcripts
     passthrough = bin_dir / "passthrough.sh"
     passthrough.write_text('#!/bin/sh\nexec "$SQUAD_CLAUDE_CLI" "$@"\n')
     passthrough.chmod(0o755)
@@ -375,3 +386,99 @@ def test_the_dm_brief_keeps_its_language_when_no_revision_names_a_persona(tmp_pa
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
     assert "Brazilian Portuguese" in text, text
+
+
+API_ERROR = {"type": "assistant", "isApiErrorMessage": True, "error": "Connection error",
+             "message": {"id": "api-err", "model": "<synthetic>", "usage": {"input_tokens": 0, "output_tokens": 0},
+                         "content": [{"type": "text",
+                                      "text": "API Error: getaddrinfo ENOTFOUND api.anthropic.com"}]}}
+
+
+def transcript(tmp_path, scope, entries, mtime):
+    """Write one session's transcript at the folder the CLI derives from the scope's marked working directory."""
+    cwd = str(tmp_path / "state" / "operators" / "SQUAD-OPERATOR" / scope)
+    folder = tmp_path / "projects" / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "session.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in entries))
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def inbox(tmp_path, scope, mtime):
+    path = tmp_path / "state" / "inboxes" / f"{scope}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"id": "m1", "ts": "1762500001.000200", "user": "U1", "channel": scope,
+                                "text": "hello", "clip": False}) + "\n")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_a_session_whose_last_turn_failed_with_an_api_error_is_restarted(tmp_path, monkeypatch):
+    """#2923 expected 1: a listed session whose last turn ended in an API error is stopped and replaced in one pass."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    live = session(tmp_path, "dm", "abababab-0000-0000-0000-000000000001", started=1)
+    (tmp_path / "state" / "operators.json").write_text(
+        json.dumps({"dm": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
+    scenario(tmp_path, [live])
+    transcript(tmp_path, "dm", [API_ERROR], mtime=time.time() - 60)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert f"stop {live['sessionId']}" in calls(tmp_path), "the dead session was never stopped"
+    assert len([c for c in calls(tmp_path) if c.startswith("--bg")]) == 1, "no replacement started"
+    assert record(tmp_path)["dm"]["id"] == "aaaaaaaa-0000-0000-0000-000000000001"
+
+
+def test_a_session_that_takes_no_turn_after_a_new_inbox_line_is_restarted(tmp_path, monkeypatch):
+    """#2923 expected 2: an inbox line newer than the last turn, past the wait, restarts the session."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    now = time.time()
+    live = session(tmp_path, "dm", "abababab-0000-0000-0000-000000000002", started=1)
+    (tmp_path / "state" / "operators.json").write_text(
+        json.dumps({"dm": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
+    scenario(tmp_path, [live])
+    transcript(tmp_path, "dm", [{"type": "assistant", "message": {"id": "m0", "model": "claude-sonnet-5-5",
+                                                                  "usage": {"input_tokens": 1, "output_tokens": 1}}}],
+               mtime=now - 3600)
+    inbox(tmp_path, "dm", mtime=now - 600)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert f"stop {live['sessionId']}" in calls(tmp_path), "a session that took no turn was never stopped"
+    assert len([c for c in calls(tmp_path) if c.startswith("--bg")]) == 1, "no replacement started"
+
+
+def test_a_session_that_answered_the_new_inbox_line_is_never_restarted(tmp_path, monkeypatch):
+    """#2923: a turn newer than the inbox line is a live session, however long ago it answered."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    now = time.time()
+    live = session(tmp_path, "dm", "abababab-0000-0000-0000-000000000003", started=1)
+    (tmp_path / "state" / "operators.json").write_text(
+        json.dumps({"dm": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
+    scenario(tmp_path, [live])
+    inbox(tmp_path, "dm", mtime=now - 3600)
+    transcript(tmp_path, "dm", [{"type": "assistant", "message": {"id": "m0", "model": "claude-sonnet-5-5",
+                                                                  "usage": {"input_tokens": 1, "output_tokens": 1}}}],
+               mtime=now - 600)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert not [c for c in calls(tmp_path) if c.startswith("stop")], "a live session was stopped"
+    assert not [c for c in calls(tmp_path) if c.startswith("--bg")], "a live session was replaced"
+
+
+def test_a_restart_with_no_answer_alerts_once_and_names_the_scope(tmp_path, monkeypatch, capsys):
+    """#2923 expected 3: the unanswered line raises one alert that names the scope, and no second one."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [])
+    now = time.time()
+    live = session(tmp_path, "dm", "abababab-0000-0000-0000-000000000004", started=1)
+    (tmp_path / "state" / "operators.json").write_text(
+        json.dumps({"dm": {"id": live["sessionId"], "pid": live["pid"], "started": 1}}))
+    scenario(tmp_path, [live])
+    transcript(tmp_path, "dm", [API_ERROR], mtime=now - 60)
+    inbox(tmp_path, "dm", mtime=now - 600)
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    err = capsys.readouterr().err
+    assert err.count("dm") and "answer" in err, f"no alert named the scope: {err!r}"
+    assert err.count("alert") == 1, f"the restarted scope raised {err.count('alert')} alerts: {err!r}"
+    assert op.run_pass(str(tmp_path / "state"), str(ROOT)) == 0
+    assert capsys.readouterr().err.count("alert") == 0, "the same unanswered line alerted twice"

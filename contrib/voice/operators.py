@@ -13,6 +13,12 @@ stopped, whatever the record says.
 The record is `<state>/operators.json`, rewritten atomically after each start or stop. `stopped.json` names the scopes
 the owner stopped on purpose: a pass never revives one. One lock bounds a pass, and every CLI call has a deadline.
 
+A listed session is adopted only while it turns (#2923). A turn writes the session's transcript under the CLI's
+projects folder, so the newest transcript write is the session's last turn. A session whose last turn ended in an API
+error, or that takes no turn within `TURN_WAIT` on an inbox line newer than its last turn, is stopped and replaced in
+one pass. The replacement skips the inbox lines already there (its Monitor starts at `tail -n 0`), so a pending line
+raises one alert on stderr that names the scope, once per line, and the owner answers it in Slack.
+
 usage: operators.py [--check] [--state DIR] [--repo DIR]
   --check  print what a pass would do, and change nothing.
 Exit 0: the pass ran (or reported). Exit 1: the CLI refused or a deadline passed.
@@ -20,9 +26,11 @@ Exit 0: the pass ran (or reported). Exit 1: the CLI refused or a deadline passed
 import argparse
 import errno
 import fcntl
+import glob
 import hashlib
 import json
 import os
+import re
 import select
 import signal
 import subprocess
@@ -49,6 +57,9 @@ LOCK_WAIT = 5.0                          # seconds, a pass waits for the lock th
 ADOPT_PASSES = 2                         # a marked session no record names is adopted after this many consecutive passes
 MISSING_PASSES = 2                       # a recorded session the CLI no longer lists is replaced after this many passes
 BACKOFF_MAX = 300.0                      # seconds, the ceiling of a failed stop's retry wait
+TURN_WAIT = 600.0                        # seconds a session may take to start a turn on a new inbox line (#2923)
+PROJECTS = os.environ.get("VOICE_CLAUDE_PROJECTS") or os.path.join(os.path.expanduser("~"), ".claude", "projects")
+PROJECT_NAME_MAX = 200                   # Claude Code cuts a longer sanitized working directory to this length (#796)
 TOOLS = "Read,Monitor,TaskStop,Bash"
 
 
@@ -98,6 +109,128 @@ def carried(cwd, root_dir):
         return None
     scope = here[len(root_dir) + 1:].split(os.sep, 1)[0]
     return scope or None
+
+
+def folder_for(name):
+    """The folder one sanitized working directory names: its exact name, or the cut path a long one starts with."""
+    exact = os.path.join(PROJECTS, name)
+    if len(name) <= PROJECT_NAME_MAX or os.path.isdir(exact):
+        return exact
+    try:
+        names = [n for n in os.listdir(PROJECTS) if n.startswith(name[:PROJECT_NAME_MAX]) and len(n) > PROJECT_NAME_MAX]
+    except OSError:
+        return exact
+    return os.path.join(PROJECTS, names[0]) if len(names) == 1 else exact
+
+
+def projects_folder(cwd):
+    """Claude Code's transcript folder for one working directory, or "" for no directory. The CLI names it after the
+    path it was given, and a resolved path is tried too, since a link in the path is spelled two ways. A path no folder
+    answers returns the exact name, so the read finds no transcript and names no live session."""
+    if not cwd:
+        return ""
+    names = []
+    for path in (cwd, os.path.realpath(cwd)):
+        name = re.sub(r"[^A-Za-z0-9]", "-", path)
+        if name not in names:
+            names.append(name)
+    for name in names:
+        folder = folder_for(name)
+        if os.path.isdir(folder):
+            return folder
+    return os.path.join(PROJECTS, names[0])
+
+
+def transcript_files(cwd):
+    """Every transcript of one session's folder, newest first; [] when it has none."""
+    folder = projects_folder(cwd)
+    found = glob.glob(os.path.join(folder, "*.jsonl")) if folder else []
+    stamped = []
+    for path in found:
+        try:
+            stamped.append((os.stat(path).st_mtime, path))
+        except OSError:
+            continue                              # a file that went between the listing and the stat is no turn
+    return [path for _, path in sorted(stamped, reverse=True)]
+
+
+def tail_lines(path, limit=262144):
+    """The last lines of one file, the tail read only: a transcript can be long, and the turn the pass reads is at its
+    end. A partial first line of the read is dropped. [] for a file that cannot be read."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > limit:
+                f.seek(size - limit)
+                f.readline()
+            data = f.read()
+    except OSError:
+        return []
+    return data.decode("utf-8", "replace").splitlines()
+
+
+def last_turn_error(cwd):
+    """The text of the session's last assistant turn when that turn is an API error, else None (#2923).
+
+    Claude Code writes a failed turn to the transcript as an assistant entry with `isApiErrorMessage`, so a session that
+    ended there takes no turn until something restarts it. Only the last assistant entry is read: an earlier error that a
+    later turn recovered is no dead session."""
+    for path in transcript_files(cwd)[:1]:
+        last = None
+        for line in tail_lines(path):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(d, dict) and d.get("type") == "assistant":
+                last = d
+        if not isinstance(last, dict) or not last.get("isApiErrorMessage"):
+            return None
+        message = last.get("message") if isinstance(last.get("message"), dict) else {}
+        text = " ".join(str(b.get("text") or "") for b in message.get("content") or [] if isinstance(b, dict))
+        return (last.get("error") or text or "the API call failed")[:200]
+    return None
+
+
+def last_turn(cwd):
+    """The newest transcript write of one session, epoch seconds, 0 when it has none: one turn writes to it."""
+    files = transcript_files(cwd)
+    try:
+        return os.stat(files[0]).st_mtime if files else 0.0
+    except OSError:
+        return 0.0
+
+
+def written(path):
+    """The last write time of one queue file, 0 when it does not exist."""
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return 0.0
+
+
+def pending(state, scope):
+    """The time of the scope's newest inbox line when no answer followed it, else 0 (#2923): the daemon writes the
+    inbox line and the session writes the outbox line, so the two write times order them."""
+    line = written(os.path.join(state, "inboxes", f"{scope}.jsonl"))
+    return line if line > written(os.path.join(state, "outboxes", f"{scope}.jsonl")) else 0.0
+
+
+def stalled(state, scope, session, now):
+    """Why this session is dead, or None (#2923). Two causes: its last turn ended in an API error, or a new inbox line
+    took no turn within TURN_WAIT. A session that started less than TURN_WAIT ago gets its grace, since it may be
+    reading the line right now."""
+    started = session.get("started") or 0
+    started = started / 1000.0 if started > 1e11 else started   # the record and the listing disagree on the unit
+    if now - started < TURN_WAIT:
+        return None
+    error = last_turn_error(session.get("cwd") or "")
+    if error:
+        return f"its last turn failed with an API error: {error}"
+    line = written(os.path.join(state, "inboxes", f"{scope}.jsonl"))
+    if line and now - line >= TURN_WAIT and line > last_turn(session.get("cwd") or ""):
+        return f"no turn since the inbox line written {int(now - line)}s ago"
+    return None
 
 
 def registry(state):
@@ -299,10 +432,12 @@ def stop(sid):
 
 
 def plan(state, sessions, record, stopped, now=None):
-    """What one pass must do, as (starts, adopts, stops, clears), each a list of scope names.
+    """What one pass must do, as (starts, adopts, stops, clears, restarts), each a list of scope names except `stops`
+    and `restarts`, whose entries also name the session.
 
     `sessions` is the live listing; `record` maps a scope to {"id", "pid", "started", "missing", "adopt"} plus a `stop`
-    entry {"tries", "next"} while a stop is pending; `stopped` names the scopes the owner stopped on purpose.
+    entry {"tries", "next"} while a stop is pending; `stopped` names the scopes the owner stopped on purpose. A
+    `restarts` entry is (scope, session, why): the session is listed but took no turn (#2923).
     """
     now = time.time() if now is None else now
     live = {s["id"]: s for s in sessions}
@@ -312,7 +447,7 @@ def plan(state, sessions, record, stopped, now=None):
         if scope:
             owned.setdefault(scope, []).append(s)
     wanted = registry(state)
-    starts, adopts, stops, clears = [], [], [], []
+    starts, adopts, stops, clears, restarts = [], [], [], [], []
     for scope in wanted:
         if scope in stopped:
             continue
@@ -339,6 +474,9 @@ def plan(state, sessions, record, stopped, now=None):
             continue
         only = mine[0]
         if held.get("id") == only["id"]:
+            why = stalled(state, scope, only, now)   # a listed session that took no turn is dead, not alive (#2923)
+            if why:
+                restarts.append((scope, only, why))
             record[scope] = {**held, "missing": 0, "adopt": 0}
             continue
         adopt = int(held.get("adopt") or 0) + 1
@@ -352,7 +490,7 @@ def plan(state, sessions, record, stopped, now=None):
             stops.append((s["id"], scope))
         if not owned.get(scope):
             clears.append(scope)
-    return starts, adopts, stops, clears
+    return starts, adopts, stops, clears, restarts
 
 
 def acquire(state):
@@ -383,13 +521,15 @@ def run_pass(state, repo, check=False):
         sessions = listing()
         record = read_json(os.path.join(state, "operators.json"), {})
         stopped = set(read_json(os.path.join(state, "stopped.json"), {}))
-        starts, adopts, stops, clears = plan(state, sessions, dict(record), stopped)
+        starts, adopts, stops, clears, restarts = plan(state, sessions, dict(record), stopped)
         for scope in starts:
             print(f"operators: would start {scope}")
         for scope, _ in adopts:
             print(f"operators: would adopt {scope}")
         for sid, scope in stops:
             print(f"operators: would stop {sid} for {scope}")
+        for scope, session, why in restarts:
+            print(f"operators: would restart {scope} for {session['id']}: {why}")
         for scope in clears:
             print(f"operators: would clear {scope}")
         return 0
@@ -404,7 +544,7 @@ def run_pass(state, repo, check=False):
         record = read_json(rec_path, {})
         stopped = set(read_json(os.path.join(state, "stopped.json"), {}))
         before = json.dumps(record, sort_keys=True)
-        starts, adopts, stops, clears = plan(state, sessions, record, stopped)
+        starts, adopts, stops, clears, restarts = plan(state, sessions, record, stopped)
         if json.dumps(record, sort_keys=True) != before:   # a counter the pass moved is a fact, and it is kept
             write_json(rec_path, record)
         for scope, session in adopts:
@@ -417,6 +557,36 @@ def run_pass(state, repo, check=False):
             record[scope] = {**prior, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             write_json(rec_path, record)
             print(f"operators: started {scope} as {sid or 'unknown id'}")
+        for scope, session, why in restarts:
+            # A session that took no turn is stopped and replaced in one pass, and ownership drops only once the CLI
+            # confirms the stop (#2923). A stop that fails keeps the session, as any other stop does.
+            try:
+                stop(session["id"])
+            except Refused as e:
+                tries = int(((record.get(scope) or {}).get("stop") or {}).get("tries") or 0) + 1
+                record[scope] = {**record[scope], "stop": {"tries": tries, "next": time.time() + min(2.0 ** tries, BACKOFF_MAX)}}
+                write_json(rec_path, record)
+                print(f"operators: restart of {scope} failed, the scope keeps its session: {e}", file=sys.stderr)
+                continue
+            if session["id"] in {s["id"] for s in listing()}:
+                record[scope] = {**record[scope], "stop": {"tries": 1, "next": time.time() + min(2.0, BACKOFF_MAX)}}
+                write_json(rec_path, record)
+                print(f"operators: {session['id']} still listed after the stop; ownership kept", file=sys.stderr)
+                continue
+            old = record.pop(scope, None) or {}
+            retire_proxy(old)
+            write_json(rec_path, record)
+            sid, entry = start(scope, state, repo)
+            kept = {k: v for k, v in old.items() if k != "proxy"}
+            record[scope] = {**kept, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
+            write_json(rec_path, record)
+            print(f"operators: restarted {scope} as {sid or 'unknown id'}: {why}")
+            line = pending(state, scope)      # a new session skips the inbox lines already there, so one alert stands
+            if line and int(kept.get("alerted") or 0) != int(line):
+                print(f"operators: alert: scope {scope} has an inbox line with no answer; its session was restarted",
+                      file=sys.stderr)
+                record[scope] = {**record[scope], "alerted": int(line)}
+                write_json(rec_path, record)
         now = time.time()
         for sid, scope in stops:
             try:
