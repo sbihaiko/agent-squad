@@ -423,7 +423,22 @@ def test_the_destination_label_names_the_decision_kind():
         return S.Decision(kind, None, (), "en-US", None, None, False, None)
     assert S.destination_label(decision(S.INBOX)) == "inbox"
     assert S.destination_label(decision(S.PROPOSAL)) == "proposal"
-    assert S.destination_label(decision(S.DATA)) == "read as data"
+    assert S.destination_label(decision(S.DATA)) == "read, never obeyed"
+
+
+def test_the_verdict_names_who_can_ask_or_says_nobody_can():
+    """#2912: one sentence answers whether the persona answers people in a channel, and who. The view draws it."""
+    assert S.verdict([]) == "Nobody can ask this persona here."
+    assert S.verdict(["U0OWNER001"]) == "U0OWNER001 can ask this persona here."
+    assert S.verdict(["U0OWNER001"], {"U0OWNER001": "Ana"}) == "Ana can ask this persona here."
+    assert S.verdict(["U1", "U2", "U1"]) == "2 people can ask this persona here."
+
+
+def test_the_class_label_reads_in_the_users_words():
+    """#2912: `owned` reads "our workspace" and `guest` reads "guest workspace"; an unknown class reads itself."""
+    assert S.class_label("owned") == "our workspace"
+    assert S.class_label("guest") == "guest workspace"
+    assert S.class_label("") == ""
 
 
 def test_resolved_members_counts_only_the_roles_a_channel_accepts():

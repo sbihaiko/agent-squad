@@ -47,7 +47,8 @@ def _slack_overview_shape(project, roles, events, personas, workspaces, defects,
     speak = sum(1 for w in workspaces for c in w["channels"] if c["mode"] == "listen+speak")
     subscribers = sum(1 for w in workspaces for c in w["channels"] if c["announce"])
     tone = lambda n: "ok" if n else "warn"   # noqa: E731  a count of zero needs a look
-    now = [{"key": "Workspaces", "value": f"{len(workspaces)} · {owned} owned · {guest} guest", "tone": tone(len(workspaces))},
+    now = [{"key": "Workspaces", "value": str(len(workspaces)),
+            "sub": f"{owned} our workspace · {guest} guest workspace", "tone": tone(len(workspaces))},
            {"key": "Channels", "value": f"{sum(len(w['channels']) for w in workspaces)} · {speak} speak",
             "tone": tone(speak)},
            {"key": "Personas", "value": f"{len(personas)} · default {project['persona_name']}"
@@ -299,6 +300,10 @@ def _slack_tree_channel_icon(P, ws, merged, ch_id):
     direct message carries no workspace class of its own, so its Slack `D` id decides."""
     guest = P.channel_class(ws, merged) == "guest"
     return "chat" if guest or str(ch_id).upper().startswith("D") else "hash"
+def _slack_hashed(name):
+    """The channel's row name carries one `#` (#2912): a name that already starts with one keeps the one it has."""
+    text = _slack_text(name)
+    return text if text.lstrip().startswith("#") else f"#{text}"
 def _slack_pick(field, value, options):
     """One select of a setting row (#2845): the stored value and every choice the policy allows. The empty choice is the
     first, and its label names what the control inherits."""
@@ -402,6 +407,19 @@ def _slack_poll_note(mode, defaults, poll):
     return (f"{at('fast')} → {at('slow')} slow after {at('quiet_after')} quiet, and a reply thread stays "
             f"fast for {at('thread_open')}")
 
+def _slack_member_names(local_doc, ws_id, ch_id):
+    """The display names the local file gives the people of one channel (#2912): a member row that carries an `alias`
+    and names one user. A row with no alias, or with several users, names nobody, so the id stands for that person."""
+    out = {}
+    for _, row in _slack_dicts(local_doc.get("members")):
+        if (_slack_text(row.get("workspace")), _slack_text(row.get("channel"))) != (ws_id, ch_id):
+            continue
+        alias, users = _slack_text(row.get("alias")).strip(), [str(u) for u in row.get("users") or ()]
+        if alias and len(users) == 1:
+            out[users[0]] = alias
+    return out
+
+
 def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
     """The Permissions section of one channel: each role of the project with its actions, whether the channel accepts
     it and its members. The distinct eligible people, the members the preview offers and a note for each person who
@@ -451,9 +469,10 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     label = _slack_text(ws.get("label") or ws_id)
     icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
     if refused:
-        return {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon, "badges":
+        return {"id": node_id, "level": 4, "kind": "channel", "name": _slack_hashed(name), "children": [], "icon": icon, "badges":
                 [_slack_badge("refused", "err", "refused")], "now": [],
-                "detail": {"title": f"#{name}", "sub": label, "text": "The workspace is refused, so this channel names no transport."}}
+                "detail": {"title": _slack_hashed(name), "sub": label, "text": "The workspace is refused, so this channel names no transport.",
+                           "verdict": P.verdict([]), "copy_id": _slack_text(ch_id)}}
     resolution = P.resolution(committed_doc, local_doc, ws, merged)
     persona = resolution["persona"]
     members = P.resolved_members(local_doc, ws_id, ch_id, merged.get("roles") or ())
@@ -461,10 +480,10 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                                                    "user": members[0] if members else ""}, dt.datetime.now(dt.UTC))
     badges = []
     if P.channel_class(ws, merged) != _slack_group_class(group, lf):
-        badges.append(_slack_badge(P.channel_class(ws, merged)))
+        badges.append(_slack_badge(P.class_label(P.channel_class(ws, merged))))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "warn", "noone"))
+        badges.append(_slack_badge("nobody can ask", "neutral" if not P.can_speak(merged) else "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -479,11 +498,14 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
     note = P.channel_note(merged, members, announcement)
-    node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
+    names = _slack_member_names(local_doc, ws_id, ch_id)
+    # The detail answers first (#2912): one verdict sentence above the tiles names who can ask the persona. The
+    # subtitle reads the workspace alone, and the copy control carries the Slack id, so the id stays reachable.
+    node = {"id": node_id, "level": 4, "kind": "channel", "name": _slack_hashed(name), "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
-                       "note": note}}
+            "detail": {"title": _slack_hashed(name), "sub": label, "text": "", "note": note,
+                       "verdict": P.verdict(members, names), "copy_id": _slack_text(ch_id)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
@@ -566,7 +588,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     refused = (group["file"], group["index"]) in refused_keys
     has_guest_channel = any(P.channel_class(row, candidate) == "guest"
                             for row, file, i in group["rows"] for k, candidate in _slack_dicts(row.get("channels")))
-    caption = "owned · contains guest channel" if class_ == "owned" and has_guest_channel else class_
+    caption = "our workspace · contains guest channel" if class_ == "owned" and has_guest_channel else P.class_label(class_)
     resolution = P.resolution(committed_doc, local_doc, ws)
     persona = resolution["persona"]
     slot = "refused" if refused else "holds it" if _slack_text(ws.get("label") or ws_id) == held else "—"
@@ -586,16 +608,16 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     defect_note = [str(d.reason) for d in named_diags]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
-    badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
+    badges = [_slack_badge(P.class_label(class_))] + ([_slack_badge("refused", "err", "refused")] if refused else [])
     return {"id": node_id, "level": 3, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
-            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
+            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{P.class_label(class_)} · {_slack_text(ws_id)}", "defect_note": defect_note,
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
                                "account with the persona mark; the bot never joins it." if class_ == "guest" else ""}}
 
-SLACK_TREE_SETUP = ({"id": "owned", "label": "Add owned workspace"}, {"id": "guest", "label": "Add guest workspace"})
+SLACK_TREE_SETUP = ({"id": "owned", "label": "Add our workspace"}, {"id": "guest", "label": "Add guest workspace"})
 
 def _slack_tree_failed(message):
     """The tree of a read that could not resolve the policy: one Unassigned client with one error project, its Now tiles
@@ -776,8 +798,9 @@ def _slack_project_node(P, seat, node_id):
     guest_nodes = [g for g in groups if _slack_group_class(g, lf) == "guest"]
     # A project count is a fact, never a passing state; only a second guest workspace earns the warning tone (#2841, #2842).
     now = [] if empty else [
-        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
-                    tone="warn" if len(guest_nodes) > 1 else "neutral"),
+        _slack_tile("Workspaces", str(len(groups)),
+                    f"{len(groups) - len(guest_nodes)} our workspace · {len(guest_nodes)} guest workspace",
+                    "warn" if len(guest_nodes) > 1 else "neutral"),
         _slack_tile("Channels", f"{len(rows)} · {speak} speak"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
                     else f"{len(personas)} · no default"),
@@ -841,7 +864,7 @@ def _slack_clients_tree_for(P, seats, here=None):
             built["node"]["here"] = _slack_here(seat, seats, here)
             built["node"]["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
             built["node"]["badges"] = list(built["node"]["badges"]) + [
-                _slack_badge("follows default", "muted", "follow") if entry["follows"]
+                _slack_badge("inherits from client", "muted", "follow") if entry["follows"]
                 else _slack_badge("own persona", "neutral", "follow")]
             children.append(built["node"])
             with_slack += 1 if CL.has_slack(seat["committed"], seat["local"]) else 0

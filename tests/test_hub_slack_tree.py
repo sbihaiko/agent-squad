@@ -116,11 +116,11 @@ def test_a_workspace_only_the_local_file_names_reads_guest_everywhere(hub, tmp_p
     out = read(hub, tmp_path, local=local)
     root = out["tree"]["root"]
     ws = by_name(root, "partner")
-    assert [b["text"] for b in ws["badges"]][:1] == ["guest"], ws["badges"]
-    assert tiles(ws)["Class"]["value"] == "guest", tiles(ws)
+    assert [b["text"] for b in ws["badges"]][:1] == ["guest workspace"], ws["badges"]
+    assert tiles(ws)["Class"]["value"] == "guest workspace", tiles(ws)
     assert "guest" not in [b["text"] for b in by_name(root, "#partner-room")["badges"]], "the channel repeats no class"
-    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "2 · 1 owned · 1 guest", tiles(root)
-    assert out["now"][0]["value"] == "2 · 1 owned · 1 guest", out["now"][0]
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "2" and tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["sub"] == "1 our workspace · 1 guest workspace", tiles(root)
+    assert (out["now"][0]["value"], out["now"][0]["sub"]) == ("2", "1 our workspace · 1 guest workspace"), out["now"][0]
     assert [w["class"] for w in out["workspaces"]] == ["owned", "guest"], out["workspaces"]
 
 
@@ -130,7 +130,7 @@ def test_an_owned_workspace_with_a_guest_channel_counts_as_owned_in_the_project_
     local = {"workspaces": [{"id": "T0TEAM0001", "channels": [
         {"id": "C0SAND0001", "name": "guest-sandbox", "class": "guest", "mode": "listen"}]}]}
     root = tree(hub, tmp_path, local=local)["root"]
-    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "1 · 1 owned · 0 guest", tiles(root)
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "1" and tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["sub"] == "1 our workspace · 0 guest workspace", tiles(root)
 
 
 def test_the_project_block_lives_in_the_pages_own_project_node(hub, tmp_path):
@@ -225,17 +225,6 @@ def test_the_destination_tile_reads_inbox_or_proposal(hub, tmp_path):
     assert tiles(by_name(root, "#support"))["A member's message"]["value"] == "proposal"
 
 
-def test_a_channel_with_no_eligible_member_reads_as_data(hub, tmp_path):
-    """No member of the local file holds a role the channel accepts, so a message stays data and the reply is `none`."""
-    local = json.loads(json.dumps(LOCAL))
-    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
-    root = tree(hub, tmp_path, local=local)["root"]
-    now = tiles(by_name(root, "#support"))
-    assert now["A member's message"]["value"] == "read as data"
-    assert now["Reply"]["value"] == "none"
-    assert any(b["text"] == "no one" for b in by_name(root, "#support")["badges"])
-
-
 def test_the_reply_tile_reads_each_policy_path(hub, tmp_path):
     root = tree(hub, tmp_path)["root"]
     assert tiles(by_name(root, "#proj-agent-squad"))["Reply"]["value"] == "bot"
@@ -265,11 +254,11 @@ def test_an_owned_workspace_with_a_guest_channel_says_so_and_offers_no_move(hub,
         "members": [{"workspace": "T0TEAM0001", "channel": "C0SAND0001", "role": "manager", "users": ["U0OWNER001"]}]}
     out = read(hub, tmp_path, local=local)
     ws = by_name(out["tree"]["root"], "team")
-    assert tiles(ws)["Class"]["value"] == "owned · contains guest channel", tiles(ws)
-    assert by_name(out["tree"]["root"], "#guest-sandbox")["badges"][0] == {"text": "guest", "tone": "neutral",
+    assert tiles(ws)["Class"]["value"] == "our workspace · contains guest channel", tiles(ws)
+    assert by_name(out["tree"]["root"], "#guest-sandbox")["badges"][0] == {"text": "guest workspace", "tone": "neutral",
                                                                            "kind": "class"}
     html = render(hub, out, sel=by_name(out["tree"]["root"], "team")["id"])
-    assert "owned · contains guest channel" in html
+    assert "our workspace · contains guest channel" in html
     assert "Move to owned" not in html
 
 
@@ -284,12 +273,12 @@ def test_a_refused_guest_workspace_shows_one_defect_and_its_channels_no_mode_bad
     assert out["notice"] is None, out.get("notice")
     assert out["guest_slot"]["tone"] == "err", out.get("guest_slot")
     project = next(n for n in walk(root) if n.get("kind") == "project")
-    assert [b["text"] for b in project["badges"]] == ["HAL9K", "follows default"], project["badges"]
+    assert [b["text"] for b in project["badges"]] == ["HAL9K", "inherits from client"], project["badges"]
     refused = by_name(root, "client-b")
     assert refused["state"] == "refused"
     assert len(refused["defects"]) == 1, refused["defects"]
     assert "a second guest workspace is refused" in refused["defects"][0]
-    assert [b["text"] for b in refused["badges"]] == ["guest", "refused"], refused["badges"]
+    assert [b["text"] for b in refused["badges"]] == ["guest workspace", "refused"], refused["badges"]
     assert by_name(root, "#b-general")["badges"] == [{"text": "refused", "tone": "err", "kind": "refused"}]
 
 
@@ -440,10 +429,10 @@ def test_the_channel_note_names_each_mode_and_announcement_combination(hub, tmp_
     listen, speak = {"mode": "listen"}, {"mode": "listen+speak"}
     member, announced = ["U0OWNER001"], ["stg_release"]
     assert P.channel_note(listen, [], []) == (
-        "No member holds a role this channel accepts, so a message is read as data and gets no reply.")
+        "No member holds a role this channel accepts, so a message is read, never obeyed, and gets no reply.")
     assert P.channel_note(listen, [], announced) == (
-        "Announcements only: no member holds a role this channel accepts, so a message is read as data and gets no "
-        "reply.")
+        "Announcements only: no member holds a role this channel accepts, so a message is read, never obeyed, and "
+        "gets no reply.")
     assert P.channel_note(listen, member, []) == (
         "Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; nothing "
         "is posted here.")
@@ -454,12 +443,12 @@ def test_the_channel_note_names_each_mode_and_announcement_combination(hub, tmp_
     assert P.channel_note(speak, member, announced) == "Announcements post as drafts for your review."
 
 
-def test_the_no_one_badge_is_amber(hub, tmp_path):
-    """#2842: a channel with no eligible member carries the no-one badge in the amber warning tone."""
+def test_the_nobody_can_ask_badge_is_amber_when_the_channel_speaks(hub, tmp_path):
+    """#2842: a channel that speaks and has no eligible member carries the badge in the amber warning tone."""
     local = json.loads(json.dumps(LOCAL))
     local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
     root = tree(hub, tmp_path, local=local)["root"]
-    badge = next(b for b in by_name(root, "#support")["badges"] if b["text"] == "no one")
+    badge = next(b for b in by_name(root, "#support")["badges"] if b["text"] == "nobody can ask")
     assert badge["tone"] == "warn", badge
 
 
@@ -486,10 +475,10 @@ def test_a_channel_with_no_member_names_the_reason_in_its_note(hub, tmp_path):
     out = read(hub, tmp_path, local=local)
     ch = by_name(out["tree"]["root"], "#support")
     assert ch["detail"]["note"] == (
-        "No member holds a role this channel accepts, so a message is read as data and gets no reply."), ch["detail"]
+        "No member holds a role this channel accepts, so a message is read, never obeyed, and gets no reply."), ch["detail"]
     html = render(hub, out, sel=ch["id"])
     assert re.search(r'<p class=sltnote><span class=sltni aria-hidden=true>[^<]*</span> '
-                     r'No member holds a role this channel accepts, so a message is read as data and gets no reply\.</p>',
+                     r'No member holds a role this channel accepts, so a message is read, never obeyed, and gets no reply\.</p>',
                      html), html
     assert html.index("sltnote") > html.index("sltnow"), "the note sits under the tiles"
     assert "role=note" not in html, "a static sentence is not a live region"
@@ -522,12 +511,12 @@ def test_a_workspace_tile_names_its_class_a_file_tile_and_the_detail_carries_cla
     line carries both the class and the workspace id, so the owned or guest status is never unclear."""
     root = tree(hub, tmp_path)["root"]
     team = tiles(by_name(root, "team"))
-    assert team["Class"] == {"key": "Class", "value": "owned", "sub": "", "tone": "neutral"}, team["Class"]
+    assert team["Class"] == {"key": "Class", "value": "our workspace", "sub": "", "tone": "neutral"}, team["Class"]
     assert team["File"]["value"] == "slack.yaml", team["File"]
     guest = by_name(root, "client-a")
-    assert tiles(guest)["Class"]["value"] == "guest", tiles(guest)["Class"]
+    assert tiles(guest)["Class"]["value"] == "guest workspace", tiles(guest)["Class"]
     assert tiles(guest)["File"]["value"] == "t.slack.local.yaml", tiles(guest)["File"]
-    assert guest["detail"]["sub"] == "guest · T0CLIENT01", guest["detail"]
+    assert guest["detail"]["sub"] == "guest workspace · T0CLIENT01", guest["detail"]
 
 
 def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
@@ -535,7 +524,7 @@ def test_a_project_with_no_slack_files_shows_two_setup_choices(hub, tmp_path):
     project = out["root"]["children"][0]
     assert out["empty"] is True and project["state"] == "empty"
     assert project["now"] == []
-    assert [c["label"] for c in project["setup"]] == ["Add owned workspace", "Add guest workspace"], project.get("setup")
+    assert [c["label"] for c in project["setup"]] == ["Add our workspace", "Add guest workspace"], project.get("setup")
 
 
 def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
@@ -566,7 +555,7 @@ def test_the_read_route_matches_the_policy_for_each_node(hub, tmp_path):
         assert now["Persona"]["value"] == (persona.name if persona else "none"), (name, now["Persona"])
         assert now["Reply"]["value"] == P.reply_label(ch, decision), (name, now["Reply"], decision.reply)
         assert now["A member's message"]["value"] == P.destination_label(decision), (name, decision.kind)
-    assert [b["text"] for b in by_name(root, "client-b")["badges"]] == ["guest", "refused"]
+    assert [b["text"] for b in by_name(root, "client-b")["badges"]] == ["guest workspace", "refused"]
     assert by_name(root, "client-b")["defects"] == [str(d) for d in P.validate(committed, local,
                                                                                local_name="t.slack.local.yaml")
                                                     if d.reason == P.SECOND_GUEST_REASON]
@@ -606,8 +595,8 @@ def test_the_tree_follows_the_wai_aria_pattern(hub, tmp_path):
 def test_a_tree_item_accessible_name_carries_its_badges(hub, tmp_path):
     html = render(hub, read(hub, tmp_path))
     items = re.findall(r"<div[^>]*role=treeitem[^>]*>", html)
-    team = next(i for i in items if 'aria-label="team, owned"' in i)
-    assert 'aria-label="team, owned"' in team, team
+    team = next(i for i in items if 'aria-label="team, our workspace"' in i)
+    assert 'aria-label="team, our workspace"' in team, team
 
 
 def test_the_tree_is_the_keyboard_tree_of_the_view(hub, tmp_path):
@@ -758,7 +747,10 @@ def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash
     assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
     html = render(hub, read(hub, tmp_path, committed=committed))
     assert "<svg class=sltkind" in _item(html, "c0.p0.w0.c2"), _item(html, "c0.p0.w0.c2")   # the DM channel
-    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "c0.p0.w0.c0")
+    # A hash channel's name carries its `#`, so the row draws no second mark beside it (#2912).
+    row = _item(html, "c0.p0.w0.c0")
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+    assert "<svg class=sltkind" not in row, row
 
 
 # ---------------------------------------------------------------- the detail pane's width and type (#2841)
@@ -1168,3 +1160,194 @@ def test_the_slack_theme_takes_the_free_width_and_keeps_prose_short(hub):
     # row's label column stops at 240 px.
     assert "max-width:1080px" in _rule(page, "#sbody .sltnow")
     assert "minmax(120px,240px)" in _rule(page, "#sbody .sltrow")
+
+
+# ---------------------------------------------------------------- the channel detail speaks plainly (#2912)
+
+def test_a_channel_row_shows_one_hash_mark(hub, tmp_path):
+    """The channel name already carries its `#`, so the row draws no second hash beside it (#2912)."""
+    html = render(hub, read(hub, tmp_path))
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    channel = next(r for r in rows if 'aria-label="#proj-agent-squad' in r)
+    shown = "".join(re.findall(r">([^<]*)<", channel))   # the row's text, never its attributes
+    assert shown.count("#") == 1, channel
+
+
+def test_the_channel_subtitle_names_no_raw_id_and_offers_a_copy(hub, tmp_path):
+    """The subtitle names the workspace alone; a copy control keeps the Slack id reachable (#2912)."""
+    out = read(hub, tmp_path)
+    ch = by_name(out["tree"]["root"], "#proj-agent-squad")
+    assert ch["detail"]["sub"] == "team", ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    sub = re.search(r"<p class=sltsub>([^<]*)</p>", html)
+    assert sub and "C0PROJ0001" not in sub.group(1), sub and sub.group(1)
+    btn = re.search(r"<button[^>]*data-slcid=\"C0PROJ0001\"[^>]*>([^<]*)</button>", html)
+    assert btn and "copy id" in btn.group(1).lower(), html[html.index("sltsub"):html.index("sltsub") + 600]
+
+
+def test_the_copy_id_control_copies_the_channel_id(hub):
+    """The copy control writes the channel id to the clipboard and confirms it in words (#2912)."""
+    body = (_slices(hub.PAGE) +
+            "\nconst got=[];globalThis.navigator={clipboard:{writeText:t=>{got.push(t);return Promise.resolve()}}};"
+            "const el={textContent:'copy id'};globalThis.setTimeout=()=>0;"
+            "Promise.resolve(slCopyId('C0PROJ0001',el)).then(ok=>console.log(JSON.stringify([got,ok,el.textContent])))")
+    assert json.loads(_node(body)) == [["C0PROJ0001"], True, "copied"]
+
+
+def test_the_copy_id_control_says_when_no_clipboard_answers(hub):
+    """A plain http hub has no clipboard API, so the control falls back and says the copy failed (#2912)."""
+    body = (_slices(hub.PAGE) +
+            "\nglobalThis.navigator={};globalThis.setTimeout=()=>0;"
+            "globalThis.document={createElement:()=>({style:{},setAttribute(){},select(){}}),"
+            "body:{appendChild(){},removeChild(){}},execCommand:()=>false};"
+            "const el={textContent:'copy id'};"
+            "Promise.resolve(slCopyId('C0PROJ0001',el)).then(ok=>console.log(JSON.stringify([ok,el.textContent])))")
+    assert json.loads(_node(body)) == [False, "copy failed"]
+
+
+def test_the_show_the_tree_button_shows_only_with_the_tree_folded(hub):
+    """The button clears the fold, so it draws only while the fold is set; a wide pane shows the tree beside the
+    detail and needs no way back to it (#2912)."""
+    page = hub.PAGE
+    assert "display:none" in _rule(page, "#sbody .sltback"), "the button is hidden until the fold is set"
+    assert "#sbody .slttop.sltshow .sltback{display:inline-flex}" in page
+    assert "#tab-set #sbody .slttop.sltshow .sltback{display:inline-flex}" in page
+    assert page.count(".sltback{display:inline-flex}") == 2, "only the folded layout shows the button"
+
+
+def test_a_workspace_badge_reads_our_workspace_or_guest_workspace(hub, tmp_path):
+    """The class badge and the class tile speak the user's words, never the file's class name (#2912)."""
+    root = tree(hub, tmp_path)["root"]
+    assert [b["text"] for b in by_name(root, "team")["badges"]][:1] == ["our workspace"], by_name(root, "team")
+    assert tiles(by_name(root, "team"))["Class"]["value"] == "our workspace", tiles(by_name(root, "team"))
+    assert [b["text"] for b in by_name(root, "client-a")["badges"]][:1] == ["guest workspace"]
+    assert tiles(by_name(root, "client-a"))["Class"]["value"] == "guest workspace"
+    assert by_name(root, "client-a")["detail"]["sub"] == "guest workspace · T0CLIENT01"
+
+
+def test_a_channel_with_no_eligible_member_reads_never_obeyed(hub, tmp_path):
+    """A message nobody may answer is `read, never obeyed`, and the badge says nobody can ask (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    root = tree(hub, tmp_path, local=local)["root"]
+    now = tiles(by_name(root, "#support"))
+    assert now["A member's message"]["value"] == "read, never obeyed", now
+    assert any(b["text"] == "nobody can ask" for b in by_name(root, "#support")["badges"]), by_name(root, "#support")
+
+
+def test_a_listen_channel_with_no_member_shows_a_neutral_badge(hub, tmp_path):
+    """A listen-only channel that answers nobody is its designed state, so its badge is neutral; a channel that speaks
+    and answers nobody keeps the warning tone (#2912)."""
+    root = tree(hub, tmp_path)["root"]
+    alert = next(b for b in by_name(root, "#squad-alerts")["badges"] if b["text"] == "nobody can ask")
+    assert alert["tone"] == "neutral", alert
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    support = next(b for b in by_name(tree(hub, tmp_path, local=local)["root"], "#support")["badges"]
+                   if b["text"] == "nobody can ask")
+    assert support["tone"] == "warn", support
+
+
+def test_the_neutral_badge_follows_the_local_mode_override(hub, tmp_path):
+    """The tone reads the merged channel, so a local row that turns a speaking channel to listen turns its badge
+    neutral, and the reverse turns it back to warning (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0PROJ0001"]
+    local["workspaces"].append({"id": "T0TEAM0001", "channels": [
+        {"id": "C0PROJ0001", "mode": "listen"}, {"id": "C0ALERT001", "mode": "listen+speak"}]})
+    root = tree(hub, tmp_path, local=local)["root"]
+    quiet = next(b for b in by_name(root, "#proj-agent-squad")["badges"] if b["text"] == "nobody can ask")
+    assert quiet["tone"] == "neutral", quiet
+    loud = next(b for b in by_name(root, "#squad-alerts")["badges"] if b["text"] == "nobody can ask")
+    assert loud["tone"] == "warn", loud
+
+
+def test_the_project_counts_read_in_the_users_words(hub, tmp_path):
+    project = next(n for n in walk(tree(hub, tmp_path)["root"]) if n.get("kind") == "project")
+    assert tiles(project)["Workspaces"] == {"key": "Workspaces", "value": "2",
+                                            "sub": "1 our workspace · 1 guest workspace", "tone": "neutral"}, tiles(project)
+
+
+def test_a_truncated_workspace_name_keeps_its_full_name(hub, tmp_path):
+    """Every tree row keeps its whole name in the tooltip, a workspace row included (#2912)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["label"] = "team-with-a-very-long-label-that-runs-past-the-tree-column"
+    html = render(hub, read(hub, tmp_path, committed=committed))
+    full = "team-with-a-very-long-label-that-runs-past-the-tree-column"
+    assert re.search(r'<span class=sltname title="' + re.escape(full) + r'"', html), html[:1200]
+
+
+def test_a_truncated_channel_name_keeps_its_full_name_and_one_hash(hub, tmp_path):
+    """A channel row that the tree column cuts keeps its whole name in the tooltip and shows one `#` (#2912)."""
+    long_name = "proj-agent-squad-with-a-name-that-runs-past-the-tree-column"
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["name"] = long_name
+    out = read(hub, tmp_path, committed=committed)
+    html = render(hub, out)
+    full = "#" + long_name
+    assert re.search(r'<span class=sltname title="' + re.escape(full) + r'"', html), html[:1200]
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    row = next(r for r in rows if 'aria-label="' + full in r)
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+
+
+def test_a_channel_name_that_already_carries_its_hash_shows_one_mark(hub, tmp_path):
+    """The hub never doubles a `#` a channel name already carries (#2912)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["name"] = "#proj-agent-squad"
+    out = read(hub, tmp_path, committed=committed)
+    ch = next(n for n in walk(out["tree"]["root"]) if n.get("kind") == "channel"
+              and n["name"].lstrip("#") == "proj-agent-squad")
+    assert ch["name"] == "#proj-agent-squad", ch
+    html = render(hub, out)
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    row = next(r for r in rows if 'aria-label="#proj-agent-squad' in r)
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+
+
+def test_the_channel_detail_opens_with_the_verdict(hub, tmp_path):
+    """One sentence above the Now tiles says who can ask the persona, and the hub writes it (#2912). The local file
+    names the person by id alone, so the id stands for the one person it names."""
+    out = read(hub, tmp_path)
+    ch = by_name(out["tree"]["root"], "#proj-agent-squad")
+    assert ch["detail"]["verdict"] == "U0OWNER001 can ask this persona here.", ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    assert re.search(r"<p class=sltverdict>U0OWNER001 can ask this persona here\.</p>", html), html[:1200]
+    assert html.index("sltverdict") < html.index("sltnow"), "the verdict stands above the Now tiles"
+
+
+def test_the_verdict_names_the_alias_the_local_file_gives_the_person(hub, tmp_path):
+    """A member row that names one person and carries an alias gives the verdict a plain name, and the policy keeps
+    the sentence (#2912, ADR-0137)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"][0]["alias"] = "Sam"
+    ch = by_name(tree(hub, tmp_path, local=local)["root"], "#proj-agent-squad")
+    assert ch["detail"]["verdict"] == "Sam can ask this persona here.", ch["detail"]
+
+
+def test_the_verdict_names_a_known_person_and_counts_the_rest(hub):
+    """A known display name stands for its person, and several people read as one plain count, never a list of ids
+    (#2912). The hub writes the sentence (ADR-0137)."""
+    P = hub.slack_policy()
+    assert P.verdict(["U0OWNER001"], {"U0OWNER001": "Ana"}) == "Ana can ask this persona here."
+    assert P.verdict(["U0OWNER001", "U0CLIENT01"]) == "2 people can ask this persona here."
+    assert P.verdict([]) == "Nobody can ask this persona here."
+
+
+def test_the_verdict_stands_above_the_setup_choices(hub):
+    """The verdict is the first answer of the pane, even when the node also carries setup choices (#2912)."""
+    node = {"id": "p0", "level": 2, "kind": "project", "name": "P", "children": [], "badges": [], "now": [],
+            "setup": [{"id": "owned", "label": "Add our workspace"}],
+            "detail": {"title": "P", "sub": "", "verdict": "Nobody can ask this persona here."}}
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={{tree:{{root:{json.dumps(node)}}}}};"
+            f"slT={{root:{json.dumps(node)}}};slTsel='p0';console.log(JSON.stringify(slTDetail()))")
+    html = json.loads(_node(body))
+    assert html.index("sltverdict") < html.index("Add our workspace"), html
+
+
+def test_the_verdict_says_nobody_can_ask(hub, tmp_path):
+    """A channel whose roles no member holds says so in its verdict (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    ch = by_name(tree(hub, tmp_path, local=local)["root"], "#support")
+    assert ch["detail"]["verdict"] == "Nobody can ask this persona here.", ch["detail"]

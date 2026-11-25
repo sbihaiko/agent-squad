@@ -60,7 +60,10 @@ LOCAL = {
              {"id": "C0CLIGEN01", "name": "general", "mode": "listen"},
          ]},
     ],
-    "members": [],
+    "members": [
+        {"workspace": "T0CLIENT01", "channel": "C0CLISUP01", "role": "manager", "users": ["U0CLIENT01"],
+         "alias": "Sam"},
+    ],
 }
 
 
@@ -91,7 +94,9 @@ class Hub:
         self.port = free_port()
         self.base = base / name
         self.profiles = self.base / "profiles"
-        self.checkout = self.base / "checkout"
+        # The profile's local file is named for the checkout folder (#2899), so this folder is `probe` and the fixture
+        # keeps its `probe.slack.local.yaml` name.
+        self.checkout = self.base / "probe"
         self.state, self.hubdir = self.base / "state", self.base / "hubdir"
         for d in (self.profiles, self.state, self.hubdir):
             d.mkdir(parents=True)

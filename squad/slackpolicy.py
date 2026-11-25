@@ -259,6 +259,16 @@ def channel_class(workspace, channel):
     return str((channel or {}).get("class") or (workspace or {}).get("class") or "owned")
 
 
+CLASS_LABELS = {"owned": "our workspace", "guest": "guest workspace"}
+
+
+def class_label(class_):
+    """The user's words for a workspace class (#2912): `owned` reads "our workspace" and `guest` reads "guest
+    workspace". The view draws the label and holds no copy of it."""
+    name = str(class_ or "")
+    return CLASS_LABELS.get(name, name)
+
+
 def channel_row(local, workspace_id, channel_id):
     """The local file's row of one channel, or None when it names none. A caller merges it over the committed row, so
     the channel's class and its other keys read from the file that declares the guest channel."""
@@ -892,9 +902,24 @@ def guest_workspaces(doc):
 
 def destination_label(decision):
     """The destination of an eligible member's message, in the words of the settings view: `inbox` in an `owned`
-    channel, `proposal` in a `guest` channel, `read as data` when no member holds an accepted role, and `none` for a
-    kind the channel ignores."""
-    return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read as data"}.get(decision.kind, "none")
+    channel, `proposal` in a `guest` channel, `read, never obeyed` when no member holds an accepted role, and `none`
+    for a kind the channel ignores."""
+    return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read, never obeyed"}.get(decision.kind, "none")
+
+
+def verdict(members, names=None):
+    """One sentence that answers whether the persona answers people in a channel, and who (#2912). A known display name
+    stands for its person; the Slack id stands only when no name is known. More than one person reads as a count, never
+    a list of ids. Nobody eligible says so. The caller hands in the eligible members, and the view draws the sentence
+    whole."""
+    people = list(dict.fromkeys(str(user) for user in members or () if str(user)))
+    known = {str(k): str(v) for k, v in (names or {}).items() if v}
+    who = lambda user: known.get(user, user)  # noqa: E731  a name when one is known, the id otherwise
+    if not people:
+        return "Nobody can ask this persona here."
+    if len(people) == 1:
+        return f"{who(people[0])} can ask this persona here."
+    return f"{len(people)} people can ask this persona here."
 
 
 def reply_label(channel, decision):
@@ -919,9 +944,9 @@ def channel_note(channel, members, announcement):
     channel that subscribes to events always says what it does with them. The view draws this sentence and holds no
     copy of it."""
     if not members:
-        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
-                "no reply.") if announcement else \
-               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
+        return ("Announcements only: no member holds a role this channel accepts, so a message is read, never obeyed, "
+                "and gets no reply.") if announcement else \
+               "No member holds a role this channel accepts, so a message is read, never obeyed, and gets no reply."
     if str((channel or {}).get("mode") or "listen") == "listen":
         note = ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
                 "nothing is posted here.")
