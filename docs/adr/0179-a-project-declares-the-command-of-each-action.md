@@ -22,13 +22,16 @@ the grant and the arguments against the policy decision.
    one path the session's kernel bound lets it write, so the request travels with the answers.
 2. **The executor runs outside the session.** `squad/slackactions.py` runs in the daemon's process, which is outside
    every operator session and outside the session's sandbox. It reads the request, asks `squad/slackpolicy.decide` for
-   the sender's decision, and hands the request to `squad/slackexecutor.execute`, which checks it whole. The pass reads
+   the sender's decision, and hands the request to `squad/slackexecutor.execute`, which checks it whole: the sender, the
+   role, the request's action against the actions the role grants, the arguments against the ones the action takes, and
+   the deploy environment against the role's deploy list. The pass reads
    only the outbox of a channel a project owns and never the DM outbox, so a line in any other outbox never runs. A
    request older than a small window is stale and never runs, so a line a crashed pass left behind cannot act on a
    channel long after its message.
 3. **The command comes from the project, never from a message.** The committed `slack.yaml` declares one command per
    action id under `project.actions`, and the project identity declares the deploy command. The executor builds no
-   command from message text, and no argument of a request reaches a command line. Every declared action id gets its
+   command from message text, no argument of a request reaches a command line, and the declared command runs as one argv
+   with no shell, so a declared value that names `;`, `|`, `$(` or a backtick is refused. Every declared action id gets its
    command source, so a declared request action runs its command too. An action with no declared command has no source,
    and the executor refuses it by name.
 4. **The action vocabulary stays closed.** `project.actions` accepts only the ids the role vocabulary names, so a

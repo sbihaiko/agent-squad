@@ -35,15 +35,22 @@ The grant the executor checks is the decision `decide` returned for the inbox li
 path decide both what the pass asks and what the executor allows, so the request's action adds no grant of its own.
 
 A request is run once: a ledger of the requests already handled lives in `<state>/actions-handled.jsonl`, one JSON line
-per handled key, and the key is written with fsync before the reply, the audit line and the command itself. Each pass
-also keeps its place in every outbox in `<state>/actions-offsets.json`, so a pass reads only the bytes appended since
-the last one; the ledger, never the offset, is what decides that a request already ran.
+per handled key, and the key names the whole request line, so two requests that share the source and the action but
+differ in their arguments still run once each. The key is written with fsync before the reply, the audit line and the
+command itself. Each pass also keeps its place in every outbox in `<state>/actions-offsets.json`, so a pass reads only
+the bytes appended since the last one; a pass that keeps no place reads a bounded tail of the outbox. The ledger, never
+the offset, is what decides that a request already ran.
+
+The command the project declares runs as one argv with no shell, and a declared value that names a shell metacharacter
+never gets a source, so the executor refuses it.
 
 Guards: `tests/test_slack_actions.py`.
 """
 import glob
+import hashlib
 import json
 import os
+import shlex
 import subprocess
 import time
 from typing import NamedTuple
@@ -57,8 +64,12 @@ OFFSETS = "actions-offsets.json"     # the byte of each outbox the last pass rea
 DEFAULT_OUTBOXES = "outboxes"
 COMMAND_TIMEOUT = 300.0              # seconds, one declared command: a bound, never a target
 REQUEST_WINDOW = 300.0               # seconds, a request older than this is stale and never runs
+FIRST_READ_BYTES = 1 << 20           # bytes: the tail a first pass reads of an outbox it keeps no place in
 KIND = "action-request"              # the reserved field that tells a request from an answer, and nothing else does
 DM = "dm"                            # the owner's DM scope: it carries answers and proposals, never an action request
+# The characters that make a declared command a shell line. The command runs with no shell, so a value that names one of
+# them is refused, and a project value can never chain a second command.
+SHELL_METACHARACTERS = (";", "|", "$(", "`")
 REQUEST_FIELDS = ("action", "arguments", "sender", "channel", "source")
 # The actions whose source answers one text. `approve_and_move` and `loop_control` keep the caller's own source,
 # because each answers a pair `slackexecutor.execute` unpacks (slackexecutor.py:341 and slackexecutor.py:345).
@@ -89,18 +100,22 @@ class Run(NamedTuple):
 
 class CommandSource:
     """One action source that runs a command the project declares, with the caller's runner. It reads the message
-    nowhere: the command is fixed at build time, and no argument of a request is appended to it. `exit_code` holds the
-    code of the last run, so the audit line names the command's own answer."""
+    nowhere: the command is fixed at build time, it runs as one argv with no shell, and no argument of a request is
+    appended to it. `exit_code` holds the code of the last run, so the audit line names the command's own answer."""
 
     def __init__(self, command, runner=subprocess.run, timeout=COMMAND_TIMEOUT):
         self.command = str(command)
+        self.argv = command_argv(self.command)
         self.runner = runner
         self.timeout = timeout
         self.exit_code = None
 
     def __call__(self, *args):
+        if not self.argv:
+            self.exit_code = 1
+            return "the declared command is not one argv, so it never runs"
         try:
-            done = self.runner(self.command, shell=True, capture_output=True, text=True, timeout=self.timeout)
+            done = self.runner(self.argv, shell=False, capture_output=True, text=True, timeout=self.timeout)
         except (OSError, subprocess.SubprocessError) as e:
             self.exit_code = 1
             return f"the command did not run: {type(e).__name__}: {e}"
@@ -109,6 +124,19 @@ class CommandSource:
         if text:
             return text
         return f"the command exited {self.exit_code} with no output"
+
+
+def command_argv(command):
+    """The one argv of a declared command, or None when the value names a shell metacharacter or cannot be split. The
+    command runs with no shell, so this refusal is what keeps a declared value from chaining a second command."""
+    text = str(command)
+    if not text.strip() or any(mark in text for mark in SHELL_METACHARACTERS):
+        return None
+    try:
+        argv = shlex.split(text)
+    except ValueError:
+        return None
+    return argv or None
 
 
 def request_record(action, channel, sender, source, arguments=None, at=None, **extra):
@@ -186,9 +214,10 @@ def sources_for(committed, local, runner=subprocess.run):
     switch, `slackexecutor.py:340-347`), so this function builds none and the executor refuses them as a missing
     source here."""
     declared = S.project_actions(committed, local)
-    out = {action: CommandSource(command, runner) for action, command in declared.items() if action in TEXT_ACTIONS}
+    out = {action: CommandSource(command, runner) for action, command in declared.items()
+           if action in TEXT_ACTIONS and command_argv(command)}
     _, command = S.deploy_target(S.project_identity(committed, local))
-    if command:
+    if command and command_argv(command):
         out[X.DEPLOY] = CommandSource(command, runner)
     return out
 
@@ -301,6 +330,27 @@ def _save_offsets(path, offsets):
         return
 
 
+def _tail_start(path, limit=FIRST_READ_BYTES):
+    """The byte a first read starts at: the start of the file when it is short, else the first line boundary at or after
+    `size - limit`. A pass that keeps no place in an outbox reads a bounded tail, so a long answer history costs one
+    bounded read and never one read of the whole file."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0
+    if size <= limit:
+        return 0
+    start = size - limit
+    try:
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(limit + 1)
+    except OSError:
+        return 0
+    cut = data.find(b"\n")
+    return start + cut + 1 if cut >= 0 else size
+
+
 def _new_rows(path, offset):
     """The complete lines written after `offset`, and the byte after the last of them. A file shorter than its offset
     was rotated, so it is read from the start. A last line with no newline is not yet written, so it stays unread."""
@@ -341,7 +391,8 @@ def _request_lines(state, project_of, now, offsets=None):
             reason = f"the channel {key!r} is owned by no project"
         else:
             reason = None
-        rows, ends[path] = _new_rows(path, (offsets or {}).get(path, 0))
+        kept = (offsets or {}).get(path)
+        rows, ends[path] = _new_rows(path, _tail_start(path) if kept is None else kept)
         for i, row in enumerate(rows):
             try:
                 record = json.loads(row.decode("utf-8"))
@@ -396,13 +447,10 @@ class Ledger:
 
 
 def _key(record):
-    """One handled key: the inbox line a request answers and the action it asks for, so the key is small and stable
-    while the request's other fields may differ. A record without both fields falls back to its own text, so a
-    malformed line still takes one key and is never audited again and again."""
-    source, action = record.get("source"), record.get("action")
-    if isinstance(source, str) and source.strip() and isinstance(action, str) and action.strip():
-        return f"{source}|{action}"
-    return json.dumps(record, sort_keys=True)
+    """One handled key: the whole request line, so two requests that share the source and the action but differ in their
+    arguments, their sender or their time are two requests, and the second one runs. The key is the digest of the line's
+    canonical text, so a line a pass already handled keeps one small, stable key."""
+    return hashlib.sha256(json.dumps(record, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def _append_line(path, record):
@@ -509,12 +557,12 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
         if ledger.has(key):
             continue
         if why is not None:
-            # A refusal has no side effect, so its audit line goes first and the key after: a crash between them at
-            # worst writes the same refusal twice, never loses the record of why nothing ran.
+            # The handled key is written before the audit line, the same order the run branch uses, so a crash between
+            # the two writes never repeats the audit row on the next pass.
+            ledger.add(key)
             _append_line(audit_path, {"time": now.isoformat(), "sender": str(record.get("sender") or ""),
                                       "role": "", "channel": str(record.get("channel") or ""),
                                       "action": str(record.get("action") or ""), "exit": 1, "error": why})
-            ledger.add(key)
             continue
         # The handled key is written with fsync before the reply, the audit line and the command itself, so a crash
         # after any of them never runs the request a second time (#2939 review, finding 1).
