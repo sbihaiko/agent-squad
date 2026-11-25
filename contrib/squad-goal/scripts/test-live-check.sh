@@ -18,7 +18,15 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SG_STATE=$T/st SG_REPO=o/r SQUAD_CAPS_DIR=$T/caps HEALTH_NOTIFY=/bin/true
 export SG_LIVE_CHECK_WINDOW_SECONDS=3600
 pids=()
-hold() { sleep 300 >/dev/null 2>&1 & pids+=("$!"); printf '%s\n' "$!"; }
+# A case starts a holder as h=$(hold), so hold runs in a command substitution subshell: a pids entry it adds there never
+# reaches the parent's cleanup (#2889). The holder records its pid in a file the parent reads instead, and cleanup ends it.
+holders=$T/holders; : > "$holders"
+hold() { sleep 300 >/dev/null 2>&1 & printf '%s\n' "$!" >> "$holders"; printf '%s\n' "$!"; }
+holders_alive() { local p; for p in $(cat "$holders" 2>/dev/null); do alive "$p" && printf '%s ' "$p"; done; }
+end_holders() { local p i=0
+  for p in $(cat "$holders" 2>/dev/null); do alive "$p" && kill -TERM "$p" 2>/dev/null; done
+  while [ -n "$(holders_alive)" ] && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
+  for p in $(cat "$holders" 2>/dev/null); do alive "$p" && kill -KILL "$p" 2>/dev/null; done; }
 # The check a case starts is detached, so the suite ends every one of them, by pid and process group, before it exits, a red
 # run included: each fake reading records its own pid and its process group in its runs file. A check runs under serial.sh's
 # `set -m`, so its reading leads a group of its own, never the group the suite shares with its caller; the suite signals that
@@ -39,7 +47,7 @@ end_checks() { local g p i
   for g in $(ck_groups | sort -u); do alive_group "$g" && kill -KILL -- "-$g" 2>/dev/null; done
   for p in $(ck_pids | sort -u); do alive "$p" && kill -KILL "$p" 2>/dev/null; done; }
 cleanup() { local p; for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; [ ${#pids[@]} -gt 0 ] && wait "${pids[@]}" 2>/dev/null
-  end_checks; rm -rf "$T"; }
+  end_holders; end_checks; rm -rf "$T"; }
 trap cleanup EXIT
 fresh() { rm -rf "$T/st" "$T/caps"; mkdir -p "$T/st/locks/waiting" "$T/caps/waiting" "$T/caps/gates"; : > "$T/st/gate-history"; }
 age() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
@@ -257,5 +265,15 @@ alive_checks=$(left_checks)
 held="$T/la/live-check.lease $T/ld/live-check.lease $T/lf/live-check.lease $T/lh/live-check.lease"
 left_leases=""; for f in $held; do [ -e "$f" ] && left_leases="$left_leases $f"; done
 [ -z "$left_leases" ] && ok "the door of every check the suite started is released" || ko "a check the suite started still holds its door:$left_leases"
+
+# j) The suite's cleanup ends every process it starts (#2889): a lock holder started through the call pattern a case uses
+# reaches the parent's cleanup, so no sleep holder of the suite is alive once cleanup has run. This case runs last, because
+# cleanup removes the fixture state a case reads.
+holder=$(hold)
+[ -n "$holder" ] && alive "$holder" && ok "a case starts its lock holder through the command substitution" \
+  || ko "the lock holder did not start: '$holder'"
+cleanup
+i=0; while alive "$holder" && [ $i -lt 40 ]; do sleep 0.05; i=$((i+1)); done
+alive "$holder" && ko "cleanup left the suite's lock holder alive: $holder" || ok "cleanup ends the suite's lock holder"
 
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
