@@ -1073,6 +1073,12 @@ def append_outbox(path, *records):
         f.flush()
 
 
+def pending(state, key, ts="1762500000.000100", text="check the loop"):
+    """One pending inbox line the daemon answers: a channel with no inbox line posts no answer (#2948)."""
+    append_outbox(state.inbox_for(key), {"id": f"{key}:{ts}", "ts": ts, "user": OWNER, "channel": key,
+                                         "text": text, "language": "en-US"})
+
+
 def outbox_daemon(tmp_path, mod, client, channels, voice):
     """One daemon whose two spoken-answer seams are the fake voice, over a state that already holds the channels."""
     state = mod.State(str(tmp_path))
@@ -1099,6 +1105,7 @@ def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_p
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1176,6 +1183,7 @@ def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_te
 
     client.before_post = gate
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1196,6 +1204,7 @@ def test_the_first_clip_and_the_full_answer_arrive_inside_their_targets(tmp_path
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1214,6 +1223,7 @@ def test_a_line_with_no_speech_speaks_its_own_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1229,6 +1239,7 @@ def test_the_spoken_script_wins_over_the_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"text": "A long answer with the detail. " * 20, "speech": "Short version. Done."})
     asyncio.run(daemon.drain_outboxes())
@@ -1245,6 +1256,7 @@ def test_a_clip_is_threaded_under_its_own_text_when_the_line_names_no_thread(tmp
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1260,6 +1272,7 @@ def test_a_restart_does_not_post_the_same_outbox_line_again(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
     assert len(client.posts()) == 1 and len(voice.clips) == 2
@@ -1283,6 +1296,7 @@ def test_a_refused_clip_is_spoken_again_and_the_text_is_never_posted_twice(tmp_p
     voice = FakeVoice(tmp_path, refuse=1)      # Slack refuses the first clip, and the next daemon's try succeeds
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1313,6 +1327,7 @@ def test_a_refused_rest_clip_respeaks_only_the_rest(tmp_path):
     voice = FakeVoice(tmp_path, refuse_nth=(2,))   # the first clip is accepted, the rest is refused
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1341,6 +1356,7 @@ def test_a_second_refusal_of_the_rest_clip_still_never_repeats_the_first(tmp_pat
     voice = FakeVoice(tmp_path, refuse_nth=(2,))
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1365,6 +1381,7 @@ def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):
     voice = FakeVoice(tmp_path, on_clip=lambda n: stop.set() if n >= 2 else None)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
     path = daemon.state.outbox_for(app["id"])
+    pending(daemon.state, app["id"])
 
     def later():
         time.sleep(0.1)
@@ -1396,6 +1413,7 @@ def test_no_token_reaches_a_log_the_inbox_or_the_outbox(tmp_path):
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=log.append, client=slack, synthesizer=voice.synth, uploader=voice.upload)
 
+    pending(state, app["id"])
     append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1425,6 +1443,7 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
                         log=log.append, client=client, synthesizer=synth,
                         uploader=lambda path, channel, thread_ts, title: ("F0001", None))
 
+    pending(state, app["id"])
     append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1442,6 +1461,7 @@ def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=lambda line: None, client=client, synthesizer=voice.synth, uploader=voice.upload)
 
+    pending(state, "dm")
     append_outbox(state.outbox_path, {"channel": "D0OWNER", "text": "One. Two."}, {"text": "no channel at all"})
     asyncio.run(daemon.drain_outboxes())
 

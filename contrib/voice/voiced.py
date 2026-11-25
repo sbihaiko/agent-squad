@@ -45,6 +45,11 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 - every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
   app name until #2726 records what an upload does with a `username`.
 
+Before any of it, the daemon checks the line (#2948): it must answer a pending inbox line of its channel and thread
+(`slackpolicy.pending_line`), its `text`, `speech` and `persona` are redacted by the shared redaction module and stripped
+of every link, and its text may not pass the channel's `answer_max_chars`. A refused line posts nothing and writes one row
+to `$VOICE_STATE/audit.jsonl` with its reason class.
+
 Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
 `answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
 question is the inbox line whose ts the answer threads under, else the oldest line the ledger does not answer yet.
@@ -92,10 +97,8 @@ import channels  # noqa: E402  the one Slack call path, so this daemon keeps no 
 import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
-from squad import (  # noqa: E402  a release event as a post in each subscribed owned channel (#2703)
-    slackannounce,
-    slackpolicy,  # the one home of the Slack file rules (ADR-0177)
-)
+from squad import redact as shared_redact  # noqa: E402  the one redaction module, so an answer carries no secret (#2948)
+from squad import slackannounce, slackpolicy  # noqa: E402  the release post (#2703) and the Slack file rules (ADR-0177)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
@@ -118,6 +121,7 @@ GUARD_WINDOW = 60.0                   # the guard counts one sender's messages i
 GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
 AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
+LINK = re.compile(r"https?://\S+")      # a whole URL, removed from an answer before the post (#2948)
 SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
@@ -1831,6 +1835,51 @@ class Daemon:
         self._guard_hits[key] = hits
         return None
 
+    def answer_refusal(self, record, inbox_key, cid, text):
+        """The reason one outbox line may not post, else None (#2948).
+
+        The line must answer a pending inbox line of its channel and thread (`slackpolicy.pending_line`), so a session
+        never posts in a channel it was not asked in. The channel's `answer_max_chars` bounds the text it may post."""
+        inbox = read_lines(self.state.inbox_for(inbox_key))
+        if slackpolicy.pending_line(inbox, record.get("thread_ts")) is None:
+            return "unbound"
+        if len(text) > int(self.guard_settings(cid)["answer_max_chars"]):
+            return "size"
+        return None
+
+    def clean_answer(self, record):
+        """The answer's `text`, `speech` and `persona` with every secret redacted and every link removed (#2948).
+
+        Returns the cleaned line, the fields the redaction changed and the number of links removed, so the audit tells
+        what the checks did. Redaction is a backstop: the session's read bound is what stops a leak."""
+        cleaned = dict(record)
+        redacted, links = [], 0
+        for name in ("text", "speech", "persona"):
+            value = cleaned.get(name)
+            if not isinstance(value, str):
+                continue
+            masked = shared_redact.redact(value)
+            if masked != value:
+                redacted.append(name)
+            links += len(LINK.findall(masked))
+            cleaned[name] = re.sub(r"[ \t]{2,}", " ", LINK.sub("", masked)).strip()
+        return cleaned, redacted, links
+
+    def record_answer_audit(self, cid, text, decision, reason=None, redacted=(), links=0):
+        """One audit line for one outbox answer: its channel, the decision, the reason class, and what the redaction
+        and the link rule changed (#2948)."""
+        self.state.append_audit({
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "user": None,
+            "role": None,
+            "channel": cid,
+            "decision": decision,
+            "reason": reason,
+            "text": redacted_text(text),
+            "redacted": list(redacted),
+            "links_removed": links,
+        })
+
     def answer_refused(self, record, decision, reason):
         """One refusal reply to a refused sender, at most one per channel in ten minutes (#2947). The reply names the
         reason class, `rate` or `size`, and it is one sentence. A `listen` channel receives no post."""
@@ -2154,6 +2203,19 @@ class Daemon:
                     continue
                 fails = self.failed.get(digest, 0)
                 if fails >= MAX_DELIVER_ATTEMPTS:
+                    continue
+                text = (record.get("text") or "").strip()
+                reason, redacted, links = None, [], 0
+                if text and cid:
+                    reason = self.answer_refusal(record, channel or DM, cid, text)
+                    if reason is None:
+                        record, redacted, links = self.clean_answer(record)
+                    self.record_answer_audit(cid, text, "refused" if reason else "answer", reason, redacted, links)
+                if reason:
+                    # A refused answer is final: the delivered ledger never retries it, and the outbox keeps the line.
+                    self.state.remember_delivered(digest)
+                    delivered.add(digest)
+                    self.log(f"voiced: answer refused: {reason}")
                     continue
                 posted, voiced = await self.deliver(record, channel, digest)
                 if posted and voiced:

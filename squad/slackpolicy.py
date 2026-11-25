@@ -12,7 +12,7 @@ class wins over its workspace's class (#2770).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
 `tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `tests/test_slack_channel_class.py`,
-`contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_voiced_answer_check.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
@@ -429,6 +429,21 @@ def readable(text, wrappers=()):
     for wrapper in wrappers or ():
         out = out.replace(str(wrapper), "")
     return out
+
+
+def pending_line(inbox, thread):
+    """The pending inbox line one answer answers, or None when it answers none (#2948).
+
+    The inbox keeps each line, so its presence is what makes an answer legal. An answer threads under its question, so
+    the line whose ts equals the answer's `thread_ts` is that question. An answer with no thread answers the oldest line
+    of its channel. A channel whose inbox holds no line answers nothing, so the daemon posts nothing there."""
+    records = [record for record in inbox or () if record.get("ts") is not None]
+    if thread:
+        for record in records:
+            if str(record.get("ts")) == str(thread):
+                return record
+        return None
+    return records[0] if records else None
 
 
 def _guard(file, doc, out):

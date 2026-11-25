@@ -7,7 +7,7 @@ the speech request, so no case reaches Slack or Gemini. The personas come from a
 """
 import asyncio
 
-from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, append_outbox, configure, voiced
+from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, append_outbox, configure, pending, voiced
 from tests.test_voiced_persona import PersonaVoice
 from tests.test_voiced_policy import REPO
 
@@ -66,6 +66,8 @@ def test_a_line_that_names_hal_posts_and_speaks_as_HAL9K(tmp_path):
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
 
+    pending(daemon.state, channel)
+
     append_outbox(daemon.state.outbox_for(channel),
                   {"thread_ts": "1762500000.000100", "text": "Green. Then blue.", "persona": "hal"})
     asyncio.run(daemon.drain_outboxes())
@@ -87,6 +89,8 @@ def test_a_line_with_no_persona_keeps_the_channel_persona(tmp_path):
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
 
+    pending(daemon.state, channel)
+
     append_outbox(daemon.state.outbox_for(channel), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -106,6 +110,8 @@ def test_a_line_that_names_an_unknown_persona_keeps_the_channel_persona_and_logs
     voice = PersonaVoice(tmp_path)
     lines = []
     daemon = outbox_daemon(tmp_path, mod, client, voice, log=lines.append)
+
+    pending(daemon.state, channel)
 
     append_outbox(daemon.state.outbox_for(channel),
                   {"thread_ts": "1762500000.000100", "text": "Green. Then blue.", "persona": "ghost"})
@@ -127,6 +133,8 @@ def test_the_zesty_persona_keeps_its_voice_Kore(tmp_path):
     persona_revision(tmp_path, channel)
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
+
+    pending(daemon.state, channel)
 
     append_outbox(daemon.state.outbox_for(channel),
                   {"thread_ts": "1762500000.000100", "text": "Green. Then blue.", "persona": "zesty"})
