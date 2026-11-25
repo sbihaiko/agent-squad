@@ -13,6 +13,7 @@ import fcntl
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -465,6 +466,43 @@ def test_the_plist_keeps_the_daemon_alive_and_is_never_loaded(tmp_path):
     assert after == before
 
 
+def test_the_printed_plist_names_the_live_profiles_folder_when_none_is_given(tmp_path, monkeypatch, capsys):
+    """#2957: `voiced.py --print-plist` with no `--profiles` still names a projects folder, and it is the live copy's,
+    never the deploy checkout's example-only one; a value in SG_PROFILES_DIR wins, as install-agents.sh reads it."""
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    code = voiced().main(["--print-plist", "--state", str(tmp_path), "--owner", OWNER])
+    assert code == 0
+    env = plist_dict(ET.tostring(
+        plist_dict(capsys.readouterr().out)["EnvironmentVariables"], encoding="unicode"))
+    assert env["SG_PROFILES_DIR"].text == str(Path.home() / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles")
+
+    monkeypatch.setenv("SG_PROFILES_DIR", str(tmp_path / "mine"))
+    code = voiced().main(["--print-plist", "--state", str(tmp_path), "--owner", OWNER])
+    assert code == 0
+    env = plist_dict(ET.tostring(
+        plist_dict(capsys.readouterr().out)["EnvironmentVariables"], encoding="unicode"))
+    assert env["SG_PROFILES_DIR"].text == str(tmp_path / "mine")
+
+
+def test_print_profiles_default_names_the_one_folder_constant(monkeypatch, capsys):
+    """#2957: install-agents.sh reads its default from the daemon's own constant, so one place names the folder. The
+    flag prints LIVE_PROFILES and needs no state folder, so the install reads it before it writes a plist."""
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    mod = voiced()
+    code = mod.main(["--print-profiles-default"])
+    assert code == 0
+    assert capsys.readouterr().out.strip() == mod.LIVE_PROFILES
+    assert mod.LIVE_PROFILES == str(Path.home() / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles")
+
+
+def test_install_agents_reads_its_profiles_default_from_the_daemon():
+    """#2957: one constant names the profiles folder. install-agents.sh asks the daemon for its default instead of
+    carrying its own copy, so a moved folder is one edit."""
+    src = (VOICE / "install-agents.sh").read_text()
+    assert "--print-profiles-default" in src
+    assert "skills/squad-goal/scripts/profiles" not in src
+
+
 # --- one channel per hub project (#1484)
 
 def configure(tmp_path, mod, client, repos):
@@ -678,6 +716,47 @@ def test_a_sync_reports_a_mapped_channel_that_slipped_outside_the_prefix(tmp_pat
 
     assert len(log) == 1, log
     assert "acme/app" in log[0] and "C0APP" in log[0]
+
+
+def test_an_unlisted_mapped_channel_is_named_once_with_its_probable_cause(tmp_path):
+    """#2955: a channel the registry maps and Slack does not list is named with the probable cause, and the sync that
+    runs again on every reconnect names it once, never once per pass."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/gone": {"name": "proj-gone", "id": "C0GONE"}})
+    client = FakeClient(existing=[])
+    log = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=None, downloader=None, log=log.append,
+                        client=client, projects=lambda: ["acme/gone"])
+
+    daemon.sync_projects()
+    daemon.sync_projects()
+    daemon.sync_projects()
+
+    assert len(log) == 1, log
+    assert "acme/gone" in log[0] and "proj-gone" in log[0] and "C0GONE" in log[0], log
+    assert "the bot left the channel, or the channel does not exist" in log[0], log
+
+
+def test_a_channel_that_returns_to_slacks_list_is_named_again_when_it_disappears(tmp_path):
+    """#2955: the once-per-process line follows the live fact: a channel Slack lists again is no violation, and the next
+    disappearance is a new line, never one the process silenced for good."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/gone": {"name": "proj-gone", "id": "C0GONE"}})
+    client = FakeClient(existing=[])
+    log = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=None, downloader=None, log=log.append,
+                        client=client, projects=lambda: ["acme/gone"])
+
+    daemon.sync_projects()
+    client.channels["proj-gone"] = {"id": "C0GONE", "name": "proj-gone", "is_member": True}
+    daemon.sync_projects()
+    assert len(log) == 1, log
+    del client.channels["proj-gone"]
+    daemon.sync_projects()
+
+    assert len(log) == 2, log
 
 
 def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_answer_goes_back_there(tmp_path):
@@ -1073,6 +1152,12 @@ def append_outbox(path, *records):
         f.flush()
 
 
+def pending(state, key, ts="1762500000.000100", text="check the loop"):
+    """One pending inbox line the daemon answers: a channel with no inbox line posts no answer (#2948)."""
+    append_outbox(state.inbox_for(key), {"id": f"{key}:{ts}", "ts": ts, "user": OWNER, "channel": key,
+                                         "text": text, "language": "en-US"})
+
+
 def outbox_daemon(tmp_path, mod, client, channels, voice):
     """One daemon whose two spoken-answer seams are the fake voice, over a state that already holds the channels."""
     state = mod.State(str(tmp_path))
@@ -1099,6 +1184,7 @@ def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_p
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1107,6 +1193,54 @@ def test_the_outbox_line_is_posted_as_text_by_the_bot_within_three_seconds(tmp_p
                                "thread_ts": "1762500000.000100"}]
     posted_at = [at for method, at in client.stamped if method == "chat.postMessage"][0]
     assert posted_at - written <= TEXT_TARGET, "the text was not posted inside 3 s of the outbox line"
+
+
+def test_an_answered_message_records_its_latency_from_the_slack_ts_to_the_post(tmp_path):
+    """Criterion (3): each answered message writes the seconds from its own Slack ts to the answer's post ts.
+
+    The question lands at Slack ts 1762500000.000100 and the answer posts at 1762500009.000900 (the fake client's own
+    ts), so the recorded latency is 9.0008 s: a literal worked example, never a second computation of the code's own.
+    """
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    question_ts = "1762500000.000100"     # the inbox line's Slack ts, which the answer threads under
+    answer_ts = "1762500009.000900"       # the ts Slack returns for the posted answer, FakeClient's own
+    append_outbox(daemon.state.inbox_for(app["id"]),
+                  {"id": f"{app['id']}:{question_ts}", "ts": question_ts, "user": OWNER,
+                   "channel": app["id"], "text": "What colour?", "language": "en"})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"thread_ts": question_ts, "text": "Green."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert lines(daemon.state.latency_path) == [
+        {"id": f"{app['id']}:{question_ts}", "channel": app["id"], "question_ts": question_ts,
+         "answer_ts": answer_ts, "seconds": 9.0008}]
+
+
+def test_an_unthreaded_answer_records_the_oldest_inbox_line_it_still_owes(tmp_path):
+    """Criterion (3), the unthreaded line: an answer that names no thread ts still records a latency, against the oldest
+    inbox line of its channel that no recorded latency answers yet, so the record never guesses a newer message."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    append_outbox(daemon.state.inbox_for(app["id"]),
+                  {"id": f"{app['id']}:1762500000.000100", "ts": "1762500000.000100", "user": OWNER,
+                   "channel": app["id"], "text": "First.", "language": "en"},
+                  {"id": f"{app['id']}:1762500002.000200", "ts": "1762500002.000200", "user": OWNER,
+                   "channel": app["id"], "text": "Second.", "language": "en"})
+    append_outbox(daemon.state.outbox_for(app["id"]), {"text": "Answer to the first."})
+    asyncio.run(daemon.drain_outboxes())
+
+    assert [row["question_ts"] for row in lines(daemon.state.latency_path)] == ["1762500000.000100"]
+    assert lines(daemon.state.latency_path)[0]["id"] == f"{app['id']}:1762500000.000100"
 
 
 def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_text_post(tmp_path):
@@ -1128,6 +1262,7 @@ def test_the_first_sentence_is_spoken_before_the_rest_and_never_waits_for_the_te
 
     client.before_post = gate
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1148,6 +1283,7 @@ def test_the_first_clip_and_the_full_answer_arrive_inside_their_targets(tmp_path
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
     written = time.monotonic()
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "The paint is green. It dries in an hour."})
     asyncio.run(daemon.drain_outboxes())
@@ -1166,6 +1302,7 @@ def test_a_line_with_no_speech_speaks_its_own_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1181,6 +1318,7 @@ def test_the_spoken_script_wins_over_the_text(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"text": "A long answer with the detail. " * 20, "speech": "Short version. Done."})
     asyncio.run(daemon.drain_outboxes())
@@ -1197,6 +1335,7 @@ def test_a_clip_is_threaded_under_its_own_text_when_the_line_names_no_thread(tmp
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1212,6 +1351,7 @@ def test_a_restart_does_not_post_the_same_outbox_line_again(tmp_path):
     voice = FakeVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
     assert len(client.posts()) == 1 and len(voice.clips) == 2
@@ -1235,6 +1375,7 @@ def test_a_refused_clip_is_spoken_again_and_the_text_is_never_posted_twice(tmp_p
     voice = FakeVoice(tmp_path, refuse=1)      # Slack refuses the first clip, and the next daemon's try succeeds
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1265,6 +1406,7 @@ def test_a_refused_rest_clip_respeaks_only_the_rest(tmp_path):
     voice = FakeVoice(tmp_path, refuse_nth=(2,))   # the first clip is accepted, the rest is refused
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1293,6 +1435,7 @@ def test_a_second_refusal_of_the_rest_clip_still_never_repeats_the_first(tmp_pat
     voice = FakeVoice(tmp_path, refuse_nth=(2,))
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
 
+    pending(daemon.state, app["id"])
     append_outbox(daemon.state.outbox_for(app["id"]),
                   {"thread_ts": "1762500000.000100", "text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
@@ -1317,6 +1460,7 @@ def test_the_daemon_answers_a_line_the_session_appends_while_it_runs(tmp_path):
     voice = FakeVoice(tmp_path, on_clip=lambda n: stop.set() if n >= 2 else None)
     daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
     path = daemon.state.outbox_for(app["id"])
+    pending(daemon.state, app["id"])
 
     def later():
         time.sleep(0.1)
@@ -1348,6 +1492,7 @@ def test_no_token_reaches_a_log_the_inbox_or_the_outbox(tmp_path):
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=log.append, client=slack, synthesizer=voice.synth, uploader=voice.upload)
 
+    pending(state, app["id"])
     append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1377,12 +1522,123 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
                         log=log.append, client=client, synthesizer=synth,
                         uploader=lambda path, channel, thread_ts, title: ("F0001", None))
 
+    pending(state, app["id"])
     append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."})
     asyncio.run(daemon.drain_outboxes())
 
     assert client.posts(), "the text answer never went out, so the voice path was never exercised"
     assert log, "a refused voice is a log line"
     assert all(secret not in line for line in log), "a log line holds the key"
+
+
+def tts_refusing(err):
+    """A stand-in for the vendored `tts.synth` that answers no clip and the given provider error text."""
+    class Refusing:
+        @staticmethod
+        def synth(key, script, voice, out, tone=""):
+            return None, err
+    return Refusing
+
+
+def spoken_daemon(tmp_path, mod, client, socket_path, fake_tts, log):
+    """One daemon whose synthesizer is the production `spoken_clip` over a fake TTS module (#2956).
+
+    `mkstemp` is redirected into the test's folder, so the production reader runs and no temporary clip leaves it."""
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def mkstemp(prefix="", suffix=""):
+        return os.open(socket_path, os.O_CREAT | os.O_WRONLY), str(socket_path)
+
+    was, mod.tempfile.mkstemp = mod.tempfile.mkstemp, mkstemp
+    sys.modules["tts"] = fake_tts
+
+    def restore():
+        mod.tempfile.mkstemp = was
+        sys.modules.pop("tts", None)
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client,
+                        synthesizer=lambda script, voice=None, tone=None:
+                            mod.spoken_clip("the-key", script, voice=voice or mod.VOICE, tone=tone or ""),
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+    return daemon, app, restore
+
+
+def test_a_refused_tts_names_its_cause_in_the_log_once_per_run(tmp_path):
+    """Criteria (1) and (2) of #2956: the production TTS path answers its cause code to the log, and one cause is one
+    line however many answers it fails. The line never carries the spoken answer's text."""
+    mod = voiced()
+    client = FakeClient()
+    log = []
+    daemon, app, restore = spoken_daemon(tmp_path, mod, client, tmp_path / "clip.wav",
+                                         tts_refusing("RESOURCE_EXHAUSTED"), log)
+    try:
+        pending(daemon.state, app["id"])
+        append_outbox(daemon.state.outbox_for(app["id"]),
+                      {"text": "First sentence. Second sentence."},
+                      {"text": "Third sentence. Fourth sentence."})
+        asyncio.run(daemon.drain_outboxes())
+    finally:
+        restore()
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped and skipped[0].endswith("resource_exhausted"), f"the cause is unnamed: {skipped}"
+    assert len(skipped) == 1, f"one cause is one line, got {skipped}"
+    assert all(word not in skipped[0] for word in ("First", "Second", "Third", "Fourth")), "a log line holds the text"
+
+
+def test_a_refused_tts_logs_neither_the_provider_message_nor_its_secret(tmp_path):
+    """Criterion (1) of #2956, the failure path: a provider message that carries a key becomes a cause code, and the
+    log line holds neither the key nor the rest of the message."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    log = []
+    daemon, app, restore = spoken_daemon(tmp_path, mod, client, tmp_path / "clip.wav",
+                                         tts_refusing(f"400 refused key {secret}"), log)
+    try:
+        pending(daemon.state, app["id"])
+        append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
+        asyncio.run(daemon.drain_outboxes())
+    finally:
+        restore()
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: SpeechError: refused"], f"the cause is unnamed: {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the provider's message"
+
+
+def test_a_speech_failure_with_no_cause_code_logs_its_class_once(tmp_path):
+    """Criterion (2) of #2956: an exception that carries no cause code is one line naming its class, once per run,
+    and never its own message."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def synth(script, **kwargs):
+        raise RuntimeError(f"400 refused key {secret}")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    pending(state, app["id"])
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."}, {"text": "Three. Four."})
+    asyncio.run(daemon.drain_outboxes())
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: RuntimeError"], f"one cause is one line, got {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the exception's message"
 
 
 def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
@@ -1394,6 +1650,7 @@ def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=lambda line: None, client=client, synthesizer=voice.synth, uploader=voice.upload)
 
+    pending(state, "dm")
     append_outbox(state.outbox_path, {"channel": "D0OWNER", "text": "One. Two."}, {"text": "no channel at all"})
     asyncio.run(daemon.drain_outboxes())
 
@@ -1488,15 +1745,23 @@ def commit(repo, text):
 def revision_daemon(tmp_path, client=None, log=None, registry=None):
     """A daemon that never hears Slack, so a case reads only the Slack-file refresh it drives.
 
-    A `registry` path puts the hub's saved-sha check in force (#2695); none leaves the daemon as one whose machine
-    names no registry, so the older cases read the revision load alone.
+    A `registry` path puts the saved-sha check in force for every project (#2695). A `registry` mapping instead puts
+    each repository's own file in force for that repository alone (#2961), so one project's save never approves
+    another's. None leaves the daemon as one whose machine names no registry, so the older cases read the revision
+    load alone.
     """
     mod = voiced()
     lines = log if log is not None else []
+
+    def registry_for(entry):
+        if isinstance(registry, dict):
+            return str(registry.get(str((entry or {}).get("repo") or ""), ""))
+        return str(registry)
+
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER,
                         transcriber=FakeTranscriber(), downloader=lambda url: b"",
                         log=lines.append if isinstance(lines, list) else lines, client=client,
-                        registry=(lambda: str(registry)) if registry is not None else None)
+                        registry=registry_for if registry is not None else None)
     return mod, daemon, lines
 
 
@@ -2237,6 +2502,27 @@ def test_the_same_revision_is_accepted_after_the_hub_lists_it(tmp_path):
     assert active["revision"]["project"]["language"] == "es-ES"
 
 
+def test_a_per_project_registry_approves_only_its_own_repository(tmp_path):
+    """#2961: one registry per repository approves that repository alone.
+
+    Alpha's registry lists beta's sha too, and beta's registry lists nothing, so beta stays refused while alpha becomes
+    active. The case drives the mapping form of the helper, so a first-project-wins regression fails it."""
+    alpha = git_project(tmp_path, SLACK_VALID, name="alpha")
+    beta = git_project(tmp_path, SLACK_VALID.replace("C0PROJ0001", "C0BETA0001"), name="beta")
+    sha_a = git(alpha, "rev-parse", "refs/remotes/origin/dev")
+    sha_b = git(beta, "rev-parse", "refs/remotes/origin/dev")
+    registries = {"acme/alpha": str(saved_registry(tmp_path / "a", sha_a, sha_b)),
+                  "acme/beta": str(saved_registry(tmp_path / "b"))}
+    _, daemon, _ = revision_daemon(tmp_path, registry=registries)
+
+    daemon.refresh_slack(projects=[{"repo": "acme/alpha", "checkout": str(alpha)},
+                                   {"repo": "acme/beta", "checkout": str(beta)}])
+
+    active = daemon.state.active_revision("acme/alpha")
+    assert active is not None and active["sha"] == sha_a
+    assert daemon.state.active_revision("acme/beta") is None, "alpha's registry approved beta's revision"
+
+
 def unlisted_project_daemon(tmp_path, mod, client):
     """A daemon over a state that already holds one channel for `acme/app`, with a registry that lists no revision."""
     _, got = configure(tmp_path, mod, client, ["acme/app"])
@@ -2244,7 +2530,7 @@ def unlisted_project_daemon(tmp_path, mod, client):
     registry = saved_registry(tmp_path)
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
                         downloader=lambda url: b"", log=lambda line: None, client=client,
-                        projects=lambda: ["acme/app"], registry=lambda: str(registry))
+                        projects=lambda: ["acme/app"], registry=lambda entry: str(registry))
     daemon.refuse_channel_claims([{"repo": "acme/app", "checkout": "", "local": ""}])
     return daemon, cid
 

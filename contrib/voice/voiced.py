@@ -1,6 +1,7 @@
 """The `voiced` daemon: one owner DM becomes one transcribed inbox line, and a stranger's message stays data.
 
-usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH]]
+usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]
+       [--print-profiles-default]
 
 The daemon holds one long-lived Socket Mode connection (`apps.connections.open` with the app token), so Slack pushes
 each `message.im` event instead of the operator polling for it. For every event it does one of three things:
@@ -45,6 +46,15 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 - every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
   app name until #2726 records what an upload does with a `username`.
 
+Before any of it, the daemon checks the line (#2948): it must answer a pending inbox line of its channel and thread
+(`slackpolicy.pending_line`), its `text`, `speech` and `persona` are redacted by the shared redaction module and stripped
+of every link, and its text may not pass the channel's `answer_max_chars`. A refused line posts nothing and writes one row
+to `$VOICE_STATE/audit.jsonl` with its reason class.
+
+Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
+`answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
+question is the inbox line whose ts the answer threads under, else the oldest line the ledger does not answer yet.
+
 A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
 posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
 `$VOICE_STATE/outbox-posted.jsonl` with the ts its clips answer, so the next drain speaks the voice again and never posts
@@ -74,6 +84,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import xml.sax.saxutils
 from datetime import datetime
@@ -87,16 +98,20 @@ import channels  # noqa: E402  the one Slack call path, so this daemon keeps no 
 import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
-from squad import (  # noqa: E402  a release event as a post in each subscribed owned channel (#2703)
-    slackannounce,
-    slackpolicy,  # the one home of the Slack file rules (ADR-0177)
-)
+from squad import redact as shared_redact  # noqa: E402  the one redaction module, so an answer carries no secret (#2948)
+from squad import slackannounce, slackpolicy  # noqa: E402  the release post (#2703) and the Slack file rules (ADR-0177)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
+# The profiles folder a printed plist names when the caller passes none (#2957): the live copy's own, never the deploy
+# checkout's, which holds only `example.sh`. install-agents.sh writes the same default into its own agents.
+LIVE_PROFILES = os.path.expanduser("~/.claude/skills/squad-goal/scripts/profiles")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
 OPERATORS = os.path.join(HERE, "operators.py")   # the supervisor a new inbox line wakes at once (#2925)
 CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
+# The probable cause a mapped channel Slack does not list leaves open (#2955). A listing answers it by an id alone:
+# a channel the bot left, and one that no longer exists, both read as absent from the public list.
+NOT_LISTED_CAUSE = "the bot left the channel, or the channel does not exist"
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
@@ -109,7 +124,11 @@ VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
+GUARD_WINDOW = 60.0                   # the guard counts one sender's messages in this window (#2947)
+GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
+AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
+LINK = re.compile(r"https?://\S+")      # a whole URL, removed from an answer before the post (#2948)
 SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
@@ -250,20 +269,55 @@ def slack_registry_path(env=None):
     return os.path.join(state, SLACK_REGISTRY) if state else ""
 
 
-def hub_registry(projects=None):
-    """The registry path a daemon on this machine reads: the loop state directory the hub seam names (#2694).
+def hub_registries(projects=None, env=None):
+    """repository -> the registry path of that project's own profile, read from the hub seam's entries (#2961).
 
-    The explicit env var wins, then the `SG_STATE` of the first project the seam lists. `''` leaves the saved-sha
-    check out of force, so a machine that names no loop state keeps the older behaviour.
+    Every profile's hub writes its saves to its own state directory, so one registry per project is the only rule that
+    lets a save for one project reach the daemon. `SG_SLACK_REGISTRY` names one file for every project, so it
+    short-circuits to that one shared registry, whatever state directory a project names. A project whose profile names
+    no state directory is absent, so the saved-sha check stays out of force for it alone.
     """
-    named = slack_registry_path({"SG_SLACK_REGISTRY": os.environ.get(SLACK_REGISTRY_ENV) or ""})
+    env = os.environ if env is None else env
+    entries = hub_projects() if projects is None else projects
+    repos = [str((entry or {}).get("repo") or "").strip() for entry in entries]
+    named = (env.get(SLACK_REGISTRY_ENV) or "").strip()
+    if named:      # one named file is one registry for every project, so it never resolves per entry
+        return {repo: named for repo in repos if repo}
+    out = {}
+    for repo, entry in zip(repos, entries, strict=True):
+        path = project_registry(entry, env) if repo else ""
+        if path:
+            out[repo] = path
+    return out
+
+
+def project_registry(entry, env=None):
+    """The saved-sha registry of one project: the file in the state directory of that project's own profile (#2961).
+
+    Saving in the hub is the owner's approval (SPEC 2682 story 66), and each profile's hub writes its registry beside its
+    own loop state. A project's revision is approved by the registry its own profile wrote, never by another project's.
+    `SG_SLACK_REGISTRY` names one file for every project, for a machine that moves it. `''` means this project names no
+    registry, so the saved-sha check is out of force for it.
+    """
+    env = os.environ if env is None else env
+    named = (env.get(SLACK_REGISTRY_ENV) or "").strip()
     if named:
         return named
-    for entry in (hub_projects() if projects is None else projects):
-        state = str((entry or {}).get("state") or "").strip()
-        if state:
-            return os.path.join(state, SLACK_REGISTRY)
-    return ""
+    state = str((entry or {}).get("state") or "").strip()
+    return os.path.join(state, SLACK_REGISTRY) if state else ""
+
+
+def hub_registry_seam(projects=None, env=None):
+    """The registry callable `main` hands the daemon, or None when no profile names a registry (#2695, #2961).
+
+    `SG_SLACK_REGISTRY` names one file for every project, so it puts the saved-sha check in force whatever the hub lists.
+    Else a project's own state directory puts the check in force for that project alone. A machine that names neither
+    keeps the older behaviour with the check out of force, so no channel is refused for want of a save.
+    """
+    env = os.environ if env is None else env
+    if (env.get(SLACK_REGISTRY_ENV) or "").strip():
+        return project_registry
+    return project_registry if hub_registries(projects, env) else None
 
 
 def listed_revisions(path):
@@ -470,10 +524,12 @@ def project_documents_at_start(projects, listed=None):
     """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
 
     A tip that cannot be read, or a revision that breaks a rule, contributes nothing: the refresh that follows reports
-    it, and this start opens only the sockets it can justify. With `listed` given, a tip the hub registry does not list
-    contributes nothing either, so no socket opens for a project the owner approved no revision of (#2695).
+    it, and this start opens only the sockets it can justify. `listed` maps each project to the shas its own registry
+    lists (#2961): a tip that project's registry does not list contributes nothing, so no socket opens for a revision
+    the owner approved nothing of (#2695).
     """
     docs = {}
+    listed = listed or {}
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if not repo:
@@ -482,7 +538,7 @@ def project_documents_at_start(projects, listed=None):
             sha, text = dev_tip((entry.get("checkout") or "").strip())
         except TipUnreadable:
             continue
-        if listed is not None and sha not in listed:
+        if repo in listed and sha not in listed[repo]:
             continue
         out = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), out)
@@ -494,16 +550,17 @@ def project_documents_at_start(projects, listed=None):
 def project_documents(state, projects, listed=None):
     """The active revision of each project: repository -> document; a project with no active revision contributes none.
 
-    With `listed` given, an active record whose sha the hub registry does not list contributes none: a revision no save
-    approved is no authority, whatever wrote the record (#2695).
+    `listed` maps each project to the shas its own registry lists (#2961): an active record whose sha that registry does
+    not list contributes none, because a revision no save approved is no authority, whatever wrote the record (#2695).
     """
     docs = {}
+    listed = listed or {}
     for entry in projects or ():
         repo = str((entry or {}).get("repo") or "").strip()
         if not repo:
             continue
         record = state.active_revision(repo) or {}
-        if listed is not None and record.get("sha") not in listed:
+        if repo in listed and record.get("sha") not in listed[repo]:
             continue
         revision = record.get("revision")
         if isinstance(revision, dict):
@@ -516,8 +573,8 @@ def effective_documents(state, projects, read_start=None, listed=None):
 
     The dev tip answers on a fresh start, before the first revision is promoted, so a channel claim is refused from
     the first poll. A tip is read only for a project with no active revision, so a steady daemon reads no extra tip.
-    With `listed` given, a document no hub save lists contributes none, so a project the owner approved nothing for
-    serves no channel (#2695).
+    `listed` maps each project to the shas its own registry lists (#2961): a document that project's registry lists no
+    save of contributes none, so a project the owner approved nothing for serves no channel (#2695).
     """
     active = project_documents(state, projects, listed=listed)
     missing = []
@@ -708,7 +765,9 @@ class State:
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
+        self.latency_path = os.path.join(directory, "answer-latency.jsonl")
         self.announced_path = os.path.join(directory, "announced.jsonl")
+        self.audit_path = os.path.join(directory, "audit.jsonl")
         self.release_events_path = os.path.join(directory, releases.RECORD)
         self.slack_dir = os.path.join(directory, "slack")
         self._seen = None
@@ -716,6 +775,7 @@ class State:
         self._registry_read = False
         self._delivered = None
         self._posted = None
+        self._latencies = None
         self._announced = None
         if self.version < SCHEMA_VERSION:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
@@ -986,6 +1046,17 @@ class State:
         self._append(self.posted_path, record)
         self.posted()[digest] = record
 
+    def latencies(self):
+        """Every recorded answer latency, oldest first: one row per answered message, kept as its Slack ts pair (#2940)."""
+        if self._latencies is None:
+            self._latencies = read_lines(self.latency_path)
+        return self._latencies
+
+    def remember_latency(self, record):
+        """One durable latency row, written at once: the Slack ts of the question and the ts of its answer's post."""
+        self._append(self.latency_path, record)
+        self.latencies().append(record)
+
     def announced(self):
         """Every `(event key, event id, channel)` notice already posted, so a restart posts no release notice a second
         time, and one key that two events share is two notices, because the event id is part of the mark."""
@@ -1077,6 +1148,11 @@ class State:
         self._append(self.other_path, record)
         self._remember(record["id"])
 
+    def append_audit(self, record):
+        """One audit line per message, with no secret in it (#2947). The audit is not the seen ledger, so it remembers
+        no id: a message already recorded stays recorded when the audit line is the only write."""
+        self._append(self.audit_path, record)
+
 
 def read_lines(path):
     """The JSON lines of one state file, skipping a half line a crash left behind."""
@@ -1118,26 +1194,84 @@ def split_sentences(text):
     return parts[0], " ".join(parts[1:]).strip()
 
 
+def question_line(state, cid, thread):
+    """The inbox line one answer answers, as `(id, ts)`, or `(None, None)` when the inbox holds none (#2940).
+
+    The answer's thread ts is the question's Slack ts, so a line whose ts it equals is the question. When the answer
+    names no thread, or threads under a ts no inbox line holds, the question is the oldest line of the channel that no
+    recorded latency answers yet: a record never blames a newer message for an older answer."""
+    records = read_lines(state.inbox_for(cid)) if cid else []
+    if thread:
+        for record in records:
+            if record.get("ts") is not None and str(record.get("ts")) == str(thread):
+                return record.get("id"), record.get("ts")
+    answered = {row.get("id") for row in state.latencies() if row.get("id")}
+    for record in records:
+        if record.get("ts") is not None and record.get("id") not in answered:
+            return record.get("id"), record.get("ts")
+    return None, None
+
+
 def outbox_digest(record):
     """One outbox line's identity: its whole content, so two answers that differ by a word are two answers."""
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+# A refused TTS answer as the cause code the log names (#2956): a known phrase of the vendored reader, or a provider
+# status such as RESOURCE_EXHAUSTED. The provider's free-text message never becomes a code, because it can carry the
+# request material, and this log is never redacted.
+SPEECH_CAUSES = {"no audio in the answer": "no_audio", "no TTS model answered": "no_model"}
+_SPEECH_CODE = re.compile(r"^[A-Z][A-Z_]{2,39}$")
+
+
+class SpeechError(RuntimeError):
+    """The TTS path refused a clip: `cause` is a short code, never the provider's own message (#2956)."""
+
+    def __init__(self, cause):
+        super().__init__(cause)
+        self.cause = cause
+
+
+def speech_cause(err):
+    """The safe cause code of a refused TTS answer: a known phrase or a provider status, never its message (#2956).
+
+    A provider message can carry request material, and the daemon's log is never redacted, so the free text stops
+    here. An answer that names no known phrase and no status is a plain refusal."""
+    text = (err or "").strip()
+    if not text:
+        return "no_audio"
+    if text in SPEECH_CAUSES:
+        return SPEECH_CAUSES[text]
+    if _SPEECH_CODE.match(text):
+        return text.lower()
+    return "refused"
+
+
 def spoken_clip(key, script, voice=VOICE, tone=""):
     """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it.
 
-    The voice and the tone are the persona's, so one answer sounds like the channel it answers in."""
+    The voice and the tone are the persona's, so one answer sounds like the channel it answers in. A refusal is a
+    `SpeechError` that carries its cause code, and the temporary clip never survives it."""
     import tts  # the vendored TTS beside this file, so the daemon keeps no second copy of it
     fd, path = tempfile.mkstemp(prefix="voiced-", suffix=".wav")
     os.close(fd)
-    got, err = tts.synth(key, script, voice, path, tone=tone)
+    try:
+        got, err = tts.synth(key, script, voice, path, tone=tone)
+    except subprocess.TimeoutExpired:
+        _drop_clip(path)
+        raise SpeechError("timeout") from None
     if not got:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        raise RuntimeError(err or "no audio")
+        _drop_clip(path)
+        raise SpeechError(speech_cause(err))
     return got
+
+
+def _drop_clip(path):
+    """Remove one temporary clip; a missing file is no error on a failure path."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def upload_clip(token, path, channel, thread_ts=None, title=None):
@@ -1274,7 +1408,7 @@ def channel_name_violations(mapping, live):
             continue
         live_name = names.get(cid)
         if live_name is None:
-            lines.append(f"voiced: {repo} maps #{mapped_name} ({cid}), which Slack does not list")
+            lines.append(f"voiced: {repo} maps #{mapped_name} ({cid}), which Slack does not list: {NOT_LISTED_CAUSE}")
             continue
         live_bare = not live_name.startswith(PROJ_PREFIX)
         registry_bare = bool(mapped_name) and not mapped_name.startswith(PROJ_PREFIX)
@@ -1374,8 +1508,9 @@ class Daemon:
         self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
         self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
-        # The callable that names the hub's saved-sha registry. None leaves the saved-sha check out of force, for a
-        # machine that names no registry; a callable puts it in force, and a file it cannot read lists nothing.
+        # The callable that names one project's saved-sha registry, as the profile seam resolves it (#2961). None leaves
+        # the saved-sha check out of force, for a machine that names no registry; a callable puts it in force per
+        # project, and a file it cannot read lists nothing.
         self.registry = registry
         self.synthesizer = synthesizer
         self.uploader = uploader
@@ -1387,6 +1522,10 @@ class Daemon:
         self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
         self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
+        self._speech_logged = set()   # each (error class, cause code) already logged, so one cause is one line (#2956)
+        self._guard_hits = {}    # (channel, user) -> monotonic moments of the messages inside the guard window (#2947)
+        self._guard_replied = {}  # (channel, user) -> the monotonic moment of the last refusal reply (#2947)
+        self._name_lines = set()  # the channel-name lines the last sync reported, so a caught-up sync repeats none (#2955)
 
     def app_of(self, channel):
         """The app id that owns one channel, or None when no active document names it."""
@@ -1457,33 +1596,56 @@ class Daemon:
             return self.downloaders[app](url)
         return self.downloader(url)
 
-    def listed(self):
-        """The shas the hub registry lists, read fresh on every pass, or None when this daemon names no registry.
+    def listed(self, projects=None):
+        """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
 
-        Saving in the hub is the owner's approval, and a commit author is forgeable, so only a listed sha is an
-        authority (#2695). None means the check is out of force on a machine that names no registry.
+        Saving in the hub is the owner's approval, and a commit author is forgeable, so only a sha the project's own
+        profile lists is an authority (#2695). The answer covers the repository each channel registry names and every
+        project the configs seam lists, beside this pass's own projects, so a project outside one pass still gets its
+        registry read. A daemon wired with no configs seam covers only the channel registry and this pass. A project
+        absent from the answer names no registry, so the check is out of force for it alone.
         """
         if self.registry is None:
-            return None
-        return listed_revisions(self.registry())
+            return {}
+        entries = {}
+        for repo in (self.state.channels() or {}):
+            repo = str(repo or "").strip()
+            if repo:
+                entries[repo] = {"repo": repo}
+        if self.configs is not None:
+            for entry in self.configs() or ():
+                repo = str((entry or {}).get("repo") or "").strip()
+                if repo:
+                    entries[repo] = entry
+        for entry in projects or ():
+            repo = str((entry or {}).get("repo") or "").strip()
+            if repo:
+                entries[repo] = entry
+        out = {}
+        for repo, entry in entries.items():
+            path = self.registry(entry)
+            if path:
+                out[repo] = listed_revisions(path)
+        return out
 
     def refresh_slack(self, projects=None):
         """Read each registered project's `slack.yaml` from its dev tip and switch to it only when it is valid.
 
         A tip that did not move is not read again. A valid revision replaces the active one. A revision that breaks a
-        rule, a tip that cannot be read, or a revision the hub registry does not list keeps the previous revision
-        active, so an invalid edit or an unapproved commit never changes a live channel. The owner gets one DM naming
-        the failing key, and every write is atomic (ADR-0030).
+        rule, a tip that cannot be read, or a revision the project's own registry does not list keeps the previous
+        revision active, so an invalid edit or an unapproved commit never changes a live channel. The owner gets one DM
+        naming the failing key, and every write is atomic (ADR-0030).
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
         local_docs, local_defects = self.local_documents(projects)
+        listed = self.listed(projects)
         results = []
         for entry in projects:
             repo = (entry.get("repo") or "").strip()
             if not repo:
                 continue
-            results.append(self.refresh_one(repo, entry, local_docs, local_defects))
+            results.append(self.refresh_one(repo, entry, local_docs, local_defects, listed))
         self.refuse_channel_claims(projects)
         self.log_uncovered_channels(projects)
         return results
@@ -1530,9 +1692,9 @@ class Daemon:
         """
         if projects is None:
             projects = list(self.configs() or []) if self.configs is not None else []
-        listed = self.listed()
+        listed = self.listed(projects)
         documents = effective_documents(self.state, projects, listed=listed)
-        unserved = self.unlisted_channel_lines(documents)
+        unserved = self.unlisted_channel_lines(documents, listed)
         claims = channel_claims(documents)
         lines = channel_claim_refusals(documents) + [line for _, line in unserved]
         self.refused_channels = {cid: f"voiced: {repos[0]} and {repos[1]} claim the channel {cid}; refused"
@@ -1559,18 +1721,19 @@ class Daemon:
         """One line for a channel whose project the hub lists no approved revision of (#2695)."""
         return (f"voiced: {repo} has no approved Slack revision in the hub registry; its channel {cid} is not served")
 
-    def unlisted_channel_lines(self, documents):
+    def unlisted_channel_lines(self, documents, listed=None):
         """`(channel id, line)` of each project channel whose project holds no listed document (#2695, criteria 7, 8).
 
-        With no registry this daemon serves as before. With one, a project channel and no listed document means the
-        hub saved no revision for it, so no event of that channel reaches an inbox and no answer leaves for it.
+        `listed` maps each project to the shas its own registry lists (#2961). A project that names no registry serves
+        as before. A project that names one, with no listed document, has no revision the hub saved, so no event of its
+        channel reaches an inbox and no answer leaves for it.
         """
         if self.registry is None:
             return []
         out = []
         for repo, entry in (self.state.channels() or {}).items():
             cid = str((entry or {}).get("id") or "")
-            if cid and repo not in documents:
+            if cid and repo not in documents and repo in (listed or {}):
                 out.append((cid, self._unlisted_line(repo, cid)))
         return out
 
@@ -1615,8 +1778,11 @@ class Daemon:
             defects[repo] = out
         return docs, defects
 
-    def refresh_one(self, repo, entry, local_docs, local_defects):
-        """One project's revision: read, validate with its local file, then save it or keep the previous one."""
+    def refresh_one(self, repo, entry, local_docs, local_defects, listed=None):
+        """One project's revision: read, validate with its local file, then save it or keep the previous one.
+
+        `listed` maps each project to the shas its own registry lists; `repo` absent from it names no registry, so the
+        check is out of force for this project alone (#2961)."""
         active = self.state.active_revision(repo)
         try:
             sha, text = dev_tip((entry.get("checkout") or "").strip())
@@ -1624,9 +1790,9 @@ class Daemon:
             return self.refuse_revision(repo, active, [str(x)], sha=None, tip_failed=True)
         if active is not None and active.get("sha") == sha:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
-        listed = self.listed()
-        if listed is not None and sha not in listed:
-            held = listed_revision_at((entry.get("checkout") or "").strip(), listed)
+        approved = (listed or {}).get(repo)
+        if approved is not None and sha not in approved:
+            held = listed_revision_at((entry.get("checkout") or "").strip(), approved)
             if held is None:
                 return self.refuse_revision(
                     repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
@@ -1732,8 +1898,14 @@ class Daemon:
         if self.client is None or self.projects is None:
             return {"channels": self.state.channels(), "refused": []}
         got = project_channels(self.state, self.client, self.projects(), self.log)
-        for line in check_channel_names(self.state.channels(), self.client):
-            self.log(line)
+        # One line per violation, once per process: the sync runs again on every reconnect, and a channel that stays
+        # unlisted is a fact the owner reads once, never one line per pass (#2955). A rule that stops holding leaves
+        # the set, so the next break of it is a new line.
+        lines = check_channel_names(self.state.channels(), self.client)
+        for line in lines:
+            if line not in self._name_lines:
+                self.log(line)
+        self._name_lines = set(lines)
         return got
 
     def wake_operator(self, repo, line=None):
@@ -1751,6 +1923,122 @@ class Daemon:
         except Exception as x:      # noqa: BLE001 - a start that fails is a log line, never a lost inbox line
             self.log(f"voiced: the operator start for {repo} failed: {type(x).__name__}: {x}")
             return False
+
+    def guard_settings(self, channel):
+        """The guard block of the project that owns one channel, or the plugin defaults. A channel with no active
+        revision, such as the DM, takes the defaults, so the operator session stays bounded whatever the file names."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        committed = active.get("revision") if active else None
+        return slackpolicy.guard(committed or {})
+
+    def size_reason(self, channel, text):
+        """`size` when one message body is longer than the channel's `max_chars`, else None. The size rule removes the
+        `read_wrappers` substrings first, so a wrapper never counts against the sender (#2947)."""
+        guard = self.guard_settings(channel)
+        body = slackpolicy.readable(text, guard.get("read_wrappers"))
+        return "size" if len(body) > int(guard["max_chars"]) else None
+
+    def guard_reason(self, channel, user, text, now=None):
+        """`rate` or `size` when the guard refuses one message, else None. The size rule runs first, and the rate rule
+        counts the messages of one sender in one channel inside the window; a refused message still counts, so a flood
+        stays refused (#2947). `now` is the monotonic moment, so a test passes its own clock."""
+        now = time.monotonic() if now is None else now
+        reason = self.size_reason(channel, text)
+        if reason:
+            return reason
+        key = (str(channel), str(user))
+        hits = [moment for moment in self._guard_hits.get(key, []) if now - moment < GUARD_WINDOW]
+        if len(hits) >= int(self.guard_settings(channel)["rate"]):
+            self._guard_hits[key] = hits
+            return "rate"
+        hits.append(now)
+        self._guard_hits[key] = hits
+        return None
+
+    def answer_refusal(self, record, inbox_key, cid, text):
+        """The reason one outbox line may not post, else None (#2948).
+
+        The line must answer a pending inbox line of its channel and thread (`slackpolicy.pending_line`), so a session
+        never posts in a channel it was not asked in. The channel's `answer_max_chars` bounds the text it may post."""
+        inbox = read_lines(self.state.inbox_for(inbox_key))
+        if slackpolicy.pending_line(inbox, record.get("thread_ts")) is None:
+            return "unbound"
+        if len(text) > int(self.guard_settings(cid)["answer_max_chars"]):
+            return "size"
+        return None
+
+    def clean_answer(self, record):
+        """The answer's `text`, `speech` and `persona` with every secret redacted and every link removed (#2948).
+
+        Returns the cleaned line, the fields the redaction changed and the number of links removed, so the audit tells
+        what the checks did. Redaction is a backstop: the session's read bound is what stops a leak."""
+        cleaned = dict(record)
+        redacted, links = [], 0
+        for name in ("text", "speech", "persona"):
+            value = cleaned.get(name)
+            if not isinstance(value, str):
+                continue
+            masked = shared_redact.redact(value)
+            if masked != value:
+                redacted.append(name)
+            links += len(LINK.findall(masked))
+            cleaned[name] = re.sub(r"[ \t]{2,}", " ", LINK.sub("", masked)).strip()
+        return cleaned, redacted, links
+
+    def record_answer_audit(self, cid, text, decision, reason=None, redacted=(), links=0):
+        """One audit line for one outbox answer: its channel, the decision, the reason class, and what the redaction
+        and the link rule changed (#2948)."""
+        self.state.append_audit({
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "user": None,
+            "role": None,
+            "channel": cid,
+            "decision": decision,
+            "reason": reason,
+            "text": redacted_text(text),
+            "redacted": list(redacted),
+            "links_removed": links,
+        })
+
+    def answer_refused(self, record, decision, reason):
+        """One refusal reply to a refused sender, at most one per channel in ten minutes (#2947). The reply names the
+        reason class, `rate` or `size`, and it is one sentence. A `listen` channel receives no post."""
+        key = (str(record.get("channel")), str(record.get("user")))
+        now = time.monotonic()
+        last = self._guard_replied.get(key)
+        if last is not None and now - last < GUARD_REPLY_WINDOW:
+            return
+        if decision is not None and decision.reply is None:
+            return
+        self._guard_replied[key] = now
+        sentence = ("Your message was refused: rate. You sent more messages than this channel accepts in one minute."
+                    if reason == "rate" else
+                    "Your message was refused: size. Your message is longer than this channel accepts.")
+        try:
+            self.answer(record, one_sentence(sentence))
+        except Exception as x:      # noqa: BLE001 - a Slack error is a log line, never a lost record or a lost ack
+            self.log(f"voiced: refusal reply refused: {type(x).__name__}: {x}")
+
+    def refuse(self, record, decision, reason, text):
+        """Record one refused message: its audit line first, then the one refusal reply the sender may hear (#2947). A
+        refused message writes no inbox line."""
+        self.record_audit(record, "refused", text, reason)
+        self.answer_refused(record, decision, reason)
+        self.log(f"voiced: refused {reason} for {record.get('id')}")
+
+    def record_audit(self, record, decision, text, reason=None):
+        """One audit line for one message: its time, sender id, role, channel, decision and reason class, and at most
+        `AUDIT_TEXT_MAX` characters of redacted text (#2947)."""
+        self.state.append_audit({
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "user": record.get("user"),
+            "role": record.get("role"),
+            "channel": record.get("channel"),
+            "decision": decision,
+            "reason": reason,
+            "text": redacted_text(text),
+        })
 
     def inbox_path_of(self, event):
         """The inbox one message belongs to: its own channel's when a project owns the channel, the DM's for an im, else
@@ -1901,8 +2189,13 @@ class Daemon:
         try:
             return self.synthesizer(script, voice=voice, tone=tone) or None
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
-            # The error type only: a provider message can carry request material, and this log is never redacted.
-            self.log(f"voiced: speech skipped: {type(x).__name__}")
+            # The error type and its cause code, never the provider's message: that message can carry request
+            # material, and this log is never redacted. One cause is one line, so a voice that refuses every answer
+            # never floods the log (#2956).
+            name, cause = type(x).__name__, getattr(x, "cause", None)
+            if (name, cause) not in self._speech_logged:
+                self._speech_logged.add((name, cause))
+                self.log(f"voiced: speech skipped: {name}: {cause}" if cause else f"voiced: speech skipped: {name}")
             return None
 
     def upload_for(self, channel):
@@ -1928,6 +2221,25 @@ class Daemon:
                 os.unlink(path)
             except OSError:
                 pass
+
+    def record_latency(self, cid, thread, answer_ts):
+        """Write the seconds from the question's Slack ts to the answer's post ts (#2940).
+
+        Slack's ts is epoch seconds, so the answer's own ts is the moment it went out: no wall clock is trusted, and no
+        two clocks can disagree. A ts that does not parse, or a channel whose inbox holds no unanswered line, records
+        nothing rather than a made-up number."""
+        if answer_ts is None:
+            return
+        question_id, question_ts = question_line(self.state, cid, thread)
+        if question_ts is None:
+            return
+        try:
+            seconds = round(float(answer_ts) - float(question_ts), 4)
+        except (TypeError, ValueError):
+            return
+        self.state.remember_latency({"id": question_id or f"{cid}:{question_ts}", "channel": cid,
+                                     "question_ts": str(question_ts), "answer_ts": str(answer_ts),
+                                     "seconds": seconds})
 
     async def deliver(self, record, channel=None, digest=None):
         """Answer one outbox line: the text at once, the first spoken sentence with it, then the rest as one clip.
@@ -1968,6 +2280,7 @@ class Daemon:
             if digest:
                 # The text is out before its voice: a crash from here repeats only the voice, never the text.
                 self.state.remember_posted(digest, ts)
+            self.record_latency(cid, thread, ts)
         else:
             ts = posted.get("ts")
         anchor = thread or ts
@@ -2016,6 +2329,19 @@ class Daemon:
                     continue
                 fails = self.failed.get(digest, 0)
                 if fails >= MAX_DELIVER_ATTEMPTS:
+                    continue
+                text = (record.get("text") or "").strip()
+                reason, redacted, links = None, [], 0
+                if text and cid:
+                    reason = self.answer_refusal(record, channel or DM, cid, text)
+                    if reason is None:
+                        record, redacted, links = self.clean_answer(record)
+                    self.record_answer_audit(cid, text, "refused" if reason else "answer", reason, redacted, links)
+                if reason:
+                    # A refused answer is final: the delivered ledger never retries it, and the outbox keeps the line.
+                    self.state.remember_delivered(digest)
+                    delivered.add(digest)
+                    self.log(f"voiced: answer refused: {reason}")
                     continue
                 posted, voiced = await self.deliver(record, channel, digest)
                 if posted and voiced:
@@ -2153,6 +2479,7 @@ class Daemon:
             record["text"] = text
             record["error"] = refusal
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
         if target is None:
             # A channel no project owns is data, never a DM question the operator might answer as if it were one.
@@ -2160,6 +2487,7 @@ class Daemon:
                 record["text"] = text
             record["error"] = "unknown channel: no project owns it"
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
         if decision.kind == slackpolicy.IGNORE:
             return "ignored"
@@ -2167,7 +2495,14 @@ class Daemon:
             if text:
                 record["text"] = text
             self.state.append_other(record)
+            self.record_audit(record, "data", text)
             return "other"
+        # The guard runs before any clip download or inbox write, so a flood or an oversized message never reaches
+        # the operator session (#2947).
+        reason = self.guard_reason(event.get("channel"), event.get("user"), text)
+        if reason:
+            self.refuse(record, decision, reason, text)
+            return "refused"
         clip = audio_file(event)
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
@@ -2183,6 +2518,7 @@ class Daemon:
                 record["answer"] = one_sentence(record["error"])
                 record["bytes"] = x.size
                 self.state.append_other(record)
+                self.record_audit(record, "failed", text, "size")
                 self.answer_failed_clip(record, decision)
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
@@ -2191,6 +2527,7 @@ class Daemon:
                 record["error"] = f"{kind} failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
+                self.record_audit(record, "failed", text)
                 self.answer_failed_clip(record, decision)
                 # The step and the reason, so a certificate failure reads as a download or a transcription failure and
                 # never as one vague type. `safe_reason` drops a URL query and every key-like value (#2933).
@@ -2200,10 +2537,17 @@ class Daemon:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
             record["error"] = "empty transcript" if clip else "empty message: no clip and no text"
             self.state.append_other(record)
+            self.record_audit(record, "other", text)
             return "other"
+        # A clip's transcript is measured by the same size rule as the text, so a long transcript is refused too.
+        reason = self.size_reason(event.get("channel"), text) if clip else None
+        if reason:
+            self.refuse(record, decision, reason, text)
+            return "refused"
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
+        self.record_audit(record, "inbox", text)
         self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""),
                            record["id"])
         return "inbox"
@@ -2226,9 +2570,13 @@ async def handle_envelope(daemon, envelope, ack):
     return outcome
 
 
-def plist_text(label, python, script, state_dir, owner, checkout):
-    """The launchd agent that restarts the daemon after a crash. Printing it loads nothing."""
+def plist_text(label, python, script, state_dir, owner, checkout, profiles=LIVE_PROFILES):
+    """The launchd agent that restarts the daemon after a crash. Printing it loads nothing.
+
+    `profiles` is the folder the agent reads its projects from: the live copy's profiles folder, never the deploy's own,
+    which holds only `example.sh` (#2957). A caller that names an empty value writes no SG_PROFILES_DIR."""
     esc = lambda v: xml.sax.saxutils.escape(str(v))  # noqa: E731
+    profiles_line = (f"<key>SG_PROFILES_DIR</key><string>{esc(profiles)}</string>\n" if profiles else "")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -2238,7 +2586,7 @@ def plist_text(label, python, script, state_dir, owner, checkout):
 <key>EnvironmentVariables</key><dict>
 <key>VOICE_STATE</key><string>{esc(state_dir)}</string>
 <key>VOICE_OWNER</key><string>{esc(owner)}</string>
-</dict>
+{profiles_line}</dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
 <key>ThrottleInterval</key><integer>10</integer>
@@ -2297,6 +2645,15 @@ _URL = re.compile(r"https?://[^\s\"']*")
 _KEY_PARAM = re.compile(r"(?i)\b(key|token|api[_-]?key|x-goog-api-key|access_token|sig|signature|secret)=[^\s&,;\"']*")
 # A bare secret with a known provider prefix, with no `key=` before it (#2933).
 _TOKEN_PREFIX = re.compile(r"\b(?:xox[baprs]-|AIza|ghp_|sk-)[A-Za-z0-9_\-]*")
+
+
+def redacted_text(text):
+    """At most `AUDIT_TEXT_MAX` characters of one message for the audit, with every URL, key-like value and bare token
+    removed, so the audit line never carries a secret (#2947)."""
+    out = _URL.sub("<url>", str(text or ""))
+    out = _KEY_PARAM.sub(lambda m: m.group(1) + "=<redacted>", out)
+    out = _TOKEN_PREFIX.sub("<redacted>", out)
+    return " ".join(out.split())[:AUDIT_TEXT_MAX]
 
 
 def safe_reason(error):
@@ -2434,31 +2791,38 @@ async def hear(daemon, app_token, connect=None, open_connection=None, stop=None)
         wait = min(wait * 2, 60)
 
 
-def main(argv):
+def main(argv, projects=hub_projects):
     state_dir = os.environ.get("VOICE_STATE") or DEFAULT_STATE
     owner = None
     label = "com.agent-squad.voiced"
     python = sys.executable
+    profiles = os.environ.get("SG_PROFILES_DIR") or LIVE_PROFILES   # a plist never names the deploy's example-only folder
     print_plist = False
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--state", "--owner", "--label", "--python") and i + 1 < len(argv):
+        if a in ("--state", "--owner", "--label", "--python", "--profiles") and i + 1 < len(argv):
             if a == "--state":
                 state_dir = argv[i + 1]
             elif a == "--owner":
                 owner = argv[i + 1]
             elif a == "--label":
                 label = argv[i + 1]
+            elif a == "--profiles":
+                profiles = argv[i + 1]
             else:
                 python = argv[i + 1]
             i += 2
         elif a == "--print-plist":
             print_plist = True
             i += 1
+        elif a == "--print-profiles-default":
+            # install-agents.sh reads its default from this one constant, so the folder is named in one place (#2957).
+            sys.stdout.write(LIVE_PROFILES + "\n")
+            return 0
         else:
-            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH]]",
-                  file=sys.stderr)
+            print("usage: voiced.py [--state DIR] [--owner USER_ID] [--print-plist [--label L] [--python PATH] [--profiles DIR]]"
+                  " [--print-profiles-default]", file=sys.stderr)
             return 2
     try:
         state = State(state_dir)
@@ -2471,7 +2835,7 @@ def main(argv):
         return 2
     if print_plist:
         sys.stdout.write(plist_text(label=label, python=python, script=os.path.abspath(__file__),
-                                    state_dir=state_dir, owner=owner,
+                                    state_dir=state_dir, owner=owner, profiles=profiles,
                                     checkout=os.path.abspath(os.path.join(HERE, "..", ".."))))
         return 0
     lock = open(os.path.join(state_dir, "voiced.lock"), "a")
@@ -2481,11 +2845,14 @@ def main(argv):
         print(f"voiced: another daemon holds {state_dir}; this start stands aside", file=sys.stderr)
         lock.close()
         return 1
-    projects = hub_projects()
-    # The hub's saved-sha registry is the only authority for a Slack revision (#2695): the app set this start opens
-    # sockets for comes from listed revisions alone, and no listed revision means no channel of that project.
-    registry = hub_registry(projects)
-    specs = app_keychains(project_documents_at_start(projects, listed=listed_revisions(registry) if registry else None))
+    entries = projects()
+    # Each project's own registry is the only authority for its Slack revision (#2695, #2961): the app set this start
+    # opens sockets for comes from the revisions that project's registry lists alone, and no listed revision means no
+    # channel of that project. The same hub seam feeds the daemon's configs and this start's seam, so the two never
+    # name different project sets.
+    registries = hub_registries(entries)
+    listed = {repo: listed_revisions(path) for repo, path in registries.items()}
+    specs = app_keychains(project_documents_at_start(entries, listed=listed))
     if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
         specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
@@ -2500,8 +2867,8 @@ def main(argv):
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
-                    client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    registry=(lambda: registry) if registry else None,
+                    client=SlackClient(bot), projects=hub_repos, configs=projects,
+                    registry=hub_registry_seam(entries),
                     synthesizer=lambda script, voice=None, tone=None:
                         spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
@@ -2514,7 +2881,7 @@ def main(argv):
                                for app_id, entry in bots.items()},
                     starter=start_operator)
     # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
-    daemon.refuse_channel_claims(projects)
+    daemon.refuse_channel_claims(entries)
     try:
         asyncio.run(serve(daemon, apps))
     except KeyboardInterrupt:

@@ -500,3 +500,51 @@ def test_the_local_file_never_sets_the_deploy_environment():
     local["project"] = {"deploy": {"environment": "prod", "command": "make deploy-prod"}}
     assert S.validate(committed, local) == []
     assert S.deploy_target(S.project_identity(committed, local)) == ("stg", "make deploy-stg")
+
+
+# --- the guard block of the committed file (issue #2947) ---------------------------------------------------------
+def test_a_missing_guard_block_takes_the_plugin_defaults():
+    """The guard is optional, so a file that names none still bounds the operator session by the shipped defaults."""
+    assert S.guard({}) == {"rate": 6, "max_chars": 4000, "answer_max_chars": 8000, "read_wrappers": []}
+    assert S.guard({"version": 1})["rate"] == 6
+
+
+def test_a_committed_guard_block_passes_validation():
+    """The committed file accepts the guard block, and the reader returns the values the file names."""
+    committed, local = files(committed__guard={"rate": 3, "max_chars": 1000, "answer_max_chars": 2000,
+                                               "read_wrappers": ["<@U0MENTION>"]})
+    assert S.validate(committed, local) == []
+    got = S.guard(committed)
+    assert got == {"rate": 3, "max_chars": 1000, "answer_max_chars": 2000, "read_wrappers": ["<@U0MENTION>"]}
+
+
+def test_a_guard_block_that_is_not_a_mapping_is_refused():
+    committed, local = files(committed__guard="fast")
+    defects = S.validate(committed, local)
+    assert "guard" in keys(defects), defects
+
+
+@pytest.mark.parametrize("field,value", [
+    ("rate", "six"),
+    ("rate", 0),
+    ("max_chars", -1),
+    ("max_chars", "4000"),
+    ("answer_max_chars", "many"),
+    ("answer_max_chars", 0),
+    ("read_wrappers", "text"),
+    ("read_wrappers", [1]),
+])
+def test_a_malformed_guard_field_is_named(field, value):
+    """Each malformed field is one defect that names its own key, so a person repairs the key the message names."""
+    committed, local = files()
+    committed["guard"] = {field: value}
+    defects = S.validate(committed, local)
+    assert f"guard.{field}" in keys(defects), defects
+
+
+def test_a_guard_field_the_file_omits_reads_the_default():
+    """A guard block that names one field keeps the default of every field it omits."""
+    committed, local = files(committed__guard={"rate": 2})
+    assert S.validate(committed, local) == []
+    got = S.guard(committed)
+    assert got == {"rate": 2, "max_chars": 4000, "answer_max_chars": 8000, "read_wrappers": []}

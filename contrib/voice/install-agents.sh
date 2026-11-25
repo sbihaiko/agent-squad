@@ -32,10 +32,20 @@ if [ "$restore" = 0 ]; then
 fi
 git -C "$DEPLOY" checkout -q --detach "$sha"
 
+# The folder both agents read their projects from (#2957). It is the live copy's profiles folder, never the deploy
+# checkout's own, which holds only example.sh. The daemon names that folder in one constant, so the default is read
+# from the pinned checkout and never carried as a second copy here.
+if [ -n "${SG_PROFILES_DIR:-}" ]; then
+  PROFILES=$SG_PROFILES_DIR
+else
+  PROFILES=$("$PY" "$DEPLOY/contrib/voice/voiced.py" --print-profiles-default) \
+    || { echo "install-agents: the pinned commit does not print its profiles default" >&2; exit 1; }
+fi
+
 mkdir -p "$LAUNCH_DIR"
 V="$LAUNCH_DIR/com.squad.voiced.plist"
 O="$LAUNCH_DIR/com.squad.operators.plist"
-"$PY" "$DEPLOY/contrib/voice/voiced.py" --print-plist --label com.squad.voiced --python "$PY" > "$V.tmp"
+"$PY" "$DEPLOY/contrib/voice/voiced.py" --print-plist --label com.squad.voiced --python "$PY" --profiles "$PROFILES" > "$V.tmp"
 mv "$V.tmp" "$V"
 cat > "$O.tmp" <<P2
 <?xml version="1.0" encoding="UTF-8"?>
@@ -49,6 +59,7 @@ cat > "$O.tmp" <<P2
 <key>HOME</key><string>$HOME</string>
 <key>VOICE_STATE</key><string>$STATE</string>
 <key>VOICE_REPO</key><string>$DEPLOY</string>
+<key>SG_PROFILES_DIR</key><string>$PROFILES</string>
 </dict>
 <key>RunAtLoad</key><true/>
 <key>StartInterval</key><integer>300</integer>
@@ -58,8 +69,21 @@ cat > "$O.tmp" <<P2
 P2
 mv "$O.tmp" "$O"
 
+# launchd unloads a booted-out job asynchronously: a bootstrap sent before the unload ends answers "Bootstrap failed: 5:
+# Input/output error" and leaves the job unloaded (#2954). The wait is bounded so a stuck job fails loud, never hangs.
+wait_unloaded() {
+  i=0
+  while "$LAUNCHCTL" print "gui/$(id -u)/$1" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge "${SG_BOOTOUT_WAIT_TRIES:-30}" ]; then return 1; fi
+    sleep "${SG_BOOTOUT_WAIT_SECONDS:-0.1}"
+  done
+  return 0
+}
 for L in com.squad.voiced com.squad.operators; do
   "$LAUNCHCTL" bootout "gui/$(id -u)/$L" 2>/dev/null || true
-  "$LAUNCHCTL" bootstrap "gui/$(id -u)" "$LAUNCH_DIR/$L.plist"
+  wait_unloaded "$L" || { echo "install-agents: launchd still holds $L after bootout" >&2; exit 1; }
+  "$LAUNCHCTL" bootstrap "gui/$(id -u)" "$LAUNCH_DIR/$L.plist" \
+    || { echo "install-agents: bootstrap of $L failed" >&2; exit 1; }
 done
 echo "installed com.squad.voiced and com.squad.operators from $(git -C "$DEPLOY" rev-parse --short HEAD)"

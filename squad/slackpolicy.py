@@ -12,7 +12,7 @@ class wins over its workspace's class (#2770).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
 `tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `tests/test_slack_channel_class.py`,
-`contrib/squad-goal/scripts/test-commit-guard.sh`.
+`tests/test_voiced_answer_check.py`, `contrib/squad-goal/scripts/test-commit-guard.sh`.
 """
 import os
 import re
@@ -363,6 +363,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     _send_grants(local_name, local, out, local=True)
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
     _deploy_identity("slack.yaml", committed, out)
+    _guard("slack.yaml", committed, out)
     events = {str(row.get("id")) for row in _rows(committed.get("events")) if row.get("id") is not None}
     for file, doc in ours:
         _announce(file, doc, events, out)
@@ -398,6 +399,69 @@ def _second_guests(local_name, local, others):
     for name, doc in sorted(others, key=lambda pair: str(pair[0])):
         guests += [(name, i) for i, ws in enumerate(_rows(doc.get("workspaces"))) if _guest_workspace(ws)]
     return guests[1:]
+
+
+# The guard block of the committed file bounds what the operator session reads (issue #2947). It is optional, and a
+# missing field takes the plugin default, so a project that names none still keeps the bound.
+GUARD_FIELDS = ("rate", "max_chars", "answer_max_chars", "read_wrappers")
+GUARD_DEFAULTS = {"rate": 6, "max_chars": 4000, "answer_max_chars": 8000, "read_wrappers": []}
+
+
+def guard(doc):
+    """The guard of one committed file, each field over the plugin default. The block is optional, so a file that names
+    none, and a block that omits a field, keep the defaults. `read_wrappers` is the list of substrings the size rule
+    removes from a message first, such as a mention wrapper."""
+    row = (doc or {}).get("guard") if isinstance(doc or {}, dict) else None
+    out = {"rate": GUARD_DEFAULTS["rate"], "max_chars": GUARD_DEFAULTS["max_chars"],
+           "answer_max_chars": GUARD_DEFAULTS["answer_max_chars"],
+           "read_wrappers": list(GUARD_DEFAULTS["read_wrappers"])}
+    if isinstance(row, dict):
+        for name in GUARD_FIELDS:
+            if row.get(name) is not None:
+                out[name] = list(row[name]) if name == "read_wrappers" and isinstance(row[name], list) else row[name]
+    return out
+
+
+def readable(text, wrappers=()):
+    """The message body the size rule measures: each `read_wrappers` substring removed first, so a wrapper never counts
+    against the sender."""
+    out = str(text or "")
+    for wrapper in wrappers or ():
+        out = out.replace(str(wrapper), "")
+    return out
+
+
+def pending_line(inbox, thread):
+    """The pending inbox line one answer answers, or None when it answers none (#2948).
+
+    The inbox keeps each line, so its presence is what makes an answer legal. An answer threads under its question, so
+    the line whose ts equals the answer's `thread_ts` is that question. An answer with no thread answers the oldest line
+    of its channel. A channel whose inbox holds no line answers nothing, so the daemon posts nothing there."""
+    records = [record for record in inbox or () if record.get("ts") is not None]
+    if thread:
+        for record in records:
+            if str(record.get("ts")) == str(thread):
+                return record
+        return None
+    return records[0] if records else None
+
+
+def _guard(file, doc, out):
+    """The defects of one guard block: it is a mapping, each count is a whole number above zero, and `read_wrappers` is
+    a list of strings. A block the file omits is no defect, so a project that names none keeps the plugin defaults."""
+    row = doc.get("guard")
+    if row is None:
+        return
+    if not isinstance(row, dict):
+        out.append(_defect(file, "guard", "the guard is a mapping of rate, max_chars, answer_max_chars and read_wrappers"))
+        return
+    for name in ("rate", "max_chars", "answer_max_chars"):
+        value = row.get(name)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+            out.append(_defect(file, f"guard.{name}", f"the guard {name} is a whole number above zero"))
+    wrappers = row.get("read_wrappers")
+    if wrappers is not None and (not isinstance(wrappers, list) or not all(isinstance(x, str) for x in wrappers)):
+        out.append(_defect(file, "guard.read_wrappers", "read_wrappers is a list of strings"))
 
 
 FIELD_CLASSES = ("owned", "guest")

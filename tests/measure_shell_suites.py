@@ -13,6 +13,7 @@ import statistics
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from tests import shell_suites
 
@@ -40,11 +41,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     suites = shell_suites.discover()
     if args.names:
+        # A name finds a suite of the runner's folder; a path finds a suite beside its own script, outside it.
         known = {p.name: p for p in suites}
-        unknown = [n for n in args.names if n not in known]
-        if unknown:
-            parser.error("no such suite: " + " ".join(unknown))
-        suites = [known[n] for n in args.names]
+        chosen = []
+        for n in args.names:
+            path = Path(n)
+            if path.is_file():
+                chosen.append(path.resolve())
+            elif n in known:
+                chosen.append(known[n])
+            else:
+                parser.error(f"no such suite: {n}")
+        suites = chosen
     rows, failed = {}, []
     for suite in suites:
         seconds = measure(suite, args.runs)

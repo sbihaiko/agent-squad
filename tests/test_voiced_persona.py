@@ -13,7 +13,7 @@ import sys
 import threading
 from pathlib import Path
 
-from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, append_outbox, configure, voiced
+from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, append_outbox, configure, pending, voiced
 from tests.test_voiced_policy import REPO
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -99,6 +99,8 @@ def test_the_text_answer_is_posted_with_the_persona_username(tmp_path):
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
 
+    pending(daemon.state, channel)
+
     append_outbox(daemon.state.outbox_for(channel),
                   {"thread_ts": "1762500000.000100", "text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
@@ -117,6 +119,8 @@ def test_the_text_answer_carries_no_username_when_the_channel_names_no_persona(t
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
 
+    pending(daemon.state, channel)
+
     append_outbox(daemon.state.outbox_for(channel), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -134,6 +138,8 @@ def test_the_spoken_answer_uses_the_persona_voice_and_tone(tmp_path):
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
 
+    pending(daemon.state, channel)
+
     append_outbox(daemon.state.outbox_for(channel), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 
@@ -150,6 +156,8 @@ def test_the_clip_carries_no_name_until_the_spike_records_its_result(tmp_path):
     persona_revision(tmp_path, channel)
     voice = PersonaVoice(tmp_path)
     daemon = outbox_daemon(tmp_path, mod, client, voice)
+
+    pending(daemon.state, channel)
 
     append_outbox(daemon.state.outbox_for(channel), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
@@ -173,6 +181,7 @@ def test_the_first_sentence_is_still_synthesized_while_the_persona_text_is_poste
             assert started.wait(5.0), "the first synthesis waited for the text post instead of running with it"
 
     client.before_post = gate
+    pending(daemon.state, channel)
     append_outbox(daemon.state.outbox_for(channel), {"text": "Green. Then blue."})
     asyncio.run(daemon.drain_outboxes())
 

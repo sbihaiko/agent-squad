@@ -16,6 +16,11 @@ project checkout is a person's own session, never this script's.
 The record is `<state>/operators.json`, rewritten atomically after each start or stop. `stopped.json` names the projects
 the owner stopped on purpose: a pass never revives one. One lock bounds a pass, and every CLI call has a deadline.
 
+Every CLI call runs under the operator's own config root (`<state>/operators/config`, through `CLAUDE_CONFIG_DIR`), with
+the owner's keychain service name (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty): the session keeps its runtime state in a
+folder the kernel grants it, and the owner's global config file is never writable (#2963). A pass reads the operator's
+roster and the owner's, so a session of an earlier build is adopted or stopped, never duplicated.
+
 A message must never wait for the five-minute pass: `--ensure <project>` runs one pass for one project, and the daemon
 calls it the moment an inbox line lands. The new session's Monitors start at `tail -n 0`, so the line that paid for the
 start rides in the brief as the first answer owed, and the session answers the message that started it. That pass prints
@@ -78,6 +83,17 @@ PROJECT_NAME_MAX = 200                   # Claude Code cuts a longer sanitized w
 TOOLS = "Read,Monitor,TaskStop,Bash"
 CLAUDE_LOADED_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json")
 CLAUDE_LOADED_DIRS = ("skills", "agents", "commands", "hooks", "plugins", "output-styles", "rules")
+# #2963: the user-level entries a session loads from the owner's Claude home, linked into the operator's own config root.
+# `projects` holds the transcripts and the memory the supervisor reads by the owner's path.
+CONFIG_LINKS = CLAUDE_LOADED_FILES + CLAUDE_LOADED_DIRS + ("projects",)
+CONFIG_HOME = "CLAUDE_CONFIG_DIR"                     # the CLI's config home: its global config file and its daemon
+CONFIG_KEYCHAIN = "CLAUDE_SECURESTORAGE_CONFIG_DIR"   # empty: the default keychain service name, the owner's login
+# #2951: a hook defect in an operator session must not open a secret or another project's checkout. The owner's
+# credential folders, a project's `.env` and its profile-local Slack file are refused, and only the session's own
+# checkout stays readable. The model route is the one loopback port the profile opens.
+SECRET_DIRS = (".ssh", os.path.join(".config", "gh"), ".aws")
+ENV_SECRET = '(regex #"^(.*/)?\\.env(\\.[^/]*)?$")'
+SLACK_LOCAL_SECRET = '(regex #"^(.*/)?[^/]*\\.slack\\.local\\.yaml$")'
 
 SESSION_ID = re.compile(r"\A[0-9a-f]{8}(-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\Z")
 hub_projects = voiced.hub_projects         # the hub's one list of projects: repository, checkout and local Slack file
@@ -121,10 +137,11 @@ def call(argv, cwd=None, timeout=DEADLINE, env=None):
     return done
 
 
-def listing():
-    """Every live session the CLI lists: id, pid, name, cwd and start time, one dict each."""
+def listing(env=None):
+    """Every live session one roster lists: id, pid, name, cwd and start time, one dict each. The roster belongs to the
+    CLI's config home, so `env` names the home to read: the operator's own root, or the owner's (#2963)."""
     try:
-        out = json.loads(call([CLI, "agents", "--json"]).stdout or "[]")
+        out = json.loads(call([CLI, "agents", "--json"], env=env).stdout or "[]")
     except ValueError as e:
         raise Refused(f"claude agents --json answered nothing readable: {e}") from None
     items = out if isinstance(out, list) else out.get("agents", out.get("sessions", []))
@@ -383,6 +400,45 @@ def registry(state, repo=REPO, found=None):
     return units
 
 
+# The profiles folder beside `address.sh`, the folder the hub seam reads when `SG_PROFILES_DIR` is unset (#2957).
+PROFILES_FALLBACK = os.path.normpath(os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
+
+
+def profiles_folder():
+    """The profiles folder the hub seam reads: `SG_PROFILES_DIR`, or the fallback folder beside `address.sh`."""
+    return os.environ.get("SG_PROFILES_DIR") or PROFILES_FALLBACK
+
+
+def profiles_note():
+    """The folder the pass read and its state, as a suffix of the mismatch line: the documented cause of #2957.
+
+    A folder the filesystem lacks and a folder that holds only the template both read as no project, but they are two
+    faults, so the note says which one. A folder with a project of its own reads as a hub that names none of them, and
+    the note names the path the pass read, so the operator never blames the wrong folder."""
+    folder = profiles_folder()
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        unset = "" if os.environ.get("SG_PROFILES_DIR") else ", and SG_PROFILES_DIR is unset"
+        return f"the profiles folder {folder} is not there{unset}"
+    if any(n.endswith(".sh") and n != "example.sh" for n in names):
+        return f"the profiles folder {folder} names a project the hub does not list"
+    return f"the profiles folder {folder} holds only example.sh"
+
+
+def report_no_project(units, found):
+    """Name the mismatch in the error log: the channel map asks for a project the hub does not list (#2957).
+
+    The report follows the hub seam alone: the channel map names a project and the hub lists none, so the pass starts
+    no session for it, and this line says so instead of staying silent. The profiles folder and its state follow as a
+    hint, never as a gate, so a folder that holds a project still reports the mismatch (#2957)."""
+    named = [u.get("repo") or u["key"] for u in units if u["key"] != DM]
+    if found or not named:
+        return
+    print(f"operators: the hub names no project, but the channel map names {len(named)}: {', '.join(named)}; "
+          f"{profiles_note()}; check SG_PROFILES_DIR and address.sh --list", file=sys.stderr)
+
+
 def as_unit(unit, repo=REPO):
     """One unit from a unit dict or a bare key, so a caller may name `dm` or a project key alone."""
     if isinstance(unit, dict):
@@ -500,24 +556,112 @@ def daemon_root():
     return os.path.realpath(DAEMON)
 
 
-def profile_text(outboxes, inboxes, own_inboxes):
+def config_root(state):
+    """The config home the operator's CLI runs under: its own global config file, its transcripts and its background
+    service, so no operator session writes the owner's `~/.claude.json` (#2963)."""
+    return os.path.realpath(os.path.join(root(state), "config"))
+
+
+def cli_env(state):
+    """The environment every operator CLI call runs under (#2963). `CLAUDE_CONFIG_DIR` moves the config home to the
+    operator's root. An empty `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the default keychain service name, so the login
+    stays the owner's keychain entry at the same path and no credential moves (measured on CLI 2.1.332)."""
+    return {CONFIG_HOME: config_root(state), CONFIG_KEYCHAIN: ""}
+
+
+def prepare_config(state):
+    """Prepare the operator's config root: link each user-level entry of the owner's Claude home, so a session loads the
+    same settings, memory, skills and transcripts it loaded before the root moved (#2963). The global config file is not
+    linked: it belongs to the session's own root."""
+    cfg = config_root(state)
+    os.makedirs(cfg, exist_ok=True)
+    owner = os.path.join(os.path.expanduser("~"), ".claude")
+    for name in CONFIG_LINKS:
+        source = os.path.join(owner, name)
+        if not os.path.exists(source):
+            continue
+        link = os.path.join(cfg, name)
+        if os.path.islink(link):
+            if os.path.realpath(link) == os.path.realpath(source):
+                continue
+            os.unlink(link)                # a link to a home that moved: the current entry wins
+        elif os.path.exists(link):
+            continue                       # a folder the CLI wrote in its own root: never replaced
+        os.symlink(source, link)
+    return cfg
+
+
+def seed_trust(state, checkouts):
+    """Copy the trust boolean the owner's global config records for each checkout into the operator's own file (#2963).
+
+    `claude --bg` refuses a folder with no trust record, and the operator's file is not the owner's. Only
+    `hasTrustDialogAccepted` moves, and only when the owner recorded it true: no other key of the owner's file enters the
+    operator's, and no credential moves."""
+    path = os.path.join(config_root(state), ".claude.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    owner = read_json(os.path.join(os.path.expanduser("~"), ".claude.json"), {})
+    known = owner.get("projects") if isinstance(owner.get("projects"), dict) else {}
+    data = read_json(path, {})
+    projects = data.get("projects") if isinstance(data.get("projects"), dict) else {}
+    for checkout in checkouts:
+        if not checkout:
+            continue
+        spellings = list(dict.fromkeys((checkout, os.path.realpath(checkout))))
+        trusted = any(isinstance(known.get(s), dict) and known[s].get("hasTrustDialogAccepted") for s in spellings)
+        if not trusted:
+            continue                       # a folder the owner never trusted stays untrusted here
+        for spelling in spellings:
+            projects.setdefault(spelling, {}).update({"hasTrustDialogAccepted": True})
+    data["projects"] = projects
+    write_json(path, data)
+
+
+def live_sessions(state):
+    """Every live session of both rosters: the operator's own config root first, then the owner's, where a session of an
+    earlier build or a hand start still lives (#2963). One id is listed once, whatever roster reports it."""
+    rows, seen = [], set()
+    for env in ({**os.environ, **cli_env(state)}, None):
+        for row in listing(env):
+            key = row.get("session") or row["id"]   # the full id: the short form is shared by two sessions
+            if key not in seen:
+                seen.add(key)
+                rows.append(row)
+    return rows
+
+
+def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None, *, config):
     """The kernel bound of one operator session: write only its project's outboxes, read only its project's inboxes,
-    reach loopback only (#2925).
+    reach loopback only on the model route (#2925, #2951).
 
     A project's session answers every channel of the project, so it holds one outbox file per channel and reads one
     inbox per channel. Seatbelt applies the last matching rule, so the per-file read allows follow the inboxes deny. A
     foreign model host is not named here: Seatbelt accepts only `*` or `localhost` as a host, so that endpoint goes
     through model_proxy.py.
 
+    The read wall (#2951): the owner's credential folders, `.env` and the profile-local `*.slack.local.yaml` are refused
+    wherever they sit, and so is every checkout in `others`. The session's own `checkout` stays readable, so its project
+    files load — including its own `.env` and `*.slack.local.yaml`, which a project keeps there, so a `(subpath
+    "<checkout>")` allow follows every secret deny and wins by Seatbelt's last matching rule. `ports` names the loopback
+    ports the model route uses: the endpoint's own port for a loopback gateway,
+    or the proxy's port when the endpoint is remote. It defaults to the endpoint's port, read from
+    `ANTHROPIC_BASE_URL`, so no port is guessed.
+
     The background service (#2768): `claude --bg` reaches the service the CLI already runs, or starts one, so the session
     needs the service's own runtime. It takes `/dev/null` for the ignored stdio of a detached spawn, it writes its run dir
     and its control socket under `daemon_root()`, and it connects to that socket. Without them the service cannot start
     and posix_spawn fails with EPERM.
+
+    The config home (#2963): `config` names the operator's own root, which the CLI writes under when the start sets
+    `CLAUDE_CONFIG_DIR`. The owner's global config file is never granted: an MCP server entry written there would load
+    into the owner's next, unsandboxed session.
     """
     home = os.path.realpath(os.path.expanduser("~"))
     daemon = daemon_root()
     outboxes = [outboxes] if isinstance(outboxes, str) else list(outboxes)
     own_inboxes = [own_inboxes] if isinstance(own_inboxes, str) else list(own_inboxes)
+    checkout = os.path.realpath(checkout) if checkout else None
+    others = [os.path.realpath(path) for path in others if path]
+    ports = list(dict.fromkeys(int(p) for p in (ports if ports is not None else [model_endpoint()[1]])))
     # The device path the kernel opens is the resolved one, as `/tmp` is; its symlink spelling is kept too, in case the
     # CLI names that spelling. A path that resolves to itself is emitted once.
     devnull = os.path.realpath(os.devnull)
@@ -526,24 +670,37 @@ def profile_text(outboxes, inboxes, own_inboxes):
         return " ".join(f'(literal "{path}")' for path in dict.fromkeys(paths))
 
     devices = literals((os.devnull, devnull))
+    config = os.path.realpath(config)
     claude = f"{home}/.claude"
-    # The CLI writes its own runtime under ~/.claude, so the folder stays writable. Every file there that the owner's
-    # next, unsandboxed session loads is refused after it: Seatbelt applies the last matching rule (#2925).
+    # The CLI writes its runtime under its own config root, and some state under ~/.claude, so both stay writable. The
+    # owner's global config file is never granted, and every file under ~/.claude that the owner's next, unsandboxed
+    # session loads is refused after the folder's grant: Seatbelt applies the last matching rule (#2925, #2963).
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
+    creds = " ".join(f'(subpath "{home}/{name}")' for name in SECRET_DIRS)
+    # Another project's checkout is refused, and the session's own is not: a path equal to `checkout` is left out.
+    foreign = list(dict.fromkeys(path for path in others if path != checkout))
+    # A project keeps `.env` and `*.slack.local.yaml` in its own checkout, so the secret denies above must not swallow
+    # them there: this allow follows every deny, and Seatbelt's last matching rule wins (#2951 criteria 1 and 3).
+    own_checkout = [f'(allow file-read* (subpath "{checkout}"))'] if checkout else []
     return "\n".join([
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
         f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude") '
-        f'(literal "{home}/.claude.json") (subpath "{daemon}"))',
+        f'(subpath "{config}") (subpath "{daemon}"))',
         *[f'(deny file-write* (literal "{claude}/{name}"))' for name in CLAUDE_LOADED_FILES],
         f"(deny file-write* {loaded_dirs} {memory} {top_md})",
+        f"(deny file-read* {creds})",
+        f"(deny file-read* {ENV_SECRET})",
+        f"(deny file-read* {SLACK_LOCAL_SECRET})",
+        *[f'(deny file-read* (subpath "{path}"))' for path in foreign],
+        *own_checkout,
         f'(deny file-read* (subpath "{inboxes}"))',
         f'(allow file-read* {literals(own_inboxes)})',
         "(deny network-outbound)",
-        '(allow network-outbound (remote ip "localhost:*"))',
+        *[f'(allow network-outbound (remote ip "localhost:{port}"))' for port in ports],
         f'(allow network-outbound (remote unix-socket (subpath "{daemon}")))',
     ]) + "\n"
 
@@ -597,34 +754,48 @@ def report_refusals(state):
     write_json(mark, {"seen": len(lines)})
 
 
-def start(unit, state, repo):
+def start(unit, state, repo, others=()):
     """Start one session for a project through the sandbox wrapper, in the project's own checkout.
 
     Returns the id the CLI printed (or ""), and the entry the record keeps: the session's name, its checkout, its
-    channels, the profile file and its sha256, and the proxy when the endpoint is not loopback.
+    channels, the profile file and its sha256, and the proxy when the endpoint is not loopback. `others` names every
+    project checkout the profile must refuse a read of (#2951); the session's own stays readable, and so does `repo`,
+    which the brief sends the session to for the operator contract and which `--add-dir` grants.
     """
     unit = as_unit(unit, repo)
     key = unit["key"]
     checkout = os.path.realpath(unit.get("checkout") or repo)
     if not os.path.isdir(checkout):
         raise Refused(f"{key}: the checkout {checkout} is not a directory")
+    own_repo = os.path.realpath(repo)
+    others = [path for path in others if path and os.path.realpath(path) != own_repo]
+    prepare_config(state)                    # the CLI's own config home, never the owner's global config file (#2963)
+    seed_trust(state, [checkout, own_repo])  # `--bg` refuses a folder whose trust the operator's own file lacks
     os.makedirs(root(state), exist_ok=True)
     outboxes = [os.path.realpath(outbox_path(state, scope)) for scope in unit["channels"]]
     inboxes = os.path.realpath(os.path.join(state, "inboxes"))
     own = [os.path.join(inboxes, f"{scope}.jsonl") for scope in unit["channels"]]
-    profile = profile_text(outboxes, inboxes, own)
-    profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
-    os.makedirs(os.path.dirname(profile_path), exist_ok=True)
-    with open(profile_path, "w", encoding="utf-8") as f:
-        f.write(profile)
-    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]),
-             "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
-    env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
-    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
     host, port = model_endpoint()
     proxy = None
     if host not in LOOPBACK:
         proxy = start_proxy(key, state, host, port)
+    ports = [port] if host in LOOPBACK else [proxy["port"]]
+    try:
+        profile = profile_text(outboxes, inboxes, own, checkout=checkout, others=others, ports=ports,
+                               config=config_root(state))
+        profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
+        os.makedirs(os.path.dirname(profile_path), exist_ok=True)
+        with open(profile_path, "w", encoding="utf-8") as f:
+            f.write(profile)
+    except OSError:
+        retire_proxy({"proxy": proxy})
+        raise
+    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]),
+             "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
+    env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
+    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
+    env.update(cli_env(state))
+    if proxy is not None:
         entry["proxy"] = proxy
         env["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy['port']}"
     brief = prompt_for(unit, state, repo, waiting=owed(state, unit))
@@ -642,9 +813,18 @@ def start(unit, state, repo):
     return "", entry
 
 
-def stop(sid):
-    """Stop one session by id. A refusal raises Refused, and the caller keeps ownership and retries later."""
-    call([CLI, "stop", sid])
+def stop(sid, state=None):
+    """Stop one session by id. A refusal raises Refused, and the caller keeps ownership and retries later.
+
+    The roster belongs to the CLI's config home, so the id is tried in the operator's own root first, then in the owner's,
+    where a session of an earlier build carries the token (#2963)."""
+    env = {**os.environ, **cli_env(state)} if state is not None else None
+    try:
+        call([CLI, "stop", sid], env=env)
+    except Refused:
+        if env is None:
+            raise
+        call([CLI, "stop", sid])             # the owner's roster: the session predates the config root
 
 
 def root(state):
@@ -770,7 +950,11 @@ def run_pass(state, repo, check=False, only=None):
     session at once instead of at the next five-minute pass (#2925). That pass prints one verdict line: `started <id>`,
     `live <id>`, or a reason on stderr and exit 2 when the project has no session at all."""
     state = os.path.abspath(state)
-    units = registry(state, repo)
+    found = checkouts()
+    units = registry(state, repo, found)
+    report_no_project(units, found)
+    # Every project checkout, read before `only` narrows the pass: each session refuses the reads of the others (#2951).
+    others = [unit.get("checkout") or "" for unit in units]
     only_unit = None
     if only is not None:
         named = [u for u in units if only in (u["key"], u["repo"])]
@@ -785,7 +969,7 @@ def run_pass(state, repo, check=False, only=None):
             print(f"operators: {only} names no checkout; no session started", file=sys.stderr)
             return 2
     if check:
-        sessions = listing()
+        sessions = live_sessions(state)
         record = read_json(os.path.join(state, "operators.json"), {})
         stopped = set(read_json(os.path.join(state, "stopped.json"), {}))
         starts, adopts, stops, clears, restarts = plan(state, units, sessions, dict(record), stopped)
@@ -808,7 +992,7 @@ def run_pass(state, repo, check=False, only=None):
         return 0
     try:
         report_refusals(state)
-        sessions = listing()
+        sessions = live_sessions(state)
         rec_path = os.path.join(state, "operators.json")
         record = read_json(rec_path, {})
         stopped = set(read_json(os.path.join(state, "stopped.json"), {}))
@@ -828,7 +1012,7 @@ def run_pass(state, repo, check=False, only=None):
             if not os.path.isdir(by_key[key].get("checkout") or ""):
                 print(f"operators: {key} names no checkout; no session started", file=sys.stderr)
                 continue
-            sid, entry = start(by_key[key], state, repo)  # the record is written after each start, never at the end
+            sid, entry = start(by_key[key], state, repo, others)  # the record is written after each start, never at the end
             record[key] = {**prior, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             started_now[key] = sid
             write_json(rec_path, record)
@@ -838,14 +1022,14 @@ def run_pass(state, repo, check=False, only=None):
             # A session that took no turn is stopped and replaced in one pass, and ownership drops only once the CLI
             # confirms the stop (#2923). A stop that fails keeps the session, as any other stop does.
             try:
-                stop(session["id"])
+                stop(session["id"], state)
             except Refused as e:
                 tries = int(((record.get(key) or {}).get("stop") or {}).get("tries") or 0) + 1
                 record[key] = {**record[key], "stop": {"tries": tries, "next": time.time() + min(2.0 ** tries, BACKOFF_MAX)}}
                 write_json(rec_path, record)
                 print(f"operators: restart of {key} failed, the project keeps its session: {e}", file=sys.stderr)
                 continue
-            if session["id"] in {s["id"] for s in listing()}:
+            if session["id"] in {s["id"] for s in live_sessions(state)}:
                 record[key] = {**record[key], "stop": {"tries": 1, "next": time.time() + min(2.0, BACKOFF_MAX)}}
                 write_json(rec_path, record)
                 print(f"operators: {session['id']} still listed after the stop; ownership kept", file=sys.stderr)
@@ -853,7 +1037,7 @@ def run_pass(state, repo, check=False, only=None):
             old = record.pop(key, None) or {}
             retire_proxy(old)
             write_json(rec_path, record)
-            sid, entry = start(unit, state, repo)
+            sid, entry = start(unit, state, repo, others)
             kept = {k: v for k, v in old.items() if k != "proxy"}
             record[key] = {**kept, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             write_json(rec_path, record)
@@ -868,7 +1052,7 @@ def run_pass(state, repo, check=False, only=None):
         now = time.time()
         for sid, key in stops:
             try:
-                stop(sid)
+                stop(sid, state)
             except Refused as e:
                 if key:
                     tries = int(((record.get(key) or {}).get("stop") or {}).get("tries") or 0) + 1
@@ -876,7 +1060,7 @@ def run_pass(state, repo, check=False, only=None):
                     write_json(rec_path, record)
                 print(f"operators: stop {sid} failed, the project keeps its session: {e}", file=sys.stderr)
                 continue
-            later = {s["id"] for s in listing()}
+            later = {s["id"] for s in live_sessions(state)}
             if sid in later:                         # ownership drops only once the stop is confirmed absent
                 if key:
                     record[key] = {**record[key], "stop": {"tries": 1, "next": now + min(2.0, BACKOFF_MAX)}}
@@ -894,7 +1078,7 @@ def run_pass(state, repo, check=False, only=None):
                 retire_proxy(record.pop(key, None))
                 write_json(rec_path, record)
         if only_unit is not None:
-            return ensure_verdict(only_unit, started_now.get(only_unit["key"]), listing)
+            return ensure_verdict(only_unit, started_now.get(only_unit["key"]), lambda: live_sessions(state))
         return 0
     finally:
         os.close(fd)

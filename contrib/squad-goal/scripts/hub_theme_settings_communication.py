@@ -774,12 +774,17 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
     # The workspace node adds a channel to the row that leads it; the hub lists the Slack ids the files already name,
     # so the channel list never offers one twice (#2918).
+    named_ids = [c for c in (_slack_real_id(x["id"]) for x in group["channels"]) if c]
     channel_add = None if refused or not _slack_real_id(ws_id) else {
         "doc": "committed" if group["file"] == cf else "local", "ws": group["index"], "workspace": ws_id,
-        "named": [c for c in (_slack_real_id(x["id"]) for x in group["channels"]) if c]}
+        "named": named_ids}
+    # The read target the tree marks its channels by (#2955): the hub asks the workspace's own connection which of
+    # these ids Slack still lists, and a channel it does not list reads unreachable. It is a read, so another project's
+    # workspace keeps it too.
+    channel_read = None if refused or not _slack_real_id(ws_id) else {"workspace": ws_id, "named": named_ids}
     return {"id": node_id, "level": 3, "kind": "workspace", "name": _slack_text(ws.get("label") or ws_id),
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
-            "channel_add": channel_add,
+            "channel_add": channel_add, "channel_read": channel_read,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
             "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
@@ -2501,17 +2506,25 @@ def _slack_channel_directory(ws, token):
         _SLACK_CHANNELS[ws] = {"at": now, "channels": channels}
     return channels, None
 
+SLACK_NOT_LISTED = "Slack does not list this channel: the bot left the channel, or the channel does not exist."
+
 def slack_channels_post(body):
     """POST /api/slack/channels: `{workspace, named}` answers the workspace's channels by name, the ones `named` holds
-    left out (#2918). A workspace this host cannot read answers `manual`, so the page offers the raw id field."""
-    if not isinstance(body, dict): return {"err": "bad request", "manual": True, "channels": []}
+    left out (#2918), and `unreachable`: each named channel the workspace's Slack list does not hold, with the probable
+    cause (#2955). A workspace this host cannot read answers `manual`, so the page offers the raw id field."""
+    if not isinstance(body, dict): return {"err": "bad request", "manual": True, "channels": [], "unreachable": []}
     ws = _slack_text(body.get("workspace")).strip()
     token, err = _slack_people_conn(ws)
-    if err: return {"err": err, "manual": True, "channels": []}
+    if err: return {"err": err, "manual": True, "channels": [], "unreachable": []}
     channels, err = _slack_channel_directory(ws, token)
-    if err: return {"err": err, "manual": True, "channels": []}
+    if err: return {"err": err, "manual": True, "channels": [], "unreachable": []}
     named = {_slack_text(x) for x in body.get("named") or [] } if isinstance(body.get("named"), list) else set()
-    return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named]}
+    listed = {c["id"] for c in channels}
+    # The listing is the one measure of reachability: a failed read above marks nothing, and an archived channel the
+    # directory leaves out reads the same as one the bot left (#2955).
+    gone = [{"id": i, "text": SLACK_NOT_LISTED} for i in sorted(named) if i and i not in listed]
+    return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named],
+            "unreachable": gone}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and

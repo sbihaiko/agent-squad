@@ -4,17 +4,24 @@
 Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
 probe writes. The profile is the one a live project session runs under: it writes the outbox of each channel of one
 project, reads the inbox of each of them, and nothing else of the inbox folder. The denials come first: a write outside
-those outboxes, a read of another project's inbox and a foreign host on port 443 must each fail, while a write into each
-own outbox and a read of each own inbox must pass. Then one bounded `claude -p` call runs with the operator's tool set
-and `dontAsk`. Its HTTPS goes only through a loopback proxy that relays the model host and refuses every other target.
-A denial that does not happen, a control that does not pass, or a session that starts with another tool set, fails the
-probe.
+those outboxes, a read of another project's inbox, a read of a secret or another project's checkout (#2951) and a foreign
+host on port 443 must each fail, while a write into each own outbox and a read of each own inbox must pass. Then one
+bounded `claude -p` call runs with the operator's tool set and `dontAsk`. Its HTTPS goes only through a loopback proxy
+that relays the model host and refuses every other target. A denial that does not happen, a control that does not pass,
+or a session that starts with another tool set, fails the probe.
 
-Network bound: the profile allows network out to localhost only, so the kernel refuses every foreign host, port 443
-included. How the call reaches the model follows the CLI's endpoint (`ANTHROPIC_BASE_URL`): a loopback gateway is reached
-under that same loopback rule, and any other host is reached through contrib/voice/model_proxy.py, which relays that one
-target and refuses every other CONNECT, recording each refusal. The probe proves the kernel refusal, the refusal the proxy
-records, and a model call that succeeds.
+Network bound: the profile allows network out to localhost only, on the model route's one port (#2951), so the kernel
+refuses every foreign host, port 443 included, and every loopback port but that one. How the call reaches the model
+follows the CLI's endpoint (`ANTHROPIC_BASE_URL`): a loopback gateway is reached under that same loopback rule, and any
+other host is reached through contrib/voice/model_proxy.py, which relays that one target and refuses every other CONNECT,
+recording each refusal. The probe proves the kernel refusal, the refusal the proxy records, and a model call that
+succeeds.
+
+Read bound (#2951): the profile refuses a read of `.env`, of every `*.slack.local.yaml`, of the owner's `~/.ssh`,
+`~/.config/gh` and `~/.aws`, and of another project's checkout. The probe writes the first two and the foreign checkout
+itself, so those three refusals never depend on what the machine holds, and it tries each credential folder the home
+holds. A read of the session's own checkout must still pass — its own `.env` and `*.slack.local.yaml` included, since
+a project keeps them there — or a profile that refuses every read would pass.
 
 Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile, under the
 name a live project session carries (`SQUAD-OPERATOR-<key>`, #2925). The CLI must reach the service it already runs, or
@@ -52,8 +59,9 @@ ROOT = Path(__file__).resolve().parents[2]
 VOICE = Path(__file__).resolve().parent
 sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
+import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
-from operators import TOOLS, marked_name, profile_text  # noqa: E402
+from operators import SECRET_DIRS, TOOLS, marked_name, profile_text  # noqa: E402
 
 from squad import slackwriter  # noqa: E402
 
@@ -66,6 +74,8 @@ DEADLINE = 180.0                       # seconds, the one CLI call
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
+OWN_READABLE = "PROBE-OWN-CHECKOUT-LINE"  # one line in the session's own checkout: the read denials must not swallow it
+SECRET_LINE = "PROBE-SECRET-LINE"       # one line in each file the profile must refuse: no read may return it
 PROBE_KEY = "probe-project"             # the name a live project session carries: `SQUAD-OPERATOR-probe-project`
 PROBE_CHANNELS = ("C0PROBE01", "C0PROBE02")   # two channels of one project: one session answers both (#2925)
 PROMPT = "Reply with the single word ok. Use no tool."
@@ -132,6 +142,22 @@ def session_dir():
     return work_root() / "session"
 
 
+def config_root():
+    """The probe CLI's own config root (#2963): a live session's runtime state, never the owner's global config file."""
+    return Path(operators.config_root(str(work_root())))
+
+
+def config_env():
+    """The environment every probe CLI call runs under: the operator's config root and the owner's keychain name (#2963)."""
+    return operators.cli_env(str(work_root()))
+
+
+def prepare_config(checkouts):
+    """Prepare the probe's config root the way a live supervisor does, and trust each folder the probe works in."""
+    operators.prepare_config(str(work_root()))
+    operators.seed_trust(str(work_root()), [str(path) for path in checkouts])
+
+
 def check_denials(write_landed, read_leaked, network_reached):
     if write_landed:
         raise ProbeFailed("a denial did not happen: write outside the outbox landed")
@@ -170,14 +196,77 @@ def sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
         raise ProbeFailed(f"a sandboxed call passed its {timeout:.0f}s deadline") from None
 
 
-def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inboxes=()):
+def refuse_reads(work, profile, other_checkout, home=None, outside=None):
+    """Prove every read the profile must refuse (#2951 criteria 1 and 4), and return the credential folders it tried.
+
+    The probe writes `.env`, a `*.slack.local.yaml` and a line of another project's checkout itself, so the three
+    refusals never depend on what a machine holds. Those two secrets sit beside the session's own checkout, never inside
+    it: a project keeps its own `.env` and `*.slack.local.yaml` in its checkout, and the profile re-allows that folder,
+    so the same names there must stay readable. The own-checkout control reads one ordinary file and one of each secret
+    name: without it, a profile that refuses every read, or that swallows the checkout's own secrets, would pass. A
+    credential folder the home does not hold cannot be tried, and is skipped, as `config_denials` skips a settings file;
+    a folder whose files all sit in subfolders is walked to its first file. Every refusal is the kernel's own
+    `Operation not permitted`.
+    """
+    home = Path(home or os.path.realpath(os.path.expanduser("~")))
+    checkout = Path(work)
+    other = Path(other_checkout)
+    other.mkdir(parents=True, exist_ok=True)
+    outside = Path(outside) if outside else checkout.parent / f"{checkout.name}-outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    own = [checkout / "own-notes.txt", checkout / ".env", checkout / "probe.slack.local.yaml"]
+    for path in own:
+        path.write_text(OWN_READABLE + "\n", encoding="utf-8")
+    written = [outside / ".env", outside / "probe.slack.local.yaml", other / "notes.txt"]
+    for path in written:
+        path.write_text(SECRET_LINE + "\n", encoding="utf-8")
+    targets, tried = list(written), []
+    for name in SECRET_DIRS:
+        folder = home / name
+        if not folder.is_dir():
+            continue
+        found = next((p for p in sorted(folder.rglob("*")) if p.is_file()), None)
+        if found is None:
+            continue
+        targets.append(found)
+        tried.append(str(folder))
+    for path in targets:
+        done = sandboxed(profile, "/bin/sh", ["-c", f'cat "{path}"'], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a read denial did not hold: the session may read {path}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ": the read returned a line"))
+    for path in own:
+        control = sandboxed(profile, "/bin/sh", ["-c", f'cat "{path}"'], work, DENIAL_DEADLINE)
+        if control.returncode != 0 or OWN_READABLE not in control.stdout:
+            raise ProbeFailed(f"the profile refuses {path.name} of the session's own checkout, so its read denials "
+                              f"prove nothing: {control.stderr.strip() or 'no reason'}")
+    return sorted(tried)
+
+
+def check_loopback_bound(connect):
+    """The other half of the port rule (#2951 criterion 2): a loopback port that is not the model route is refused.
+
+    The listener is open, so a refusal is the kernel's and not a connection the machine would refuse anyway.
+    """
+    elsewhere = socket.create_server((LOOPBACK, 0))
+    try:
+        done = connect(LOOPBACK, elsewhere.getsockname()[1])
+    finally:
+        elsewhere.close()
+    if not denied(done):
+        raise ProbeFailed("the profile reaches a loopback port that is not the model route, so the endpoint port bound "
+                          f"is unproven: {done.stderr.strip() if done.returncode else 'the connection passed'}")
+
+
+def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inboxes=(), other_checkout=None):
     """Run each denial under the profile, with no model in the loop, and return what got through.
 
     A denial counts only when the profile applied (the control echo ran) and the command refused with its own
     `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
-    The loopback control is the proxy's port: the model call needs it open, so a refused loopback proves nothing.
+    The loopback control is the proxy's port: the model call needs it open, so a refused loopback proves nothing, and
+    every other loopback port must be refused.
     Each own outbox must take a write and each own inbox must give its line: without those controls, a profile that
-    refuses everything would pass the denials (#2925).
+    refuses everything would pass the denials (#2925). `other_checkout` adds the read refusals of `refuse_reads`.
     """
     def run(command):
         return sandboxed(profile, "/bin/sh", ["-c", command], work, DENIAL_DEADLINE)
@@ -205,22 +294,27 @@ def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inbox
             raise ProbeFailed(f"the profile refuses an own inbox, so the denial proves nothing: "
                               f"{granted.stderr.strip() or 'no reason'}")
     check_loopback_open(connect(LOOPBACK, proxy_port))
+    check_loopback_bound(connect)
+    if other_checkout is not None:
+        refuse_reads(work, profile, other_checkout)
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
 
 
 OWNER_FILES = ("settings.json", "CLAUDE.md")   # files the owner's next, unsandboxed session loads from ~/.claude
+OWNER_GLOBAL = ".claude.json"                  # the owner's global config: the MCP servers its next session starts (#2963)
 OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates
 
 
 def config_denials(work, profile, home=None):
-    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925).
+    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925, #2963).
 
-    The check opens the file for append and writes nothing, and it never creates a file, so a profile that let it through
-    changes nothing on disk. A file the machine does not hold cannot be tried, and is skipped. Returns the files tried."""
+    The owner's global config file sits beside the Claude home, not inside it, and its MCP server entries load into the
+    owner's next, unsandboxed session, so it is tried with the settings files. The check opens the file for append and
+    writes nothing, and it never creates a file, so a profile that let it through changes nothing on disk. A file the
+    machine does not hold cannot be tried, and is skipped. Returns the files tried."""
     root = Path(home or os.path.realpath(Path.home())) / ".claude"
     tried = []
-    for name in OWNER_FILES:
-        path = root / name
+    for path in [root / name for name in OWNER_FILES] + [root.parent / OWNER_GLOBAL]:
         if not path.is_file():
             continue
         done = sandboxed(profile, sys.executable, ["-c", OPEN_FOR_WRITE, str(path)], work, DENIAL_DEADLINE)
@@ -262,7 +356,7 @@ def session(work, profile, cli, proxy_url=None):
 def cli_call(work, profile, cli, args, proxy_url=None):
     """One bounded CLI call through the wrapper; return its init event, its result event and every event."""
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
-    done = sandboxed(profile, cli, args, work, DEADLINE, proxy_env)
+    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env()})
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -301,7 +395,8 @@ def bg_listed(cli, sid, work, name):
     """True when the CLI lists the session id under `name` in its live roster: the background service answered, and the
     session carries the operator token in its name (#2925). A session whose cwd is a project checkout is told apart
     from a person's own session by that name alone."""
-    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
+                          env={**os.environ, **config_env()})
     try:
         rows = json.loads(done.stdout or "[]")
     except ValueError:
@@ -335,7 +430,7 @@ def bg_session(work, profile, cli, proxy_url=None, name=None):
     name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
     done = sandboxed(profile, cli, ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"], work,
-                     BG_DEADLINE, proxy_env)
+                     BG_DEADLINE, {**proxy_env, **config_env()})
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
         raise ProbeFailed(bg_failure(done, work))
@@ -343,7 +438,8 @@ def bg_session(work, profile, cli, proxy_url=None, name=None):
         if not bg_listed(cli, sid, work, name):
             raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
     finally:
-        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
+                       env={**os.environ, **config_env()})
 
 
 def expected_control(role):
@@ -466,15 +562,17 @@ def guest_sessions(work, profile, cli, proxy_url=None):
             raise ProbeFailed(f"the {role} session did not succeed: {result.get('subtype')}")
 
 
-def project_shape(work):
+def project_shape(work, ports):
     """The folders one live project session owns: its checkout, one outbox per channel, one inbox per channel, another
-    project's inbox it must never read, and a folder outside every grant for the write denial (#2925)."""
+    project's inbox it must never read, another project's checkout it must never read (#2951), and a folder outside every
+    grant for the write denial (#2925). `ports` names the loopback ports the model route uses."""
     checkout = work / "checkout"
+    other_checkout = work / "other-checkout"
     outboxes = [work / "state" / "outboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     own_inboxes = [work / "state" / "inboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
-    for folder in (checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent):
+    for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent):
         folder.mkdir(parents=True, exist_ok=True)
     leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
     for outbox in outboxes:
@@ -482,16 +580,19 @@ def project_shape(work):
     for inbox in own_inboxes:
         inbox.write_text(OWN_SENTINEL + "\n")
     other_inbox.write_text(SENTINEL + "\n")
-    profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes])
-    return checkout, outboxes, own_inboxes, other_inbox, leak, profile
+    profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
+                           checkout=str(checkout), others=[str(other_checkout)], ports=ports,
+                           config=str(config_root()))
+    return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile
 
 
 def run_probe(work, cli):
-    checkout, outboxes, own_inboxes, other_inbox, leak, profile = project_shape(work)
     host, port, loopback = model_endpoint()
-    controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
     if loopback:
-        check_denials(*denials(checkout, profile, leak, other_inbox, port, **controls))
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [port])
+        prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
+        controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
+        check_denials(*denials(checkout, profile, leak, other_inbox, port, other_checkout=other_checkout, **controls))
         config_denials(checkout, profile)
         init, result = session(checkout, profile, cli)
         check_session(init, result)
@@ -499,7 +600,11 @@ def run_probe(work, cli):
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
-        check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, **controls))
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [proxy.port])
+        prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
+        controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
+        check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, other_checkout=other_checkout,
+                               **controls))
         config_denials(checkout, profile)
         check_proxy_refuses(proxy)
         init, result = session(checkout, profile, cli, proxy.url)
@@ -526,8 +631,10 @@ def main(argv=None):
     host, port, loopback = model_endpoint()
     route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
         f"the proxy refused {refused} target(s) and recorded them"
-    print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
-          f"open; each own outbox took a write and each own inbox gave its line); {route}; session tools {TOOLS}, "
+    print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, the model "
+          f"route's loopback port open and every other loopback port refused; each own outbox took a write and each own "
+          f"inbox gave its line; .env, the Slack local file, another project's checkout and each credential folder the "
+          f"home holds refused, the own checkout read); {route}; session tools {TOOLS}, "
           f"dontAsk, cap ${SPEND}; a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
           f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
