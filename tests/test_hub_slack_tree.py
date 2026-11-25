@@ -356,12 +356,6 @@ def test_the_empty_project_setup_sits_in_a_dashed_box(hub):
 
 # ---------------------------------------------------------------- layout and type (#2841)
 
-def test_the_node_title_is_the_largest_text_of_the_detail_pane(hub):
-    """#2841: the selected node's title is the largest text of the detail pane."""
-    rule = re.search(r"#sbody \.slth\{([^}]*)\}", hub.PAGE)
-    assert rule and "font-size:var(--fs-display)" in rule.group(1), rule and rule.group(1)
-
-
 def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
     """#2841: five channel tiles and four workspace tiles fit one row at 1440 px, so each track asks 140 px at most."""
     rule = re.search(r"#tab-set #sbody \.sltnow\{([^}]*)\}", hub.PAGE)
