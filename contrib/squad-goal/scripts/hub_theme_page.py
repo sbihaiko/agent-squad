@@ -1844,8 +1844,8 @@ const slChFields=(d,i,j)=>{const ws=slWs(d)[i]||{},c=(ws.channels||[])[j]||{},g=
 const slAddCh=(d,i)=>`<div class=slad><input data-slci="${d}:${i}" placeholder="channel id" aria-label="new channel id"><input data-slcn="${d}:${i}" placeholder="name" aria-label="new channel name"><button data-sladdch="${d}:${i}">Add channel</button></div>`;
 const slAddWs=()=>`<div class=slad><select data-slwsclass aria-label="new workspace class"><option value=owned>owned · app installed</option><option value=guest>guest · connector</option></select><input data-slwsid placeholder="team id" aria-label="new workspace id"><input data-slwslabel placeholder="label" aria-label="new workspace label"><input data-slwsapp placeholder="app" aria-label="new workspace app"><button data-sladdws>Add Slack workspace</button></div>`;
 const slOpenBtn=(key,label)=>`<button data-slopen="${key}">${slOpen===key?"Close":"Edit"}</button>`;
-/* The roles and members editor (SPEC 2682 #2699). The owner edits a role's id, its actions and its deploy list, and the
-   members of a role in one format: Slack workspace, channel, role and user ids. The actions come from the hub's read,
+/* The roles and members editor (SPEC 2682 #2699). The owner edits a role's id, its actions, its deploy list and its
+   tone, and the members of a role in one format: Slack workspace, channel, role and user ids. The actions come from the hub's read,
    never a copy in the view, and every rule stays with the hub and the policy module (ADR-0177): the edit posts one
    operation, and the hub refuses an action outside the list, a member that is not a user id, a channel outside the
    member's workspace, and `prod` in a deploy list. A role lives in the committed file and a member in the local one, so
@@ -1872,6 +1872,7 @@ const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],ac
  +`<span role=cell data-l="Role"><input data-sle="role:${i}:id" value="${slA((x&&x.id)||"")}" size=16 aria-label="role ${n}: id"></span>`
  +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
  +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
+ +`<span role=cell data-l="Tone"><input data-sle="role:${i}:tone" value="${slA((x&&x.tone)||"")}" placeholder="inherit" aria-label="role ${n}: tone"></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
 /* Members by name (#2911): a Slack user knows a person by email or @name, never by a user id. The row shows each
    person's display name and @name, which the hub reads from the workspace's own connection, and the add row takes an

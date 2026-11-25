@@ -1675,11 +1675,11 @@ def slack_clients_post(body):
 # The view holds no rule (ADR-0137) and the policy module holds the refusal text (ADR-0177).
 SLACK_WS_FIELDS = ("id", "label", "class", "app", "language", "persona")
 SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announce", "reply")
-# The roles and members editor (#2699): a role carries its id, its actions and its deploy list, and it lives in the
-# committed file; a member carries its Slack workspace, channel, role and user ids, and it lives in the local file
+# The roles and members editor (#2699): a role carries its id, its actions, its deploy list and its tone, and it lives
+# in the committed file; a member carries its Slack workspace, channel, role and user ids, and it lives in the local file
 # alone (ADR-0177). The file a row lives in is a placement rule here; the value's own rule stays in the policy module,
 # which validates the edited documents below.
-SLACK_ROLE_FIELDS = ("id", "actions", "deploy")
+SLACK_ROLE_FIELDS = ("id", "actions", "deploy", "tone")
 SLACK_MEMBER_FIELDS = ("workspace", "channel", "role", "users", "alias")
 ROLE_IN_COMMITTED = "the roles of the project live in the committed file"
 MEMBER_IN_LOCAL = "the members of a role live in the local file"
@@ -2093,7 +2093,7 @@ def _slack_place(P, op, docs, local_name):
             return f"slack.yaml: {ROLE_IN_COMMITTED}", False
         err, changed, _touched = _slack_place_rows(kind, path, value, docs["committed"], SLACK_ROLE_FIELDS,
                                                    "slack.yaml", "roles", {"id": "", "actions": []},
-                                                   id_required=True, unique_key="id")
+                                                   id_required=True, unique_key="id", optional=("tone",))
         return err, changed
     if path[0] == "members":
         if doc != "local":
