@@ -35,14 +35,21 @@ The grant the executor checks is the decision `decide` returned for the inbox li
 path decide both what the pass asks and what the executor allows, so the request's action adds no grant of its own.
 
 A request is run once: a ledger of the requests already handled lives in `<state>/actions-handled.jsonl`, one JSON line
-per handled key, and the key names the whole request line, so two requests that share the source and the action but
-differ in their arguments still run once each. The key is written with fsync before the reply, the audit line and the
-command itself. Each pass also keeps its place in every outbox in `<state>/actions-offsets.json`, so a pass reads only
-the bytes appended since the last one; a pass that keeps no place reads a bounded tail of the outbox. The ledger, never
-the offset, is what decides that a request already ran.
+per handled key, and the key names the parsed request (the action, the arguments, the sender, the channel and the
+source), so two requests that share the source and the action but differ in their arguments still run once each, and
+two lines that parse alike never run twice whatever else they carry. The key is written with fsync before the reply,
+the audit line and the command itself. Each pass also keeps its place in every outbox in
+`<state>/actions-offsets.json`, so a pass reads only the bytes appended since the last one; a pass that keeps no place,
+and one whose outbox rotated below its place, reads a bounded tail of the outbox. The ledger, never the offset, is what
+decides that a request already ran.
 
-The command the project declares runs as one argv with no shell, and a declared value that names a shell metacharacter
-never gets a source, so the executor refuses it.
+A reply write that fails never loses the record of the run: the audit line still names the failure, and the pass keeps
+the reply in `<state>/actions-pending.jsonl` for its next pass to deliver, so the reply arrives without running the
+command again.
+
+The command the project declares runs as one argv with no shell. A declared value that names a shell metacharacter is
+not one argv, so its source keeps the reason and the executor refuses the action as an invalid source, never as a
+missing one.
 
 Guards: `tests/test_slack_actions.py`.
 """
@@ -61,6 +68,7 @@ from . import slackpolicy as S
 AUDIT = "actions-audit.jsonl"        # one JSON line per action run, in the state directory (#2939)
 HANDLED = "actions-handled.jsonl"    # one JSON line per request a pass already handled, in the state directory
 OFFSETS = "actions-offsets.json"     # the byte of each outbox the last pass read through, so a pass reads only new bytes
+PENDING = "actions-pending.jsonl"    # one JSON line per reply a failed write left for the next pass to deliver
 DEFAULT_OUTBOXES = "outboxes"
 COMMAND_TIMEOUT = 300.0              # seconds, one declared command: a bound, never a target
 REQUEST_WINDOW = 300.0               # seconds, a request older than this is stale and never runs
@@ -101,11 +109,16 @@ class Run(NamedTuple):
 class CommandSource:
     """One action source that runs a command the project declares, with the caller's runner. It reads the message
     nowhere: the command is fixed at build time, it runs as one argv with no shell, and no argument of a request is
-    appended to it. `exit_code` holds the code of the last run, so the audit line names the command's own answer."""
+    appended to it. `exit_code` holds the code of the last run, so the audit line names the command's own answer.
+
+    `error` is None for a command that is one argv, and the reason the declared value never runs otherwise. The executor
+    reads it to refuse the action as an invalid source, so a declaration that names a shell metacharacter is refused
+    with its own reason and never reads as a command the project did not declare."""
 
     def __init__(self, command, runner=subprocess.run, timeout=COMMAND_TIMEOUT):
         self.command = str(command)
         self.argv = command_argv(self.command)
+        self.error = None if self.argv else "the declared command is not one argv, so it never runs"
         self.runner = runner
         self.timeout = timeout
         self.exit_code = None
@@ -113,7 +126,7 @@ class CommandSource:
     def __call__(self, *args):
         if not self.argv:
             self.exit_code = 1
-            return "the declared command is not one argv, so it never runs"
+            return self.error
         try:
             done = self.runner(self.argv, shell=False, capture_output=True, text=True, timeout=self.timeout)
         except (OSError, subprocess.SubprocessError) as e:
@@ -198,6 +211,10 @@ def refusal_text(action, error, decision=None):
                 "grants no action.")
     if check == "action":
         return f"The {action} action was refused: {reason}"
+    if check == "source_invalid":
+        # The project declares a command for the action, but the value is not one argv, so it never runs. The refusal
+        # names that reason, never a missing command.
+        return f"The {action} action was refused: {reason}"
     if check == "source":
         # `approve_and_move` and `loop_control` keep their own executor path, so no `project.actions` command stands in
         # for the source they need, and the reply says so.
@@ -214,10 +231,11 @@ def sources_for(committed, local, runner=subprocess.run):
     switch, `slackexecutor.py:340-347`), so this function builds none and the executor refuses them as a missing
     source here."""
     declared = S.project_actions(committed, local)
-    out = {action: CommandSource(command, runner) for action, command in declared.items()
-           if action in TEXT_ACTIONS and command_argv(command)}
+    # A declared value that is not one argv keeps its source, and that source carries the reason: the executor refuses
+    # it as an invalid source, so a refusal never reads as a command the project did not declare.
+    out = {action: CommandSource(command, runner) for action, command in declared.items() if action in TEXT_ACTIONS}
     _, command = S.deploy_target(S.project_identity(committed, local))
-    if command and command_argv(command):
+    if command:
         out[X.DEPLOY] = CommandSource(command, runner)
     return out
 
@@ -330,10 +348,13 @@ def _save_offsets(path, offsets):
         return
 
 
-def _tail_start(path, limit=FIRST_READ_BYTES):
+def _tail_start(path, limit=None):
     """The byte a first read starts at: the start of the file when it is short, else the first line boundary at or after
     `size - limit`. A pass that keeps no place in an outbox reads a bounded tail, so a long answer history costs one
-    bounded read and never one read of the whole file."""
+    bounded read and never one read of the whole file. A rotated outbox reads the same bounded tail, never the whole
+    file its old place no longer bounds."""
+    if limit is None:
+        limit = FIRST_READ_BYTES
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -353,13 +374,14 @@ def _tail_start(path, limit=FIRST_READ_BYTES):
 
 def _new_rows(path, offset):
     """The complete lines written after `offset`, and the byte after the last of them. A file shorter than its offset
-    was rotated, so it is read from the start. A last line with no newline is not yet written, so it stays unread."""
+    was rotated, so it is read from a bounded tail, the same tail a first read takes, and never from the start of a long
+    file. A last line with no newline is not yet written, so it stays unread."""
     try:
         size = os.path.getsize(path)
     except OSError:
         return [], offset
     if offset > size:
-        offset = 0
+        offset = _tail_start(path)
     try:
         with open(path, "rb") as f:
             f.seek(offset)
@@ -447,10 +469,12 @@ class Ledger:
 
 
 def _key(record):
-    """One handled key: the whole request line, so two requests that share the source and the action but differ in their
-    arguments, their sender or their time are two requests, and the second one runs. The key is the digest of the line's
-    canonical text, so a line a pass already handled keeps one small, stable key."""
-    return hashlib.sha256(json.dumps(record, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    """One handled key: the parsed request, never the raw line. The key holds the action, the arguments, the sender, the
+    channel and the source, so two requests that name the same thing run once each, and two lines that carry the same
+    request with another field (a thread ts, say) never run the declared command twice. A malformed line keeps a key too,
+    so a refusal is recorded once. The key is the digest of those fields' canonical text."""
+    fields = {name: record.get(name) for name in REQUEST_FIELDS}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 def _append_line(path, record):
@@ -460,6 +484,46 @@ def _append_line(path, record):
         f.write(json.dumps(record, sort_keys=True) + "\n")
         f.flush()
         os.fsync(f.fileno())
+
+
+def _write_lines(path, records):
+    """Replace one JSON-lines file atomically, so a rewrite a crash cuts leaves the old file whole."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _send_pending(path, outbox_for):
+    """Deliver every reply a failed write left behind, then clear it. A reply that cannot be written stays for the next
+    pass, so a full disk delays a reply and never loses it."""
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = f.read().splitlines()
+    except OSError:
+        return
+    left = []
+    for row in rows:
+        try:
+            got = json.loads(row)
+        except ValueError:
+            continue
+        if not isinstance(got, dict) or not isinstance(got.get("reply"), dict):
+            continue
+        try:
+            _append_line(outbox_for(str(got.get("channel") or "")), got["reply"])
+        except OSError:
+            left.append(got)
+    try:
+        _write_lines(path, left)
+    except OSError:
+        return
 
 
 def _exit_code(outcome, source):
@@ -548,6 +612,8 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
     ledger = Ledger(os.path.join(state, HANDLED))
     audit_path = os.path.join(state, AUDIT)
     offsets_path = os.path.join(state, OFFSETS)
+    pending_path = os.path.join(state, PENDING)
+    _send_pending(pending_path, outbox_for)   # a reply a failed write left behind goes out before any new request
     offsets = _load_offsets(offsets_path)
     lines, ends = _request_lines(state, project_of, now, offsets)
     inbox = _Inbox(state)
@@ -568,13 +634,24 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
         # after any of them never runs the request a second time (#2939 review, finding 1).
         ledger.add(key)
         run = _run_one(record, state, project_of, documents, now, runner, outbox_for, inbox)
-        if run.reply is not None:
-            _append_line(outbox_for(run.channel), run.reply)
         error = run.error
-        if not error and run.exit != 0:
-            error = f"the declared command exited {run.exit}"
-        _append_line(audit_path, {"time": now.isoformat(), "sender": run.sender, "role": run.role,
-                                  "channel": run.channel, "action": run.action, "exit": run.exit, "error": error})
+        exit_code = run.exit
+        if not error and exit_code != 0:
+            error = f"the declared command exited {exit_code}"
+        try:
+            if run.reply is not None:
+                _append_line(outbox_for(run.channel), run.reply)
+        except OSError as e:
+            # The reply write failed: the audit still records the run, and the reply waits for the next pass, so a full
+            # disk delays a reply and never loses it (#2939 review, findings 2 and 4).
+            exit_code = 1
+            error = f"the reply was not written: {type(e).__name__}: {e}"
+            _append_line(pending_path, {"channel": run.channel, "reply": run.reply})
+        finally:
+            # The audit line is written whatever the reply write did, so a crash after the reply never loses the record.
+            _append_line(audit_path, {"time": now.isoformat(), "sender": run.sender, "role": run.role,
+                                      "channel": run.channel, "action": run.action, "exit": exit_code,
+                                      "error": error})
         runs.append(run)
     _save_offsets(offsets_path, ends)   # only the outboxes this pass read, so a deleted one leaves no stale entry
     return tuple(runs)

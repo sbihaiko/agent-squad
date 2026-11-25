@@ -41,7 +41,10 @@ The module reads no clock and calls no network: the caller supplies the status, 
 sources, the hub loop switch and the deploy source, because those answers come from the repository, the board, the
 project's own log, the project's own work path and its ratified deploy command, and the loop is the hub's to write.
 
-Guards: `tests/test_slack_executor.py`, `tests/test_approve_and_move.py`.
+A source that is there but declares a value that is not one argv is refused as an invalid source, with the declaration's
+own reason, so it never reads as a command the project did not declare.
+
+Guards: `tests/test_slack_executor.py`, `tests/test_approve_and_move.py`, `tests/test_slack_actions.py`.
 """
 import json
 from typing import NamedTuple
@@ -329,6 +332,10 @@ def execute(request, decision, line, project, status=None, logs=None, guest=(), 
     for action, source, name in sources:
         if refusal is None and request.action == action and source is None:
             refusal = Refusal("source", f"the {action} action needs a {name} source")
+        # A source that is there but declares a value that never runs keeps its own reason, so a declaration that names
+        # a shell metacharacter is refused as invalid and never reads as a command the project did not declare.
+        elif refusal is None and request.action == action and getattr(source, "error", None):
+            refusal = Refusal("source_invalid", f"the {action} action's declared command never runs: {source.error}")
     if refusal is not None:
         return Outcome(False, None, data_record(line, refusal))
     if request.action == STATUS:

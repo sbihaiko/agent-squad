@@ -2837,9 +2837,30 @@ def test_two_action_watchers_never_run_a_pass_at_once():
     assert peak and max(peak) == 1
 
 
-def test_the_drain_never_posts_a_line_that_names_the_request_kind(tmp_path):
-    """Finding 15 (BLOCKING 1): a line whose raw text names the reserved `action-request` kind is never posted as an
-    answer, even when its shape fails the request test, so the request's arguments never reach the channel."""
+def test_the_drain_posts_an_answer_that_mentions_the_request_kind_in_plain_text(tmp_path):
+    """Finding 3 (DEBT): the drain parses each line first and skips only a real request, so an answer whose text names
+    `action-request` is posted, never silently dropped."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    pending(daemon.state, app["id"])
+    # The line carries an `action-request` mention under another key, never as the top-level kind, so `is_request` reads
+    # it as an answer; the old raw-text test skipped it.
+    append_outbox(daemon.state.outbox_for(app["id"]),
+                  {"text": "The action-request pass is documented in the ADR.",
+                   "meta": {"kind": "action-request"}, "thread_ts": "1762500000.000100"})
+    assert asyncio.run(daemon.drain_outboxes()) == 1
+    assert [p.get("text") for p in client.posts() if p.get("text")] == [
+        "The action-request pass is documented in the ADR."]
+
+
+def test_an_unparseable_line_that_names_the_request_kind_is_never_posted(tmp_path):
+    """Finding 3 (DEBT): a line that is not JSON but names the reserved `action-request` kind as its own key is still a
+    request, so it never reaches the channel as an answer."""
     mod = voiced()
     state = mod.State(str(tmp_path))
     (tmp_path / "inboxes").mkdir(exist_ok=True)
@@ -2848,10 +2869,7 @@ def test_the_drain_never_posts_a_line_that_names_the_request_kind(tmp_path):
          "text": "what is the status?"}) + "\n")
     outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
     outbox.parent.mkdir(exist_ok=True)
-    # The kind carries a trailing space, so `is_request` reads the line as an answer; the raw text still names the
-    # request kind, and the line must never reach the channel.
-    outbox.write_text(json.dumps({"kind": "action-request ", "text": "deploy with the secret token",
-                                  "thread_ts": "1762500100.000100"}) + "\n")
+    outbox.write_text('{"kind": "action-request", "text": "deploy with the secret token", broken\n')
     client = FakeClient()
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
                         downloader=lambda url: b"", log=lambda line: None, client=client)
