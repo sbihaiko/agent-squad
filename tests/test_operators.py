@@ -667,7 +667,7 @@ def test_the_brief_tells_the_session_to_name_the_channel_persona_on_its_answers(
     """#2935: the brief carries the channel persona's id, so the session writes `persona` on each of its own answers."""
     op = operators(tmp_path, monkeypatch)
     state = tmp_path / "state"
-    state.mkdir()
+    state.mkdir(exist_ok=True)
     (state / "channels.json").write_text(json.dumps({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}}))
     revision = {
         "project": {"language": "en-US", "persona": "hal"},
