@@ -1564,7 +1564,7 @@ function slTSettings(n){const rows=((n.settings||{}).rows)||[];if(!rows.length)r
 /* The Permissions section and the sender preview of a channel (SPEC 2682 #2826). The rows, the counts and the
    decision are the hub's; the view draws them and asks the one read route for a preview, which posts nothing. */
 let slSnd=null;   // the last sender preview: its channel node, its sender and its answer
-const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:`member:${u}`,t:u})),{v:"stranger",t:"someone with no membership"},{v:"bot",t:"a bot"}];
+const slPvSenders=n=>[...((n.permissions||{}).members||[]).map(u=>({v:`member:${u}`,t:u})),{v:"stranger",t:"someone with no membership"},{v:"bot",t:"a bot"},{v:"own",t:"the owner's own post"}];
 function slTPerms(n){const p=n.permissions;if(!p)return "";
  const rows=(p.roles||[]).map(r=>`<tr><td class=${r.accepted?"yes":"no"}>${r.accepted?"yes":"no"}</td><td>${esc(r.id)}</td><td>${esc((r.actions||[]).join(", ")||"none")}</td><td>${esc((r.members||[]).join(", ")||"none")}</td></tr>`).join("");
  const count=`${p.eligible} distinct ${p.eligible===1?"person":"people"} eligible`;
@@ -1583,6 +1583,7 @@ async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
  const q=new URLSearchParams({workspace:n.ref.workspace,channel:n.ref.channel});
  if(sender.startsWith("member:"))q.set("user",sender.slice(7));
  if(sender==="bot")q.set("bot","1");
+ if(sender==="own")q.set("own","1");
  slSnd={node:id,sender,data:null};slPvShow();
  let data;try{data=await (await fetch("/api/slack/decide?"+q)).json()}catch(e){data={err:"The preview did not answer."}}
  if(slSnd&&slSnd.node===id&&slSnd.sender===sender){slSnd={node:id,sender,data};slPvShow()}}
