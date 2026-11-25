@@ -927,16 +927,20 @@ def test_a_person_in_two_accepted_roles_gets_a_note_naming_the_membership_the_po
 def test_the_preview_answers_an_owned_member_a_guest_member_a_stranger_a_bot_and_an_own_post(hub, tmp_path):
     owned = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
     assert owned == {"err": None, "decision": "inbox", "role": "manager", "actions": "status, logs",
-                     "reply": "bot", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, owned
+                     "reply": "bot", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                     "tone": "Calm and direct."}, owned
     guest = preview(hub, tmp_path, workspace="T0CLIENT01", channel="C0CLISUP01", user="U0CLIENT01")
     assert guest == {"err": None, "decision": "proposal", "role": "manager", "actions": "status, logs",
-                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US"}, guest
+                     "reply": "draft", "mark": "*Iara's Msg*", "language": "en-US",
+                     "tone": "Warm and patient."}, guest
     stranger = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0STRANGER")
     assert stranger == {"err": None, "decision": "data", "role": "none", "actions": "none",
-                        "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, stranger
+                        "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                        "tone": "Calm and direct."}, stranger
     bot = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", bot="1")
     assert bot == {"err": None, "decision": "data", "role": "manager", "actions": "none",
-                   "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR"}, bot
+                   "reply": "none", "mark": "*HAL9K's Msg*", "language": "pt-BR",
+                   "tone": "Calm and direct."}, bot
     own = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001", own="1")
     assert own["decision"] == "ignore" and own["reply"] == "none", own
 

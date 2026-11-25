@@ -1748,7 +1748,7 @@ function slTPreview(n){const p=n.permissions;if(!p||!n.ref)return "";
  const cur=known?slSnd.sender:senders[0].v;   // a sender the channel no longer offers falls back to its first option
  const opts=senders.map(s=>`<option value="${slA(s.v)}"${s.v===cur?" selected":""}>${esc(s.t)}</option>`).join("");
  const got=slSnd&&slSnd.node===n.id&&slSnd.sender===cur?slSnd.data:null;
- const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
+ const cells=g=>[["Decision",g.decision],["Role",g.role],["Actions",g.actions],["Reply path",g.reply],["Mark",g.mark],["Language",g.language],["Tone",g.tone]].map(([k,v])=>`<div class=tile><span class=tk>${esc(k)}</span><span class=tv>${esc(v)}</span></div>`).join("");
  const out=got&&got.err?`<p class="mx err" role=status>${esc(got.err)}</p>`:got?`<div class="now sltnow slpvnow">${cells(got)}</div>`:(slSnd&&slSnd.node===n.id&&slSnd.sender===cur?`<p class=m>Reading the decision.</p>`:"");
  return `<div class=setblk data-blk=preview data-theme=slk><h3 class=blkh>Try a sender</h3><div class=slpvbox>`
  +`<label class=slf><span>Sender</span><select data-slp-sender="${slA(n.id)}" aria-label="Sender">${opts}</select></label>${out}</div></div>`}

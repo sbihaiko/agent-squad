@@ -1149,9 +1149,9 @@ def slack_decide(query, committed=None, local=None):
     `member` must be one of them, a `stranger` must not be, and a `bot` posts as itself. It loads and validates the
     two documents once per request."""
     not_read = {"err": None, "decision": "not read", "role": "not read", "actions": "not read", "reply": "not read",
-                "mark": "not read", "language": "not read"}
+                "mark": "not read", "language": "not read", "tone": "not read"}
     unknown = {"err": None, "decision": "unknown", "role": "unknown", "actions": "unknown", "reply": "unknown",
-               "mark": "unknown", "language": "unknown"}
+               "mark": "unknown", "language": "unknown", "tone": "unknown"}
     if committed is None and local is None:
         try:
             committed, local = slack_yaml_paths()
@@ -1197,7 +1197,7 @@ def slack_decide(query, committed=None, local=None):
         return {"err": f"the decision did not resolve: {type(e).__name__}: {e}"}
     return {"err": None, "decision": decision.kind, "role": decision.role or "none",
             "actions": ", ".join(decision.actions) or "none", "reply": reply, "mark": mark,
-            "language": decision.language}
+            "language": decision.language, "tone": decision.tone or "none"}
 
 def slack_overview(committed=None, local=None):
     """The read view of the Communication theme: the Now tiles, each persona with the channels that resolve to it, each
