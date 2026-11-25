@@ -1583,10 +1583,11 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
  if(key==="ArrowLeft"){if(n.kids&&n.open)return {focus:cur,toggle:cur};return n.parent?{focus:n.parent}:null}
  return null}
 function slTFlush(){if(slAutoT)slAutoSave();if(slProposeT){clearTimeout(slProposeT);slProposeT=null;slPropose(slTsel,true)}}   // leaving a node saves its pending edit at once (#2908)
-function slTGo(r){if(!r)return;if(r.focus&&r.focus!==slTsel)slTFlush();
+function slTGo(r){if(!r)return;if(r.focus&&r.focus!==slTsel){slTFlush();slConfirm=null}   // a question belongs to its pane, never to the next one (#2922)
  if(r.toggle)slTopen[r.toggle]=!slTOpen(slTNode(r.toggle));   // an untouched node reads as open, so the fold must flip that reading
  if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
-function slTPick(id){if(id!==slTsel)slTFlush();slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
+function slTPick(id){if(id!==slTsel){slTFlush();slConfirm=null}   // a question belongs to its pane, never to the next one (#2922)
+ slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
 const slTNarrow=()=>{const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sbody");
  return !!el&&!!el.getBoundingClientRect&&el.getBoundingClientRect().width<=700};
@@ -1679,9 +1680,11 @@ const slTClient=n=>{if(n.kind!=="client"||n.own)return "";   // the page of one 
 const slTClientActions=n=>n.kind!=="project"||!n.ask?""
  :`<div class=sltacts><button type=button data-slcask="${slA(n.id)}">${esc("Remove from client")}</button></div>`;
 /* The one question a change asks (#2922): the hub's text, with Confirm and Keep. The question a node carries needs no
-   post; the one the route answers for Add project or Add client lands on the node the owner is looking at. */
-const slTConfirm=n=>{if(!slConfirm||(slConfirm.id&&(!n||slConfirm.id!==n.id)))return "";
- return `<div class="mx sltconfirm" role=alertdialog aria-label="${slA("Confirm")}"><p>${esc(slConfirm.text)}</p>`
+   post; the one the route answers for Add project or Add client lands on the node the owner is looking at. The question
+   is bound to the id of the node it belongs to, so a switch to another node hides it, and the tree's empty pane draws the
+   one question of a map with no client, where no node carries it (#2922). */
+const slTConfirm=n=>{const c=slConfirm;if(!c)return "";if(c.id&&(!n||c.id!==n.id))return "";
+ return `<div class="mx sltconfirm" role=alertdialog aria-label="${slA("Confirm")}"><p>${esc(c.text)}</p>`
  +`<div class=sltacts><button type=button data-slcconfirm>${esc("Confirm")}</button><button type=button data-slccancel>${esc("Keep")}</button></div></div>`};
 /* The Add client control of the tree (#2922): a name and a default persona, and the hub makes the client from them. */
 const slTNewPersonas=()=>(slT&&slT.new_client_personas)||[];
@@ -1797,7 +1800,7 @@ function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
   ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+T.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
  return `<div class="slttop${slTshow&&roots.length?" sltshow":""}"><div class=sltcol>`   // an empty tree keeps its column: Add client is the one way out of it (#2922)
  +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
- +slTSlot(T.guest_slot)+slTAddClient()
+ +slTSlot(T.guest_slot)+slTAddClient()+(roots.length?"":slTConfirm(null))   // the empty tree has no detail pane, so the question sits beside its control, which a narrow panel always shows (#2922)
  +`<div role=tree aria-label="Slack tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
@@ -1820,18 +1823,24 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
 function slMapAsk(id){const n=slTNode(id);slConfirm=n&&n.ask?{id:n.id,text:n.ask.text,body:n.ask}:null;slRender()}   // the one question a remove or a delete asks
 function slMapKeep(){slConfirm=null;slRender()}
 /* One change posts its body as it stands, so the hub answers its one question before any write; the confirm posts the
-   same body with the flag (#2922). A body that carries `confirm` on the first click would skip the question. */
-function slMapPost(body){slSaving=true;slMsg="";slBarSync();
+   same body with the flag (#2922). A body that carries `confirm` on the first click would skip the question. One change
+   is in flight at a time: a click while the save runs is dropped, so it never overwrites the pending question or drops
+   an ask the owner already issued (#2922). `at` names the node the question belongs to: the control's own node, so a
+   stale selection never draws the question on another pane. */
+function slMapPost(body,at){if(slSaving)return;   // one change at a time, never a second over the pending question
+ const node=at||slTsel||(slTRoots()[0]||{}).id||"";   // the pane the question belongs to, captured before the answer
+ slSaving=true;slMsg="";slBarSync();
  const fail=m=>{slSaving=false;slMsg="!"+m;slRender()};
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
  .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
  .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client map was not saved");return}
-  if(o.saved===false&&o.ask){slSaving=false;slConfirm={id:slTsel,text:o.ask,body:body};slRender();return}   // the hub's question, drawn before the write
+  if(o.saved===false&&o.ask){slSaving=false;if(slTNode(node))slTsel=node;   // the question moves the pane to its own node
+   slConfirm={id:node,text:o.ask,body:body};slRender();return}   // the hub's question, drawn before the write
   slSaving=false;slConfirm=null;slMsg="saved";slLoad()})   // the tree is read again, so the drawn tree is the hub's
  .catch(()=>fail("the client map was not saved: the hub did not answer"))}
-function slMapConfirm(){if(slConfirm)slMapPost(Object.assign({},slConfirm.body,{confirm:true}))}
+function slMapConfirm(){if(slSaving)return;if(slConfirm)slMapPost(Object.assign({},slConfirm.body,{confirm:true}),slConfirm.id)}
 function slMapAddProject(id){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclproject");
- if(el&&el.value)slMapPost({op:"add_project",client:(slTNode(id)||{}).client||"",project:el.value})}
+ if(el&&el.value)slMapPost({op:"add_project",client:(slTNode(id)||{}).client||"",project:el.value},id)}
 function slMapAddClient(){const d=typeof document!=="undefined"?document:null,
  name=d&&d.getElementById&&d.getElementById("slcname"),sel=d&&d.getElementById&&d.getElementById("slcpersona"),
  typed=name?String(name.value||"").trim():"";if(!typed)return;   // a name is what makes a client (#2922)

@@ -770,7 +770,9 @@ def _slack_tree_failed(message):
     tiles at zero, the reason as its one defect, and the two setup choices. The node carries no client field, so a
     broken policy read never draws a client the map does not name (#2922)."""
     label = _slack_project_label()
-    node = {"id": "p0", "level": 1, "kind": "project", "name": label, "state": "error",
+    # The id sits outside the client and project spaces, so a failed read never collides with a real project's node id
+    # in the selection or the breadcrumbs (#2922).
+    node = {"id": "error", "level": 1, "kind": "project", "name": label, "state": "error",
             "badges": [], "children": [], "defects": [message], "setup": list(SLACK_TREE_SETUP),
             "now": [{"key": key, "value": "0", "tone": "neutral"} for key in ("Workspaces", "Channels", "Personas", "Events")],
             "detail": {"title": label, "sub": "", "text": ""}}
@@ -1709,8 +1711,10 @@ def slack_clients_post(body):
 CLIENT_MAP_OPS = ("add_project", "remove_project", "add_client", "delete_client")
 
 def _slack_project_name(roster, project_id):
-    """The display name one project of the roster carries, else its id: a question names a project the way the tree
-    does, never by its raw id (#2922, ADR-0137)."""
+    """The display name one project of the roster carries, else its id: a question names a project the way the tree does
+    (#2922, ADR-0137). The id is the one fallback, for a project the map names and the hub does not hold; the tree names
+    that project by its id too, under "Not on this hub". Every caller resolves the roster first, so a question that names
+    projects never falls back to an id the hub could have named (#2922)."""
     return next((_slack_text(s.get("label")) for s in roster
                  if s.get("id") == project_id and s.get("label")), "") or project_id
 
@@ -1761,7 +1765,8 @@ def _slack_clients_op(body):
         if not pid: return {"err": "project: a body that names one"}
         if pid not in [p["id"] for p in client["projects"]]:
             return {"err": f"{client['name']} holds no project {pid!r}"}
-        roster, _ = _slack_roster_checked(PREVIEW_ROSTER_SECONDS)   # a broken roster costs the display name, never the remove
+        roster, rerr = _slack_roster_checked()   # the question names the project, so a roster that cannot resolve refuses it
+        if rerr: return {"err": rerr}
         ask = f"Remove {_slack_project_name(roster, pid)} from {client['name']}?"
         if not confirm: return {"err": None, "saved": False, "ask": ask}
         err = _clients_map_write(lambda C, doc: C.without_project(doc, cid, pid))
@@ -1795,7 +1800,8 @@ def _slack_clients_op(body):
         return {"err": None, "saved": True, "client": made["id"]}
     # delete_client
     if client is None: return {"err": f"the client map names no client {cid!r}" if cid else "client: a body that names one"}
-    roster, _ = _slack_roster_checked(PREVIEW_ROSTER_SECONDS)
+    roster, rerr = _slack_roster_checked()   # the question names each project, so a roster that cannot resolve refuses it
+    if rerr: return {"err": rerr}
     held = [_slack_project_name(roster, p["id"]) for p in client["projects"]]
     ask = f"Delete {client['name']}? Its projects return to the Add project list" + (f": {', '.join(held)}." if held else ".")
     if not confirm: return {"err": None, "saved": False, "ask": ask}

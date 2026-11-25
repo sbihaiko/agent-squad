@@ -448,3 +448,119 @@ def test_an_empty_tree_keeps_the_add_client_control_in_view(hub, tmp_path, monke
     top = html[:html.index("sltdetail")]
     assert 'class="slttop sltshow"' not in top, top[-400:]
     assert 'aria-label="Client name"' in top, top[-400:]
+
+
+# ---------------------------------------------------------------- one question belongs to one pane
+
+def test_an_add_client_question_reaches_the_empty_tree_pane(hub, tmp_path, monkeypatch):
+    """Acceptance 9 and 10: a map with no client has no node to carry the hub's question, so the pane still draws it and
+    its Confirm. Without it the first client could never be added from the UI (#2922)."""
+    wire(tmp_path, monkeypatch, hub, [], {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    assert not clients_tree(out), "the fixture map names no client"
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve('
+              'b.confirm===true?{saved:true}:{saved:false,ask:"Add the client Two?"})})};'
+              'const EL={slcname:{value:"Two"},slcpersona:{value:"amber",options:[{text:"Amber"}],selectedIndex:0}};'
+              'globalThis.document={getElementById:id=>EL[id]||null};'
+              '(async()=>{slRender();slMapAddClient();await new Promise(r=>setTimeout(r,20));'
+              'const h=STORE["#sbody"].innerHTML;slMapConfirm();await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({html:h,bodies:BODIES}))})()')
+    got = _fetched(hub, out, "", script)
+    assert "Add the client Two?" in got["html"], got["html"][-800:]
+    assert "Confirm" in got["html"], "the empty pane draws the question's Confirm button"
+    assert [b["op"] for b in got["bodies"]] == ["add_client", "add_client"], got["bodies"]
+    assert got["bodies"][1]["confirm"] is True, got["bodies"]
+
+
+def test_a_click_while_a_save_is_in_flight_is_ignored(hub, tmp_path, monkeypatch):
+    """Acceptance 6, 8 and 12: a second click before the first answer returns is dropped, so its request never overwrites
+    the pending question and every issued change keeps its own confirmation (#2922)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}],
+         {"alpha": FOLLOWER, "beta": OTHER})
+    out = hub.slack_overview()
+    script = ('const BODIES=[];let resolveFirst;'
+              'globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'if(BODIES.length===1)return new Promise(r=>{resolveFirst=r});'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve({saved:false,ask:"Add the client Two?"})})};'
+              'const EL={slclproject:{value:"beta"},slcname:{value:"Two"},'
+              'slcpersona:{value:"amber",options:[{text:"Amber"}],selectedIndex:0}};'
+              'globalThis.document={getElementById:id=>EL[id]||null};'
+              '(async()=>{slRender();slMapAddProject("c0");slMapAddClient();'
+              'resolveFirst({status:200,json:()=>Promise.resolve({saved:false,ask:"Add beta to One?"})});'
+              'await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({bodies:BODIES,html:STORE["#sbody"].innerHTML}))})()')
+    got = _fetched(hub, out, "c0", script)
+    assert [b["op"] for b in got["bodies"]] == ["add_project"], "a click during the save is ignored"
+    assert "Add beta to One?" in got["html"], got["html"][-800:]
+    assert "Add the client Two?" not in got["html"], "the dropped click's question is never drawn"
+
+
+def test_a_route_question_stays_on_the_node_it_was_asked_from(hub, tmp_path, monkeypatch):
+    """Acceptance 2 and 6: the Add project question belongs to the client pane the control sits in, never to whatever node
+    the selection names, so a stale selection cannot draw it on another pane (#2922)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha", "beta"]}],
+         {"alpha": FOLLOWER, "beta": OTHER})
+    out = hub.slack_overview()
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve('
+              'b.confirm===true?{saved:true}:{saved:false,ask:"Add gamma to One?"})})};'
+              'const EL={slclproject:{value:"gamma"}};globalThis.document={getElementById:id=>EL[id]||null};'
+              '(async()=>{slRender();slTsel="c0.p1";slMapAddProject("c0");await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({html:STORE["#sbody"].innerHTML,bodies:BODIES,sel:slTsel}))})()')
+    got = _fetched(hub, out, "c0", script)
+    assert "Add gamma to One?" in got["html"], "the question shows on the client pane it was asked from"
+    assert got["sel"] == "c0", "the pane moves from the stale selection back to the client the control sits in"
+    assert got["bodies"][0]["client"] == "one", got["bodies"]
+
+
+def test_the_remove_route_asks_its_question_before_it_writes(hub, tmp_path, monkeypatch):
+    """Acceptance 5 to 8: a body without `confirm` gets the hub's question, and the confirm posts the same body with the
+    flag. The test drives the route's own question, never only the node's, so a forced flag on the first click is red
+    (#2922)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha", "beta"]}],
+         {"alpha": FOLLOWER, "beta": OTHER})
+    out = hub.slack_overview()
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{const b=JSON.parse(o.body);BODIES.push(b);'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve('
+              'b.confirm===true?{saved:true}:{saved:false,ask:"Remove beta from One?"})})};'
+              '(async()=>{slRender();slMapPost({op:"remove_project",client:"one",project:"beta"});'
+              'await new Promise(r=>setTimeout(r,20));const h=STORE["#sbody"].innerHTML;'
+              'slMapConfirm();await new Promise(r=>setTimeout(r,20));'
+              'console.log(JSON.stringify({html:h,bodies:BODIES}))})()')
+    got = _fetched(hub, out, "c0.p1", script)
+    assert [b["op"] for b in got["bodies"]] == ["remove_project", "remove_project"], got["bodies"]
+    first, second = got["bodies"]
+    assert first.get("confirm") is not True, "the first click writes nothing before the question"
+    assert first["client"] == "one" and first["project"] == "beta", first
+    assert "Remove beta from One?" in got["html"], got["html"][-800:]
+    assert second["confirm"] is True and second["project"] == "beta", second
+
+
+# ---------------------------------------------------------------- the hub's own node spaces
+
+def test_the_failed_tree_node_sits_outside_the_client_and_project_id_spaces(hub):
+    """A read that fails draws one error node with an id no client or project uses, so it never collides with a real
+    project's selection or breadcrumb (#2922)."""
+    failed = hub._slack_tree_failed("the rules module did not resolve")
+    assert failed["root"]["id"] == "error", failed["root"]
+    assert [n["id"] for n in failed["clients"]] == ["error"], failed["clients"]
+    assert failed["clients"][0]["kind"] == "project", failed["clients"][0]
+
+
+def test_a_question_that_names_projects_needs_the_roster(hub, tmp_path, monkeypatch):
+    """Acceptance 12 and 14: the hub names each project the client holds, so a roster that cannot resolve refuses the
+    question instead of falling back to raw ids; no policy names a project two ways (#2922)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha", "beta"]}],
+         {"alpha": FOLLOWER, "beta": OTHER})
+    monkeypatch.setattr(hub, "_slack_roster_checked", lambda cache=0.0: ([], "the profile read timed out after 20 s"))
+    out = hub.slack_clients_post({"op": "delete_client", "client": "one"})
+    assert out.get("err") == "the profile read timed out after 20 s", out
+    assert not out.get("ask"), "a roster that cannot resolve draws no question with raw ids"
+    rem = hub.slack_clients_post({"op": "remove_project", "client": "one", "project": "beta"})
+    assert rem.get("err") == "the profile read timed out after 20 s", rem
+    assert not rem.get("ask"), rem
