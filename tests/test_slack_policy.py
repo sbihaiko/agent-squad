@@ -423,7 +423,7 @@ def test_the_destination_label_names_the_decision_kind():
         return S.Decision(kind, None, (), "en-US", None, None, False, None)
     assert S.destination_label(decision(S.INBOX)) == "inbox"
     assert S.destination_label(decision(S.PROPOSAL)) == "proposal"
-    assert S.destination_label(decision(S.DATA)) == "read as data"
+    assert S.destination_label(decision(S.DATA)) == "read, never obeyed"
 
 
 def test_resolved_members_counts_only_the_roles_a_channel_accepts():

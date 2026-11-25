@@ -247,8 +247,12 @@ def slack_sample(body, client=None):
 def _slack_project_label():
     return str(os.environ.get("SG_PROJECT") or PROFILE_NAME or "project")
 
+# A workspace class reads in the owner's words in a badge (#2912); the files and the policy keep `owned` and `guest`.
+SLACK_CLASS_WORDS = {"owned": "our workspace", "guest": "guest workspace"}
+
 def _slack_badge(text, tone="neutral", kind="class"):
-    return {"text": _slack_text(text), "tone": tone, "kind": kind}
+    text = _slack_text(text)
+    return {"text": SLACK_CLASS_WORDS.get(text, text) if kind == "class" else text, "tone": tone, "kind": kind}
 
 def _slack_tile(key, value, sub="", tone="neutral"):
     return {"key": key, "value": _slack_text(value), "sub": _slack_text(sub), "tone": tone}
@@ -463,8 +467,10 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     if P.channel_class(ws, merged) != _slack_group_class(group, lf):
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
+    listen_only = _slack_text(merged.get("mode") or "listen") == "listen"
     if not members:
-        badges.append(_slack_badge("no one", "warn", "noone"))
+        # A listen-only channel answers nobody by design, so its badge is a fact and not a warning (#2912).
+        badges.append(_slack_badge("nobody can ask", "neutral" if listen_only else "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -482,12 +488,26 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
-                       "note": note}}
+            "detail": {"title": f"#{name}", "sub": label, "text": "", "note": note,
+                       "verdict": _slack_channel_verdict(persona, merged, members, listen_only)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
     return node
+
+
+def _slack_channel_verdict(persona, merged, members, listen_only):
+    """The channel detail's first sentence (#2912): will the persona answer people here, and who. The hub writes it from
+    the policy's answers, so the view holds no rule (ADR-0137)."""
+    who = persona.name if persona else "The agent"
+    count = "1 person" if len(members) == 1 else f"{len(members)} people"
+    roles = " or ".join(_slack_text(r) for r in merged.get("roles") or ())
+    if listen_only:
+        return (f"{who} posts nothing here: a message from the {count} who {'holds' if len(members) == 1 else 'hold'} {roles} becomes a proposal in your DM."
+                if members else f"{who} only listens here and answers nobody.")
+    if not members:
+        return f"Nobody can ask {who} here: no member holds a role this channel accepts."
+    return f"{who} answers {count} here: anyone who holds {roles}."
 
 
 def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf):
@@ -841,7 +861,7 @@ def _slack_clients_tree_for(P, seats, here=None):
             built["node"]["here"] = _slack_here(seat, seats, here)
             built["node"]["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
             built["node"]["badges"] = list(built["node"]["badges"]) + [
-                _slack_badge("follows default", "muted", "follow") if entry["follows"]
+                _slack_badge("inherits from client", "muted", "follow") if entry["follows"]
                 else _slack_badge("own persona", "neutral", "follow")]
             children.append(built["node"])
             with_slack += 1 if CL.has_slack(seat["committed"], seat["local"]) else 0

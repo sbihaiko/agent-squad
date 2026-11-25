@@ -892,9 +892,9 @@ def guest_workspaces(doc):
 
 def destination_label(decision):
     """The destination of an eligible member's message, in the words of the settings view: `inbox` in an `owned`
-    channel, `proposal` in a `guest` channel, `read as data` when no member holds an accepted role, and `none` for a
+    channel, `proposal` in a `guest` channel, `read, never obeyed` when no member holds an accepted role, and `none` for a
     kind the channel ignores."""
-    return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read as data"}.get(decision.kind, "none")
+    return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read, never obeyed"}.get(decision.kind, "none")
 
 
 def reply_label(channel, decision):
@@ -914,14 +914,14 @@ ANNOUNCEMENT_NOTE = "Announcements post as drafts for your review."
 
 def channel_note(channel, members, announcement):
     """The one plain sentence the settings view prints under a channel's Now tiles, naming how a message resolves. A
-    channel with no eligible member says a message stays data; a listen channel with a member names the proposal path;
+    channel with no eligible member says a message is read and never obeyed; a listen channel with a member names the proposal path;
     a channel that speaks and has a member says nothing of its own. The announcement clause follows every branch, so a
     channel that subscribes to events always says what it does with them. The view draws this sentence and holds no
     copy of it."""
     if not members:
-        return ("Announcements only: no member holds a role this channel accepts, so a message is read as data and gets "
+        return ("Announcements only: no member holds a role this channel accepts, so a message is read, never obeyed, and gets "
                 "no reply.") if announcement else \
-               "No member holds a role this channel accepts, so a message is read as data and gets no reply."
+               "No member holds a role this channel accepts, so a message is read, never obeyed, and gets no reply."
     if str((channel or {}).get("mode") or "listen") == "listen":
         note = ("Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; "
                 "nothing is posted here.")
