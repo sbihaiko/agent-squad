@@ -1028,6 +1028,29 @@ def test_the_preview_route_reads_an_unknown_workspace_or_channel_as_unknown(hub,
     assert ch["decision"] == "unknown" and ch["err"], ch
 
 
+def test_the_preview_shows_the_tone_the_sender_gets(hub, tmp_path):
+    """#2927 criterion 9: the sender preview names the combined tone, the persona's and then the sender's role's."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["roles"][0]["tone"] = "Short sentences."
+    got = preview(hub, tmp_path, committed, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert got["tone"] == "Calm and direct. Short sentences.", got
+
+
+def test_the_sender_preview_draws_a_tone_tile(hub, tmp_path):
+    """#2927 criterion 9 on the page: the answer the route returns is drawn as one tile, so the owner reads the tone a
+    sender gets before the files are saved."""
+    out = read(hub, tmp_path)
+    data = {"decision": "inbox", "role": "manager", "actions": "status", "reply": "bot",
+            "mark": "*HAL9K's Msg*", "language": "pt-BR", "tone": "Calm and direct. Short sentences."}
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel=\"c0.p0.w1.c0\";"
+            + f"slSnd={{node:\"c0.p0.w1.c0\",sender:\"U0CLIENT01\",data:{json.dumps(data)}}};"
+            + "slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    html = json.loads(_node(body))
+    preview_html = html[html.index("Try a sender"):]
+    assert "Tone" in preview_html, preview_html[:800]
+    assert "Calm and direct. Short sentences." in preview_html, preview_html[:800]
+
+
 def test_the_preview_senders_are_the_accepted_members_only(hub, tmp_path):
     """The `members` list feeds the sender options, so it holds the same accepted people the eligibility counts, never
     a user the channel's accepted roles do not grant (AC3, AC6)."""
