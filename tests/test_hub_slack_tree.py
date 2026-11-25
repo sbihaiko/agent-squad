@@ -747,7 +747,10 @@ def test_a_guest_or_dm_channel_shows_the_chat_icon_and_the_other_channels_a_hash
     assert by_name(root, "#proj-agent-squad")["icon"] == "hash", "another channel shows the hash"
     html = render(hub, read(hub, tmp_path, committed=committed))
     assert "<svg class=sltkind" in _item(html, "c0.p0.w0.c2"), _item(html, "c0.p0.w0.c2")   # the DM channel
-    assert '<span class=sltkind aria-hidden=true>#</span>' in _item(html, "c0.p0.w0.c0")
+    # A hash channel's name carries its `#`, so the row draws no second mark beside it (#2912).
+    row = _item(html, "c0.p0.w0.c0")
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+    assert "<svg class=sltkind" not in row, row
 
 
 # ---------------------------------------------------------------- the detail pane's width and type (#2841)
