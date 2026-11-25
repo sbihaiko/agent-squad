@@ -456,7 +456,7 @@ def _slices(page):
 def render(hub, out, open_id=""):
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
             "slDocs=slClone((slR&&slR.docs)||{});slSavedDocs=slClone(slDocs);"
-            f"slPOpen={json.dumps(open_id)};slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+            f"slPOpen={json.dumps(open_id)};slT=slR.tree;slTsel=(slTHere()||{{}}).id||slTsel;slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
 
 
@@ -520,7 +520,7 @@ def test_a_refused_autoplay_leaves_a_visible_play_control(hub, tmp_path):
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
             "slDocs=slClone((slR&&slR.docs)||{});slSavedDocs=slClone(slDocs);"
             f"slPOpen='iara';globalThis.window={{__slAudio:{json.dumps(audio)}}};"
-            "slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+            "slT=slR.tree;slTsel=(slTHere()||{}).id||slTsel;slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     html = json.loads(_node(body))
     assert "<audio" in html and "controls" in html, html
     assert audio in html, "the control points at the kept URL"

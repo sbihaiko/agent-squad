@@ -108,6 +108,59 @@ def tree(hub, tmp_path, committed=None, local=None):
     return read(hub, tmp_path, committed, local)["tree"]
 
 
+def test_a_workspace_only_the_local_file_names_reads_guest_everywhere(hub, tmp_path):
+    """A workspace row that only the local file holds is guest, since the local file never holds an owned workspace;
+    the tree badge, the class tile and both Workspaces tiles say so with one rule (#2904)."""
+    local = {"workspaces": [{"id": "T0GUEST009", "label": "partner", "channels": [
+        {"id": "C0GUEST009", "name": "partner-room", "class": "guest", "mode": "listen"}]}]}
+    out = read(hub, tmp_path, local=local)
+    root = out["tree"]["root"]
+    ws = by_name(root, "partner")
+    assert [b["text"] for b in ws["badges"]][:1] == ["guest"], ws["badges"]
+    assert tiles(ws)["Class"]["value"] == "guest", tiles(ws)
+    assert "guest" not in [b["text"] for b in by_name(root, "#partner-room")["badges"]], "the channel repeats no class"
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "2 · 1 owned · 1 guest", tiles(root)
+    assert out["now"][0]["value"] == "2 · 1 owned · 1 guest", out["now"][0]
+    assert [w["class"] for w in out["workspaces"]] == ["owned", "guest"], out["workspaces"]
+
+
+def test_an_owned_workspace_with_a_guest_channel_counts_as_owned_in_the_project_tile(hub, tmp_path):
+    """The project tile counts a workspace by the class its badge shows, so an owned workspace with one guest channel
+    is one owned workspace (#2904)."""
+    local = {"workspaces": [{"id": "T0TEAM0001", "channels": [
+        {"id": "C0SAND0001", "name": "guest-sandbox", "class": "guest", "mode": "listen"}]}]}
+    root = tree(hub, tmp_path, local=local)["root"]
+    assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "1 · 1 owned · 0 guest", tiles(root)
+
+
+def test_the_project_block_lives_in_the_pages_own_project_node(hub, tmp_path):
+    """The personas, roles, workspaces and events of the page's project sit in that project's detail pane, under its
+    Settings; a client node shows none of them, so no project block reads as global (#2906)."""
+    out = read(hub, tmp_path)
+    root = out["tree"]["root"]
+    project = next(n for n in walk(root) if n.get("kind") == "project")
+    assert project["here"] is True, project.get("here")
+    client = render(hub, out, sel=root["id"])
+    assert "data-blk=read" not in client, client[-600:]
+    own = render(hub, out, sel=project["id"])
+    detail = own[own.index("id=sltdetail"):]
+    assert "data-blk=read" in detail and "<h4>Personas" in detail, detail[-800:]
+    assert detail.index("data-blk=settings") < detail.index("data-blk=read"), "the node's Settings come first"
+
+
+def test_another_projects_node_links_its_own_page(hub, tmp_path):
+    """A project that is not the page's own names the page that edits its personas, roles and events (#2906)."""
+    out = read(hub, tmp_path)
+    client = out["tree"]["root"]
+    own = next(n for n in walk(client) if n.get("kind") == "project")
+    project = dict(json.loads(json.dumps(own)), id=own["id"] + "x", name="other", here=False, hub="/other/#settings",
+                   children=[])
+    client["children"].append(project)
+    html = render(hub, out, sel=project["id"])
+    assert "data-blk=read" not in html
+    assert f'href="{project["hub"]}"' in html and project["hub"].endswith("/#settings"), html[-600:]
+
+
 def walk(node):
     yield node
     for child in node.get("children") or []:
@@ -458,7 +511,7 @@ def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
 
 def test_the_persona_edit_button_stays_on_one_line(hub, tmp_path):
     """#2841: the Personas table's Edit button never breaks its label across two lines."""
-    html = render(hub, read(hub, tmp_path))
+    out = read(hub, tmp_path); html = render(hub, out, sel=next(n for n in walk(out["tree"]["root"]) if n.get("here"))["id"])
     btn = re.search(r"<button[^>]*data-slpopen[^>]*>", html)
     assert btn and "slnw" in btn.group(0), btn and btn.group(0)
     assert re.search(r"#sbody \.slnw\{[^}]*white-space:nowrap", hub.PAGE), "the one-line rule"
@@ -543,7 +596,7 @@ def render(hub, out, sel=None):
 
 def test_the_tree_follows_the_wai_aria_pattern(hub, tmp_path):
     html = render(hub, read(hub, tmp_path))
-    assert 'role=tree aria-label="Communication tree"' in html
+    assert 'role=tree aria-label="Slack tree"' in html
     items = re.findall(r"<div[^>]*role=treeitem[^>]*>", html)
     assert items and all("aria-level=" in i for i in items), items[:2]
     assert sum('tabindex="0"' in i for i in items) == 1, items     # one tab stop
@@ -586,6 +639,17 @@ def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
     name = re.search(r'<span class=sltname title="(' + re.escape(full) + r')"', html)
     assert name and name.group(1) == full, name
     assert f'aria-label="{full}' in html, "the accessible name keeps the full name"
+
+
+def test_a_long_node_name_wraps_and_is_never_cut(hub, tmp_path):
+    """A node name wraps inside its row and keeps every character on screen; the badges sit beside it in one wrapping
+    group, so a narrow tree column never cuts the name to an ellipsis (#2903)."""
+    rule = _rule(hub.PAGE, "#sbody .sltname")
+    assert "overflow-wrap:anywhere" in rule, rule
+    assert "nowrap" not in rule and "ellipsis" not in rule, rule
+    assert "flex-wrap:wrap" in _rule(hub.PAGE, "#sbody .sltmain")
+    html = render(hub, read(hub, tmp_path))
+    assert re.search(r'<span class=sltmain><span class=sltname title="[^"]*">[^<]*</span><span class=sltbadges>', html), html[:800]
 
 
 def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):

@@ -416,7 +416,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    node's Now block on the right. A badge sits beside its node, a long channel name is cut with an ellipsis and keeps its
    whole text in the tooltip and the accessible name, and a phone folds the tree away after a selection so two tiles stay
    in view. A client holds its default persona and the proposed writes of a change. */
-#sbody .slttop{display:grid;grid-template-columns:minmax(200px,320px) minmax(0,1fr);gap:16px;align-items:start}   /* the tree pane holds a channel name and its badges whole, as the mock draws it (#2842) */
+#sbody .slttop{display:grid;grid-template-columns:minmax(260px,400px) minmax(0,1fr);gap:16px;align-items:start}   /* the tree pane holds a channel name and its badges whole, as the mock draws it (#2842); a deep row still reads its name (#2903) */
 #sbody .sltcol{min-width:0;padding-right:12px;border-right:1px solid var(--line)}
 #sbody .sltnotice{margin:0 0 8px;padding:8px 10px;border:1px solid var(--tint-err-line);border-left:3px solid var(--err);border-radius:var(--radius-md);background:var(--tint-err);color:var(--fg);font-size:var(--fs-caption);line-height:1.4}
 #sbody .sltguest{margin:0 0 8px;padding:6px 10px;background:var(--inset);border:1px solid var(--line);border-radius:var(--radius-md);font-size:var(--fs-caption);color:var(--mute)}
@@ -426,19 +426,22 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltguest.err{display:flex;gap:8px;align-items:flex-start;line-height:1.4}
 #sbody .sltguest.err .sltgi{flex:none;line-height:1.4}   /* the alert's warning glyph sits beside its two-line sentence */
 #sbody .sltree{display:flex;flex-direction:column;gap:1px;min-width:0}
-#sbody .slti{display:flex;align-items:center;gap:6px;min-width:0;min-height:32px;padding:3px 8px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
+#sbody .slti{display:flex;align-items:flex-start;gap:6px;min-width:0;min-height:32px;padding:5px 8px;line-height:22px;border-radius:var(--radius-sm);color:var(--fg);cursor:pointer}
 #sbody .slti:hover{background:var(--inset)}
 /* The indent guides (mockup, #2843): one rule per ancestor level, drawn by an empty span of the row, so the line ends at
    the last child of the subtree and never runs past it. The client level (SPEC 2682 #2827) reads bolder than a project. */
-#sbody .sltg{flex:0 0 16px;align-self:stretch;margin-right:2px}
+#sbody .sltg{flex:0 0 12px;align-self:stretch;margin:-5px 2px -5px 0}   /* the guide runs the full row, through the padding, so the line has no gap between rows */
 #sbody .sltg.more{border-left:1px solid var(--line)}
 #sbody .slti.lv1{font-weight:600}
 #sbody .slti.sel{background:var(--inset);outline:1px solid var(--acc);outline-offset:-1px}
 #sbody .slti:focus-visible{outline:2px solid var(--acc);outline-offset:-2px}
-#sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption)}
-#sbody .sltkind{flex:0 0 14px;width:14px;height:14px;color:var(--mute)}
-#sbody .sltname{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sbody .sltbadges{display:flex;gap:4px;flex:0 0 auto;min-width:0}   /* a badge keeps its whole word: the name gives way, never the badge (#2842) */
+#sbody .sltarrow{flex:0 0 12px;color:var(--mute);font-size:var(--fs-caption);line-height:22px}
+#sbody .sltkind{flex:0 0 14px;width:14px;height:14px;margin-top:4px;color:var(--mute)}   /* centred on the first line, beside the name */
+/* The name comes first (#2903): name and badges share one wrapping line, so badges that do not fit move under the
+   name, and the name is cut only when it alone is wider than the row. */
+#sbody .sltmain{display:flex;flex-wrap:wrap;align-items:center;column-gap:8px;row-gap:3px;flex:1 1 auto;min-width:0}
+#sbody .sltname{flex:1 1 auto;min-width:0;max-width:100%;overflow-wrap:anywhere}
+#sbody .sltbadges{display:flex;flex-wrap:wrap;gap:4px;flex:0 0 auto;margin-left:auto;min-width:0;line-height:20px}   /* a badge keeps its whole word: the name gives way, never the badge (#2842) */
 #sbody .sltbadges .sltb{flex:0 0 auto;white-space:nowrap}   /* a badge is one word, never cut to a letter */
 #sbody .sltb{padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-size:var(--fs-caption);white-space:nowrap}
 #sbody .sltb.err{color:var(--err);border-color:var(--err)}
@@ -832,12 +835,12 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Communication<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Communication</option><option value=acc>Access</option></select></label>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Slack<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Slack</option><option value=acc>Access</option></select></label>
 <details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
-<details id=slk class=sp data-sp=slk><summary>Communication<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
+<details id=slk class=sp data-sp=slk><summary>Slack<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
 <details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile";document.getElementById("mobile-link").onclick=()=>localStorage.removeItem("squad-view")</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
@@ -1448,9 +1451,7 @@ function slReadHtml(r){if(!r)return "";
  const cf=r.files.committed,lf=r.files.local,cell=c=>Array.isArray(c)?`<td data-l="${slA(c[0])}">${c[1]}</td>`:`<td>${c}</td>`,
  row=cells=>`<tr>${cells.map(cell).join("")}</tr>`,join=(xs,or)=>xs.length?xs.map(x=>esc(x)).join(", "):or,   // a narrow screen stacks a cell under its own label (data-l): a column loses no word
  ban=(r.defects||[]).length?`<p class="mx err" role=status>${r.defects.map(d=>esc(d)).join(" ")}</p>`:"";   // a defect is a message above the sections, never a page of its own
- let h=`<div class=setblk data-blk=read data-theme=slk><h3 class=blkh>Settings</h3>${ban}`   // the block names the files under its one title, before the four sections
- +`<div class=slrow><span class=sl>Default language</span><span class=sc>${esc(r.project.language)}</span>${slTag(r.project.file)}</div>`
- +`<div class=slrow><span class=sl>Default persona</span><span class=sc>${esc(r.project.persona_name||"none")}</span>${slTag(r.project.file)}</div>`;
+ let h=`<div class=setblk data-blk=read data-theme=slk>${ban}`;   // the project node's detail holds this block, under its own Settings (#2906)
  h+=slPersonaSection(r);
  h+=(slDocs?`<section class=slsec><h4>Roles <span class=slfiles>${slTag(cf)} ${slTag(lf)}</span></h4>${slRolesEditHtml(r)}</section>`
   :slSec("Roles",cf,["Role","Actions"],
@@ -1527,7 +1528,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
  if(!slT&&slR&&slR.tree)slT=slR.tree;   // a fresh read plants the tree; a staged edit keeps its own until the save (#2846)
  if(slT&&!slTNode(slTsel))slTsel=(slTRoots()[0]||{}).id||"";   // a reload that dropped the selected node falls back to the first client
  const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
- let h=slTreeHtml()+slReadHtml(slR);
+ let h=slTreeHtml()+(slTHere()?"":slReadHtml(slR));   // the project's personas, roles and events live in its own node (#2906)
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
  b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar();
  const n=slTNode(slTsel);   // a client's selected default proposes its writes once; a hub without the route is not asked again (#2827)
@@ -1538,6 +1539,13 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
    keys, Home and End. */
 let slT=null,slTsel="",slTopen={},slTF="",slTshow=false,slProposeT=null;
 function slTRoots(){if(!slT)return [];return slT.clients||(slT.root?[slT.root]:[])}
+function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.children||[]).map(walk).find(Boolean)||null);
+ for(const r of slTRoots()){const hit=walk(r);if(hit)return hit}return null}
+/* A project node's own files (#2906): the page's project carries its personas, roles, workspaces and events under its
+   Settings; another project names the page that edits them, so no section reads as global. */
+function slTProject(n){if(!n||n.kind!=="project")return "";
+ if(n.here)return slReadHtml(slR);
+ return n.hub?`<p class=slttext>${esc("Its personas, roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
@@ -1596,7 +1604,7 @@ function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.childre
  const label=[n.name].concat((n.badges||[]).map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
  +slTGuides(more||[])+`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span>${slTGlyph(n)}`
- +`<span class=sltname title="${slA(n.name)}">${esc(n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></div>`}
+ +`<span class=sltmain><span class=sltname title="${slA(n.name)}">${esc(n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></span></div>`}
 function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
  const cols=Math.min(tiles.length,5);   // the tile count names the row's columns: five for a channel, four for a workspace (#2841)
  return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow sltn${cols}">${tiles.join("")}</div></div>`:""}
@@ -1640,7 +1648,7 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTPerms(n)+slTPreview(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
    the field, never the row's place in a list, so the save writes the row that carries the id. A control shows the value
@@ -1648,16 +1656,26 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
 const slTOpt=o=>typeof o==="string"?{value:o,label:o}
  :{value:String((o||{}).value==null?"":o.value),label:String((o||{}).label==null?(o||{}).value:o.label)};
 function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(el&&el.value!==undefined?el.value:"");
- return {kind:"field",channel:String(ch),field:String(field),value:v}}
-function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),doc=slDocsCur()[row.doc];
+ const k=String(ch);   // `project` and `ws:<id>` name a row above a channel; a Slack id never takes either shape (#2901)
+ if(k==="project")return {kind:"field",scope:"project",field:String(field),value:v};
+ if(k.indexOf("ws:")===0)return {kind:"field",scope:"workspace",workspace:k.slice(3),field:String(field),value:v};
+ return {kind:"field",channel:k,field:String(field),value:v}}
+function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),docs=slDocsCur();
+ if(sc==="project"){const p=(docs.committed||{}).project;return p&&p[f]!==undefined&&p[f]!==null?String(p[f]):""}
+ if(sc.indexOf("ws:")===0){const id=sc.slice(3);
+  for(const d of ["committed","local"])for(const w of Array.isArray((docs[d]||{}).workspaces)?docs[d].workspaces:[])
+   if(w&&String(w.id)===id&&w[f]!==undefined&&w[f]!==null)return Array.isArray(w[f])?w[f].join(", "):String(w[f]);
+  return ""}
+ const doc=docs[row.doc];
  if(doc)for(const w of Array.isArray(doc.workspaces)?doc.workspaces:[])for(const x of Array.isArray(w&&w.channels)?w.channels:[])
   if(x&&String(x.id)===ch){const v=f.indexOf("poll.")===0?(x.poll||{})[f.slice(5)]:x[f];
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
-function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=ch&&f?`data-slf="${slA(ch)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
+function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),f=String(c.field||""),
+ tgt=ch||sc,   // the channel id, `project` or `ws:<id>`: the target the hub named for the row (#2901)
+ at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
  sv=v===undefined||v===null?"":String(v),
- id=`slf_${ch}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
+ id=`slf_${tgt}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  ph=c.default?` placeholder="default: ${slA(c.default)}"`:(f.indexOf("poll.")===0?` placeholder="the policy default"`:"");
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
  if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl id="${slA(id)}" ${at} aria-label="${lab}"${v?" checked":""}> ${esc(c.label||f)}</label>`;
@@ -1707,7 +1725,7 @@ function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
  +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
  +slTSlot(T.guest_slot)
- +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
+ +`<div role=tree aria-label="Slack tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
@@ -1872,8 +1890,8 @@ const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
  value:{id:(document.querySelector(`[data-slci="${d}:${i}"]`)||{}).value,name:(document.querySelector(`[data-slcn="${d}:${i}"]`)||{}).value}});
 /* The save path over the two Slack files (#2694): the view hands both raw documents back, the hub validates them, shows
    the diff of each file and, on confirm, writes the local file and lands the committed one in dev. */
-const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((d.diff||{}).committed)||[]).map(l=>themeLine("Communication",l))},
- {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Communication",l))}];
+const slGroups=d=>!d?[]:[{file:((d.files||{}).committed)||"slack.yaml",lines:(((d.diff||{}).committed)||[]).map(l=>themeLine("Slack",l))},
+ {file:((d.files||{}).local)||"4.slack.local.yaml",lines:(((d.diff||{}).local)||[]).map(l=>themeLine("Slack",l))}];
 const slAsk=async()=>{try{const r=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm:false})})).json();
  return r.err?[{file:(slR&&slR.files&&slR.files.committed)||"slack.yaml",lines:["! Communication · "+r.err]}]:slGroups(r)}catch(x){return[{file:"slack.yaml",lines:["! Communication · the diff could not be read"]}]}};
 /* The reply preview and the voice sample ask the hub for the draft documents, so a change shows before the save (#2697).
@@ -1937,7 +1955,7 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
    writes each field on its own and keeps no button (#2433). Access has no Save: the bar says so. */
-const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Communication",acc:"Access"};
+const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Slack",acc:"Access"};
 const SET_FIRST="lim";   // the first theme left: a saved Loop link and a stored Loop theme open it (#2515)
 const SET_SAVE=["mdl","slk","sub"];   // the themes the one Save writes; Access and Spend & limits stage no file here
 let sTheme=STH[ls.sth]?ls.sth:SET_FIRST,sPend=null;   // a removed theme opens the first one left (#2515)

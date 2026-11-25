@@ -226,7 +226,7 @@ def _slices(page):
 
 def render(hub, out):
     """The theme drawn from one read view: the page holds no state of its own before the read answers."""
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slRender();"
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel=(slTHere()||{{}}).id||slTsel;slRender();"
             "console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
 
@@ -242,7 +242,7 @@ def test_the_theme_writes_one_status_text_to_the_chip_and_the_nav_line(hub, tmp_
     """One read view, one summary (#1284): the chip and the nav line carry the same text from the one render, so a
     changed workspace or channel count can never leave the two disagreeing."""
     out = overview(hub, tmp_path)
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slRender();"
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT=slR.tree;slTsel=(slTHere()||{{}}).id||slTsel;slRender();"
             "console.log(JSON.stringify({chip:STORE['#slksr'].textContent,nav:STORE['#slknav'].textContent}))")
     got = json.loads(_node(body))
     assert got["chip"] == "1 client · 1 project · 4 channels", got
@@ -277,8 +277,9 @@ def test_each_drawn_row_names_its_file(hub, tmp_path):
     html = read_block(render(hub, out))
     h4 = re.findall(r"<h4[^>]*>(.*?)</h4>", html)
     assert len(h4) == 4 and all("class=slfile" in h for h in h4), h4
-    rows = re.findall(r"<div class=slrow>.*?</div>", html)
-    assert len(rows) == 2 and all("class=slfile" in r for r in rows), rows
+    # The project's default language and persona are the node's own Settings rows, each with its file chip (#2906), so
+    # the block repeats neither.
+    assert not re.findall(r"<div class=slrow>.*?</div>", html), html[:400]
     h5 = re.findall(r"<h5 class=slws>(.*?)</h5>", html)
     assert len(h5) == 2 and all("class=slfile" in h for h in h5), h5
     assert "team" in h5[0] and "slack.yaml" in h5[0], h5[0]

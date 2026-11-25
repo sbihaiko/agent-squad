@@ -31,7 +31,7 @@ roles:
   - approve_and_move
 workspaces:
 - id: T0CFRFR05RU
-  label: bihaiko-test
+  label: bihaiko
   class: owned
   app: hal9k
   language: pt-BR

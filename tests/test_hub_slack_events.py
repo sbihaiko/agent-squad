@@ -267,7 +267,7 @@ def overview(hub, tmp_path):
 def render(hub, out, docs=None):
     body = (_slack_js(hub.PAGE) + "\n" + STUB
             + f"\nslS={{}};slR={json.dumps(out)};"
-            + f"slDocs={json.dumps(docs if docs is not None else out['docs'])};slSavedDocs=slClone(slDocs);slRender();"
+            + f"slDocs={json.dumps(docs if docs is not None else out['docs'])};slSavedDocs=slClone(slDocs);slT=slR.tree;slTsel=(slTHere()||{{}}).id||slTsel;slRender();"
             "console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
 
