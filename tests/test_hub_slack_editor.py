@@ -749,13 +749,14 @@ def test_the_roles_editor_draws_the_id_a_checkbox_per_action_and_the_deploy(hub)
 
 
 def test_the_members_editor_draws_the_four_fields_of_one_format(hub):
-    """Criterion 3 on the page: a member is one row of the four fields of the mockup: Slack workspace, channel, role
-    and user ids. The row is drawn from the local document, and the controls name the ids the files hold."""
+    """Criterion 3 on the page, re-anchored (#2911): a member is one row of a person, a Slack workspace, a channel and a
+    role. The ids stay in the option values the edit posts, and no id is shown to the owner."""
     html = roles_html(hub, local=with_member())
-    for field in ("workspace", "channel", "role", "users"):
+    for field in ("workspace", "channel", "role"):
         assert f'data-sle="member:0:{field}"' in html, (field, html)
-    assert 'value="U0OWNER001"' in html, html
-    assert "T0TEAM0001" in html and "C0PROJ0001" in html, html
+    assert 'data-l="Person"' in html, html
+    assert ">U0OWNER001<" not in html and 'value="U0OWNER001"' not in html, html
+    assert 'value="T0TEAM0001"' in html and 'value="C0PROJ0001"' in html, html
     assert "data-sladdmem" in html and "data-slrmmem" in html, html
 
 
@@ -822,44 +823,48 @@ def test_the_editor_adds_a_member_with_a_blank_alias_and_no_alias_key(hub, tmp_p
     assert "alias" not in out["local"]["members"][-1], out["local"]
 
 
-def test_a_member_row_shows_its_alias_first_and_its_user_id_as_secondary_text(hub):
-    """Criterion 2 on the page: the alias field comes before the user id, and the user id is the secondary line."""
+def test_a_member_row_names_its_person_by_alias_until_the_name_is_read(hub):
+    """Criterion 2 on the page, re-anchored (#2911): before the hub answers the person's Slack name, the row names the
+    alias, and it never shows the user id."""
     row = member_row(roles_html(hub, local=with_alias()))
-    assert row.index('value="alias-a"') < row.index("U0OWNER001"), row
-    assert '<span class=m>U0OWNER001</span>' in row, row
-    assert "no alias" not in row, row
+    assert "<b>alias-a</b>" in row, row
+    assert "U0OWNER001" not in row, row
 
 
-def test_a_member_row_without_an_alias_shows_its_user_id_and_the_no_alias_hint(hub):
-    """Criterion 3 on the page: a member with no alias shows its user id and the hint `no alias`."""
+def test_a_member_row_without_an_alias_names_a_slack_member_and_no_id(hub):
+    """Criterion 3 on the page, re-anchored (#2911): a member with no alias reads "A Slack member" until its name is
+    read, and the row shows no user id."""
     row = member_row(roles_html(hub, local=with_member()))
-    assert "U0OWNER001" in row and "no alias" in row, row
+    assert "A Slack member" in row and "U0OWNER001" not in row, row
 
 
-def test_the_alias_cell_wraps_its_controls_in_one_element(hub):
-    """Layout: the alias input, the hint and the user id share one wrapper, so the narrow grid keeps one child beside the label."""
+def test_the_person_cell_wraps_its_people_in_one_element(hub):
+    """Layout, re-anchored (#2911): the people of one row share one wrapper, so the narrow grid keeps one child beside
+    the label."""
     row = member_row(roles_html(hub, local=with_alias()))
-    cell = row[row.index('data-l="Alias"'):row.index('data-l="Slack workspace"')]
-    assert cell.count('<span class=slalias>') == 1, cell
-    assert cell.index('<span class=slalias>') < cell.index('value="alias-a"') < cell.index("U0OWNER001"), cell
+    cell = row[row.index('data-l="Person"'):row.index('data-l="Slack workspace"')]
+    assert cell.count("<span class=slwho>") == 1, cell
 
 
-def test_the_member_workspace_select_shows_the_label_with_the_team_id(hub):
-    """Criterion 4 on the page: the workspace choice reads its label, and its team id is the secondary text."""
+def test_the_member_workspace_select_shows_the_label_only(hub):
+    """Criterion 4 on the page, re-anchored (#2911): the workspace choice reads its label, and its team id stays in the
+    option value."""
     html = roles_html(hub, local=with_member())
-    assert re.search(r'<option value="T0TEAM0001"[^>]*>team · T0TEAM0001</option>', html), html
+    assert re.search(r'<option value="T0TEAM0001"[^>]*>team</option>', html), html
 
 
-def test_the_member_channel_select_shows_the_channel_name_with_the_channel_id(hub):
-    """Criterion 5 on the page: the channel choice reads #name, and its channel id is the secondary text."""
+def test_the_member_channel_select_shows_the_channel_name_only(hub):
+    """Criterion 5 on the page, re-anchored (#2911): the channel choice reads #name, and its id stays in the value."""
     html = roles_html(hub, local=with_member())
-    assert re.search(r'<option value="C0PROJ0001"[^>]*>#proj-agent-squad · C0PROJ0001</option>', html), html
+    assert re.search(r'<option value="C0PROJ0001"[^>]*>#proj-agent-squad</option>', html), html
 
 
-def test_the_add_member_row_has_an_alias_field(hub):
-    """Criterion 6 on the page: the Add member row carries an alias field that the Add control reads."""
+def test_the_add_member_row_takes_an_email_or_an_at_name(hub):
+    """Criterion 6 on the page, re-anchored (#2911): the Add member row takes the person by email or @name, and the
+    hub resolves the id; the alias is the person's @name."""
     html = roles_html(hub, local=with_member())
-    assert 'data-slmalias' in html and 'aria-label="new member alias"' in html, html
+    assert 'data-slmwho' in html and 'placeholder="email or @name"' in html, html
+    assert 'data-slmalias' not in html and 'placeholder="U0..."' not in html, html
 
 
 def test_a_member_alias_edit_builds_a_local_operation(hub):

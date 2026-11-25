@@ -280,7 +280,9 @@ def test_the_renderer_draws_the_client_tree(hub, tmp_path, monkeypatch):
     assert re.search(r'aria-level="4"[^>]*aria-label="#project', html)
 
 
-def test_the_renderer_draws_the_proposed_writes_table(hub, tmp_path, monkeypatch):
+def test_the_client_pane_names_only_the_projects_a_save_could_not_write(hub, tmp_path, monkeypatch):
+    """Re-anchored (#2908): the "Proposed writes" table left the pane. A save writes by itself, and the pane names only
+    a project it could not write, with the reason."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
                    [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
                      "projects": [{"id": "alpha", "follows": True}, {"id": "owners", "follows": False}]}],
@@ -288,12 +290,8 @@ def test_the_renderer_draws_the_proposed_writes_table(hub, tmp_path, monkeypatch
     out = hub.slack_overview()
     out["tree"]["clients"][0]["proposal"] = hub.slack_clients_preview({"client": "one", "persona": "amber"})["rows"]
     html = render(hub, out, sel="c0")
-    assert "Proposed writes" in html, html[:500]
-    assert "writes Amber" in html and "kept: the project set its own persona" in html
-    assert re.search(r"<th[^>]*>Project", html) and re.search(r"<th[^>]*>Result", html)
-
-
-# ---------------------------------------------------------------- the review's findings (#2827)
+    assert "Proposed writes" not in html and "writes Amber" not in html, html[:500]
+    assert "Not written" not in html, html[:500]
 
 def stub_write(hub, monkeypatch):
     """A stub of the project save path: it writes the committed document to its own file and answers a sha. The route's
@@ -402,59 +400,53 @@ def _fetched(hub, out, sel, script):
     return json.loads(_node(body))
 
 
-def test_the_bootstrap_proposes_once_and_a_missing_route_reads_not_available(hub, tmp_path, monkeypatch):
-    """The page proposes a client's writes once; a hub without the route answers 404, the pane reads 'not available',
-    and no later render asks again."""
+def test_a_render_posts_nothing_and_a_missing_route_reads_not_available(hub, tmp_path, monkeypatch):
+    """Re-anchored (#2908): the pane no longer proposes on its own, so a render posts nothing. A save against a hub
+    without the route answers 404, and the bar says the route is not available and offers Retry."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
                    [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
     out = hub.slack_overview()
     script = ('let CALLS=0;globalThis.fetch=()=>{CALLS++;return Promise.resolve({status:404,json:()=>Promise.resolve({})})};'
-              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slRender();await new Promise(r=>setTimeout(r,20));'
-              "console.log(JSON.stringify({calls:CALLS,html:STORE['#sbody'].innerHTML}))})()")
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));const before=CALLS;slPropose("c0",true);'
+              'await new Promise(r=>setTimeout(r,20));'
+              "console.log(JSON.stringify({before,calls:CALLS,bar:slBarState()}))})()")
     got = _fetched(hub, out, "c0", script)
-    assert got["calls"] == 1, got["calls"]
-    assert "not available" in got["html"], got["html"][:600]
-
+    assert got["before"] == 0 and got["calls"] == 1, got
+    assert "not available" in got["bar"]["text"] and got["bar"]["retry"] is True, got
 
 def test_the_page_shows_saved_after_a_full_save_and_partly_saved_after_a_partial_one(hub, tmp_path, monkeypatch):
+    """Re-anchored (#2908): the verdict sits in the bar, and a partial save names the refused project in the pane."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
                    [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
     out = hub.slack_overview()
     rows = [{"project": "alpha", "label": "alpha", "now": "Blue", "action": "write", "result": "writes Amber"}]
-    script = (f"const ANSWER={json.dumps({'rows': rows, 'proposal_saved': True, 'partial': False, 'refused': []})};"
-              'globalThis.fetch=()=>Promise.resolve({status:200,json:()=>Promise.resolve(ANSWER)});'
-              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slPropose("c0",true);'
-              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
-    html = _fetched(hub, out, "c0", script)
-    assert re.search(r'sltb ok">saved', html), html[-600:]
+    def run(answer):
+        script = (f"const ANSWER={json.dumps(answer)};"
+                  'globalThis.fetch=()=>Promise.resolve({status:200,json:()=>Promise.resolve(ANSWER)});'
+                  '(async()=>{slRender();slPropose("c0",true);await new Promise(r=>setTimeout(r,20));'
+                  "console.log(JSON.stringify({bar:slBarState(),html:STORE['#sbody'].innerHTML}))})()")
+        return _fetched(hub, out, "c0", script)
+    got = run({"rows": rows, "proposal_saved": True, "partial": False, "refused": []})
+    assert got["bar"]["text"] == "Saved" and got["bar"]["err"] is False, got["bar"]
     refused = {"rows": rows + [{"project": "gamma", "label": "gamma", "now": "none", "action": "refused",
                                 "result": "refused: Amber is not declared in this project"}],
                "proposal_saved": False, "partial": True,
                "refused": [{"project": "gamma", "result": "refused: Amber is not declared in this project"}]}
-    script = (f"const ANSWER={json.dumps(refused)};"
-              'globalThis.fetch=()=>Promise.resolve({status:200,json:()=>Promise.resolve(ANSWER)});'
-              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slPropose("c0",true);'
-              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
-    html = _fetched(hub, out, "c0", script)
-    assert "partly saved" in html and not re.search(r'sltb ok">saved', html), html[-600:]
+    got = run(refused)
+    assert got["bar"]["text"].startswith("Saved in part"), got["bar"]
+    assert "gamma: Amber is not declared in this project" in got["html"], got["html"][-600:]
 
-
-# ---------------------------------------------------------------- the second review's findings (#2827)
-
-def test_a_fetch_failure_reads_not_available_and_disables_the_save(hub, tmp_path, monkeypatch):
-    """A preview that fails to reach the hub leaves no stale table: the pane reads 'not available', the error is shown,
-    and the Save button is disabled until a preview succeeds."""
+def test_a_fetch_failure_says_not_saved_and_offers_retry(hub, tmp_path, monkeypatch):
+    """Re-anchored (#2908): a save that fails to reach the hub says so in the bar and offers Retry."""
     prof, _ = wire(tmp_path, monkeypatch, hub,
                    [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
     out = hub.slack_overview()
     script = ('globalThis.fetch=()=>Promise.reject(new Error("down"));'
-              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slRender();'
-              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
-    html = _fetched(hub, out, "c0", script)
-    assert "not available" in html, html[:800]
-    assert re.search(r'<button[^>]*data-slt-write="c0"[^>]*disabled', html), html[:800]
-    assert "could not be read" in html, html[:800]
-
+              '(async()=>{slRender();slPropose("c0",true);await new Promise(r=>setTimeout(r,20));'
+              "console.log(JSON.stringify(slBarState()))})()")
+    bar = _fetched(hub, out, "c0", script)
+    assert bar["text"].startswith("Not saved") and "did not answer" in bar["text"], bar
+    assert bar["retry"] is True and bar["err"] is True, bar
 
 def test_a_preview_posts_the_personas_display_name(hub, tmp_path, monkeypatch):
     """The POST names the persona id and the label the pane shows, so a non-default persona never renders as its raw
@@ -465,9 +457,9 @@ def test_a_preview_posts_the_personas_display_name(hub, tmp_path, monkeypatch):
     out = hub.slack_overview()
     script = ('const BODIES=[];globalThis.fetch=(u,o)=>{BODIES.push(JSON.parse(o.body));'
               'return Promise.resolve({status:200,json:()=>Promise.resolve({rows:[]})})};'
-              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));'
+              '(async()=>{slRender();slPropose("c0",true);await new Promise(r=>setTimeout(r,20));'
               "console.log(JSON.stringify(BODIES))})()")
-    bodies = _fetched(hub, out, "c0", script)
+    bodies = _fetched(hub, out, "c0", script)   # re-anchored (#2908): the save posts; a render posts nothing
     assert bodies and bodies[0].get("persona") == "blue", bodies
     assert bodies[0].get("persona_name") == "Blue", bodies
 

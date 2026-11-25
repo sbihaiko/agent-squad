@@ -202,10 +202,11 @@ def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
     src = HUB_PY.read_text()
     routes = ('self.path in ("/api/models", "/api/plans", "/api/promote", "/api/limits", "/api/columns", '
               '"/api/slots", "/api/slack/files", "/api/slack/preview", "/api/slack/sample", "/api/slack/clients", '
-              '"/api/sync")')
+              '"/api/slack/people", "/api/sync")')
     assert routes in src, "the write routes changed"
     # /api/columns: Spend & limits saves the column limits (#2432); /api/slots: its slots sub-group (#2435);
     # /api/slack/files: the Communication save and its one edit (#2694, #2696);
+    # /api/slack/people: the members editor resolves an @name to a Slack user (#2911);
     # /api/slack/preview and /api/slack/sample: the persona editor's reply preview and voice sample (#2697);
     # /api/slack/clients: the client default's proposed writes and its save (#2827);
     # the old settings route is retired (#2701)

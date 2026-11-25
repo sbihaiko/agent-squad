@@ -524,17 +524,23 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    the fields on one line, the actions wrap beside each other, and the user ids field keeps its whole value. A narrow
    panel stacks each field under its own label, so no value is clipped. */
 #sbody .slroledet .slevr{display:grid;grid-template-columns:minmax(140px,16ch) minmax(200px,1fr) minmax(120px,16ch) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--line)}
-#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(90px,.8fr) minmax(150px,1.5fr) minmax(170px,1.6fr) minmax(90px,.8fr) minmax(120px,1.2fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) minmax(150px,1.2fr) minmax(110px,.8fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
 #sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slad input[data-slroleid],#sbody .slad input[data-slmus]{flex:1 1 220px}
-#sbody .slad input[data-slmalias]{flex:1 1 150px}
+#sbody .slad input[data-slmwho]{flex:1 1 220px}#sbody .slwho{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;min-width:0}#sbody .slperson{overflow-wrap:anywhere}#sbody .slwhonote{flex-basis:100%;font-size:var(--fs-caption)}#sbody .sladv summary{color:var(--mute);cursor:pointer;font-size:var(--fs-caption)}#sbody .slwhomsg{margin:4px 0 0}#sbody .slwhomsg.err{color:var(--err)}#sbody .slwhopick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 #sbody .slad select[data-slmws]{flex:1 1 190px}   /* a phone puts the workspace on its own line, so its team id is never cut */
 #sbody .slad select[data-slmch]{flex:1 1 240px}
 #sbody .slad select[data-slmrole]{flex:1 1 120px}
 #sbody .slmembdet .slalias{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
 #sbody .slmembdet .slalias input{width:100%;min-width:0}
+/* The members block reads its own width, not the window's (#2911): a wide window with a narrow settings panel stacks each
+   member field under its label, so no select is cut. */
+#sbody .slmembdet{container-type:inline-size}
+@container (max-width:760px){#sbody .slmembdet .slevr{grid-template-columns:1fr}
+ #sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
+ #sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}}
 @media (max-width:1240px){#sbody .slroledet .slevr,#sbody .slmembdet .slevr{grid-template-columns:1fr}
  #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
  #sbody .slroledet .slevr [role=cell][data-l]::before,#sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}
@@ -845,7 +851,7 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <details id=slk class=sp data-sp=slk><summary>Slack<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
 <details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile";document.getElementById("mobile-link").onclick=()=>localStorage.removeItem("squad-view")</script></div></details>
 </div></div>
-<div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span></div>
+<div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span><button id=sundo hidden>Undo</button><button id=sretry hidden>Retry</button></div>
 <dialog id=sdlg aria-label="Confirm the settings change"><b>Save these settings?</b><pre id=sdpre></pre><p class=m>Written to the project files. Runs already started keep the chains they recorded.</p><div class=sact><button id=sdok>Confirm and save</button><button id=sdno>Back</button></div></dialog>
 </section>
 </main>
@@ -1532,9 +1538,7 @@ function slRender(){const b=$("#sbody");if(!b)return;if(!slR&&!slS){b.innerHTML=
  const keep=(typeof document!=="undefined"&&document.activeElement&&document.activeElement.id)||"";   // a redraw replaces the pane's markup, so the control that had the keyboard takes it back (#2846)
  let h=slTreeHtml()+(slTHere()?"":slReadHtml(slR));   // the project's personas, roles and events live in its own node (#2906)
  if(slMsg&&!slDocs)h+=`<div class="mx${slMsg.startsWith("!")?" err":""}" role=status>${esc(slMsg.replace(/^!/,""))}</div>`;   // with the documents in hand the editor carries the message (#2696)
- b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();if(typeof setBar==="function")setBar();
- const n=slTNode(slTsel);   // a client's selected default proposes its writes once; a hub without the route is not asked again (#2827)
- if(n&&n.kind==="client"&&!n.proposal&&!n.proposal_tried&&typeof fetch==="function"){n.proposal_tried=true;n.proposal=[];slPropose(n.id,false)}}
+ b.innerHTML=h;slTBind();if(slTF||!slKeepFocus(keep))slTFocus();slAutoSchedule();slBarSync()}   // each edit saves by itself (#2908)
 /* The Communication tree (SPEC 2682 #2824, #2827): Client > Project > Workspace > Channel, with the selected node's state
    in a Now block of tiles. The hub answers every value from the policy module and the client map module; the view
    constructs, binds and moves the focus, and holds no rule of the Slack files (ADR-0137, ADR-0177). One tab stop, Arrow
@@ -1563,10 +1567,11 @@ function slTreeKey(f,cur,key){const i=f.findIndex(x=>x.id===cur),n=f[i]||{},last
  if(key==="ArrowRight"){if(!n.kids)return null;if(!n.open)return {focus:cur,toggle:cur};const k=f[i+1];return k&&k.parent===cur?{focus:k.id}:null}
  if(key==="ArrowLeft"){if(n.kids&&n.open)return {focus:cur,toggle:cur};return n.parent?{focus:n.parent}:null}
  return null}
-function slTGo(r){if(!r)return;
+function slTFlush(){if(slAutoT)slAutoSave();if(slProposeT){clearTimeout(slProposeT);slProposeT=null;slPropose(slTsel,true)}}   // leaving a node saves its pending edit at once (#2908)
+function slTGo(r){if(!r)return;if(r.focus&&r.focus!==slTsel)slTFlush();
  if(r.toggle)slTopen[r.toggle]=!slTOpen(slTNode(r.toggle));   // an untouched node reads as open, so the fold must flip that reading
  if(r.focus)slTsel=r.focus;slTF=r.focus||slTsel;slTshow=false;slRender()}
-function slTPick(id){slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
+function slTPick(id){if(id!==slTsel)slTFlush();slTsel=id;slTF=id;slTshow=slTNarrow();slRender()}   // only a narrow panel folds the tree on a pick
 function slTKey(e){const r=slTreeKey(slTFlat(),slTsel,e.key);if(!r)return;e.preventDefault();e.stopPropagation();slTGo(r)}
 const slTNarrow=()=>{const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sbody");
  return !!el&&!!el.getBoundingClientRect&&el.getBoundingClientRect().width<=700};
@@ -1582,8 +1587,7 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
   if(e.target&&e.target.closest&&e.target.closest(".sltarrow")&&n&&n.children&&n.children.length){slTGo({focus:id,toggle:id});return}slTPick(id)});
  for(const el of document.querySelectorAll("[data-slt-setup]"))el.addEventListener("click",()=>slSetup(el.getAttribute("data-slt-setup")));
  const sel=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
- if(sel)sel.addEventListener("change",()=>{clearTimeout(slProposeT);slProposeT=setTimeout(()=>slPropose(slTsel,false),300)});   // a debounce, so one change never starts a burst of roster reads (#2827)
- for(const el of document.querySelectorAll("[data-slt-write]"))el.addEventListener("click",()=>slPropose(el.getAttribute("data-slt-write"),true));
+ if(sel)sel.addEventListener("change",slClientPick);   // a client's default saves its project writes by itself (#2908)
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
  for(const el of document.querySelectorAll("[data-slt-perm]"))el.addEventListener("click",e=>{e.preventDefault();slPermGo()});
@@ -1622,23 +1626,16 @@ function slTSetup(n){const setup=n.setup||[];if(!setup.length)return "";
  return `<div class=sltempty><p class=slttext>${esc((n.detail||{}).text||"This project has no Slack files yet.")}</p><div class=sltacts><span>${esc("Start with a workspace:")}</span>`
  +setup.map(c=>`<button type=button data-slt-setup="${slA(c.id)}">${esc(c.label)}</button>`).join("")+`</div>`
  +`<p class="m">${esc("owned: the bot posts in your workspace · guest: the persona writes from your account in a client's")}</p></div>`}
-const slTProp=n=>{if(n.proposal_na&&(!n.proposal||!n.proposal.length))return `<div class=setblk data-blk=prop><h3 class=blkh>${esc("Proposed writes")}</h3><p class=m>${esc("the proposal route is not available on this hub")}</p></div>`;
- const rows=n.proposal;if(!rows||!rows.length)return "";
- const tone=r=>r.action==="refused"?"err":r.action==="write"?"ok":"muted";
- const saved=n.proposal_saved?"saved":n.proposal_partial?"partly saved":"not saved";   // a partial save is never green (#2827)
- return `<div class=setblk data-blk=prop><div class=sltprophead><h3 class=blkh>${esc("Proposed writes")}</h3>`
- +`<span class="sltb ${n.proposal_saved?"ok":"warn"}">${esc(saved)}</span></div>`
- +`<table class=slt2><thead><tr><th>${esc("Project")}</th><th>${esc("project.persona now")}</th><th>${esc("Result")}</th></tr></thead><tbody>`
- +rows.map(r=>`<tr><td data-l=Project>${esc(r.label||r.project)}</td><td data-l="persona now"><span class=nw>${esc(r.now||"none")}</span></td><td data-l=Result class="slr ${tone(r)}">${esc(r.result||"")}</td></tr>`).join("")
- +`</tbody></table></div>`};
+function slClientPick(){clearTimeout(slProposeT);slProposeT=setTimeout(()=>{slProposeT=null;slPropose(slTsel,true)},SL_COMMIT_MS);slBarSync()}   // one burst of picks is one save of each project (#2908)
+const slTRefused=n=>{const bad=(n.proposal||[]).filter(r=>r.action==="refused");if(!bad.length)return "";   // only a project the save could not write is named (#2908)
+ return `<div class="mx err sltbad" role=status><b>${esc("Not written")}</b><ul>${bad.map(r=>`<li>${esc(r.label||r.project)}: ${esc(String(r.result||"").replace(/^refused: /,""))}</li>`).join("")}</ul></div>`};
 const slTClient=n=>{if(n.kind!=="client")return "";
  const opts=n.persona_options||[],cur=n.default_persona||"";
  const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
  const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div></div>`;
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
- +`<div class=sltacts><button type=button data-slt-write="${slA(n.id)}"${n.proposal_ok?"":" disabled"}>${esc("Save the writes")}</button></div>`
- +slTProp(n)+projects};
+ +slTRefused(n)+projects};
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
  const badges=(n.badges||[]).map(slTBadge).join(""),dnote=(n.detail||{}).defect_note||[],
@@ -1734,16 +1731,15 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const pid=(el&&el.value)||n.default_persona||"";
  const opt=(n.persona_options||[]).find(o=>o.id===pid)||((el&&el.options&&el.options[el.selectedIndex])||{});
  const pname=String(opt.name||opt.text||pid),body={client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827)
- if(confirm)body.confirm=true;slMsg="the proposed writes are being read";slRender();
+ if(confirm)body.confirm=true;slSaving=!!confirm;slMsg="";slBarSync();
+ const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slPropose(id,true);slRender()};
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
- .then(r=>{if(r.status===404||r.status>=500){n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!the proposal route is not available on this hub";slRender();return null}return r.json()})
- .then(o=>{if(o===null)return;if(!o||o.err){n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
-  n.proposal_na=false;n.proposal_ok=true;   // a preview that answered is the only state that enables the Save button
-  if(o.rows)n.proposal=o.rows;
-  if(confirm){n.proposal_saved=!!o.proposal_saved;n.proposal_partial=!!o.partial;slMsg=o.partial?"the writes were saved in part":"the writes were saved"}
-  else{n.proposal_saved=false;n.proposal_partial=false;slMsg="the proposed writes are shown"}
+ .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client default could not be saved");return}
+  slSaving=false;slRetryFn=null;if(o.rows)n.proposal=o.rows;
+  if(confirm){n.default_persona=pid;slMsg=o.partial?"saved in part · a project was not written":"saved"}   // the refused projects are named in the pane (#2908)
   slRender()})
- .catch(()=>{n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!the proposed writes could not be read";slRender()})}
+ .catch(()=>fail("the client default could not be saved: the hub did not answer"))}
 /* A tone becomes a class token only from a fixed set, and only a set each CSS rule draws: `err` has its rule, and any
    other tone is neutral, never a token of its own (#2842). */
 const slTTone=t=>t==="err"?t:"neutral";
@@ -1819,8 +1815,8 @@ const slChIdsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},sl
 const slChannelsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
  for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(w&&String(w.id)===String(wsId))for(const c of (Array.isArray(w.channels)?w.channels:[]))if(c&&c.id)out.push(c);return out};
 const slWsOpt=id=>{let lab="";for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
- for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(!lab&&w&&String(w.id)===String(id)&&w.label)lab=String(w.label);return lab?`${lab} · ${id}`:id};
-const slChOpt=(wsId,id)=>{const c=slChannelsOf(wsId).find(x=>String(x.id)===String(id));return c&&c.name?`#${c.name} · ${id}`:id};
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(!lab&&w&&String(w.id)===String(id)&&w.label)lab=String(w.label);return lab||id};   // a person reads a workspace by its label, never its id (#2911)
+const slChOpt=(wsId,id)=>{const c=slChannelsOf(wsId).find(x=>String(x.id)===String(id));return c&&c.name?`#${c.name}`:id};
 const slOptsV=(ids,labelOf,cur)=>ids.map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(labelOf(x))}</option>`).join("");
 const slRoleIds=()=>slRoleRows().map(x=>String((x||{}).id||"")).filter(Boolean);
 const slActionList=()=>Array.isArray(slR&&slR.role_actions)?slR.role_actions:[];
@@ -1831,13 +1827,28 @@ const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],ac
  +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
  +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
-const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,al=typeof m.alias==="string"?m.alias:"",us=(Array.isArray(m.users)?m.users:[]).join(", ");
+/* Members by name (#2911): a Slack user knows a person by email or @name, never by a user id. The row shows each
+   person's display name and @name, which the hub reads from the workspace's own connection, and the add row takes an
+   email or an @name that the hub resolves to the id the local file stores. A workspace this host has no connection to
+   keeps a raw id field under "Slack ids", the one place an id shows. */
+let slPeople={},slPeopleAsk={},slPeopleManual={},slWhoMsg="",slWhoPick=[];
+const slPersonOf=(ws,id)=>(slPeople[ws]||{})[id]||null;
+function slPeopleNeed(){if(typeof fetch!=="function")return;const want={};
+ for(const m of slMemberRows()){const ws=String((m&&m.workspace)||"");for(const u of (Array.isArray(m&&m.users)?m.users:[]))if(!slPersonOf(ws,u))(want[ws]=want[ws]||[]).push(String(u))}
+ for(const ws of Object.keys(want)){if(slPeopleAsk[ws])continue;slPeopleAsk[ws]=true;   // one ask per workspace per page view
+  fetch("/api/slack/people",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:ws,ids:want[ws]})})
+  .then(r=>r.json()).then(o=>{if(o&&o.manual)slPeopleManual[ws]=true;slPeople[ws]={...(slPeople[ws]||{}),...((o&&o.people)||{})};slRender()}).catch(()=>{})}}
+const slPersonChip=(ws,u,m,k,n)=>{const p=slPersonOf(ws,u);   // an unread person keeps the row's alias only when the row names one person
+ return p?`<span class=slperson><b>${esc(p.name||p.handle)}</b>${p.handle?` <span class=m>@${esc(p.handle)}</span>`:""}</span>`
+  :`<span class=slperson><b>${esc(n===1&&m&&m.alias?m.alias:n===1?"A Slack member":"Slack member "+(k+1))}</b></span>`};
+const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,ws=String(m.workspace||""),us=Array.isArray(m.users)?m.users:[];
+ const ids=slPeopleManual[ws]?`<details class=sladv><summary>${esc("Slack ids")}</summary><input data-sle="${at("users")}" value="${slA(us.join(", "))}" aria-label="member ${n}: Slack ids"></details>`:"";
  return `<div class="sle slmembdet" role=group aria-label="member ${n} fields"><div class=slevr role=row>`
- +`<span role=cell data-l="Alias"><span class=slalias><input data-sle="${at("alias")}" value="${slA(al)}" placeholder="alias" aria-label="member ${n}: alias">${al?"":`<span class=m>no alias</span>`}<span class=m>${slA(us)}</span></span></span>`
+ +`<span role=cell data-l="Person"><span class=slwho>${us.length?us.map((u,k)=>slPersonChip(ws,u,m,k,us.length)).join(""):`<span class=m>${esc("nobody yet")}</span>`}`
+ +(us.length&&us.some(u=>!slPersonOf(ws,u))?`<span class="m slwhonote">${esc(slPeopleManual[ws]?"names not readable on this host":"reading the names")}</span>`:"")+`${ids}</span></span>`
  +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOptsV(slWsIds(),slWsOpt,m.workspace)}</select></span>`
  +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOptsV(slChIdsOf(m.workspace),c=>slChOpt(m.workspace,c),m.channel)}</select></span>`
  +`<span role=cell data-l="Role"><select data-sle="${at("role")}" aria-label="member ${n}: role">${slOpts(slRoleIds(),m.role)}</select></span>`
- +`<span role=cell data-l="User ids"><input data-sle="${at("users")}" value="${slA((Array.isArray(m.users)?m.users:[]).join(", "))}" placeholder="U0..., U0..." aria-label="member ${n}: user ids"></span>`
  +`<span role=cell><button data-slrmmem="${i}" aria-label="remove member ${n}">Remove</button></span></div></div>`};
 function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.committed,lf=r.files.local;
  let h=`<h5 class=slws>Roles ${slTag(cf)}</h5>`;
@@ -1845,12 +1856,29 @@ function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.c
  h+=`<div class=slad><input data-slroleid placeholder="role id" aria-label="new role id"><button data-sladdrole>Add role</button></div>`;
  h+=`<h5 class=slws>Members ${slTag(lf)}</h5>`;
  h+=ms.length?ms.map(slMemberEditRow).join(""):`<p class=m>${esc("No member: the roles name no user.")}</p>`;
- const w0=slWsIds()[0]||"";
- return h+`<div class=slad><input data-slmalias placeholder="alias" aria-label="new member alias">`
+ const w0=slWsIds()[0]||"";slPeopleNeed();
+ const pick=slWhoPick.length?`<div class=slwhopick role=group aria-label="${slA("Choose the person")}">${slWhoPick.map(p=>`<button type=button data-slmpick="${slA(p.id)}">${esc(p.name||p.handle)} <span class=m>@${esc(p.handle)}</span></button>`).join("")}</div>`:"";
+ const manual=slPeopleManual[w0]?`<details class=sladv><summary>${esc("Slack ids")}</summary><input data-slmus aria-label="new member Slack id"></details>`:"";
+ return h+`<div class=slad><input data-slmwho value="${esc(slWhoQ)}" placeholder="email or @name" aria-label="new member: email or @name">`
  +`<select data-slmws aria-label="new member Slack workspace">${slOptsV(slWsIds(),slWsOpt,"")}</select>`
  +`<select data-slmch aria-label="new member channel">${slOptsV(slChIdsOf(w0),c=>slChOpt(w0,c),"")}</select>`
  +`<select data-slmrole aria-label="new member role">${slOpts(slRoleIds(),"")}</select>`
- +`<input data-slmus placeholder="U0..." aria-label="new member user ids"><button data-sladdmem>Add member</button></div>`}
+ +`<button data-sladdmem>Add member</button>${manual}</div>`
+ +(slWhoMsg?`<p class="slwhomsg${slWhoMsg.startsWith("!")?" err":""}" role=status>${esc(slWhoMsg.replace(/^!/,""))}</p>`:"")+pick}
+let slWhoAt=null,slWhoQ="";   // slWhoQ: the text the owner typed, kept until a person is added   // the workspace, channel and role the add row held when the owner asked
+function slMemberAdd(at,p){slPeople[at.workspace]={...(slPeople[at.workspace]||{}),[p.id]:p};slWhoMsg="";slWhoPick=[];slWhoAt=null;slWhoQ="";
+ slOp({kind:"add",doc:"local",path:["members"],value:{workspace:at.workspace,channel:at.channel,role:at.role,users:p.id,alias:p.handle||p.name||""}})}
+function slMemberAddAsk(){const g=s=>{const el=document.querySelector(s);return el?String(el.value||"").trim():""};
+ const at={workspace:g("[data-slmws]"),channel:g("[data-slmch]"),role:g("[data-slmrole]")},who=g("[data-slmwho]"),raw=g("[data-slmus]");
+ if(raw){slMemberAdd(at,{id:raw,handle:"",name:""});return}   // the one raw path: a workspace this host cannot read
+ if(!who){slWhoMsg="!Type an email or an @name.";slRender();return}
+ slWhoQ=who;slWhoMsg="Looking up "+who;slWhoPick=[];slWhoAt=at;slRender();
+ fetch("/api/slack/people",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:at.workspace,q:who})})
+ .then(r=>r.json()).then(o=>{if(o&&o.manual)slPeopleManual[at.workspace]=true;const ms=(o&&o.matches)||[];
+  if(ms.length===1){slMemberAdd(at,ms[0]);return}
+  if(ms.length>1){slWhoPick=ms;slWhoMsg="Several people match. Choose one.";slRender();return}
+  slWhoMsg="!"+((o&&o.err)||"No Slack user matches");slRender()})
+ .catch(()=>{slWhoMsg="!The hub did not answer.";slRender()})}
 function slDocOp(attr,el){const p=attr.split(":"),v=el.type==="checkbox"?!!el.checked:el.value;
  if(p[0]==="role"||p[0]==="member"){const i=+p[1];   // a role edits the committed file and a member the local one (#2699)
   if(p[0]==="role"&&p[2]==="act"){const a=p.slice(3).join(":"),row=slRoleRows()[i]||{},cur=Array.isArray(row.actions)?row.actions.slice():[];
@@ -1913,14 +1941,41 @@ async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
    }catch(x){window.__slAudio=r.url}}}
  catch(x){slPvMsg="!the sample could not be fetched"}
  slRender()}
+/* Autosave (#2908): every edit saves by itself, so the page shows no Save, no Discard and no "not saved". An edit of the
+   local file saves at once; an edit of the committed file waits two seconds after the last edit of a burst, so a burst
+   lands as one commit. Leaving the node saves a pending edit at once. An edit made during a save is kept and saves after
+   it. The bar keeps one status line: Undo for a short while after a save, and Retry after a refusal. */
+const SL_LOCAL_MS=300,SL_COMMIT_MS=2000,SL_UNDO_MS=15000;
+let slAutoT=null,slAutoJ="",slFailJ="",slSaving=false,slAgain=false,slUndo=null,slUndoAt=0,slRetryFn=null;
+const slBarSync=()=>{if(typeof setBar==="function")setBar()};
+function slAutoSchedule(){if(!slDirty()||(typeof RO!=="undefined"&&RO)||typeof slPost!=="function")return;const j=JSON.stringify(slDocsCur());   // a view slice with no save path schedules nothing
+ if(j===slFailJ||(slAutoT&&j===slAutoJ))return;   // a render with no new edit never pushes the save back, and a refused file waits for Retry
+ slAutoJ=j;clearTimeout(slAutoT);const only=JSON.stringify(slDocs.committed)===JSON.stringify((slSavedDocs||{}).committed);
+ slAutoT=setTimeout(slAutoSave,only?SL_LOCAL_MS:SL_COMMIT_MS)}
+async function slAutoSave(){clearTimeout(slAutoT);slAutoT=null;slAutoJ="";if(!slDirty())return;if(slSaving){slAgain=true;return}
+ slSaving=true;const prev=slClone(slSavedDocs),sent=JSON.stringify(slDocsCur());slMsg="";slFailJ="";slBarSync();
+ try{await slPost(true)}finally{slSaving=false}
+ if(slMsg.startsWith("!")){slUndo=null;slFailJ=sent;slRetryFn=()=>{slFailJ="";slAutoSave()}}
+ else{slUndo=prev;slUndoAt=Date.now();slRetryFn=null;setTimeout(slBarSync,SL_UNDO_MS+50)}
+ if(slAgain||slDirty()){slAgain=false;slAutoSchedule()}slBarSync()}
+function slUndoLast(){if(!slUndo)return;slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
+const slBarState=()=>{if(slSaving)return {text:"Saving…",undo:false,retry:false,err:false};
+ if(slMsg.startsWith("!"))return {text:"Not saved: "+slMsg.slice(1),undo:false,retry:!!slRetryFn,err:true};
+ if(slAutoT||slProposeT)return {text:"Saving in a moment",undo:false,retry:false,err:false};
+ const undo=!!slUndo&&Date.now()-slUndoAt<SL_UNDO_MS;
+ return slMsg?{text:slMsg[0].toUpperCase()+slMsg.slice(1),undo,retry:false,err:false}
+  :{text:"Slack: each edit saves by itself",undo:false,retry:false,err:false}};
 function slDiscard(){slDocs=slClone(slSavedDocs);slT=slClone((slR&&slR.tree)||slT);slMsg="";slRender()}   // Discard puts back the values the page read last, the Now block included (#2846)
 async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.json();slS=slR;slDocs=slClone((slR&&slR.docs)||slSavedDocs||{committed:{},local:{}});slSavedDocs=slClone(slDocs);slT=(slR&&slR.tree)||null;slD=null;slMsg="";slRender()}
  catch(e){slMsg="!load failed";slR=null;slRender()}}
-async function slPost(confirm){try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,confirm})}),d=await r.json();
+async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
+ const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)
+ try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm})}),d=await r.json();
  slPv=null;slPvMsg="";   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
- else if(confirm){slSavedDocs=slClone(slDocs);slD=null;slMsg=d.sha?"saved · landed "+String(d.sha).slice(0,7):"saved";
-  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slDocs=slClone((v&&v.docs)||slSavedDocs||{});slSavedDocs=slClone(slDocs);slT=(v&&v.tree)||slT}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
+ else if(confirm){slSavedDocs=JSON.parse(sent);if(mine())slDocs=slClone(slSavedDocs);slD=null;slMsg="saved";   // the commit is the hub's business, not the owner's (#2908)
+  try{const v=await(await fetch("/api/slack/files")).json();slR=v;slSavedDocs=slClone((v&&v.docs)||slSavedDocs||{});
+   if(mine()||!slDocs){slDocs=slClone(slSavedDocs);slT=(v&&v.tree)||slT}}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
@@ -1946,9 +2001,8 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
   if(dt.sladdrole!==undefined){const el=document.querySelector("[data-slroleid]");
    slOp({kind:"add",doc:"committed",path:["roles"],value:{id:el?String(el.value||""):"",actions:[]}});return}   // #2699
   if(dt.slrmrole!==undefined){slOp({kind:"remove",doc:"committed",path:["roles",+dt.slrmrole]});return}
-  if(dt.sladdmem!==undefined){const g=s=>{const el=document.querySelector(s);return el?String(el.value||""):""};
-   slOp({kind:"add",doc:"local",path:["members"],value:{workspace:g("[data-slmws]"),channel:g("[data-slmch]"),
-    role:g("[data-slmrole]"),users:g("[data-slmus]"),alias:g("[data-slmalias]")}});return}
+  if(dt.sladdmem!==undefined){slMemberAddAsk();return}   // the person is named by email or @name (#2911)
+  if(dt.slmpick!==undefined){const p=slWhoPick.find(x=>x.id===dt.slmpick);if(p&&slWhoAt)slMemberAdd(slWhoAt,p);return}
   if(dt.slrmmem!==undefined){slOp({kind:"remove",doc:"local",path:["members",+dt.slrmmem]});return}}
  if(!b)return;
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
@@ -1964,15 +2018,17 @@ let sTheme=STH[ls.sth]?ls.sth:SET_FIRST,sPend=null;   // a removed theme opens t
 let subS=null,subDraft=null,subData=null,subSrv="",subMsg="";   // the plans: the saved answer, the staged draft, and the last read (#1281)
 const mdlDirty=()=>mdlChanged();
 const subDirty=()=>!!subDraft&&subSrv!==JSON.stringify(subDraft);   // Subscriptions stages each change: the Save asks the hub for a diff (#1281)
-const setDirty=()=>[["mdl",mdlDirty()],["slk",slDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
+const setDirty=()=>[["mdl",mdlDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x=>x[0]);
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
    never a bar that disappears and leaves the reader guessing whether anything was lost. Spend & limits hides the two
    buttons there, because it writes each field on its own and a button would name a write that already happened (#2433). */
-function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme),solo=sTheme==="lim";bar.hidden=false;
- bar.classList.toggle("dirty",d.length>0&&!ro);
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme),solo=sTheme==="lim"||sTheme==="slk";bar.hidden=false;
+ const sb=sTheme==="slk"&&!RO&&typeof slBarState==="function"?slBarState():null;   // Slack saves each edit by itself (#2908)
+ $("#sundo").hidden=!(sb&&sb.undo);$("#sretry").hidden=!(sb&&sb.retry);$("#schg").classList.toggle("err",!!(sb&&sb.err));
+ bar.classList.toggle("dirty",d.length>0&&!ro&&!solo);
  $("#ssave").hidden=solo;$("#sdisc").hidden=solo;
  $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
- $("#schg").textContent=RO?RO_WHY:solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+ $("#schg").textContent=RO?RO_WHY:sb?sb.text:sTheme==="slk"?"Slack: each edit saves by itself":solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
 function setTheme(sp){if(!STH[sp])sp=SET_FIRST;sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
@@ -1987,14 +2043,12 @@ const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,
 /* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */
 $("#ssave").onclick=async()=>{const d=setDirty(),groups=[];sPend=d;
  if(d.includes("mdl"))groups.push({file:(mdl&&mdl.file)||"(the project files)",lines:mdlDiffLines(JSON.parse(mdlSrv),mdlOut(),MLAB)});
- if(d.includes("slk"))groups.push(...await slAsk());   // the two Slack files, each under its own path (#2694)
  if(d.includes("sub"))groups.push(await setAskOne("/api/plans",subPayload(),"Subscriptions",(subData&&subData.file)||"(the plans file)"));
  const bad=groups.some(g=>g.lines.some(l=>l.startsWith("!"))),any=groups.some(g=>g.lines.length);
  $("#sdpre").textContent=diffByFile(groups)||"No change to save.";$("#sdok").disabled=!any||bad;$("#sdlg").showModal()};
 $("#sdno").onclick=()=>{sPend=null;$("#sdlg").close()};
 $("#sdok").onclick=async()=>{const d=sPend||[];sPend=null;$("#sdlg").close();
  if(d.includes("mdl")){try{const r=await mdlPost(mdlOut());if(r.err)mdlMsg="!"+r.err;else{mdl=r;mdlSrv=JSON.stringify(r);mdlRmk={};mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}mdlRender()}
- if(d.includes("slk"))await slPost(true);
  if(d.includes("sub")){const r=await subPost(true);subMsg=r.err?"!"+r.err:"saved";subRender()}
  setBar();barSay([mdlMsg,kanMsg,slotMsg,slMsg,subMsg])};
 // The verdict of a save belongs where the Save button is: the panel's own line sits at the end of a long scrolling
@@ -2003,10 +2057,14 @@ const barSay=ms=>{const b=$("#schg");if(!b)return;const say=ms.filter(Boolean);i
  const bad=say.some(m=>m.startsWith("!"));b.textContent=say.map(m=>m.replace(/^!/,"")).join(" · ");
  b.classList.toggle("err",bad);b.classList.toggle("ok",!bad)};
 // The explicit revert drops a refused value and redraws the saved state (#2433).
-$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}if(slR||slS){slDiscard()}
+$("#sdisc").onclick=()=>{if(mdl){mdl=JSON.parse(mdlSrv);mdlRmk={};mdlMsg="";mdlRender()}if(limS){limMsg="";limBad="";limBadMsg="";limSent={};limTmr={};limRender()}
  if(subS){subDraft=subClone(subS);subSrv=JSON.stringify(subS);subMsg="";subRender()}
  if(kanS){kanDraft=kanClone(kanS.columns||[]);kanMsg="";kanSent={};kanRef={};kanBad="";kanBadMsg="";kanDiff=[];kanStaged={};limRender()}
  if(slotS){slotDraft=slotClone(slotS);slotDiff=null;slotMsg="";limRender()}setBar()};
+$("#sundo").onclick=()=>slUndoLast();$("#sretry").onclick=()=>{const f=slRetryFn;slRetryFn=null;if(f)f()};
+// A pending Slack edit or a save in flight asks the browser's leave prompt before the page closes (#2908). A page run with no
+// window, as a test runs it in node, skips the prompt (#2914).
+if(typeof window!=="undefined"&&typeof window.addEventListener==="function")window.addEventListener("beforeunload",e=>{if(slDirty()||slSaving||slProposeT){e.preventDefault();e.returnValue=""}});
 /* accordions: each of the five answers its own header and leaves the others alone; the open set is stored like the pins */
 const ACC=["stats","mdl","lim","slk"];   // only the cards the page carries: a name with no element used to kill the whole script (#1032)
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal

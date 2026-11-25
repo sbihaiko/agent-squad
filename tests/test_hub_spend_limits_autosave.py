@@ -361,8 +361,10 @@ def test_the_spend_and_limits_theme_shows_no_save_and_no_discard_button(hub):
 
 def test_every_other_theme_keeps_its_save_and_discard_buttons(hub):
     out = _set_bar(hub[0])
-    for theme in ("sub", "mdl", "slk", "acc"):
+    for theme in ("sub", "mdl", "acc"):
         assert out[theme]["save"] is False and out[theme]["disc"] is False, (theme, out[theme])
+    # re-anchored (#2908): Slack saves each edit by itself, so its bar keeps no Save and no Discard, as Spend & limits.
+    assert out["slk"]["save"] is True and out["slk"]["disc"] is True, out["slk"]
 
 
 def test_a_refused_kanban_value_is_never_resent_by_a_later_pause(hub):
