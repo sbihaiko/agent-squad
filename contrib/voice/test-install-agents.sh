@@ -5,8 +5,13 @@ set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 mkfix() {
+  # No detached `git maintenance --auto`: its repack deletes loose objects while the clone below copies them (#2894).
+  export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0
   T=$(mktemp -d); mkdir -p "$T/bin" "$T/src/contrib"
   cp -R "$here" "$T/src/contrib/voice"
+  # voiced.py imports the squad package, and a real deploy clones the whole repo: carry its tracked files (#2894).
+  (cd "$here/../.." && git ls-files -z squad | xargs -0 tar -cf -) | tar -xf - -C "$T/src"
+  printf '__pycache__/\n*.pyc\n' > "$T/src/.gitignore"   # a pyc another worker writes mid-add must not enter the commit
   git -C "$T/src" init -q -b main
   git -C "$T/src" -c user.name=t -c user.email=t@t add -A
   git -C "$T/src" -c user.name=t -c user.email=t@t commit -q -m proven; A=$(git -C "$T/src" rev-parse HEAD)
