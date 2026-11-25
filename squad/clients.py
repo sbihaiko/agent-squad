@@ -52,11 +52,13 @@ def _persona(value):
 def normalize(doc):
     """The map as a list of clients: id, name, default persona and the projects it groups, each with its follow flag.
     A client with no id and a project with no id are dropped; they name nothing. A repeated project keeps its first
-    place, so the tree and the proposal draw each project once."""
+    place, so the tree and the proposal draw each project once. The id of the synthetic Unassigned group is reserved: a
+    client the map gives that id is dropped, so the tree never draws two nodes with one id, and its projects fall to the
+    one Unassigned group."""
     clients, seen = [], set()
     for row in _rows((doc or {}).get("clients")):
         cid = _text(row.get("id")).strip()
-        if not cid or cid in seen:
+        if not cid or cid in seen or cid == UNASSIGNED_ID:
             continue
         seen.add(cid)
         projects, named = [], set()
@@ -116,9 +118,16 @@ def _persona_name(P, committed, local, wanted):
 
 
 def has_slack(committed, local):
-    """A project has Slack when either file declares a key beyond `version`; a pair that names only a version is the
-    project with no Slack."""
-    return any(key != "version" for doc in (committed or {}, local or {}) for key in doc)
+    """A project has Slack when either file declares a non-empty list of workspaces or of personas; a pair that names
+    only a version, a project block or a role is the project with no Slack."""
+    for doc in (committed or {}, local or {}):
+        if not isinstance(doc, dict):
+            continue
+        for key in ("workspaces", "personas"):
+            value = doc.get(key)
+            if isinstance(value, list) and value:
+                return True
+    return False
 
 
 def _after(committed, persona_id):
