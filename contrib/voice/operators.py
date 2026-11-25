@@ -78,6 +78,12 @@ PROJECT_NAME_MAX = 200                   # Claude Code cuts a longer sanitized w
 TOOLS = "Read,Monitor,TaskStop,Bash"
 CLAUDE_LOADED_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json")
 CLAUDE_LOADED_DIRS = ("skills", "agents", "commands", "hooks", "plugins", "output-styles", "rules")
+# #2951: a hook defect in an operator session must not open a secret or another project's checkout. The owner's
+# credential folders, a project's `.env` and its profile-local Slack file are refused, and only the session's own
+# checkout stays readable. The model route is the one loopback port the profile opens.
+SECRET_DIRS = (".ssh", os.path.join(".config", "gh"), ".aws")
+ENV_SECRET = '(regex #"^(.*/)?\\.env(\\.[^/]*)?$")'
+SLACK_LOCAL_SECRET = '(regex #"^(.*/)?[^/]*\\.slack\\.local\\.yaml$")'
 
 SESSION_ID = re.compile(r"\A[0-9a-f]{8}(-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\Z")
 hub_projects = voiced.hub_projects         # the hub's one list of projects: repository, checkout and local Slack file
@@ -500,14 +506,20 @@ def daemon_root():
     return os.path.realpath(DAEMON)
 
 
-def profile_text(outboxes, inboxes, own_inboxes):
+def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None):
     """The kernel bound of one operator session: write only its project's outboxes, read only its project's inboxes,
-    reach loopback only (#2925).
+    reach loopback only on the model route (#2925, #2951).
 
     A project's session answers every channel of the project, so it holds one outbox file per channel and reads one
     inbox per channel. Seatbelt applies the last matching rule, so the per-file read allows follow the inboxes deny. A
     foreign model host is not named here: Seatbelt accepts only `*` or `localhost` as a host, so that endpoint goes
     through model_proxy.py.
+
+    The read wall (#2951): the owner's credential folders, `.env` and the profile-local `*.slack.local.yaml` are refused
+    wherever they sit, and so is every checkout in `others`. The session's own `checkout` stays readable, so its project
+    files load. `ports` names the loopback ports the model route uses: the endpoint's own port for a loopback gateway,
+    or the proxy's port when the endpoint is remote. It defaults to the endpoint's port, read from
+    `ANTHROPIC_BASE_URL`, so no port is guessed.
 
     The background service (#2768): `claude --bg` reaches the service the CLI already runs, or starts one, so the session
     needs the service's own runtime. It takes `/dev/null` for the ignored stdio of a detached spawn, it writes its run dir
@@ -518,6 +530,9 @@ def profile_text(outboxes, inboxes, own_inboxes):
     daemon = daemon_root()
     outboxes = [outboxes] if isinstance(outboxes, str) else list(outboxes)
     own_inboxes = [own_inboxes] if isinstance(own_inboxes, str) else list(own_inboxes)
+    checkout = os.path.realpath(checkout) if checkout else None
+    others = [os.path.realpath(path) for path in others if path]
+    ports = list(dict.fromkeys(int(p) for p in (ports if ports is not None else [model_endpoint()[1]])))
     # The device path the kernel opens is the resolved one, as `/tmp` is; its symlink spelling is kept too, in case the
     # CLI names that spelling. A path that resolves to itself is emitted once.
     devnull = os.path.realpath(os.devnull)
@@ -532,6 +547,9 @@ def profile_text(outboxes, inboxes, own_inboxes):
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
+    creds = " ".join(f'(subpath "{home}/{name}")' for name in SECRET_DIRS)
+    # Another project's checkout is refused, and the session's own is not: a path equal to `checkout` is left out.
+    foreign = list(dict.fromkeys(path for path in others if path != checkout))
     return "\n".join([
         "(version 1)",
         "(allow default)",
@@ -540,10 +558,14 @@ def profile_text(outboxes, inboxes, own_inboxes):
         f'(literal "{home}/.claude.json") (subpath "{daemon}"))',
         *[f'(deny file-write* (literal "{claude}/{name}"))' for name in CLAUDE_LOADED_FILES],
         f"(deny file-write* {loaded_dirs} {memory} {top_md})",
+        f"(deny file-read* {creds})",
+        f"(deny file-read* {ENV_SECRET})",
+        f"(deny file-read* {SLACK_LOCAL_SECRET})",
+        *[f'(deny file-read* (subpath "{path}"))' for path in foreign],
         f'(deny file-read* (subpath "{inboxes}"))',
         f'(allow file-read* {literals(own_inboxes)})',
         "(deny network-outbound)",
-        '(allow network-outbound (remote ip "localhost:*"))',
+        *[f'(allow network-outbound (remote ip "localhost:{port}"))' for port in ports],
         f'(allow network-outbound (remote unix-socket (subpath "{daemon}")))',
     ]) + "\n"
 
@@ -597,34 +619,44 @@ def report_refusals(state):
     write_json(mark, {"seen": len(lines)})
 
 
-def start(unit, state, repo):
+def start(unit, state, repo, others=()):
     """Start one session for a project through the sandbox wrapper, in the project's own checkout.
 
     Returns the id the CLI printed (or ""), and the entry the record keeps: the session's name, its checkout, its
-    channels, the profile file and its sha256, and the proxy when the endpoint is not loopback.
+    channels, the profile file and its sha256, and the proxy when the endpoint is not loopback. `others` names every
+    project checkout the profile must refuse a read of (#2951); the session's own stays readable, and so does `repo`,
+    which the brief sends the session to for the operator contract and which `--add-dir` grants.
     """
     unit = as_unit(unit, repo)
     key = unit["key"]
     checkout = os.path.realpath(unit.get("checkout") or repo)
     if not os.path.isdir(checkout):
         raise Refused(f"{key}: the checkout {checkout} is not a directory")
+    own_repo = os.path.realpath(repo)
+    others = [path for path in others if path and os.path.realpath(path) != own_repo]
     os.makedirs(root(state), exist_ok=True)
     outboxes = [os.path.realpath(outbox_path(state, scope)) for scope in unit["channels"]]
     inboxes = os.path.realpath(os.path.join(state, "inboxes"))
     own = [os.path.join(inboxes, f"{scope}.jsonl") for scope in unit["channels"]]
-    profile = profile_text(outboxes, inboxes, own)
-    profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
-    os.makedirs(os.path.dirname(profile_path), exist_ok=True)
-    with open(profile_path, "w", encoding="utf-8") as f:
-        f.write(profile)
-    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]),
-             "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
-    env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
-    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
     host, port = model_endpoint()
     proxy = None
     if host not in LOOPBACK:
         proxy = start_proxy(key, state, host, port)
+    ports = [port] if host in LOOPBACK else [proxy["port"]]
+    try:
+        profile = profile_text(outboxes, inboxes, own, checkout=checkout, others=others, ports=ports)
+        profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
+        os.makedirs(os.path.dirname(profile_path), exist_ok=True)
+        with open(profile_path, "w", encoding="utf-8") as f:
+            f.write(profile)
+    except OSError:
+        retire_proxy({"proxy": proxy})
+        raise
+    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]),
+             "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
+    env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
+    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
+    if proxy is not None:
         entry["proxy"] = proxy
         env["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy['port']}"
     brief = prompt_for(unit, state, repo, waiting=owed(state, unit))
@@ -771,6 +803,8 @@ def run_pass(state, repo, check=False, only=None):
     `live <id>`, or a reason on stderr and exit 2 when the project has no session at all."""
     state = os.path.abspath(state)
     units = registry(state, repo)
+    # Every project checkout, read before `only` narrows the pass: each session refuses the reads of the others (#2951).
+    others = [unit.get("checkout") or "" for unit in units]
     only_unit = None
     if only is not None:
         named = [u for u in units if only in (u["key"], u["repo"])]
@@ -828,7 +862,7 @@ def run_pass(state, repo, check=False, only=None):
             if not os.path.isdir(by_key[key].get("checkout") or ""):
                 print(f"operators: {key} names no checkout; no session started", file=sys.stderr)
                 continue
-            sid, entry = start(by_key[key], state, repo)  # the record is written after each start, never at the end
+            sid, entry = start(by_key[key], state, repo, others)  # the record is written after each start, never at the end
             record[key] = {**prior, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             started_now[key] = sid
             write_json(rec_path, record)
@@ -853,7 +887,7 @@ def run_pass(state, repo, check=False, only=None):
             old = record.pop(key, None) or {}
             retire_proxy(old)
             write_json(rec_path, record)
-            sid, entry = start(unit, state, repo)
+            sid, entry = start(unit, state, repo, others)
             kept = {k: v for k, v in old.items() if k != "proxy"}
             record[key] = {**kept, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             write_json(rec_path, record)

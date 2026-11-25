@@ -143,9 +143,13 @@ def test_a_denial_that_does_not_happen_fails_the_probe(denial, kwargs):
         probe.check_denials(**flags)
 
 
-def test_the_profile_allows_network_out_to_loopback_only():
-    text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes", "/work/state/inboxes/dm.jsonl")
-    assert '(allow network-outbound (remote ip "localhost:*"))' in text.splitlines()
+def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(monkeypatch):
+    """#2951 criterion 2: the one loopback port the profile opens is the model route's, read from the endpoint."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
+                                          "/work/state/inboxes/dm.jsonl")
+    assert '(allow network-outbound (remote ip "localhost:8016"))' in text.splitlines(), text
+    assert "localhost:*" not in text
     assert "*:443" not in text
 
 
@@ -277,24 +281,93 @@ def test_a_loopback_refusal_fails_the_probe():
 
 @pytest.mark.sandbox_bound
 @pytest.mark.heavy     # a foreign connect the kernel lets through waits out its 2 s timeout
-def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_loopback(tmp_path):
-    """The real profile, the real kernel: a foreign host on 443 must fail with the kernel's own refusal, and loopback must
-    pass, since the model call reaches its host only through the loopback proxy."""
+def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_the_endpoint_port(tmp_path):
+    """The real profile, the real kernel: a foreign host on 443 must fail with the kernel's own refusal, the model
+    route's loopback port must pass, and every other loopback port must fail (#2951 criterion 2)."""
     probe = load("operator_probe")
     (tmp_path / "outbox").mkdir()
     inboxes = tmp_path / "inboxes"
     inboxes.mkdir()   # a sibling of the session's cwd: denials of the inbox folder must never swallow the cwd
-    profile = load("operators").profile_text(str(tmp_path / "outbox"), str(inboxes), str(inboxes / "dm.jsonl"))
     listener = socket.create_server(("127.0.0.1", 0))
+    elsewhere = socket.create_server(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    profile = load("operators").profile_text(str(tmp_path / "outbox"), str(inboxes), str(inboxes / "dm.jsonl"),
+                                              ports=[port])
     try:
         def connect(host, port):
             return probe.sandboxed(profile, sys.executable, ["-c", probe.CONNECT, host, str(port)], tmp_path, 30)
         foreign = connect(probe.NETWORK_HOST, probe.NETWORK_DENIED)
-        loopback = connect("127.0.0.1", listener.getsockname()[1])
+        loopback = connect("127.0.0.1", port)
+        other = connect("127.0.0.1", elsewhere.getsockname()[1])
     finally:
         listener.close()
+        elsewhere.close()
     assert foreign.returncode != 0 and probe.DENIED in foreign.stderr, foreign.stderr
     assert loopback.returncode == 0, loopback.stderr
+    assert other.returncode != 0 and probe.DENIED in other.stderr, "the profile reaches a loopback port that is not the model route"
+
+
+def read_script(probe, allowed=""):
+    """A sandbox stand-in for the read proof: every refusal is the kernel's own, and a command naming `allowed` passes."""
+    seen = []
+
+    def fake(profile, cli, args, cwd, timeout, extra_env=None):
+        cmd = args[-1]
+        seen.append(cmd)
+        if allowed and allowed in cmd:
+            return subprocess.CompletedProcess(args, 0, probe.OWN_READABLE + "\n", "")
+        return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+
+    fake.seen = seen
+    return fake
+
+
+def test_the_read_refusals_pass_when_each_secret_and_the_other_checkout_refuse(tmp_path, monkeypatch):
+    """#2951 criteria 1 and 4: the probe proves .env, a *.slack.local.yaml, another project's checkout and each
+    credential folder the home holds are refused, and its own checkout file is readable."""
+    probe = load("operator_probe")
+    home = tmp_path / "home"
+    for name in probe.SECRET_DIRS:
+        (home / name).mkdir(parents=True)
+        (home / name / "credential.txt").write_text("secret\n")
+    fake = read_script(probe, allowed="own-notes.txt")
+    monkeypatch.setattr(probe, "sandboxed", fake)
+    tried = probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=home)
+    assert tried == sorted(str(home / name) for name in probe.SECRET_DIRS)
+    joined = "\n".join(fake.seen)
+    for name in (".env", "probe.slack.local.yaml", "notes.txt", "credential.txt", "own-notes.txt"):
+        assert name in joined, (name, joined)
+
+
+def test_a_read_of_a_secret_or_another_checkout_that_lands_fails_the_probe(tmp_path, monkeypatch):
+    """#2951 criterion 4: a denial that does not hold fails the probe, never passes it silently."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "sandboxed", read_script(probe, allowed=".env"))
+    with pytest.raises(probe.ProbeFailed, match="read denial did not hold"):
+        probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=tmp_path / "home")
+
+
+@pytest.mark.sandbox_bound
+def test_the_kernel_refuses_each_read_and_keeps_the_own_checkout_readable(tmp_path):
+    """#2951 criteria 1 and 4: the real profile under the real kernel refuses .env, a local Slack file and another
+    project's checkout inside the session's own checkout and beside it, and keeps an ordinary own file readable."""
+    probe = load("operator_probe")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    profile = load("operators").profile_text([str(tmp_path / "outbox")], str(tmp_path / "inboxes"), [],
+                                             checkout=str(checkout), others=[str(tmp_path / "other-checkout")],
+                                             ports=[1])
+    refused = probe.refuse_reads(checkout, profile, tmp_path / "other-checkout")
+    assert isinstance(refused, list)
+
+    def run(command):
+        return probe.sandboxed(profile, "/bin/sh", ["-c", command], checkout, 30)
+    for name in (".env", "probe.slack.local.yaml", "own-notes.txt"):
+        done = run(f'cat "{checkout / name}"')
+        if name == "own-notes.txt":
+            assert done.returncode == 0 and probe.OWN_READABLE in done.stdout, done.stderr
+        else:
+            assert done.returncode != 0 and probe.DENIED in done.stderr, (name, done.stderr)
 
 
 def echo_once():
@@ -451,9 +524,9 @@ def test_the_real_cli_probe_passes():
 
 def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project(tmp_path):
     """#2925 criteria 9 to 11: the probe's profile is the live project shape, one outbox and one inbox per channel, and
-    another project's inbox stays refused."""
+    another project's inbox and checkout stay refused (#2951)."""
     probe = load("operator_probe")
-    checkout, outboxes, own_inboxes, other_inbox, leak, profile = probe.project_shape(tmp_path)
+    checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = probe.project_shape(tmp_path, [8016])
     write = next(line for line in profile.splitlines() if line.startswith("(allow file-write*"))
     read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*"))
     for outbox in outboxes:
@@ -463,12 +536,14 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
         assert inbox.read_text().strip() == probe.OWN_SENTINEL
     assert other_inbox.read_text().strip() == probe.SENTINEL
     assert f'(deny file-read* (subpath "{other_inbox.parent}"))' in profile, profile
-    assert checkout.is_dir() and not leak.exists()
+    assert f'(deny file-read* (subpath "{other_checkout}"))' in profile, profile
+    assert '(allow network-outbound (remote ip "localhost:8016"))' in profile, profile
+    assert checkout.is_dir() and other_checkout.is_dir() and not leak.exists()
 
 
-def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False):
+def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1):
     """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
-    case says otherwise."""
+    case says otherwise. `port` is the one loopback port the model route uses; every other port is refused (#2951)."""
     inbox_line = probe.OWN_SENTINEL if inbox_line is None else inbox_line
 
     def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
@@ -486,6 +561,10 @@ def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False)
         if cli == sys.executable:
             if getattr(probe, "OPEN_FOR_WRITE", None) in args:
                 if config_open:
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+            if probe.CONNECT in args:
+                if args[-2] == "127.0.0.1" and args[-1] == str(port):
                     return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             if probe.NETWORK_HOST in args:

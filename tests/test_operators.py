@@ -380,8 +380,53 @@ def test_the_profile_refuses_network_outside_loopback(tmp_path, monkeypatch):
     op = operators(tmp_path, monkeypatch)
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
     lines = text.splitlines()
-    assert "(deny network-outbound)" in lines and '(allow network-outbound (remote ip "localhost:*"))' in lines
+    assert "(deny network-outbound)" in lines and "localhost:*" not in text
     assert "*:443" not in text
+
+
+def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(tmp_path, monkeypatch):
+    """#2951 criterion 2: a hook defect reaches no loopback service but the model route, so the port comes from the
+    endpoint configuration and never from a guessed constant."""
+    op = operators(tmp_path, monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    assert '(allow network-outbound (remote ip "localhost:8016"))' in text.splitlines(), text
+    assert "localhost:*" not in text
+    monkeypatch.delenv("ANTHROPIC_BASE_URL")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], ports=[9317])
+    assert '(allow network-outbound (remote ip "localhost:9317"))' in text.splitlines(), text
+    assert "localhost:8016" not in text, "a port the caller names replaces the endpoint port"
+
+
+def test_the_profile_refuses_reads_of_the_secret_list_and_another_checkout(tmp_path, monkeypatch):
+    """#2951 criterion 1: the kernel refuses every read of the owner's credentials, a project's secret files and another
+    project's checkout, while the session's own checkout stays readable."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           checkout="/work/acme", others=["/work/other", "/work/acme"])
+    lines = text.splitlines()
+    creds = f'(deny file-read* (subpath "{home}/.ssh") (subpath "{home}/.config/gh") (subpath "{home}/.aws"))'
+    assert creds in lines, text
+    assert any(line.startswith("(deny file-read*") and '(regex #"^(.*/)?\\.env' in line for line in lines), text
+    assert any(line.startswith("(deny file-read*") and "(.*/)?[^/]*\\.slack\\.local\\.yaml" in line for line in lines), text
+    assert '(deny file-read* (subpath "/work/other"))' in lines, text
+    assert '"/work/acme"' not in text, "the session's own checkout must stay readable"
+
+
+def test_a_started_session_refuses_the_checkout_of_another_project(tmp_path, monkeypatch):
+    """#2951 criterion 1: a project's session never reads another project's checkout, and its own stays open."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget", "acme/gadget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget"), ("acme/gadget", "C0AAAAAA2", "proj-gadget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    text = Path(record(tmp_path)["acme-widget"]["profile"]["path"]).read_text()
+    own, other = (os.path.realpath(found[name]) for name in ("acme/widget", "acme/gadget"))
+    assert f'(deny file-read* (subpath "{other}"))' in text.splitlines(), text
+    assert f'(subpath "{own}")' not in text, "the session's own checkout must stay readable"
+    repo = os.path.realpath(tmp_path / "repo")
+    assert f'(subpath "{repo}")' not in text, "the operator contract's checkout stays readable through --add-dir"
 
 
 def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path, monkeypatch):
