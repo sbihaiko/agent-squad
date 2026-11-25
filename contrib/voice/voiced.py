@@ -93,6 +93,7 @@ from squad import (  # noqa: E402  a release event as a post in each subscribed 
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
+OPERATORS = os.path.join(HERE, "operators.py")   # the supervisor a new inbox line wakes at once (#2925)
 CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -284,6 +285,23 @@ def listed_revisions(path):
 
 class TipUnreadable(Exception):
     """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
+
+
+def start_operator(state_dir, repo, log=None):
+    """Start one project's operator session now when none is live (#2925).
+
+    A message must never wait for the five-minute supervisor pass. The call is fire and forget: operators.py takes its
+    own lock, so a pass in flight answers first and a second start stands aside. A start that cannot run is one log
+    line, never a lost message: the line stays in the inbox and the next pass takes it.
+    """
+    try:
+        subprocess.Popen([sys.executable, OPERATORS, "--state", state_dir, "--ensure", repo],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+        return True
+    except OSError as x:
+        (log or (lambda line: None))(f"voiced: the operator start for {repo} failed: {x.strerror or x}")
+        return False
 
 
 def git_output(checkout, *args):
@@ -1200,8 +1218,11 @@ class Daemon:
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
-                 clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None):
+                 clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None, starter=None):
         self.state = state
+        # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
+        # so a fixture or a reader never spawns a session; production passes `start_operator`.
+        self.starter = starter
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
@@ -1579,6 +1600,20 @@ class Daemon:
         for line in check_channel_names(self.state.channels(), self.client):
             self.log(line)
         return got
+
+    def wake_operator(self, repo):
+        """Start the project's operator session at once when its inbox line lands (#2925).
+
+        A project with no live session never waits for the five-minute pass: the message that arrived is the reason the
+        session starts. A refused start is one log line; the line stays in the inbox, and the pass takes it later.
+        """
+        if self.starter is None or not repo:
+            return False
+        try:
+            return bool(self.starter(self.state.dir, repo))
+        except Exception as x:      # noqa: BLE001 - a start that fails is a log line, never a lost inbox line
+            self.log(f"voiced: the operator start for {repo} failed: {type(x).__name__}: {x}")
+            return False
 
     def inbox_path_of(self, event):
         """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
@@ -2031,6 +2066,7 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
+        self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""))
         return "inbox"
 
 
@@ -2336,7 +2372,8 @@ def main(argv):
                                  for app_id, entry in bots.items()},
                     uploaders={app_id: (lambda path, channel, thread_ts, title, token=entry:
                                         upload_clip(token, path, channel, thread_ts, title))
-                               for app_id, entry in bots.items()})
+                               for app_id, entry in bots.items()},
+                    starter=start_operator)
     # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
     daemon.refuse_channel_claims(projects)
     try:

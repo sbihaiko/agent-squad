@@ -41,6 +41,7 @@ def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
 
     monkeypatch.setattr(operators, "call", fake_call)
+    (tmp_path / "repo").mkdir()      # a session runs in a checkout that exists; a missing one refuses the start
     operators.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
     argv = argvs[0]
     assert argv[argv.index("--tools") + 1] == operators.TOOLS
@@ -114,7 +115,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     leak.write_text("leaked\n")
     seen = {}
 
-    def fake_denials(work, profile, leak_path, other_inbox, port):
+    def fake_denials(work, profile, leak_path, other_inbox, port, **controls):
         seen["stale"] = leak_path.exists()
         return False, False, False
 
@@ -197,22 +198,41 @@ def test_a_bg_session_that_cannot_start_fails_the_probe(tmp_path, monkeypatch):
         probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
 
 
-def test_a_bg_session_that_starts_is_listed_and_stopped(tmp_path, monkeypatch):
-    """#2768 expected (1): the `--bg` session the CLI prints is live, and the probe stops it when the check ends."""
+def test_a_bg_session_that_starts_is_listed_under_its_marked_name_and_stopped(tmp_path, monkeypatch):
+    """#2768 expected (1), #2925 criterion 15: the `--bg` session the CLI prints is live under the operator's marked
+    name, and the probe stops it when the check ends."""
     probe = load("operator_probe")
     calls = []
 
     def fake_run(argv, **kwargs):
         calls.append(argv)
         if argv[0] == "claude" and argv[1] == "agents":
-            return subprocess.CompletedProcess(argv, 0, '[{"sessionId": "ba6e7d2e", "cwd": "/w"}]', "")
+            return subprocess.CompletedProcess(
+                argv, 0, '[{"sessionId": "ba6e7d2e", "name": "SQUAD-OPERATOR-probe-project", "cwd": "/w"}]', "")
         if argv[0] == "claude" and argv[1] == "stop":
             return subprocess.CompletedProcess(argv, 0, "", "")
         return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
 
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+    started = next(argv for argv in calls if argv[1] == "--bg")
+    assert started[started.index("--name") + 1] == "SQUAD-OPERATOR-probe-project", started
     assert ["claude", "stop", "ba6e7d2e"] in calls
+
+
+def test_a_bg_session_listed_without_the_marked_name_is_unproven(tmp_path, monkeypatch):
+    """#2925 criterion 15: a name the roster does not report proves no ownership, so the supervisor could not tell the
+    session from a person's own session on the same checkout."""
+    probe = load("operator_probe")
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and argv[1] == "agents":
+            return subprocess.CompletedProcess(argv, 0, '[{"sessionId": "ba6e7d2e", "name": "", "cwd": "/w"}]', "")
+        return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    with pytest.raises(probe.ProbeFailed, match="SQUAD-OPERATOR-probe-project"):
+        probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
 
 
 def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
@@ -330,8 +350,8 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     probe = load("operator_probe")
     seen = {}
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
-    monkeypatch.setattr(probe, "denials", lambda *a: (False, False, False))
-    monkeypatch.setattr(probe, "check_denials", lambda *a: None)
+    monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
 
     def fake_session(work, profile, cli, proxy_url=None):
         seen["proxy_url"] = proxy_url
@@ -424,6 +444,106 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
 def test_the_real_cli_probe_passes():
     probe = load("operator_probe")
     assert probe.main([]) == 0
+
+
+def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project(tmp_path):
+    """#2925 criteria 9 to 11: the probe's profile is the live project shape, one outbox and one inbox per channel, and
+    another project's inbox stays refused."""
+    probe = load("operator_probe")
+    checkout, outboxes, own_inboxes, other_inbox, leak, profile = probe.project_shape(tmp_path)
+    write = next(line for line in profile.splitlines() if line.startswith("(allow file-write*"))
+    read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*"))
+    for outbox in outboxes:
+        assert f'(literal "{outbox}")' in write, write
+    for inbox in own_inboxes:
+        assert f'(literal "{inbox}")' in read, read
+        assert inbox.read_text().strip() == probe.OWN_SENTINEL
+    assert other_inbox.read_text().strip() == probe.SENTINEL
+    assert f'(deny file-read* (subpath "{other_inbox.parent}"))' in profile, profile
+    assert checkout.is_dir() and not leak.exists()
+
+
+def scripted(probe, *, outbox_refused=False, inbox_line=None):
+    """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
+    case says otherwise."""
+    inbox_line = probe.OWN_SENTINEL if inbox_line is None else inbox_line
+
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        cmd = args[-1] if cli == "/bin/sh" else ""
+        if cmd == "echo control":
+            return subprocess.CompletedProcess(args, 0, "control\n", "")
+        if "leaked" in cmd or "other-project" in cmd:
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        if "answered >>" in cmd:
+            if outbox_refused:
+                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if cmd.startswith("cat "):
+            return subprocess.CompletedProcess(args, 0, inbox_line + "\n", "")
+        if cli == sys.executable:
+            if probe.NETWORK_HOST in args:
+                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(f"unexpected denial call: {args}")
+
+    return run_sandboxed
+
+
+def probe_paths(tmp_path):
+    outbox = tmp_path / "outboxes" / "C1.jsonl"
+    outbox.parent.mkdir(parents=True)
+    inbox = tmp_path / "inboxes" / "C1.jsonl"
+    inbox.parent.mkdir(parents=True)
+    inbox.write_text("PROBE-OWN-INBOX-LINE\n")
+    other = tmp_path / "inboxes" / "other-project.jsonl"
+    other.write_text("PROBE-OTHER-INBOX-LINE\n")
+    return outbox, other, inbox
+
+
+def test_the_denials_pass_when_each_own_outbox_and_inbox_answers(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    outbox, other, inbox = probe_paths(tmp_path)
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
+    assert probe.denials(tmp_path, "(version 1)(allow default)", tmp_path / "elsewhere" / "leak.txt", other, 1,
+                         outboxes=[outbox], own_inboxes=[inbox]) == (False, False, False)
+
+
+def test_a_profile_that_refuses_an_own_outbox_fails_the_probe(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    outbox, other, inbox = probe_paths(tmp_path)
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe, outbox_refused=True))
+    with pytest.raises(probe.ProbeFailed, match="refuses an own outbox"):
+        probe.denials(tmp_path, "(version 1)(allow default)", tmp_path / "elsewhere" / "leak.txt", other, 1,
+                      outboxes=[outbox], own_inboxes=[inbox])
+
+
+def test_a_profile_that_hides_an_own_inbox_fails_the_probe(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    outbox, other, inbox = probe_paths(tmp_path)
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe, inbox_line=""))
+    with pytest.raises(probe.ProbeFailed, match="refuses an own inbox"):
+        probe.denials(tmp_path, "(version 1)(allow default)", tmp_path / "elsewhere" / "leak.txt", other, 1,
+                      outboxes=[outbox], own_inboxes=[inbox])
+
+
+def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatch):
+    """#2925 criteria 7 and 8: the probe's real CLI session runs in the project checkout, so it loads that project's
+    CLAUDE.md, never in the probe's own state folder."""
+    probe = load("operator_probe")
+    seen = []
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
+
+    def fake_session(work, profile, cli, proxy_url=None):
+        seen.append(work)
+        return ({"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False})
+
+    monkeypatch.setattr(probe, "session", fake_session)
+    monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen == [tmp_path / "checkout"], seen
 
 
 # #2716: the guest poller and writer sessions run through the same real CLI and wrapper, each with its real PreToolUse
@@ -565,7 +685,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     probe = load("operator_probe")
     roles = []
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
-    monkeypatch.setattr(probe, "denials", lambda *a: (False, False, False))
+    monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
     monkeypatch.setattr(probe, "session", lambda *a, **k: (
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
 

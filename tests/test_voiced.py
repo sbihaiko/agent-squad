@@ -2278,3 +2278,97 @@ def test_a_project_no_hub_save_lists_notices_the_owner(tmp_path):
     assert len(posts) == 1, posts
     assert posts[0]["channel"] == OWNER
     assert "acme/app" in posts[0]["text"] and cid in posts[0]["text"]
+
+
+# #2925: a message must never wait for the five-minute supervisor pass. The daemon starts the project's operator session
+# the moment the inbox line lands. The start is a seam of its own, so a fixture that names no starter spawns no session.
+
+def startable_daemon(tmp_path, mod, starter):
+    """One daemon over a state that names one project channel, with the starter seam the case drives."""
+    state = mod.State(str(tmp_path / "state"))
+    state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
+    return mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                      log=lambda line: None, client=FakeClient(), starter=starter)
+
+
+def test_a_message_for_a_project_starts_its_operator_session_at_once(tmp_path):
+    """Criteria 4 and 6: the inbox line of a project channel starts the session of the project that owns it."""
+    mod = voiced()
+    started = []
+    daemon = startable_daemon(tmp_path, mod, lambda state_dir, repo: started.append((state_dir, repo)))
+
+    outcome = daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel"))
+
+    assert outcome == "inbox"
+    assert started == [(daemon.state.dir, "acme/app")], started
+
+
+def test_a_direct_message_starts_the_dm_session(tmp_path):
+    """Criterion 14: the owner's DM is its own session, and its line starts that one."""
+    mod = voiced()
+    started = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
+                        starter=lambda state_dir, repo: started.append((state_dir, repo)))
+
+    assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
+    assert started == [(daemon.state.dir, "dm")], started
+
+
+def test_a_fixture_daemon_with_no_starter_starts_no_session(tmp_path):
+    """A daemon that names no starter reads, answers and writes its outbox, and spawns nothing."""
+    mod = voiced()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+
+    assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
+    assert daemon.wake_operator("acme/app") is False
+
+
+def test_a_refused_starter_keeps_the_inbox_line_and_logs_one_line(tmp_path):
+    """A start that fails loses no message: the line stays in the inbox for the next pass, and the log names the project."""
+    mod = voiced()
+    logged = []
+
+    def starter(state_dir, repo):
+        raise OSError("no session service")
+
+    state = mod.State(str(tmp_path / "state"))
+    state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=logged.append, client=FakeClient(), starter=starter)
+
+    assert daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel")) == "inbox"
+    assert [row["text"] for row in lines(state.inbox_for("C0PROJ0001"))] == ["what changed?"]
+    assert any("acme/app" in line and "failed" in line for line in logged), logged
+
+
+def test_the_start_operator_spawns_the_ensure_pass_for_the_project(tmp_path, monkeypatch):
+    """Criterion 4: the daemon's own starter runs one supervisor pass for one project, detached from the socket loop."""
+    mod = voiced()
+    spawned = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            spawned.append((argv, kwargs))
+
+    monkeypatch.setattr(mod.subprocess, "Popen", FakePopen)
+    assert mod.start_operator(str(tmp_path / "state"), "acme/app") is True
+    argv, kwargs = spawned[0]
+    assert argv[0] == sys.executable and argv[1].endswith("operators.py"), argv
+    assert argv[argv.index("--state") + 1] == str(tmp_path / "state")
+    assert argv[argv.index("--ensure") + 1] == "acme/app"
+    assert kwargs["start_new_session"] is True and kwargs["stdout"] is subprocess.DEVNULL
+
+
+def test_a_start_that_cannot_spawn_is_one_log_line_and_no_raise(tmp_path, monkeypatch):
+    """A Popen that fails reports the reason and returns no start, so the event loop still acknowledges the envelope."""
+    mod = voiced()
+    logged = []
+
+    def refuse(argv, **kwargs):
+        raise OSError(2, "no such file")
+
+    monkeypatch.setattr(mod.subprocess, "Popen", refuse)
+    assert mod.start_operator(str(tmp_path / "state"), "acme/app", log=logged.append) is False
+    assert logged and "acme/app" in logged[0] and "failed" in logged[0], logged
