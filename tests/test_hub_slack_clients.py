@@ -499,7 +499,7 @@ def test_a_client_save_under_a_worktree_named_by_the_environment_lands_each_proj
     out = hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
     assert out.get("err") is None, out
     assert [s["project"] for s in out["saved"]] == ["alpha", "beta"], out.get("saved")
-    for slug, (co, origin) in repos.items():
+    for slug, (_co, origin) in repos.items():
         landed = tmp_path / "hubs" / slug / "docs" / "squad" / "slack.yaml"
         assert landed.is_file(), landed
         assert yaml.safe_load(landed.read_text())["project"]["persona"] == "amber"
