@@ -636,6 +636,9 @@ def service_root(state, key):
     return os.path.realpath(os.path.join(root(state), "services", key))
 
 
+CONTROL_SOCKET = "control.sock"   # the CLI's control socket inside a service root: the one file a caller connects to
+
+
 def service_env(service):
     """The two variables that keep the CLI's background service under one root (#2943). The CLI reads `PREFIX` when it
     reads `TERMUX_VERSION`, and it puts its run dir and its socket dir under `<PREFIX>/tmp`.
@@ -670,8 +673,9 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     grant at all, never the shared one.
 
     The config home (#2963): `config` names the operator's own root, which the CLI writes under when the start sets
-    `CLAUDE_CONFIG_DIR`. The owner's global config file is never granted: an MCP server entry written there would load
-    into the owner's next, unsandboxed session.
+    `CLAUDE_CONFIG_DIR` (measured on CLI 2.1.332: its global config file and its transcript land there, and the start
+    still signs in through the owner's home). The owner's global config file is never granted: an MCP server entry
+    written there would load into the owner's next, unsandboxed session.
     """
     home = os.path.realpath(os.path.expanduser("~"))
     service_dir = os.path.realpath(service) if service else None
@@ -698,8 +702,10 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     # writable. The owner's global config file is never granted, and every file under the Claude home that the owner's
     # next, unsandboxed session loads is refused after the folder's grant. `~/.claude.json`, the owner's MCP
     # configuration, sits beside that folder and is refused too, since no grant ever covered it (#2925, #2942, #2963):
-    # Seatbelt applies the last matching rule. The config root also holds the CLI's login: auth moves with
-    # `CLAUDE_CONFIG_DIR`, and the empty secure-storage dir keeps the owner's keychain entry (measured, CLI 2.1.332).
+    # Seatbelt applies the last matching rule. Measured on CLI 2.1.332: with `CLAUDE_CONFIG_DIR` set, a start creates
+    # the global config file and its transcript under that root, leaves the home's own file untouched, and still signs
+    # in through the owner's home. Clearing `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the default keychain service name,
+    # so the login stays the owner's entry and no credential moves.
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
@@ -850,18 +856,26 @@ def stop(sid, state=None, service=None):
     The roster belongs to the CLI's config home, so the id is tried in the operator's own root first, then in the
     owner's, where a session of an earlier build carries the token (#2963). A session an older build started lives
     under the owner's shared service, where the private root answers that it holds no such session, so that one
-    refusal retries the CLI's own service. Any other refusal is the real answer: a retry could stop a foreign session
-    whose id collides, or hide a service that is down. A stop both answers refuse raises Refused, and the caller keeps
-    ownership and retries later."""
+    refusal retries the CLI's own service. Only a stop that named the operator's own root may retry: a call with no
+    state root already ran against the owner's roster, so a retry could stop a foreign session whose id collides. Any
+    other refusal is the real answer too, and it could hide a service that is down. A stop both answers refuse raises
+    Refused, and the caller keeps ownership and retries later."""
     env = {**os.environ, **(cli_env(state) if state is not None else {}), **(service_env(service) if service else {})}
     env = env if (state is not None or service) else None
     try:
         call([CLI, "stop", sid], env=env)
         return
     except Refused as e:
-        if env is None or NO_SUCH_SESSION not in str(e):
+        if state is None or NO_SUCH_SESSION not in str(e):
             raise
-        call([CLI, "stop", sid])             # the owner's roster and shared service: the session predates both roots
+        call([CLI, "stop", sid], env=owner_env())   # the owner's roster and shared service: it predates both roots
+
+
+def owner_env():
+    """The environment of a CLI call that names no operator root: the owner's roster and the owner's shared service.
+    The operator's own variables are dropped, so a supervisor that inherited them still reaches the owner's roots
+    (#2963)."""
+    return {k: v for k, v in os.environ.items() if k not in (CONFIG_HOME, CONFIG_KEYCHAIN, "TERMUX_VERSION", "PREFIX")}
 
 
 def service_of(state, key, record):
