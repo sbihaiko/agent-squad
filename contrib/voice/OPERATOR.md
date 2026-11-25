@@ -43,7 +43,7 @@ Answer each inbox line through the shipped `answer` helper, and through nothing 
         --thread "<the inbox line's ts>" --text "<the answer>" [--speech "<a summary>"] [--persona <id>]
 
 The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
-`dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
+`$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
 `VOICE_ANSWER_BINDING`: the state folder and the channels of the session's project. The helper refuses a channel
 outside that project and a thread that matches no pending inbox line, so an answer never lands in another channel or
 under a stale thread. It reuses the binding rule of the Slack policy module (`squad/slackpolicy.py`), and `voiced`
