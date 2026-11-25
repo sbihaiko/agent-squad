@@ -12,8 +12,14 @@ answers nothing. The inbox line itself must name a channel of the session's proj
 channel, and a DM line names the binding's one DM channel, since the daemon posts to the channel the outbox line
 carries. This helper is the only gate on that path; `voiced` posts the line as it reads it.
 
+A message that asks for an action gets two calls under its one line: the read-only answer, then a second call for the
+same thread whose text starts with `Proposal:`. The inbox keeps the question, so the second call answers the same
+pending line and its proposal line lands beside the answer in the same outbox.
+
 The helper writes no other file and makes no Slack call. It runs under the session's kernel profile, so the kernel
-refuses every write beyond the session's own outboxes whatever this helper does.
+refuses every write beyond the session's own outboxes whatever this helper does. One session per state folder answers
+a channel, and every append to an outbox takes an exclusive flock while every inbox read takes a shared one, so two
+writers never interleave a line.
 
 usage: answer.py --scope <channel id|dm> [--thread <the inbox line's ts>] --text "<the answer>"
                  [--speech "<a 10 to 30 second summary>"] [--persona <id>]
@@ -24,6 +30,7 @@ The binding (`VOICE_ANSWER_BINDING`) is a JSON file the supervisor writes: `key`
 DM session.
 """
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -63,15 +70,20 @@ def read_json(path, default):
 
 def read_lines(path):
     """The JSON lines of one queue file. The last line may be a half write a crash left behind, so it is skipped; a
-    corrupt line before it is a broken queue that names its path."""
+    corrupt line before it is a broken queue that names its path.
+
+    The read holds a shared flock on the file, so it never meets a writer's line half written: the daemon appends a
+    line to the inbox, and a second session never appends one here (only the daemon writes an inbox)."""
     out = []
     try:
-        with open(path, encoding="utf-8") as f:
-            raw_lines = f.read().splitlines()
+        f = open(path, encoding="utf-8")
     except FileNotFoundError:
         return out
     except OSError as e:
         raise Refused(f"cannot read the inbox {path}: {e.strerror or e}") from e
+    with f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        raw_lines = f.read().splitlines()
     last = len(raw_lines) - 1
     for number, raw in enumerate(raw_lines):
         raw = raw.strip()
@@ -111,7 +123,9 @@ def pending_line(inbox, thread):
 def answer(binding, scope, thread, text, speech=None, persona=None):
     """Write one outbox line for a pending inbox line of `scope`, a channel of the session's project.
 
-    A scope outside the project is refused, and so is a thread the channel's inbox never held: an answer may not land in
+    A second call for an already answered thread is legal: the inbox keeps the question, so the same pending line answers
+    again, and the DM's proposal rides beside its own answer. A scope outside the project is refused, and so is a
+    thread the channel's inbox never held: an answer may not land in
     another channel or under a stale thread. The inbox line itself must name a channel of the session's project: a
     project line names its own channel, and a DM line names the one DM channel of the binding, since the daemon posts to
     the channel the outbox line carries. The outbox is resolved under the session's state folder, so a tampered binding
@@ -153,9 +167,19 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
     if scope == DM:
         record["channel"] = line_channel
     os.makedirs(os.path.dirname(outbox), exist_ok=True)
-    with open(outbox, "a", encoding="utf-8") as f:      # one short append: one line lands whole or not at all
-        f.write(json.dumps(record) + "\n")
+    with open(outbox, "a+b") as f:
+        # One exclusive flock bounds every append to this outbox, so two sessions of one state folder never interleave
+        # a line: a writer that a crash left mid-line holds no lock, and the next append starts on a fresh line.
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.seek(0, os.SEEK_END)
+        lead = ""
+        if f.tell():
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                lead = "\n"                 # a crash's half line stays its own skipped line, never glued to this one
+        f.write((lead + json.dumps(record) + "\n").encode("utf-8"))
         f.flush()
+        os.fsync(f.fileno())
     return record
 
 

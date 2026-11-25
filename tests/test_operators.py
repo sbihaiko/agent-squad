@@ -169,7 +169,9 @@ def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypat
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     text = brief(tmp_path, "acme/widget")
     assert op.ANSWER in text and "--scope" in text, text
-    assert "the inbox line's channel" in text
+    for scope in ("C0AAAAAA1", "C0AAAAAA2"):        # one helper line per channel, each with its own scope
+        assert f"{op.ANSWER} --scope {scope}" in text, text
+    assert "outboxes/" not in text, "the brief names an outbox path for a free append"
     assert "C0AAAAAA9" not in text
 
 
@@ -1243,3 +1245,70 @@ def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, c
     err = capsys.readouterr().err
     assert "dm.jsonl" in err and "corrupt" in err, err
     assert err.count("operators: skipped") == 1, err
+
+
+# The brief's helper line, per unit (#2949 review): the DM answers `dm`, a project answers the line's channel, and a
+# channel persona's id rides inline. The DM binding always names the dm scope, so the helper's own binding check passes.
+
+def persona_revision(tmp_path, repo, channel, persona_id):
+    """One project's active Slack revision, naming a persona on one of its channels (#2935)."""
+    state = tmp_path / "state"
+    (state / "slack").mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    doc = {"workspaces": [{"id": "T0TEAM0001", "channels": [{"id": channel, "name": "proj", "persona": persona_id}]}],
+           "personas": [{"id": persona_id, "name": "HAL9K", "voice": "Charon", "tone": "calm"}]}
+    (state / "slack" / f"{digest}.json").write_text(json.dumps({"repo": repo, "sha": "a" * 40, "revision": doc}))
+
+
+def answer_module():
+    """The shipped helper module, loaded from the tree under test."""
+    spec = importlib.util.spec_from_file_location("answer", VOICE / "answer.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_dm_answer_line_names_the_dm_scope(tmp_path, monkeypatch):
+    """The DM session's helper call answers its own scope, never a placeholder channel it does not have."""
+    op = operators(tmp_path, monkeypatch)
+    line = op.answer_lines(str(tmp_path / "state"),
+                           {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": ["dm"]})
+
+    assert f"{op.ANSWER} --scope dm" in line, line
+    assert "the inbox line's channel" not in line, line
+
+
+def test_the_answer_line_names_the_channel_persona_inline(tmp_path, monkeypatch):
+    """A channel with a persona answers under it, so the brief's one helper line names the id (#2935)."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    persona_revision(tmp_path, "acme/widget", "C0AAAAAA1", "hal")
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    line = op.answer_lines(str(tmp_path / "state"), unit)
+
+    assert "--persona hal" in line, line
+
+
+def test_the_answer_line_names_no_persona_for_a_channel_that_declares_none(tmp_path, monkeypatch):
+    """A channel with no persona passes no `--persona`, so the daemon keeps the channel's own."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    assert "--persona" not in op.answer_lines(str(tmp_path / "state"), unit)
+
+
+def test_a_dm_binding_names_the_dm_scope_and_the_helper_accepts_it(tmp_path, monkeypatch):
+    """The DM unit's channels may be empty; the binding still names `dm`, and the helper's own read accepts it, so a DM
+    answer never exits 2 on a malformed binding."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+
+    path = op.binding(state, {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": []})
+
+    data = json.loads(Path(path).read_text())
+    assert data["channels"] == ["dm"], data
+    got = answer_module().read_binding({"VOICE_ANSWER_BINDING": path})
+    assert got["channels"] == ["dm"], got
+    assert op.outbox_path(state, "dm") == os.path.join(state, "outboxes", "dm.jsonl")

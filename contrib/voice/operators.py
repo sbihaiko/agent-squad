@@ -462,7 +462,8 @@ def action_line(state, unit):
     channel alone (#2925); the executor that runs an action is #2939."""
     if unit["key"] == DM:
         return ("When a message asks for an action, answer in its channel that this session only reads, and then call "
-                'the helper once more for the same line with --text "Proposal: <the action, one line>".')
+                "the helper once more for the same line, with the same --scope and --thread, and with "
+                '--text "Proposal: <the action, one line>".')
     return ("When a message asks for an action, answer in its channel that this session only reads and does not run "
             "actions yet. That answer is a helper call like any other.")
 
@@ -472,12 +473,33 @@ def monitor_lines(state, unit):
     return "\n".join(f"  tail -n 0 -F {inbox_path(state, scope)}" for scope in unit["channels"])
 
 
+def scope_persona_id(state, scope):
+    """The id of one channel's persona, or "" when the active revision declares none (#2935)."""
+    try:
+        persona = voiced.scope_identity(state, scope)[1]
+    except Exception:      # noqa: BLE001 - a state that cannot be read declares no persona
+        return ""
+    return str(getattr(persona, "id", "") or "")
+
+
 def answer_lines(state, unit):
     """The one answer path: the shipped helper, with the arguments one answer carries (#2949). The helper derives the
-    outbox from the scope, and it refuses a channel outside the project or a thread with no pending line."""
-    del state, unit      # the helper holds both, and the brief names no path a session may append to
-    return (f'python3 {ANSWER} --scope "<the inbox line\'s channel>" '
-            '--thread "<the inbox line\'s ts>" --text "<the answer>"')
+    outbox from the scope, and it refuses a channel outside the project or a thread with no pending line.
+
+    The line names this session's own scope: the DM session answers `dm`, and a project session answers the channel id
+    the inbox line names, one line per channel when the project owns more than one. A channel whose active revision
+    declares a persona names its id inline, so the answer posts and speaks under it (#2935)."""
+    def one(scope, shown):
+        args = f'python3 {ANSWER} --scope {shown} --thread "<the inbox line\'s ts>" --text "<the answer>"'
+        persona = scope_persona_id(state, scope)
+        return f"{args} --persona {persona}" if persona else args
+
+    if unit["key"] == DM:
+        return one(DM, DM)
+    if len(unit["channels"]) == 1:
+        return one(unit["channels"][0], '"<the inbox line\'s channel>"')
+    return "one line per channel of this project:\n" + "\n".join(
+        f"  {scope}: {one(scope, scope)}" for scope in unit["channels"])
 
 
 def prompt_for(unit, state, repo, waiting=None):
@@ -518,10 +540,14 @@ The full contract is {repo}/contrib/voice/OPERATOR.md. In short:
 def binding(state, unit):
     """The binding file one session's answer helper reads: its state folder and the channels of its project alone. A
     started session names it in `BINDING_ENV`, so the helper answers no other channel, whatever argument it is passed.
-    The DM session's binding also names the one DM channel its answers may post to (#2949)."""
+    The DM session's binding always names `dm` among its channels, and the one DM channel its answers may post to
+    (#2949): a DM unit whose channels are empty still yields a binding the helper accepts."""
     path = os.path.join(root(state), "sessions", f"{unit['key']}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    data = {"key": unit["key"], "state": state, "channels": list(unit["channels"])}
+    channels = list(unit["channels"])
+    if unit["key"] == DM and DM not in channels:
+        channels.append(DM)
+    data = {"key": unit["key"], "state": state, "channels": channels}
     if unit["key"] == DM:
         data["dm"] = dm_channel(state)
     tmp = path + ".tmp"
