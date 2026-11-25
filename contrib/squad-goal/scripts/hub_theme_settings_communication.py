@@ -926,7 +926,7 @@ def slack_decide(query, committed=None, local=None):
                              "bot": sender_type == "bot", "own": _slack_flag(query.get("own"))},
                             dt.datetime.now(dt.UTC))
         reply = P.reply_label(merged, decision)
-        mark = (P.mark(decision.persona) if decision.mark else "") or "none"
+        mark = P.mark(decision.persona) or "none"
     except Exception as e:
         # A channel absent from the files, or a policy that does not answer it, reads as `err`, never a bare 500.
         return {"err": f"the decision did not resolve: {type(e).__name__}: {e}"}

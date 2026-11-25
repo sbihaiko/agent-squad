@@ -684,7 +684,7 @@ def test_a_decide_that_raises_returns_an_error_not_a_bare_500(hub, tmp_path, mon
 def test_the_preview_offers_the_owner_own_post(hub, tmp_path):
     """The hub route accepts `own=1`, so the preview offers the owner's own post and the query sets that flag (review
     DEBT 4)."""
-    html = render(hub, read(hub, tmp_path), "w1.c0")
+    html = render(hub, read(hub, tmp_path), "c0.p0.w1.c0")
     assert '<option value="own"' in html, html[html.index("Try a sender"):][:600]
     assert 'q.set("own","1")' in hub.PAGE, "the query sets own=1 for the own-post sender"
 

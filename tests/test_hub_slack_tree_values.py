@@ -110,6 +110,11 @@ def by_name(root, name):
     raise AssertionError(f"the tree names no node {name!r}: {[n['name'] for n in walk(root)]}")
 
 
+def project_node(root):
+    """The project node: the client node is the root, and the project is its first child (#2824)."""
+    return root["children"][0]
+
+
 def rows(node):
     return {row["key"]: row for row in node["settings"]["rows"]}
 
@@ -211,7 +216,7 @@ def test_an_inherited_persona_label_names_the_committed_persona_name(hub):
 
 def test_the_project_selects_offer_not_set(hub, tmp_path):
     """Criterion 1 at the project level: nothing is above the project, so its empty choice says `Not set`."""
-    root = tree(hub, tmp_path)["root"]
+    root = project_node(tree(hub, tmp_path)["root"])
     persona = control(root, "persona", "persona")
     language = control(root, "language", "language")
     assert persona["options"][0] == {"value": "", "label": "Not set"}, persona["options"]
@@ -223,7 +228,7 @@ def test_a_project_that_names_no_value_keeps_its_select_empty(hub, tmp_path):
     """The project's own select shows the value the file stores, never the default it falls back to."""
     committed = copy.deepcopy(COMMITTED)
     committed["project"] = {}
-    root = tree(hub, tmp_path, committed=committed)["root"]
+    root = project_node(tree(hub, tmp_path, committed=committed)["root"])
     assert control(root, "persona", "persona")["value"] == ""
     assert control(root, "language", "language")["value"] == ""
 
@@ -233,7 +238,7 @@ def test_a_project_that_names_no_value_keeps_its_select_empty(hub, tmp_path):
 def test_each_language_select_offers_every_language_the_policy_supports(hub, tmp_path, policy):
     """Criterion 2: the choices are the policy's list, at every level, and no other language."""
     out = tree(hub, tmp_path)
-    for node in (out["root"], by_name(out["root"], "team"), by_name(out["root"], "#support")):
+    for node in (project_node(out["root"]), by_name(out["root"], "team"), by_name(out["root"], "#support")):
         ctl = control(node, "language", "language")
         assert [o["value"] for o in ctl["options"]] == ["", *policy.LANGUAGES], (node["name"], ctl["options"])
 
@@ -312,7 +317,7 @@ def test_the_page_holds_no_poll_default_of_its_own(hub, tmp_path, policy):
     `poll_defaults` names, so the page never holds or invents a poll default of its own. The check reads the rendered
     value, so it does not depend on a quote style and it catches an unquoted or concatenated default (review DEBT 5)."""
     allowed = {str(v) for mode in policy.FIELD_POLL_MODES for v in policy.poll_defaults(mode).values()}
-    html = render(hub, read(hub, tmp_path), "w1.c0")
+    html = render(hub, read(hub, tmp_path), "c0.p0.w1.c0")
     found = re.findall(r"default: ([^\"<]+)", html)
     assert found, "the rendered detail pane shows a poll default"
     for value in found:
@@ -367,24 +372,24 @@ def render(hub, out, sel, docs=None, open_=""):
 
 
 def test_the_project_pane_draws_the_not_set_choice(hub, tmp_path):
-    html = render(hub, read(hub, tmp_path), "p")
+    html = render(hub, read(hub, tmp_path), "c0.p0")
     body = html[html.index("Settings"):]
     assert body.count('<option value="">Not set</option>') == 2, body[:3000]
     committed = copy.deepcopy(COMMITTED)
     committed["project"] = {}
-    html = render(hub, read(hub, tmp_path, committed=committed), "p",
+    html = render(hub, read(hub, tmp_path, committed=committed), "c0.p0",
                   docs={"committed": committed, "local": copy.deepcopy(LOCAL)})
     assert '<option value="" selected>Not set</option>' in html[html.index("Settings"):], html[:3000]
 
 
 def test_the_workspace_pane_draws_the_inherited_choice(hub, tmp_path):
-    html = render(hub, read(hub, tmp_path), "w0")
+    html = render(hub, read(hub, tmp_path), "c0.p0.w0")
     body = html[html.index("Settings"):]
     assert "Inherit (HAL9K · from project)" in body, body[:3000]
 
 
 def test_the_channel_pane_draws_the_inherited_choice_and_the_default_hint(hub, tmp_path):
-    html = render(hub, read(hub, tmp_path), "w1.c0")
+    html = render(hub, read(hub, tmp_path), "c0.p0.w1.c0")
     body = html[html.index("Settings"):]
     assert "Inherit (Iara · from workspace)" in body, body[:3000]
     assert 'placeholder="default: 1m"' in body, body[:3000]
@@ -395,6 +400,6 @@ def test_the_older_editor_uses_the_policy_languages_and_poll_defaults(hub, tmp_p
     """The editor under the read view draws the same lists: the policy's languages and each poll field's default, with
     no literal of either in the page."""
     out = read(hub, tmp_path)
-    html = render(hub, out, "p", open_="local:0:0")   # the guest channel detail: poll fields and asks
+    html = render(hub, out, "c0.p0.w1.c0", open_="local:0:0")   # the guest channel detail: poll fields and asks
     assert '<option value="es-ES"' in html, "the editor offers every policy language"
     assert 'placeholder="default: 1m"' in html, "the editor annotates a poll field with the policy default"
