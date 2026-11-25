@@ -1600,7 +1600,7 @@ const slTClient=n=>{if(n.kind!=="client")return "";
  const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div></div>`;
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
- +`<div class=sltacts><button type=button data-slt-write="${slA(n.id)}">${esc("Save the writes")}</button></div>`
+ +`<div class=sltacts><button type=button data-slt-write="${slA(n.id)}"${n.proposal_ok?"":" disabled"}>${esc("Save the writes")}</button></div>`
  +slTProp(n)+projects};
 function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  const path=slTPath(n.id),crumb=path.map((x,i)=>`${i?'<span class=sp aria-hidden=true>/</span>':""}<button type=button data-slt="${slA(x.id)}">${esc(x.name)}</button>`).join("");
@@ -1667,26 +1667,31 @@ async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
  if(slSnd&&slSnd.node===id&&slSnd.sender===sender){slSnd={node:id,sender,data};slPvShow()}}
 function slPvShow(){slRender();const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slp-sender]");if(el&&el.focus)el.focus()}
 function slPermGo(){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slperm");if(!el)return;if(el.focus)el.focus({preventScroll:true});const r=el.getBoundingClientRect?el.getBoundingClientRect():null;const vh=globalThis.innerHeight||0;if(el.scrollIntoView&&(!r||r.top<0||r.bottom>vh))el.scrollIntoView({block:"start"})}
-function slTreeHtml(){const roots=slTRoots();if(!roots.length)return "";const out=[],cur=slTsel;
+function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
  const walk=(n,more)=>{out.push(slTItem(n,cur,more));if(!slTOpen(n))return;const kids=n.children||[];
   kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};for(const r of roots)walk(r,[]);
+ const lost=(Array.isArray(T.unknown_projects)&&T.unknown_projects.length)
+  ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+T.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
- +(slT.notice?`<div class="mx err sltnotice" role=status><b>${esc(slT.notice.title)}</b><br>${esc(slT.notice.text)}</div>`:"")
- +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
- +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div></div>`
- +`<div class=sltdetail id=sltdetail tabindex="-1">${slTDetail()}</div></div>`}
+ +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
+ +(T.guest_slot?`<p class=sltguest>${esc(T.guest_slot.line||"")}</p>`:"")
+ +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
+ +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
- const pid=(el&&el.value)||n.default_persona||"",body={client:n.client||"",persona:pid};
+ const pid=(el&&el.value)||n.default_persona||"";
+ const opt=(n.persona_options||[]).find(o=>o.id===pid)||((el&&el.options&&el.options[el.selectedIndex])||{});
+ const pname=String(opt.name||opt.text||pid),body={client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827)
  if(confirm)body.confirm=true;slMsg="the proposed writes are being read";slRender();
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
- .then(r=>{if(r.status===404){n.proposal_na=true;n.proposal=[];slMsg="!the proposal route is not available on this hub";slRender();return null}return r.json()})
- .then(o=>{if(o===null)return;if(!o||o.err){slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
+ .then(r=>{if(r.status===404||r.status>=500){n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!the proposal route is not available on this hub";slRender();return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!"+((o&&o.err)||"the proposed writes could not be read");slRender();return}
+  n.proposal_na=false;n.proposal_ok=true;   // a preview that answered is the only state that enables the Save button
   if(o.rows)n.proposal=o.rows;
   if(confirm){n.proposal_saved=!!o.proposal_saved;n.proposal_partial=!!o.partial;slMsg=o.partial?"the writes were saved in part":"the writes were saved"}
   else{n.proposal_saved=false;n.proposal_partial=false;slMsg="the proposed writes are shown"}
   slRender()})
- .catch(()=>{slMsg="!the proposed writes could not be read";slRender()})}
+ .catch(()=>{n.proposal_na=true;n.proposal=[];n.proposal_ok=false;slMsg="!the proposed writes could not be read";slRender()})}
 function slEdit(k,t){const p=k.split(":"),v=t.type==="checkbox"?t.checked:t.value;
  if(p[0]==="ev"&&p[2]==="id")slEvRename(+p[1],v);
  else if(p[0]==="ev"&&p[2]==="tpl"){const e=slEvDoc()[+p[1]];if(e)e.template=v}

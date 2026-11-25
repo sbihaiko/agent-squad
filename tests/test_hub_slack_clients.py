@@ -361,13 +361,13 @@ def test_a_burst_of_previews_shares_one_roster_read(hub, tmp_path, monkeypatch):
                    [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
                      "projects": [{"id": "alpha", "follows": True}]}], {"alpha": FOLLOWER})
     calls = []
-    orig = hub._profiles_context
+    orig = hub._profiles_read
 
     def counted():
         calls.append(1)
         return orig()
 
-    monkeypatch.setattr(hub, "_profiles_context", counted)
+    monkeypatch.setattr(hub, "_profiles_read", counted)
     stub_write(hub, monkeypatch)
     for _ in range(3):
         hub.slack_clients_preview({"client": "one", "persona": "amber"})
@@ -437,3 +437,133 @@ def test_the_page_shows_saved_after_a_full_save_and_partly_saved_after_a_partial
               "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
     html = _fetched(hub, out, "c0", script)
     assert "partly saved" in html and not re.search(r'sltb ok">saved', html), html[-600:]
+
+
+# ---------------------------------------------------------------- the second review's findings (#2827)
+
+def test_a_fetch_failure_reads_not_available_and_disables_the_save(hub, tmp_path, monkeypatch):
+    """A preview that fails to reach the hub leaves no stale table: the pane reads 'not available', the error is shown,
+    and the Save button is disabled until a preview succeeds."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    script = ('globalThis.fetch=()=>Promise.reject(new Error("down"));'
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));slRender();'
+              "await new Promise(r=>setTimeout(r,20));console.log(JSON.stringify(STORE['#sbody'].innerHTML))})()")
+    html = _fetched(hub, out, "c0", script)
+    assert "not available" in html, html[:800]
+    assert re.search(r'<button[^>]*data-slt-write="c0"[^>]*disabled', html), html[:800]
+    assert "could not be read" in html, html[:800]
+
+
+def test_a_preview_posts_the_personas_display_name(hub, tmp_path, monkeypatch):
+    """The POST names the persona id and the label the pane shows, so a non-default persona never renders as its raw
+    id."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": {"id": "blue", "name": "Blue"},
+                     "projects": ["alpha"]}], {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    script = ('const BODIES=[];globalThis.fetch=(u,o)=>{BODIES.push(JSON.parse(o.body));'
+              'return Promise.resolve({status:200,json:()=>Promise.resolve({rows:[]})})};'
+              '(async()=>{slRender();await new Promise(r=>setTimeout(r,20));'
+              "console.log(JSON.stringify(BODIES))})()")
+    bodies = _fetched(hub, out, "c0", script)
+    assert bodies and bodies[0].get("persona") == "blue", bodies
+    assert bodies[0].get("persona_name") == "Blue", bodies
+
+
+def test_a_client_save_under_a_worktree_named_by_the_environment_lands_each_project_from_its_own_tree(
+        hub, tmp_path, monkeypatch):
+    """`SG_SLACK_WORKTREE` names the base, and each project of a client save gets its own worktree under it, so two
+    projects of one client never share one tree and never interleave their commits."""
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    second = {"version": 1, "project": {"language": "en-US", "persona": "blue"},
+              "personas": [{"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."},
+                           {"id": "amber", "name": "Amber", "voice": "Sulafat", "tone": "Warm."}],
+              "workspaces": [{"id": "T0TEAM0009", "label": "team-b", "class": "owned", "channels": []}]}
+    repos = {}
+    for slug, doc in (("alpha", FOLLOWER), ("beta", second)):
+        co, origin = git_repo(tmp_path, slug, doc)
+        proto(tmp_path, slug, slug, co)
+        repos[slug] = (co, origin)
+        (prof / f"{slug}.slack.local.yaml").write_text(yaml.safe_dump(LOCAL, sort_keys=False))
+    client_map(prof, [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                       "projects": [{"id": "alpha", "follows": True}, {"id": "beta", "follows": True}]}])
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path / "ambient-checkout"))
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    monkeypatch.setattr(hub, "STATE", state)
+    out = hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
+    assert out.get("err") is None, out
+    assert [s["project"] for s in out["saved"]] == ["alpha", "beta"], out.get("saved")
+    for slug, (_co, origin) in repos.items():
+        landed = tmp_path / "hubs" / slug / "docs" / "squad" / "slack.yaml"
+        assert landed.is_file(), landed
+        assert yaml.safe_load(landed.read_text())["project"]["persona"] == "amber"
+        assert subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                              capture_output=True, text=True, check=True, timeout=60).stdout.find("persona: amber") >= 0
+
+
+def git_repo(tmp_path, name, doc):
+    """A project checkout that is its own git repository, one commit on dev, and the bare origin it lands in."""
+    origin = tmp_path / f"{name}-origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, timeout=60)
+    subprocess.run(["git", "-C", str(origin), "symbolic-ref", "HEAD", "refs/heads/dev"], check=True, timeout=60)
+    co = tmp_path / name
+    co.mkdir()
+    for args in (("init", "-q", "-b", "dev"), ("config", "user.name", "fixture"),
+                 ("config", "user.email", "fixture@localhost")):
+        subprocess.run(["git", "-C", str(co), *args], check=True, timeout=60)
+    c = co / "docs" / "squad" / "slack.yaml"
+    c.parent.mkdir(parents=True)
+    c.write_text(yaml.safe_dump(doc, sort_keys=False))
+    for args in (("add", "--", "docs/squad/slack.yaml"), ("commit", "-q", "-m", "seed"),
+                 ("remote", "add", "origin", str(origin)), ("push", "-q", "origin", "dev"), ("fetch", "-q", "origin")):
+        subprocess.run(["git", "-C", str(co), *args], check=True, timeout=60)
+    return co, origin
+
+
+def test_a_roster_read_that_does_not_finish_fails_the_save_loudly(hub, tmp_path, monkeypatch):
+    """A profile read that times out is not the fresh machine's empty roster: the preview and the save both answer its
+    error, so no save reports success over a roster it never read."""
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_persona": {"id": "amber", "name": "Amber"},
+                        "projects": ["alpha"]}], {"alpha": FOLLOWER})
+    real = subprocess.run
+
+    def slow(cmd, *a, **kw):
+        if isinstance(cmd, list) and cmd and cmd[0] == "bash":
+            raise subprocess.TimeoutExpired(cmd, 20)
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(hub.subprocess, "run", slow)
+    preview = hub.slack_clients_preview({"client": "one", "persona": "amber"})
+    assert preview.get("err") and "profile read" in preview["err"], preview
+    saved = hub.slack_clients_save({"client": "one", "persona": "amber", "confirm": True})
+    assert saved.get("err") and "profile read" in saved["err"], saved
+    assert made["alpha"][1].read_text() == yaml.safe_dump(FOLLOWER, sort_keys=False), "a failed read wrote a file"
+
+
+def test_the_detail_pane_says_why_when_the_tree_has_no_root(hub, tmp_path, monkeypatch):
+    """A tree of no client and no project is not a blank pane: the detail pane names the empty map."""
+    prof, _ = wire(tmp_path, monkeypatch, hub, [], {})
+    out = hub.slack_overview()
+    assert clients_tree(out) == [], clients_tree(out)
+    html = render(hub, out)
+    assert "No project in the client map yet" in html, html[:800]
+
+
+def test_a_project_the_client_names_but_the_hub_does_not_know_is_named_under_the_tree(hub, tmp_path, monkeypatch):
+    """A project the map names and no profile holds is listed under the tree by its id, so a misspelled project id never
+    leaves the tree silently short."""
+    prof, _ = wire(tmp_path, monkeypatch, hub,
+                   [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha", "ghost"]}],
+                   {"alpha": FOLLOWER})
+    out = hub.slack_overview()
+    tree = out["tree"]
+    assert tree["unknown_projects"] == ["ghost"], tree.get("unknown_projects")
+    html = render(hub, out)
+    assert re.search(r"(?i)not on this hub", html) and "ghost" in html, html[-800:]

@@ -521,9 +521,11 @@ def _clients_map_read():
     return CL.normalize(doc if isinstance(doc, dict) else {}), None
 
 
-def _profiles_context():
-    """Every profile the hub knows: slug, checkout and project, one line each. The seam (ADR-0138) reads each profile on
-    its own; a profile it refuses is skipped, so one broken profile never costs the tree the rest."""
+def _profiles_read():
+    """(contexts, error): every profile the hub knows: slug, checkout and project, one line each. The seam (ADR-0138)
+    reads each profile on its own; a profile it refuses is skipped, so one broken profile never costs the tree the rest.
+    A seam that could not run answers an error, so a caller that writes tells a failed read from a machine with no
+    profile."""
     here = pathlib.Path(__file__).resolve().parent
     script = ('. "$1/address.sh"; for n in $(sg_profiles); do sg_repo_ctx "$n" >/dev/null 2>&1 || continue; '
               'printf "%s\t%s\t%s\n" "$n" "$SG_CHECKOUT" "$SG_PROJECT"; done')
@@ -532,14 +534,23 @@ def _profiles_context():
     if d is not None: env["SG_PROFILES_DIR"] = str(d)
     try:
         r = subprocess.run(["bash", "-c", script, "_", str(here)], capture_output=True, text=True, timeout=20, env=env)
-    except Exception:
-        return []
+    except subprocess.TimeoutExpired:
+        return [], "the profile read timed out after 20 s"
+    except Exception as e:
+        return [], f"the profile read failed: {type(e).__name__}: {e}"
+    if r.returncode:
+        return [], f"the profile read failed: {(r.stderr or r.stdout or '').strip() or f'exit {r.returncode}'}"
     out = []
     for line in (r.stdout or "").splitlines():
         parts = line.split("\t")
         if len(parts) >= 2 and parts[0] and parts[1]:
             out.append({"slug": parts[0], "checkout": parts[1], "project": parts[2] if len(parts) > 2 else ""})
-    return out
+    return out, None
+
+
+def _profiles_context():
+    """Every profile the hub knows, for a read that draws the tree alone: a failed read answers no profile."""
+    return _profiles_read()[0]
 
 
 def _slack_seat(slug, checkout, project):
@@ -568,23 +579,31 @@ def _roster_key():
     return (str(profiles_dir()), os.environ.get("SG_PROFILES_DIR") or "", os.environ.get("SG_CHECKOUT") or "")
 
 
-def _slack_roster(cache=0.0):
-    """One seat per project the hub knows, in the seam's order, each profile once. `_profiles_context` runs a bash
-    subprocess with a 20 s timeout, so a preview asks a short-lived cache; a save takes no cache and clears it."""
+def _slack_roster_checked(cache=0.0):
+    """(seats, error): one seat per project the hub knows, in the seam's order, each profile once, and the error of a
+    profile read that did not finish. `_profiles_read` runs a bash subprocess with a 20 s timeout, so a preview asks a
+    short-lived cache; a save takes no cache and clears it."""
     key = _roster_key() if cache > 0 else None
     if cache > 0:
         ent = _ROSTER_CACHE
         if ent["seats"] is not None and ent["key"] == key and time.monotonic() - ent["at"] < cache:
-            return ent["seats"]
+            return ent["seats"], None
+    contexts, err = _profiles_read()
+    if err: return [], err
     seats, seen = [], set()
-    for ctx in _profiles_context():
+    for ctx in contexts:
         if ctx["slug"] in seen: continue
         seat = _slack_seat(ctx["slug"], ctx["checkout"], ctx["project"])
         if seat is not None:
             seen.add(ctx["slug"]); seats.append(seat)
     if cache > 0:
         _ROSTER_CACHE.update({"key": key, "at": time.monotonic(), "seats": seats})
-    return seats
+    return seats, None
+
+
+def _slack_roster(cache=0.0):
+    """The seats of one tree read: a failed profile read answers no seat, and the tree names no project."""
+    return _slack_roster_checked(cache)[0]
 
 
 def _slack_roster_clear():
@@ -662,6 +681,10 @@ def _slack_clients_tree_for(P, seats):
     if merr: clients = []
     groups = CL.groups(clients, [s["id"] for s in seats])
     by_id = {s["id"]: s for s in seats}
+    unknown = []   # a project the map names and no profile holds: the tree drops it, and names it under the tree
+    for g in clients:
+        for p in g["projects"]:
+            if p["id"] not in by_id and p["id"] not in unknown: unknown.append(p["id"])
     nodes, all_defects, slots, channels = [], [], [], 0
     for i, g in enumerate(groups):
         children, with_slack = [], 0
@@ -704,7 +727,7 @@ def _slack_clients_tree_for(P, seats):
     files = {"committed": seats[0]["cf"], "local": seats[0]["lf"]} if seats else {"committed": "slack.yaml", "local": "slack.local.yaml"}
     no_slack = not any(CL.has_slack(s["committed"], s["local"]) for s in seats)
     return {"err": None, "files": files, "defects": all_defects + ([merr] if merr else []), "empty": not seats or no_slack, "notice": notice,
-            "guest_slot": guest_slot, "clients": nodes, "root": nodes[0] if nodes else None,
+            "guest_slot": guest_slot, "clients": nodes, "unknown_projects": unknown, "root": nodes[0] if nodes else None,
             "counts": {"clients": len(nodes), "projects": len(seats), "channels": channels}}
 
 
@@ -885,12 +908,12 @@ def slack_registry_path():
 def slack_worktree(loop=None, name=None):
     """(worktree, error): the hub's own worktree for the committed Slack file. `SG_SLACK_WORKTREE` names it, else the hub
     derives one per profile under its state directory, outside every checkout, so no owner sets a variable by hand and
-    hubmux's one process keeps one worktree per profile (#2763). `name` splits the derived path per project, so a client
-    save over several projects lands each one from its own tree. A worktree that is the loop checkout, or sits inside
-    it, is refused."""
+    hubmux's one process keeps one worktree per profile (#2763). `name` splits the path per project, under the derived
+    base and under a base the environment names too, so a client save over several projects lands each one from its own
+    tree and never interleaves them. A worktree that is the loop checkout, or sits inside it, is refused."""
     raw = os.environ.get(SLACK_WT_ENV) or ""
     wt = pathlib.Path(raw) if raw else pathlib.Path(STATE) / SLACK_WT_DIR
-    if name and not raw:
+    if name:
         wt = wt / str(name)
     loop = loop or os.environ.get("SG_CHECKOUT") or CHECKOUT or ""
     if loop:
@@ -1201,7 +1224,9 @@ def _slack_client_plan(body, cache=0.0):
     name = name or pid
     try: P = slack_policy()
     except Exception as e: return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
-    seats = {s["id"]: s for s in _slack_roster(cache)}
+    roster, rerr = _slack_roster_checked(cache)
+    if rerr: return {"err": rerr}   # a roster the hub never read is no empty client: a save never reports over it
+    seats = {s["id"]: s for s in roster}
     projects = {sid: {"label": s["label"], "committed": s["committed"], "local": s["local"],
                       "committed_path": str(s["committed_path"]) if s["committed_path"] else None,
                       "local_path": str(s["local_path"]) if s["local_path"] else None,
