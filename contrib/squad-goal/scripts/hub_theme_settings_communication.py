@@ -253,6 +253,15 @@ def _slack_badge(text, tone="neutral", kind="class"):
 def _slack_tile(key, value, sub="", tone="neutral"):
     return {"key": key, "value": _slack_text(value), "sub": _slack_text(sub), "tone": tone}
 
+def _slack_ws_kind(row, local_only):
+    """The class one workspace shows: its row's own `class`, else `guest` when only the local file names it (the local
+    file never holds an owned workspace), else `owned`. The tree badge, the class tile and both Workspaces tiles ask
+    this one rule (#2904)."""
+    return _slack_text(row.get("class") or ("guest" if local_only else "owned"))
+
+def _slack_group_class(group, lf):
+    return _slack_ws_kind(group["ws"], all(file == lf for row, file, i in group["rows"]))
+
 def _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf):
     """The workspaces of both files in file order, one row per id: the first document's row wins and a later row adds a
     channel it names, so one workspace is one node and never two. A row that names no id keys on its document and
@@ -450,7 +459,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     decision = P.decide(committed_doc, local_doc, {"workspace": ws_id, "channel": ch_id,
                                                    "user": members[0] if members else ""}, dt.datetime.now(dt.UTC))
     badges = []
-    if P.channel_class(ws, merged) != _slack_text(ws.get("class") or "owned"):
+    if P.channel_class(ws, merged) != _slack_group_class(group, lf):
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
@@ -552,7 +561,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
     """One workspace node: its class tile, its persona and language, the guest slot it holds, the validation defects
     that name it and its channels. A refused workspace states its one defect and its channels carry no transport."""
     ws, ws_id = group["ws"], group["id"]
-    class_ = _slack_text(ws.get("class") or "owned")
+    class_ = _slack_group_class(group, lf)
     refused = (group["file"], group["index"]) in refused_keys
     has_guest_channel = any(P.channel_class(row, candidate) == "guest"
                             for row, file, i in group["rows"] for k, candidate in _slack_dicts(row.get("channels")))
@@ -763,7 +772,7 @@ def _slack_project_node(P, seat, node_id):
     rows = [(_slack_tree_channel_row(g, ch["id"]), g) for g in groups for ch in g["channels"]]
     speak = sum(1 for merged, g in rows if P.can_speak(merged))
     subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
-    guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
+    guest_nodes = [g for g in groups if _slack_group_class(g, lf) == "guest"]
     # A project count is a fact, never a passing state; only a second guest workspace earns the warning tone (#2841, #2842).
     now = [] if empty else [
         _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
@@ -1019,7 +1028,7 @@ def slack_overview(committed=None, local=None):
                 if ch_persona and ch_persona.id in by_id:
                     by_id[ch_persona.id]["channels"].append(f"{label}/#{name}")
             workspaces.append({"id": _slack_text(row.get("id")), "label": label,
-                               "class": _slack_text(row.get("class") or "owned"), "language": language,
+                               "class": _slack_ws_kind(row, file == lf), "language": language,
                                "persona": persona.id if persona else None, "file": file, "channels": channels,
                                "index": wi})
     out = _slack_overview_shape(project, roles, events, personas, workspaces, defects, committed, local)
