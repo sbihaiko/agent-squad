@@ -158,6 +158,8 @@ def _members(file, doc, out, local):
         for key in ("workspace", "channel", "role"):
             if not str(member.get(key) or "").strip():
                 out.append(_defect(file, f"{base}.{key}", f"a member names its {key}"))
+        if "alias" in member and not isinstance(member["alias"], str):
+            out.append(_defect(file, f"{base}.alias", "a member alias is a string"))
         users = member.get("users")
         if not isinstance(users, list) or not users:
             out.append(_defect(file, f"{base}.users", "a member names at least one user id"))

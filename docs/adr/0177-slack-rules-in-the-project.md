@@ -61,7 +61,7 @@ of the project, where a person reviews its commit.
 10. **Slack is the wake path in an `owned` workspace.** The session never asks Slack for a message of an `owned` workspace:
     a Monitor on the inbox wakes it. Polling exists only in a `guest` workspace, where the connector is the only transport.
 11. **A role is the owner's written grant.** A role in the committed file grants the actions it lists, in an `owned` channel,
-    and it never grants another owner-only action. The user ids of each role live in the local file.
+    and it never grants another owner-only action. The user ids of each role live in the local file, and so does each member's optional alias, a name the owner types so that a row reads as a person and never reaches the committed file.
 
 ## Consequences
 
