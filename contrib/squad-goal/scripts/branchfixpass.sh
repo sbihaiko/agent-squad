@@ -157,6 +157,17 @@ while read -r sha br i; do
     [ -e "$A/branchfix-skip-$key-$s9" ] || { echo "BRANCHFIX SKIP $br: $why"; : > "$A/branchfix-skip-$key-$s9"; }
     continue
   fi
+  # (#2877) A kept marker names the ref the round rebases on, and wave.sh deletes a wave branch after its wave lands. A wave
+  # ref that the remote does not have becomes origin/<land branch> in the marker's line 1 and in the review, before the request
+  # is built. Only an empty answer proves the ref is gone: a failing ls-remote changes nothing.
+  km="$A/kept-$key"; kref=$(head -1 "$km" 2>/dev/null)
+  case "$kref" in origin/wave/*)
+    if lsr=$(${SG_GIT:-/usr/bin/git} ls-remote "$remote" "refs/heads/${kref#origin/}" 2>/dev/null) && [ -z "$lsr" ]; then
+      nref="origin/${SG_LAND_BRANCH:-dev}"; tmp=$(mktemp "$A/.kept-$key.XXXXXX")
+      { echo "$nref"; tail -n +2 "$km"; } > "$tmp" && mv "$tmp" "$km"
+      tmp=$(mktemp "$SG_STATE/.review-$key.XXXXXX"); KREF=$kref NREF=$nref python3 -c 'import os,sys; s=open(sys.argv[1]).read(); open(sys.argv[2],"w").write(s.replace(os.environ["KREF"], os.environ["NREF"]))' "$f" "$tmp" && mv "$tmp" "$f"
+      rm -f "$tmp"; echo "BRANCHFIX $br: the remote has no $kref, so the rebase round is on $nref"
+    fi;; esac
   fp=$(python3 "$here/revformat.py" --fingerprint "$f"); same=$(python3 "$here/revformat.py" --stall "$A" branchfix "$key" "$fp")
   if [ "$same" -ge "$cap" ]; then
     [ "$(cat "$A/branchfix-stop-$key" 2>/dev/null)" = "$fp" ] && continue

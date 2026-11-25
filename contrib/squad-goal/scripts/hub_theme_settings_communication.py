@@ -427,6 +427,7 @@ def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
     return {"roles": roles, "eligible": len(set(P.resolved_members(local_doc, ws_id, ch_id, accepted))),
             "notes": notes, "members": people}
 
+
 def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, refused, cf, lf):
     """One channel node: its badges and its Now tiles. Every value is the policy's: the resolution of the persona and
     the language, the decision for one eligible member's message, the transport badge and the announcement list. A
@@ -451,7 +452,7 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
         badges.append(_slack_badge(P.channel_class(ws, merged)))
     badges.append(_slack_badge(P.transport(ws, merged), "neutral", "transport"))
     if not members:
-        badges.append(_slack_badge("no one", "err", "noone"))
+        badges.append(_slack_badge("no one", "warn", "noone"))
     eligible = ("1 eligible person" if len(members) == 1 else f"{len(members)} eligible people") if members \
         else "nobody eligible"
     reply_value = P.reply_label(merged, decision)
@@ -465,10 +466,12 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
            _slack_tile("Announcements", "none" if not announcement else _slack_counts(len(announcement), "event"),
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
+    note = P.channel_note(merged, members, announcement)
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": ""}}
+            "detail": {"title": f"#{name}", "sub": f"{label} · {_slack_text(ch_id)}".strip(" ·"), "text": "",
+                       "note": note}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}
@@ -562,8 +565,13 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
            _slack_tile("Language", resolution["language"], f"from {resolution['language_source']}"),
            _slack_tile("Guest slot", slot, "one guest workspace per machine",
                        "err" if refused else "neutral" if slot == "holds it" else "muted")]
-    named = [str(d) for d in defects if d.file == group["file"]
-             and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    named_diags = [d for d in defects if d.file == group["file"]
+                   and str(d.key).startswith(f"workspaces[{group['index']}]")]
+    # `defects` serializes each policy diagnostic whole, key and reason; the detail pane shows the reason alone, in
+    # plain words, in the error style (#2842).
+    named = [str(d) for d in named_diags]
+    # One reason per element: two diagnostics of one workspace stay two sentences, and neither hides the other (#2842).
+    defect_note = [str(d.reason) for d in named_diags]
     channels = [_slack_tree_node_channel(P, committed_doc, local_doc, group, ch, f"{node_id}.c{k}", refused, cf, lf)
                 for k, ch in enumerate(group["channels"])]
     badges = [_slack_badge(class_)] + ([_slack_badge("refused", "err", "refused")] if refused else [])
@@ -571,7 +579,7 @@ def _slack_tree_node_workspace(P, committed_doc, local_doc, group, node_id, held
             "state": "refused" if refused else "ok", "badges": badges, "now": now, "defects": named,
             "settings": {"rows": _slack_tree_workspace_settings(P, committed_doc, local_doc, group)},
             "children": channels,
-            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}",
+            "detail": {"title": _slack_text(ws.get("label") or ws_id), "sub": f"{class_} · {_slack_text(ws_id)}", "defect_note": defect_note,
                        "text": "A client workspace. The persona reads it through the connector and writes from your own "
                                "account with the persona mark; the bot never joins it." if class_ == "guest" else ""}}
 
@@ -722,10 +730,26 @@ def _slack_project_node(P, seat, node_id):
             refused_keys.add((d.file, int(hit.group(1))))
     groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
     local_rows = _slack_dicts(local_doc.get("workspaces"))
+    # The slot reads the policy's own guest order: `guest_workspaces` names the rows the connector reaches, and the
+    # validator serves the first of them and refuses every one after it. So the first row is the served workspace, and
+    # the line never names a row the policy refuses as the one it serves (#2842).
     guests = P.guest_workspaces(local_doc)
-    held = _slack_text(local_rows[guests[0]][1].get("label") or local_rows[guests[0]][1].get("id")) if guests else None
-    guest_slot = {"held": held, "count": len(guests), "line": f"Guest slot 1 of {len(guests)} · {held}"} if guests else None
+    guest_names = [_slack_text(local_rows[i][1].get("label") or local_rows[i][1].get("id")) for i in guests]
     label = seat["label"]
+    held, refused_names = (guest_names[0], guest_names[1:]) if guest_names else (None, [])
+    if not guests:
+        guest_slot = None
+    elif len(guests) > 1:
+        title = f"{len(guests)} guest workspaces; the machine serves one."
+        guest_slot = {"held": held, "count": len(guests), "tone": "err",
+                      "line": f"{len(guests)} guest workspaces; the machine serves one · {held} is served, "
+                              f"{', '.join(refused_names) or 'the other'} is refused",
+                      "title": title,
+                      "text": f"Saving from this page keeps {held} ({label}, counted first) and refuses "
+                              f"{', '.join(refused_names) or 'the other'}."}
+    else:
+        guest_slot = {"held": held, "count": 1, "tone": "neutral",
+                      "line": f"Guest slot 1 of 1 · {held} ({label})"}
     personas = _slack_dicts(committed_doc.get("personas"))
     events = _slack_dicts(committed_doc.get("events"))
     project = P.project_settings(committed_doc, local_doc)
@@ -738,8 +762,10 @@ def _slack_project_node(P, seat, node_id):
     speak = sum(1 for merged, g in rows if P.can_speak(merged))
     subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
-    now = [] if empty else [   # a project count is a fact, never a passing state: every project tile stays neutral (#2841)
-        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest"),
+    # A project count is a fact, never a passing state; only a second guest workspace earns the warning tone (#2841, #2842).
+    now = [] if empty else [
+        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
+                    tone="warn" if len(guest_nodes) > 1 else "neutral"),
         _slack_tile("Channels", f"{len(rows)} · {speak} speak"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
                     else f"{len(personas)} · no default"),
@@ -822,9 +848,17 @@ def _slack_clients_tree_for(P, seats):
     guest_slot = None
     if len(seats) == 1:
         guests = len(P.guest_workspaces(seats[0]["local"]))
-        notice = {"title": f"{guests} guest workspaces", "text": P.SECOND_GUEST_REASON} if guests > 1 else None
         if slots:
             guest_slot = {**slots[0][0]}
+        # The slot's alert already names the refused second guest, so the tree states it once, never as two banners (#2842).
+        notice = None if (guest_slot and guest_slot.get("tone") == "err") else \
+            ({"title": f"{guests} guest workspaces", "text": P.SECOND_GUEST_REASON} if guests > 1 else None)
+        if guest_slot and guest_slot.get("tone") == "err":
+            # The alert stands above the tree, so the project's row repeats neither the banner nor its badge (#2842).
+            for c in nodes:
+                for n in c.get("children") or []:
+                    n["notice"] = None
+                    n["badges"] = [b for b in n["badges"] if b.get("kind") != "refused"]
     files = {"committed": seats[0]["cf"], "local": seats[0]["lf"]} if seats else {"committed": "slack.yaml", "local": "slack.local.yaml"}
     no_slack = not any(CL.has_slack(s["committed"], s["local"]) for s in seats)
     return {"err": None, "files": files, "defects": all_defects + ([merr] if merr else []), "empty": not seats or no_slack, "notice": notice,

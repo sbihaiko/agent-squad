@@ -194,4 +194,31 @@ out=$(SERIAL_PRIORITY_MAX=900 SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo 
 [ "$rc" = 0 ] && [ "$out" = ran ] && ok "a priority marker older than SERIAL_PRIORITY_MAX names nobody" || ko "a stale priority marker blocked the gate (rc=$rc out=$out)"
 rm -f "$SG_STATE/locks/waiting/gui-old"; rm -rf "$SG_STATE/locks/gui"
 
+
+# (#2883) A fresh arrival never passes a queued waiter. daysuites runs suites back to back, each through a new serial.sh, so it
+# re-took the lock in milliseconds while a waiter on the default 3 s poll starved. A waiter W queues behind a holder; a runner
+# then takes the lock three times back to back for about 1 s each; W must run before the runner's second take.
+f=$T/fifo; mkdir -p "$f"; rm -rf "$SG_STATE/locks/fifo"
+bash "$src" fifo sh -c "while [ ! -e '$f/go' ]; do sleep 0.05; done" >/dev/null 2>&1 & fh=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/fifo/pid" ] && break; sleep 0.05; done
+SERIAL_WAIT_SECONDS=30 bash "$src" fifo sh -c "echo W >> '$f/order'" 2>/dev/null & fw=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/waiting/fifo-$fw" ] && break; sleep 0.05; done
+we=$(cut -f1 "$SG_STATE/locks/waiting/fifo-$fw" 2>/dev/null); while [ "$(date +%s)" -le "${we:-0}" ]; do sleep 0.1; done
+( for i in 1 2 3; do SERIAL_POLL_SECONDS=0.05 SERIAL_WAIT_SECONDS=30 bash "$src" fifo sh -c "echo R$i >> '$f/order'; sleep 1" 2>/dev/null; done ) & fr=$!
+sleep 0.3; : > "$f/go"; wait "$fh"; wait "$fw"; wait "$fr"
+case "$(tr '\n' ' ' < "$f/order")" in "W R1 R2 R3 "|"R1 W R2 R3 ") ok "a queued waiter runs before a back-to-back runner's second take";;
+  *) ko "a fresh arrival passed a queued waiter: order '$(tr '\n' ' ' < "$f/order")'";; esac
+# A priority waiter still goes first, before an older non-priority waiter, and a fresh non-priority arrival comes after both.
+rm -rf "$f" "$SG_STATE/locks/fifo"; mkdir -p "$f"
+bash "$src" fifo sh -c "while [ ! -e '$f/go' ]; do sleep 0.05; done" >/dev/null 2>&1 & fh=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/fifo/pid" ] && break; sleep 0.05; done
+SERIAL_POLL_SECONDS=0.1 SERIAL_WAIT_SECONDS=30 bash "$src" fifo sh -c "echo W >> '$f/order'" 2>/dev/null & fw=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/waiting/fifo-$fw" ] && break; sleep 0.05; done
+we=$(cut -f1 "$SG_STATE/locks/waiting/fifo-$fw" 2>/dev/null); while [ "$(date +%s)" -le "${we:-0}" ]; do sleep 0.1; done
+SG_SERIAL_PRIORITY=1 SERIAL_POLL_SECONDS=0.1 SERIAL_WAIT_SECONDS=30 bash "$src" fifo sh -c "echo P >> '$f/order'" 2>/dev/null & fp=$!
+for i in $(seq 1 60); do [ -s "$SG_STATE/locks/waiting/fifo-$fp" ] && break; sleep 0.05; done
+: > "$f/go"; wait "$fh"; SERIAL_POLL_SECONDS=0.05 SERIAL_WAIT_SECONDS=30 bash "$src" fifo sh -c "echo R >> '$f/order'" 2>/dev/null
+wait "$fw"; wait "$fp"
+[ "$(tr '\n' ' ' < "$f/order")" = "P W R " ] && ok "a priority waiter goes before an older waiter, and a fresh arrival goes last" || ko "order: '$(tr '\n' ' ' < "$f/order")'"
+rm -rf "$SG_STATE/locks/fifo"
 rm -rf "$T"; exit $fail

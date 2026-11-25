@@ -226,7 +226,12 @@ def test_a_refused_guest_workspace_shows_one_defect_and_its_channels_no_mode_bad
                                 "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
     out = tree(hub, tmp_path, local=local)
     root = out["root"]
-    assert out["notice"] and out["notice"]["title"] == "2 guest workspaces", out.get("notice")
+    # The slot alert at the top of the tree names the refusal once, so the tree and the project's row repeat neither
+    # banner nor badge (#2842).
+    assert out["notice"] is None, out.get("notice")
+    assert out["guest_slot"]["tone"] == "err", out.get("guest_slot")
+    project = next(n for n in walk(root) if n.get("kind") == "project")
+    assert [b["text"] for b in project["badges"]] == ["HAL9K", "follows default"], project["badges"]
     refused = by_name(root, "client-b")
     assert refused["state"] == "refused"
     assert len(refused["defects"]) == 1, refused["defects"]
@@ -236,8 +241,227 @@ def test_a_refused_guest_workspace_shows_one_defect_and_its_channels_no_mode_bad
 
 
 def test_the_guest_slot_names_the_project_that_holds_it(hub, tmp_path):
+    """The slot line names the workspace and the project that holds it, as the mockup draws it."""
     out = read(hub, tmp_path)["tree"]
-    assert out["guest_slot"] == {"held": "client-a", "count": 1, "line": "Guest slot 1 of 1 · client-a"}, out["guest_slot"]
+    assert out["guest_slot"] == {"held": "client-a", "count": 1, "tone": "neutral",
+                                 "line": "Guest slot 1 of 1 · client-a (4)"}, out["guest_slot"]
+
+
+def two_guests():
+    """The local file with a second guest workspace, so the machine serves one and refuses the other."""
+    local = json.loads(json.dumps(LOCAL))
+    local["workspaces"].append({"id": "T0OTHER001", "label": "client-b", "class": "guest",
+                                "channels": [{"id": "C0CLIB0001", "name": "b-general", "mode": "listen+speak"}]})
+    return local
+
+
+def test_two_guest_workspaces_raise_a_red_alert_at_the_top_line(hub, tmp_path):
+    """#2842: the machine serves one guest workspace, so a second is refused and the slot line says so in red."""
+    out = read(hub, tmp_path, local=two_guests())
+    slot = out["tree"]["guest_slot"]
+    assert slot["tone"] == "err", slot
+    assert "client-b" in slot["line"] and "refused" in slot["line"], slot["line"]
+    html = render(hub, out)
+    assert 'class="sltguest err"' in html, html[:600]
+
+
+def test_the_served_guest_is_the_first_workspace_the_policy_counts(hub, tmp_path):
+    """#2842: the machine serves the first guest the policy counts, so the alert names that one as served and the
+    later ones as refused, whatever order the rows and the groups hold."""
+    slot = read(hub, tmp_path, local=two_guests())["tree"]["guest_slot"]
+    assert slot["title"] == "2 guest workspaces; the machine serves one.", slot
+    assert slot["text"] == ("Saving from this page keeps client-a (4, counted first) and refuses client-b."), slot
+    html = render(hub, read(hub, tmp_path, local=two_guests()))
+    assert "<b>2 guest workspaces; the machine serves one.</b>" in html, html[:800]
+    assert "keeps client-a (4, counted first) and refuses client-b." in html, html[:800]
+
+
+def test_two_guest_workspaces_warn_in_the_project_tiles(hub, tmp_path):
+    root = tree(hub, tmp_path, local=two_guests())["root"]
+    project = next(n for n in walk(root) if n.get("kind") == "project")
+    assert tiles(project)["Workspaces"]["tone"] == "warn", tiles(project)
+
+
+def test_a_refused_workspace_state_reads_in_plain_words(hub, tmp_path):
+    """#2842: the defect shows in the error style and in words, never as the raw key the policy names."""
+    out = read(hub, tmp_path, local=two_guests())
+    html = render(hub, out, sel=by_name(out["tree"]["root"], "client-b")["id"])
+    assert "workspaces[" not in html, html
+    assert "a second guest workspace is refused" in html, html
+    assert re.search(r'class="mx err', html), html
+
+
+def test_a_refused_workspace_carries_the_policy_diagnostic_and_a_plain_note(hub, tmp_path):
+    """#2842: `defects` serializes the policy's own diagnostic, with its key, while the view shows plain-word reasons."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from squad import slackpolicy as P
+    local = two_guests()
+    c, loc = files(tmp_path, local=local)
+    committed, local_doc = yaml.safe_load(c.read_text()), yaml.safe_load(loc.read_text())
+    node = by_name(hub.slack_overview(c, loc)["tree"]["root"], "client-b")
+    want = [str(d) for d in P.validate(committed, local_doc, local_name="t.slack.local.yaml")
+            if d.reason == P.SECOND_GUEST_REASON]
+    assert node["defects"] == want, node["defects"]
+    note = node["detail"]["defect_note"]
+    assert "a second guest workspace is refused" in " ".join(note), note
+    assert not any("workspaces[" in reason for reason in note), note
+
+
+def test_a_workspace_with_two_diagnostics_shows_both_on_their_own_line(hub, tmp_path):
+    """#2842: a note never hides the other diagnostics of the node, and two reasons never run into one sentence."""
+    local = two_guests()
+    local["workspaces"][1]["language"] = "xx-YY"     # the second defect of client-b, beside the second-guest refusal
+    out = read(hub, tmp_path, local=local)
+    node = by_name(out["tree"]["root"], "client-b")
+    note = node["detail"]["defect_note"]
+    assert len(note) == 2, note
+    assert "a second guest workspace is refused" in note[0] + note[1], note
+    assert any("language 'xx-YY'" in reason for reason in note), note
+    html = render(hub, out, sel=node["id"])
+    assert html.count('class="mx err sltdef"') == 2, html
+    assert "a second guest workspace is refused" in html and "language &#39;xx-YY&#39;" in html \
+        or "language 'xx-YY'" in html, html
+
+
+def test_an_unknown_guest_slot_tone_becomes_neutral(hub, tmp_path):
+    """#2842: a tone outside the fixed set (err, neutral) never becomes a class token, because no CSS rule draws it."""
+    out = read(hub, tmp_path)
+    out["tree"]["guest_slot"]["tone"] = "err onmouseover=alert(1)"
+    html = render(hub, out)
+    assert 'class="sltguest neutral"' in html, html[:400]
+    assert "onmouseover" not in html, html[:400]
+
+
+def test_a_warning_tone_on_the_guest_slot_stays_neutral(hub, tmp_path):
+    """#2842: the guest slot draws `err` or nothing, so a `warn` tone it never sets is neutral, never a class with no rule."""
+    out = read(hub, tmp_path)
+    out["tree"]["guest_slot"]["tone"] = "warn"
+    html = render(hub, out)
+    assert 'class="sltguest neutral"' in html, html[:400]
+    assert "sltguest warn" not in html, html[:400]
+
+
+def test_the_guest_slot_escapes_its_line_and_its_names(hub, tmp_path):
+    """#2842: every value of the slot is text, so HTML in a name or in a line never becomes markup."""
+    out = read(hub, tmp_path)
+    out["tree"]["guest_slot"].update({"held": "<b>held</b>", "tone": "neutral",
+                                      "line": "<img src=x onerror=alert(1)>"})
+    html = render(hub, out)
+    assert "<img src=x" not in html and "<b>held</b>" not in html, html[:800]
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html, html[:800]
+    out["tree"]["guest_slot"].update({"tone": "err", "title": "<i>t</i>", "text": "<u>u</u>"})
+    html = render(hub, out)
+    assert "<i>t</i>" not in html and "<u>u</u>" not in html, html[:800]
+    assert "&lt;i&gt;t&lt;/i&gt;" in html and "&lt;u&gt;u&lt;/u&gt;" in html, html[:800]
+
+
+def test_the_channel_note_is_the_policy_sentence(hub, tmp_path):
+    """#2842: each branch of the note is one fixed sentence, drawn through one accessor (ADR-0137)."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from squad import slackpolicy as P
+    assert hasattr(P, "channel_note"), "the policy names the channel note"
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][1]["roles"] = ["manager"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0ALERT001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = read(hub, tmp_path, committed=committed, local=local)
+    channel = next(ch for ch in committed["workspaces"][0]["channels"] if ch["id"] == "C0ALERT001")
+    members = P.resolved_members(local, "T0TEAM0001", "C0ALERT001", channel.get("roles") or ())
+    assert members == ["U0OWNER001"], members
+    assert P.channel_note(channel, members, channel.get("announce") or []) == (
+        "Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; nothing "
+        "is posted here. Announcements post as drafts for your review.")
+    assert by_name(out["tree"]["root"], "#squad-alerts")["detail"]["note"] == (
+        "Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; nothing "
+        "is posted here. Announcements post as drafts for your review.")
+
+
+def test_the_channel_note_names_each_mode_and_announcement_combination(hub, tmp_path):
+    """#2842: the note is a literal sentence per combination of mode, members and announcements."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from squad import slackpolicy as P
+    listen, speak = {"mode": "listen"}, {"mode": "listen+speak"}
+    member, announced = ["U0OWNER001"], ["stg_release"]
+    assert P.channel_note(listen, [], []) == (
+        "No member holds a role this channel accepts, so a message is read as data and gets no reply.")
+    assert P.channel_note(listen, [], announced) == (
+        "Announcements only: no member holds a role this channel accepts, so a message is read as data and gets no "
+        "reply.")
+    assert P.channel_note(listen, member, []) == (
+        "Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; nothing "
+        "is posted here.")
+    assert P.channel_note(listen, member, announced) == (
+        "Listen mode: an eligible member's message becomes a proposal in your DM with the role's actions; nothing "
+        "is posted here. Announcements post as drafts for your review.")
+    assert P.channel_note(speak, member, []) == ""
+    assert P.channel_note(speak, member, announced) == "Announcements post as drafts for your review."
+
+
+def test_the_no_one_badge_is_amber(hub, tmp_path):
+    """#2842: a channel with no eligible member carries the no-one badge in the amber warning tone."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    root = tree(hub, tmp_path, local=local)["root"]
+    badge = next(b for b in by_name(root, "#support")["badges"] if b["text"] == "no one")
+    assert badge["tone"] == "warn", badge
+
+
+def test_the_channel_note_shows_under_the_tiles(hub, tmp_path):
+    """#2842: a listen channel with an eligible member states how a message resolves, in a note under the Now tiles."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][1]["roles"] = ["manager"]
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0ALERT001", "role": "manager",
+                             "users": ["U0OWNER001"]})
+    out = read(hub, tmp_path, committed=committed, local=local)
+    ch = by_name(out["tree"]["root"], "#squad-alerts")
+    assert ch["detail"]["note"].startswith("Listen mode:"), ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    assert "Listen mode:" in html and "sltnote" in html, html
+    assert html.index("sltnote") > html.index("sltnow"), "the note sits under the tiles"
+    assert "role=note" not in html, "a static sentence is not a live region"
+
+
+def test_a_channel_with_no_member_names_the_reason_in_its_note(hub, tmp_path):
+    """#2842: the no-member note renders its own sentence in the pane, under the tiles and in the note style."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    out = read(hub, tmp_path, local=local)
+    ch = by_name(out["tree"]["root"], "#support")
+    assert ch["detail"]["note"] == (
+        "No member holds a role this channel accepts, so a message is read as data and gets no reply."), ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    assert re.search(r'<p class=sltnote><span class=sltni aria-hidden=true>[^<]*</span> '
+                     r'No member holds a role this channel accepts, so a message is read as data and gets no reply\.</p>',
+                     html), html
+    assert html.index("sltnote") > html.index("sltnow"), "the note sits under the tiles"
+    assert "role=note" not in html, "a static sentence is not a live region"
+
+
+def test_the_empty_project_setup_sits_in_a_dashed_box(hub):
+    """#2842: the setup choices of an empty project sit in a dashed box, as the mockup draws them."""
+    assert re.search(r"#sbody \.sltempty\{[^}]*border:[^;}]*dashed", hub.PAGE), "the empty project's setup box"
+
+
+# ---------------------------------------------------------------- layout and type (#2841)
+
+def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
+    """#2841: five channel tiles and four workspace tiles fit one row at 1440 px, so each track asks 140 px at most."""
+    rule = re.search(r"#tab-set #sbody \.sltnow\{([^}]*)\}", hub.PAGE)
+    m = re.search(r"repeat\(auto-fit,minmax\((\d+)px,1fr\)\)", rule.group(1)) if rule else None
+    assert m and int(m.group(1)) <= 140, rule and rule.group(1)
+
+
+def test_the_persona_edit_button_stays_on_one_line(hub, tmp_path):
+    """#2841: the Personas table's Edit button never breaks its label across two lines."""
+    html = render(hub, read(hub, tmp_path))
+    btn = re.search(r"<button[^>]*data-slpopen[^>]*>", html)
+    assert btn and "slnw" in btn.group(0), btn and btn.group(0)
+    assert re.search(r"#sbody \.slnw\{[^}]*white-space:nowrap", hub.PAGE), "the one-line rule"
 
 
 def test_a_workspace_tile_names_its_class_a_file_tile_and_the_detail_carries_class_and_id(hub, tmp_path):
