@@ -411,7 +411,23 @@ def test_the_profile_refuses_reads_of_the_secret_list_and_another_checkout(tmp_p
     assert any(line.startswith("(deny file-read*") and '(regex #"^(.*/)?\\.env' in line for line in lines), text
     assert any(line.startswith("(deny file-read*") and "(.*/)?[^/]*\\.slack\\.local\\.yaml" in line for line in lines), text
     assert '(deny file-read* (subpath "/work/other"))' in lines, text
-    assert '"/work/acme"' not in text, "the session's own checkout must stay readable"
+    allow = f'(allow file-read* (subpath "{os.path.realpath("/work/acme")}"))'
+    assert allow in lines, "the session's own checkout must stay readable"
+    after = max(i for i, line in enumerate(lines)
+                if line.startswith("(deny file-read*") and ('\\.env' in line or "\\.slack\\.local" in line))
+    assert lines.index(allow) > after, "the own checkout allow must follow every secret deny (last rule wins)"
+
+
+def test_the_profile_reallows_the_own_checkout_secret_named_files(tmp_path, monkeypatch):
+    """#2951 criteria 1 and 3: a project keeps its `.env` and `*.slack.local.yaml` in its own checkout, so the read
+    wall must not swallow them: the own checkout is re-allowed after the secret denies, and another checkout is not."""
+    op = operators(tmp_path, monkeypatch)
+    own = os.path.realpath("/work/acme")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           checkout="/work/acme", others=["/work/other"])
+    lines = text.splitlines()
+    assert f'(allow file-read* (subpath "{own}"))' in lines, text
+    assert f'(deny file-read* (subpath "{os.path.realpath("/work/other")}"))' in lines, text
 
 
 def test_a_started_session_refuses_the_checkout_of_another_project(tmp_path, monkeypatch):
@@ -424,7 +440,7 @@ def test_a_started_session_refuses_the_checkout_of_another_project(tmp_path, mon
     text = Path(record(tmp_path)["acme-widget"]["profile"]["path"]).read_text()
     own, other = (os.path.realpath(found[name]) for name in ("acme/widget", "acme/gadget"))
     assert f'(deny file-read* (subpath "{other}"))' in text.splitlines(), text
-    assert f'(subpath "{own}")' not in text, "the session's own checkout must stay readable"
+    assert f'(allow file-read* (subpath "{own}"))' in text.splitlines(), text
     repo = os.path.realpath(tmp_path / "repo")
     assert f'(subpath "{repo}")' not in text, "the operator contract's checkout stays readable through --add-dir"
 

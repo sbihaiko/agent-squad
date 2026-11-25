@@ -517,7 +517,9 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
 
     The read wall (#2951): the owner's credential folders, `.env` and the profile-local `*.slack.local.yaml` are refused
     wherever they sit, and so is every checkout in `others`. The session's own `checkout` stays readable, so its project
-    files load. `ports` names the loopback ports the model route uses: the endpoint's own port for a loopback gateway,
+    files load — including its own `.env` and `*.slack.local.yaml`, which a project keeps there, so a `(subpath
+    "<checkout>")` allow follows every secret deny and wins by Seatbelt's last matching rule. `ports` names the loopback
+    ports the model route uses: the endpoint's own port for a loopback gateway,
     or the proxy's port when the endpoint is remote. It defaults to the endpoint's port, read from
     `ANTHROPIC_BASE_URL`, so no port is guessed.
 
@@ -550,6 +552,9 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     creds = " ".join(f'(subpath "{home}/{name}")' for name in SECRET_DIRS)
     # Another project's checkout is refused, and the session's own is not: a path equal to `checkout` is left out.
     foreign = list(dict.fromkeys(path for path in others if path != checkout))
+    # A project keeps `.env` and `*.slack.local.yaml` in its own checkout, so the secret denies above must not swallow
+    # them there: this allow follows every deny, and Seatbelt's last matching rule wins (#2951 criteria 1 and 3).
+    own_checkout = [f'(allow file-read* (subpath "{checkout}"))'] if checkout else []
     return "\n".join([
         "(version 1)",
         "(allow default)",
@@ -562,6 +567,7 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         f"(deny file-read* {ENV_SECRET})",
         f"(deny file-read* {SLACK_LOCAL_SECRET})",
         *[f'(deny file-read* (subpath "{path}"))' for path in foreign],
+        *own_checkout,
         f'(deny file-read* (subpath "{inboxes}"))',
         f'(allow file-read* {literals(own_inboxes)})',
         "(deny network-outbound)",

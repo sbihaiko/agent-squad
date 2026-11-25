@@ -20,7 +20,8 @@ succeeds.
 Read bound (#2951): the profile refuses a read of `.env`, of every `*.slack.local.yaml`, of the owner's `~/.ssh`,
 `~/.config/gh` and `~/.aws`, and of another project's checkout. The probe writes the first two and the foreign checkout
 itself, so those three refusals never depend on what the machine holds, and it tries each credential folder the home
-holds. A read of the session's own checkout must still pass, or a profile that refuses every read would pass.
+holds. A read of the session's own checkout must still pass — its own `.env` and `*.slack.local.yaml` included, since
+a project keeps them there — or a profile that refuses every read would pass.
 
 Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile, under the
 name a live project session carries (`SQUAD-OPERATOR-<key>`, #2925). The CLI must reach the service it already runs, or
@@ -178,21 +179,28 @@ def sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
         raise ProbeFailed(f"a sandboxed call passed its {timeout:.0f}s deadline") from None
 
 
-def refuse_reads(work, profile, other_checkout, home=None):
+def refuse_reads(work, profile, other_checkout, home=None, outside=None):
     """Prove every read the profile must refuse (#2951 criteria 1 and 4), and return the credential folders it tried.
 
     The probe writes `.env`, a `*.slack.local.yaml` and a line of another project's checkout itself, so the three
-    refusals never depend on what a machine holds. A credential folder the home does not hold cannot be tried, and is
-    skipped, as `config_denials` skips a settings file. The session's own checkout must still give its line: without that
-    control, a profile that refuses every read would pass. Every refusal is the kernel's own `Operation not permitted`.
+    refusals never depend on what a machine holds. Those two secrets sit beside the session's own checkout, never inside
+    it: a project keeps its own `.env` and `*.slack.local.yaml` in its checkout, and the profile re-allows that folder,
+    so the same names there must stay readable. The own-checkout control reads one ordinary file and one of each secret
+    name: without it, a profile that refuses every read, or that swallows the checkout's own secrets, would pass. A
+    credential folder the home does not hold cannot be tried, and is skipped, as `config_denials` skips a settings file;
+    a folder whose files all sit in subfolders is walked to its first file. Every refusal is the kernel's own
+    `Operation not permitted`.
     """
     home = Path(home or os.path.realpath(os.path.expanduser("~")))
     checkout = Path(work)
     other = Path(other_checkout)
     other.mkdir(parents=True, exist_ok=True)
-    own = checkout / "own-notes.txt"
-    own.write_text(OWN_READABLE + "\n", encoding="utf-8")
-    written = [checkout / ".env", checkout / "probe.slack.local.yaml", other / "notes.txt"]
+    outside = Path(outside) if outside else checkout.parent / f"{checkout.name}-outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    own = [checkout / "own-notes.txt", checkout / ".env", checkout / "probe.slack.local.yaml"]
+    for path in own:
+        path.write_text(OWN_READABLE + "\n", encoding="utf-8")
+    written = [outside / ".env", outside / "probe.slack.local.yaml", other / "notes.txt"]
     for path in written:
         path.write_text(SECRET_LINE + "\n", encoding="utf-8")
     targets, tried = list(written), []
@@ -200,7 +208,7 @@ def refuse_reads(work, profile, other_checkout, home=None):
         folder = home / name
         if not folder.is_dir():
             continue
-        found = next((p for p in sorted(folder.iterdir()) if p.is_file()), None)
+        found = next((p for p in sorted(folder.rglob("*")) if p.is_file()), None)
         if found is None:
             continue
         targets.append(found)
@@ -210,10 +218,11 @@ def refuse_reads(work, profile, other_checkout, home=None):
         if not denied(done):
             raise ProbeFailed(f"a read denial did not hold: the session may read {path}"
                               + (f": {done.stderr.strip()}" if done.returncode else ": the read returned a line"))
-    control = sandboxed(profile, "/bin/sh", ["-c", f'cat "{own}"'], work, DENIAL_DEADLINE)
-    if control.returncode != 0 or OWN_READABLE not in control.stdout:
-        raise ProbeFailed(f"the profile refuses a file of the session's own checkout, so its read denials prove "
-                          f"nothing: {control.stderr.strip() or 'no reason'}")
+    for path in own:
+        control = sandboxed(profile, "/bin/sh", ["-c", f'cat "{path}"'], work, DENIAL_DEADLINE)
+        if control.returncode != 0 or OWN_READABLE not in control.stdout:
+            raise ProbeFailed(f"the profile refuses {path.name} of the session's own checkout, so its read denials "
+                              f"prove nothing: {control.stderr.strip() or 'no reason'}")
     return sorted(tried)
 
 

@@ -307,14 +307,16 @@ def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_the_endpoint_port(t
     assert other.returncode != 0 and probe.DENIED in other.stderr, "the profile reaches a loopback port that is not the model route"
 
 
-def read_script(probe, allowed=""):
-    """A sandbox stand-in for the read proof: every refusal is the kernel's own, and a command naming `allowed` passes."""
+def read_script(probe, allowed=()):
+    """A sandbox stand-in for the read proof: every refusal is the kernel's own, and a command naming one of the
+    `allowed` paths passes. A path is matched whole, so `a-outside` never counts as `a`."""
+    allowed = (allowed,) if isinstance(allowed, str) else tuple(allowed)
     seen = []
 
     def fake(profile, cli, args, cwd, timeout, extra_env=None):
         cmd = args[-1]
         seen.append(cmd)
-        if allowed and allowed in cmd:
+        if any(f'"{path}"' in cmd for path in allowed):
             return subprocess.CompletedProcess(args, 0, probe.OWN_READABLE + "\n", "")
         return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
 
@@ -324,13 +326,15 @@ def read_script(probe, allowed=""):
 
 def test_the_read_refusals_pass_when_each_secret_and_the_other_checkout_refuse(tmp_path, monkeypatch):
     """#2951 criteria 1 and 4: the probe proves .env, a *.slack.local.yaml, another project's checkout and each
-    credential folder the home holds are refused, and its own checkout file is readable."""
+    credential folder the home holds are refused, and its own checkout files are readable — including one named
+    `.env` and one named `*.slack.local.yaml`, which a project keeps in its own checkout."""
     probe = load("operator_probe")
     home = tmp_path / "home"
     for name in probe.SECRET_DIRS:
         (home / name).mkdir(parents=True)
         (home / name / "credential.txt").write_text("secret\n")
-    fake = read_script(probe, allowed="own-notes.txt")
+    own = [tmp_path / "own-notes.txt", tmp_path / ".env", tmp_path / "probe.slack.local.yaml"]
+    fake = read_script(probe, allowed=own)
     monkeypatch.setattr(probe, "sandboxed", fake)
     tried = probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=home)
     assert tried == sorted(str(home / name) for name in probe.SECRET_DIRS)
@@ -339,18 +343,62 @@ def test_the_read_refusals_pass_when_each_secret_and_the_other_checkout_refuse(t
         assert name in joined, (name, joined)
 
 
+def test_refuse_reads_proves_a_secret_beside_the_checkout_and_keeps_the_checkouts_own_copies_readable(tmp_path, monkeypatch):
+    """#2951 criteria 1 and 3: the `.env` and `*.slack.local.yaml` the probe must prove refused sit beside the own
+    checkout, never inside it, where the same names stay readable (a project keeps its real ones there)."""
+    probe = load("operator_probe")
+    outside = tmp_path / "secrets"
+    own = [tmp_path / "own-notes.txt", tmp_path / ".env", tmp_path / "probe.slack.local.yaml"]
+    fake = read_script(probe, allowed=own)
+    monkeypatch.setattr(probe, "sandboxed", fake)
+    probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=tmp_path / "home",
+                       outside=outside)
+    assert (outside / ".env").read_text().strip() == probe.SECRET_LINE
+    assert (outside / "probe.slack.local.yaml").read_text().strip() == probe.SECRET_LINE
+    assert (tmp_path / ".env").read_text().strip() == probe.OWN_READABLE
+
+
+def test_an_own_checkout_secret_that_the_profile_refuses_fails_the_probe(tmp_path, monkeypatch):
+    """#2951 criteria 3 and 4: the own-checkout control names `.env` and `*.slack.local.yaml`, so a profile that
+    refuses them everywhere — the session's own checkout included — fails the probe instead of passing it."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "sandboxed", read_script(probe, allowed=(tmp_path / "own-notes.txt",)))
+    with pytest.raises(probe.ProbeFailed, match="own checkout"):
+        probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=tmp_path / "home")
+
+
 def test_a_read_of_a_secret_or_another_checkout_that_lands_fails_the_probe(tmp_path, monkeypatch):
     """#2951 criterion 4: a denial that does not hold fails the probe, never passes it silently."""
     probe = load("operator_probe")
-    monkeypatch.setattr(probe, "sandboxed", read_script(probe, allowed=".env"))
+    own = [tmp_path / "own-notes.txt", tmp_path / ".env", tmp_path / "probe.slack.local.yaml"]
+    # The secrets beside the checkout land: every target must be denied, and one that reads fails the probe.
+    landed = own + [tmp_path.parent / f"{tmp_path.name}-outside" / ".env"]
+    monkeypatch.setattr(probe, "sandboxed", read_script(probe, allowed=landed))
     with pytest.raises(probe.ProbeFailed, match="read denial did not hold"):
         probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=tmp_path / "home")
+
+
+def test_a_credential_folder_with_only_subfolders_is_still_sampled(tmp_path, monkeypatch):
+    """#2951 criterion 4: a credential folder that holds only subfolders is walked to its first file, so a home whose
+    `~/.ssh` keeps no file at the top is still proven refused, never skipped."""
+    probe = load("operator_probe")
+    home = tmp_path / "home"
+    nested = home / probe.SECRET_DIRS[0] / "known_hosts.d"
+    nested.mkdir(parents=True)
+    (nested / "host.txt").write_text("secret\n")
+    own = [tmp_path / "own-notes.txt", tmp_path / ".env", tmp_path / "probe.slack.local.yaml"]
+    fake = read_script(probe, allowed=own)
+    monkeypatch.setattr(probe, "sandboxed", fake)
+    tried = probe.refuse_reads(tmp_path, "(version 1)(allow default)", tmp_path / "other-checkout", home=home)
+    assert str(home / probe.SECRET_DIRS[0]) in tried
+    assert any("known_hosts.d/host.txt" in command for command in fake.seen), fake.seen
 
 
 @pytest.mark.sandbox_bound
 def test_the_kernel_refuses_each_read_and_keeps_the_own_checkout_readable(tmp_path):
     """#2951 criteria 1 and 4: the real profile under the real kernel refuses .env, a local Slack file and another
-    project's checkout inside the session's own checkout and beside it, and keeps an ordinary own file readable."""
+    project's checkout outside the session's own checkout, and keeps the checkout's own files readable — including
+    its own `.env` and `*.slack.local.yaml`, which a project keeps there."""
     probe = load("operator_probe")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -364,10 +412,11 @@ def test_the_kernel_refuses_each_read_and_keeps_the_own_checkout_readable(tmp_pa
         return probe.sandboxed(profile, "/bin/sh", ["-c", command], checkout, 30)
     for name in (".env", "probe.slack.local.yaml", "own-notes.txt"):
         done = run(f'cat "{checkout / name}"')
-        if name == "own-notes.txt":
-            assert done.returncode == 0 and probe.OWN_READABLE in done.stdout, done.stderr
-        else:
-            assert done.returncode != 0 and probe.DENIED in done.stderr, (name, done.stderr)
+        assert done.returncode == 0 and probe.OWN_READABLE in done.stdout, (name, done.stderr)
+    outside = checkout.parent / f"{checkout.name}-outside"
+    for name in (".env", "probe.slack.local.yaml"):
+        done = run(f'cat "{outside / name}"')
+        assert done.returncode != 0 and probe.DENIED in done.stderr, (name, done.stderr)
 
 
 def echo_once():
@@ -528,7 +577,8 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     probe = load("operator_probe")
     checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = probe.project_shape(tmp_path, [8016])
     write = next(line for line in profile.splitlines() if line.startswith("(allow file-write*"))
-    read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*"))
+    read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*")
+                and f'(literal "{own_inboxes[0]}")' in line)
     for outbox in outboxes:
         assert f'(literal "{outbox}")' in write, write
     for inbox in own_inboxes:
