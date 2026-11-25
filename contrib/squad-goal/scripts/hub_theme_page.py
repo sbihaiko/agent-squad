@@ -1587,7 +1587,7 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  if(sel)sel.addEventListener("change",()=>{clearTimeout(slProposeT);slProposeT=setTimeout(()=>slPropose(slTsel,false),300)});   // a debounce, so one change never starts a burst of roster reads (#2827)
  for(const el of document.querySelectorAll("[data-slt-write]"))el.addEventListener("click",()=>slPropose(el.getAttribute("data-slt-write"),true));
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
- for(const el of document.querySelectorAll("[data-slcid]"))el.addEventListener("click",()=>slCopyId(el.getAttribute("data-slcid")));
+ for(const el of document.querySelectorAll("[data-slcid]"))el.addEventListener("click",()=>slCopyId(el.getAttribute("data-slcid"),el));
  for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
  for(const el of document.querySelectorAll("[data-slt-perm]"))el.addEventListener("click",e=>{e.preventDefault();slPermGo()});
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
@@ -1621,9 +1621,11 @@ function slTVerdict(n){const v=(n.detail||{}).verdict;   /* the hub's one senten
  return v?`<p class=sltverdict>${esc(v)}</p>`:""}
 function slTCopy(n){const id=(n.detail||{}).copy_id;if(!id)return "";   /* the raw id stays reachable, out of the title (#2912) */
  return `<button type=button class=sltcopy data-slcid="${slA(id)}" title="${slA("copy the channel id")}">${esc("copy id")}</button>`}
-function slCopyId(id){const t=String(id||"");if(!t)return;
- try{if(typeof navigator!=="undefined"&&navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t)}catch(e){}
- return undefined}
+function slCopyId(id,el){const t=String(id||"");if(!t)return Promise.resolve(false);   /* copy the id and say what happened (#2912) */
+ const say=ok=>{if(el){el.textContent=ok?"copied":"copy failed";clearTimeout(el.slcidT);el.slcidT=setTimeout(()=>{el.textContent="copy id"},1500)}return ok};
+ const legacy=()=>{try{const a=document.createElement("textarea");a.value=t;a.setAttribute("readonly","");a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.select();const ok=!!(document.execCommand&&document.execCommand("copy"));document.body.removeChild(a);return say(ok)}catch(e){return say(false)}};   // a plain http hub has no clipboard API, so the copy still runs
+ try{if(typeof navigator!=="undefined"&&navigator.clipboard&&navigator.clipboard.writeText)return Promise.resolve(navigator.clipboard.writeText(t)).then(()=>say(true),legacy)}catch(e){}
+ return Promise.resolve(legacy())}
 /* The guest slot line (#2842): one plain line when the machine serves one guest workspace, and an alert with its title
    and its sentence when a second one is refused. Every value is text. */
 function slTSlot(s){if(!s)return "";
@@ -1662,7 +1664,7 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>${slTCopy(n)}${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTVerdict(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTVerdict(n)+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)}
 /* The channel settings of the detail pane (#2844, #2845): one row per field, and the row names the file it writes in a
    chip. The hub decides the file, the controls and the refusal (ADR-0137); a control carries the channel's Slack id and
    the field, never the row's place in a list, so the save writes the row that carries the id. A control shows the value

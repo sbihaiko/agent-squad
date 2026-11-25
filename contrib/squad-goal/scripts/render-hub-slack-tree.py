@@ -60,7 +60,10 @@ LOCAL = {
              {"id": "C0CLIGEN01", "name": "general", "mode": "listen"},
          ]},
     ],
-    "members": [],
+    "members": [
+        {"workspace": "T0CLIENT01", "channel": "C0CLISUP01", "role": "manager", "users": ["U0CLIENT01"],
+         "alias": "Sam"},
+    ],
 }
 
 
@@ -91,15 +94,16 @@ class Hub:
         self.port = free_port()
         self.base = base / name
         self.profiles = self.base / "profiles"
-        self.checkout = self.base / "checkout"
+        # The profile's local file is named for the checkout folder (#2899), so this folder is `probe` and the fixture
+        # keeps its `probe.slack.local.yaml` name.
+        self.checkout = self.base / "probe"
         self.state, self.hubdir = self.base / "state", self.base / "hubdir"
         for d in (self.profiles, self.state, self.hubdir):
             d.mkdir(parents=True)
         if committed is not None:
             write_yaml(self.checkout / "docs" / "squad" / "slack.yaml", committed)
         if local is not None:
-            # The local file is named for the checkout folder, as `slack_yaml_paths` reads it (#2899): `checkout`.
-            write_yaml(self.profiles / "checkout.slack.local.yaml", local)
+            write_yaml(self.profiles / "probe.slack.local.yaml", local)
         # A profile is one shell file (address.sh sources it); `example` is refused by name, so this one is `probe`.
         (self.profiles / "probe.sh").write_text(
             f'SG_REPO="probe/probe"\nSG_OWNER="probe"\nSG_PROJECT="probe"\nSG_CHECKOUT="{self.checkout}"\n')

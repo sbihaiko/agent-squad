@@ -1189,8 +1189,20 @@ def test_the_copy_id_control_copies_the_channel_id(hub):
     """The copy control writes the channel id to the clipboard and confirms it in words (#2912)."""
     body = (_slices(hub.PAGE) +
             "\nconst got=[];globalThis.navigator={clipboard:{writeText:t=>{got.push(t);return Promise.resolve()}}};"
-            "slCopyId('C0PROJ0001');console.log(JSON.stringify(got))")
-    assert json.loads(_node(body)) == ["C0PROJ0001"]
+            "const el={textContent:'copy id'};globalThis.setTimeout=()=>0;"
+            "Promise.resolve(slCopyId('C0PROJ0001',el)).then(ok=>console.log(JSON.stringify([got,ok,el.textContent])))")
+    assert json.loads(_node(body)) == [["C0PROJ0001"], True, "copied"]
+
+
+def test_the_copy_id_control_says_when_no_clipboard_answers(hub):
+    """A plain http hub has no clipboard API, so the control falls back and says the copy failed (#2912)."""
+    body = (_slices(hub.PAGE) +
+            "\nglobalThis.navigator={};globalThis.setTimeout=()=>0;"
+            "globalThis.document={createElement:()=>({style:{},setAttribute(){},select(){}}),"
+            "body:{appendChild(){},removeChild(){}},execCommand:()=>false};"
+            "const el={textContent:'copy id'};"
+            "Promise.resolve(slCopyId('C0PROJ0001',el)).then(ok=>console.log(JSON.stringify([ok,el.textContent])))")
+    assert json.loads(_node(body)) == [False, "copy failed"]
 
 
 def test_the_show_the_tree_button_shows_only_with_the_tree_folded(hub):
@@ -1236,6 +1248,20 @@ def test_a_listen_channel_with_no_member_shows_a_neutral_badge(hub, tmp_path):
     assert support["tone"] == "warn", support
 
 
+def test_the_neutral_badge_follows_the_local_mode_override(hub, tmp_path):
+    """The tone reads the merged channel, so a local row that turns a speaking channel to listen turns its badge
+    neutral, and the reverse turns it back to warning (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0PROJ0001"]
+    local["workspaces"].append({"id": "T0TEAM0001", "channels": [
+        {"id": "C0PROJ0001", "mode": "listen"}, {"id": "C0ALERT001", "mode": "listen+speak"}]})
+    root = tree(hub, tmp_path, local=local)["root"]
+    quiet = next(b for b in by_name(root, "#proj-agent-squad")["badges"] if b["text"] == "nobody can ask")
+    assert quiet["tone"] == "neutral", quiet
+    loud = next(b for b in by_name(root, "#squad-alerts")["badges"] if b["text"] == "nobody can ask")
+    assert loud["tone"] == "warn", loud
+
+
 def test_the_project_counts_read_in_the_users_words(hub, tmp_path):
     project = next(n for n in walk(tree(hub, tmp_path)["root"]) if n.get("kind") == "project")
     assert tiles(project)["Workspaces"] == {"key": "Workspaces", "value": "2",
@@ -1251,14 +1277,72 @@ def test_a_truncated_workspace_name_keeps_its_full_name(hub, tmp_path):
     assert re.search(r'<span class=sltname title="' + re.escape(full) + r'"', html), html[:1200]
 
 
+def test_a_truncated_channel_name_keeps_its_full_name_and_one_hash(hub, tmp_path):
+    """A channel row that the tree column cuts keeps its whole name in the tooltip and shows one `#` (#2912)."""
+    long_name = "proj-agent-squad-with-a-name-that-runs-past-the-tree-column"
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["name"] = long_name
+    out = read(hub, tmp_path, committed=committed)
+    html = render(hub, out)
+    full = "#" + long_name
+    assert re.search(r'<span class=sltname title="' + re.escape(full) + r'"', html), html[:1200]
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    row = next(r for r in rows if 'aria-label="' + full in r)
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+
+
+def test_a_channel_name_that_already_carries_its_hash_shows_one_mark(hub, tmp_path):
+    """The hub never doubles a `#` a channel name already carries (#2912)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["channels"][0]["name"] = "#proj-agent-squad"
+    out = read(hub, tmp_path, committed=committed)
+    ch = next(n for n in walk(out["tree"]["root"]) if n.get("kind") == "channel"
+              and n["name"].lstrip("#") == "proj-agent-squad")
+    assert ch["name"] == "#proj-agent-squad", ch
+    html = render(hub, out)
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    row = next(r for r in rows if 'aria-label="#proj-agent-squad' in r)
+    assert "".join(re.findall(r">([^<]*)<", row)).count("#") == 1, row
+
+
 def test_the_channel_detail_opens_with_the_verdict(hub, tmp_path):
-    """One sentence above the Now tiles says who can ask the persona, and the hub writes it (#2912)."""
+    """One sentence above the Now tiles says who can ask the persona, and the hub writes it (#2912). The local file
+    names the person by id alone, so the id stands for the one person it names."""
     out = read(hub, tmp_path)
     ch = by_name(out["tree"]["root"], "#proj-agent-squad")
     assert ch["detail"]["verdict"] == "U0OWNER001 can ask this persona here.", ch["detail"]
     html = render(hub, out, sel=ch["id"])
     assert re.search(r"<p class=sltverdict>U0OWNER001 can ask this persona here\.</p>", html), html[:1200]
     assert html.index("sltverdict") < html.index("sltnow"), "the verdict stands above the Now tiles"
+
+
+def test_the_verdict_names_the_alias_the_local_file_gives_the_person(hub, tmp_path):
+    """A member row that names one person and carries an alias gives the verdict a plain name, and the policy keeps
+    the sentence (#2912, ADR-0137)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"][0]["alias"] = "Sam"
+    ch = by_name(tree(hub, tmp_path, local=local)["root"], "#proj-agent-squad")
+    assert ch["detail"]["verdict"] == "Sam can ask this persona here.", ch["detail"]
+
+
+def test_the_verdict_names_a_known_person_and_counts_the_rest(hub):
+    """A known display name stands for its person, and several people read as one plain count, never a list of ids
+    (#2912). The hub writes the sentence (ADR-0137)."""
+    P = hub.slack_policy()
+    assert P.verdict(["U0OWNER001"], {"U0OWNER001": "Ana"}) == "Ana can ask this persona here."
+    assert P.verdict(["U0OWNER001", "U0CLIENT01"]) == "2 people can ask this persona here."
+    assert P.verdict([]) == "Nobody can ask this persona here."
+
+
+def test_the_verdict_stands_above_the_setup_choices(hub):
+    """The verdict is the first answer of the pane, even when the node also carries setup choices (#2912)."""
+    node = {"id": "p0", "level": 2, "kind": "project", "name": "P", "children": [], "badges": [], "now": [],
+            "setup": [{"id": "owned", "label": "Add our workspace"}],
+            "detail": {"title": "P", "sub": "", "verdict": "Nobody can ask this persona here."}}
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={{tree:{{root:{json.dumps(node)}}}}};"
+            f"slT={{root:{json.dumps(node)}}};slTsel='p0';console.log(JSON.stringify(slTDetail()))")
+    html = json.loads(_node(body))
+    assert html.index("sltverdict") < html.index("Add our workspace"), html
 
 
 def test_the_verdict_says_nobody_can_ask(hub, tmp_path):

@@ -300,6 +300,10 @@ def _slack_tree_channel_icon(P, ws, merged, ch_id):
     direct message carries no workspace class of its own, so its Slack `D` id decides."""
     guest = P.channel_class(ws, merged) == "guest"
     return "chat" if guest or str(ch_id).upper().startswith("D") else "hash"
+def _slack_hashed(name):
+    """The channel's row name carries one `#` (#2912): a name that already starts with one keeps the one it has."""
+    text = _slack_text(name)
+    return text if text.lstrip().startswith("#") else f"#{text}"
 def _slack_pick(field, value, options):
     """One select of a setting row (#2845): the stored value and every choice the policy allows. The empty choice is the
     first, and its label names what the control inherits."""
@@ -403,6 +407,19 @@ def _slack_poll_note(mode, defaults, poll):
     return (f"{at('fast')} → {at('slow')} slow after {at('quiet_after')} quiet, and a reply thread stays "
             f"fast for {at('thread_open')}")
 
+def _slack_member_names(local_doc, ws_id, ch_id):
+    """The display names the local file gives the people of one channel (#2912): a member row that carries an `alias`
+    and names one user. A row with no alias, or with several users, names nobody, so the id stands for that person."""
+    out = {}
+    for _, row in _slack_dicts(local_doc.get("members")):
+        if (_slack_text(row.get("workspace")), _slack_text(row.get("channel"))) != (ws_id, ch_id):
+            continue
+        alias, users = _slack_text(row.get("alias")).strip(), [str(u) for u in row.get("users") or ()]
+        if alias and len(users) == 1:
+            out[users[0]] = alias
+    return out
+
+
 def _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged):
     """The Permissions section of one channel: each role of the project with its actions, whether the channel accepts
     it and its members. The distinct eligible people, the members the preview offers and a note for each person who
@@ -452,9 +469,9 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
     label = _slack_text(ws.get("label") or ws_id)
     icon = _slack_tree_channel_icon(P, ws, merged, ch_id)
     if refused:
-        return {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon, "badges":
+        return {"id": node_id, "level": 4, "kind": "channel", "name": _slack_hashed(name), "children": [], "icon": icon, "badges":
                 [_slack_badge("refused", "err", "refused")], "now": [],
-                "detail": {"title": f"#{name}", "sub": label, "text": "The workspace is refused, so this channel names no transport.",
+                "detail": {"title": _slack_hashed(name), "sub": label, "text": "The workspace is refused, so this channel names no transport.",
                            "verdict": P.verdict([]), "copy_id": _slack_text(ch_id)}}
     resolution = P.resolution(committed_doc, local_doc, ws, merged)
     persona = resolution["persona"]
@@ -481,13 +498,14 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
     note = P.channel_note(merged, members, announcement)
+    names = _slack_member_names(local_doc, ws_id, ch_id)
     # The detail answers first (#2912): one verdict sentence above the tiles names who can ask the persona. The
     # subtitle reads the workspace alone, and the copy control carries the Slack id, so the id stays reachable.
-    node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
+    node = {"id": node_id, "level": 4, "kind": "channel", "name": _slack_hashed(name), "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
             "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
-            "detail": {"title": f"#{name}", "sub": label, "text": "", "note": note,
-                       "verdict": P.verdict(members), "copy_id": _slack_text(ch_id)}}
+            "detail": {"title": _slack_hashed(name), "sub": label, "text": "", "note": note,
+                       "verdict": P.verdict(members, names), "copy_id": _slack_text(ch_id)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
     node["ids"] = {"workspace": ws_id, "channel": ch_id}
     node["settings"] = {"rows": _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)}

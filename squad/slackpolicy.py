@@ -907,16 +907,19 @@ def destination_label(decision):
     return {INBOX: "inbox", PROPOSAL: "proposal", DATA: "read, never obeyed"}.get(decision.kind, "none")
 
 
-def verdict(members):
-    """One sentence that answers whether the persona answers people in a channel, and who (#2912). It names the people
-    the local file gives an accepted role, or it says that nobody can ask. The caller hands in the eligible members,
-    and the view draws the sentence whole."""
+def verdict(members, names=None):
+    """One sentence that answers whether the persona answers people in a channel, and who (#2912). A known display name
+    stands for its person; the Slack id stands only when no name is known. More than one person reads as a count, never
+    a list of ids. Nobody eligible says so. The caller hands in the eligible members, and the view draws the sentence
+    whole."""
     people = list(dict.fromkeys(str(user) for user in members or () if str(user)))
+    known = {str(k): str(v) for k, v in (names or {}).items() if v}
+    who = lambda user: known.get(user, user)  # noqa: E731  a name when one is known, the id otherwise
     if not people:
         return "Nobody can ask this persona here."
     if len(people) == 1:
-        return f"{people[0]} can ask this persona here."
-    return f"{len(people)} people can ask this persona here: {', '.join(people)}."
+        return f"{who(people[0])} can ask this persona here."
+    return f"{len(people)} people can ask this persona here."
 
 
 def reply_label(channel, decision):

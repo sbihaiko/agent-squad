@@ -430,7 +430,8 @@ def test_the_verdict_names_who_can_ask_or_says_nobody_can():
     """#2912: one sentence answers whether the persona answers people in a channel, and who. The view draws it."""
     assert S.verdict([]) == "Nobody can ask this persona here."
     assert S.verdict(["U0OWNER001"]) == "U0OWNER001 can ask this persona here."
-    assert S.verdict(["U1", "U2", "U1"]) == "2 people can ask this persona here: U1, U2."
+    assert S.verdict(["U0OWNER001"], {"U0OWNER001": "Ana"}) == "Ana can ask this persona here."
+    assert S.verdict(["U1", "U2", "U1"]) == "2 people can ask this persona here."
 
 
 def test_the_class_label_reads_in_the_users_words():
