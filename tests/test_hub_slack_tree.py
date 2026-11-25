@@ -133,6 +133,34 @@ def test_an_owned_workspace_with_a_guest_channel_counts_as_owned_in_the_project_
     assert tiles(next(n for n in walk(root) if n.get("kind") == "project"))["Workspaces"]["value"] == "1 · 1 owned · 0 guest", tiles(root)
 
 
+def test_the_project_block_lives_in_the_pages_own_project_node(hub, tmp_path):
+    """The personas, roles, workspaces and events of the page's project sit in that project's detail pane, under its
+    Settings; a client node shows none of them, so no project block reads as global (#2906)."""
+    out = read(hub, tmp_path)
+    root = out["tree"]["root"]
+    project = next(n for n in walk(root) if n.get("kind") == "project")
+    assert project["here"] is True, project.get("here")
+    client = render(hub, out, sel=root["id"])
+    assert "data-blk=read" not in client, client[-600:]
+    own = render(hub, out, sel=project["id"])
+    detail = own[own.index("id=sltdetail"):]
+    assert "data-blk=read" in detail and "<h4>Personas" in detail, detail[-800:]
+    assert detail.index("data-blk=settings") < detail.index("data-blk=read"), "the node's Settings come first"
+
+
+def test_another_projects_node_links_its_own_page(hub, tmp_path):
+    """A project that is not the page's own names the page that edits its personas, roles and events (#2906)."""
+    out = read(hub, tmp_path)
+    client = out["tree"]["root"]
+    own = next(n for n in walk(client) if n.get("kind") == "project")
+    project = dict(json.loads(json.dumps(own)), id=own["id"] + "x", name="other", here=False, hub="/other/#settings",
+                   children=[])
+    client["children"].append(project)
+    html = render(hub, out, sel=project["id"])
+    assert "data-blk=read" not in html
+    assert f'href="{project["hub"]}"' in html and project["hub"].endswith("/#settings"), html[-600:]
+
+
 def walk(node):
     yield node
     for child in node.get("children") or []:
@@ -483,7 +511,7 @@ def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
 
 def test_the_persona_edit_button_stays_on_one_line(hub, tmp_path):
     """#2841: the Personas table's Edit button never breaks its label across two lines."""
-    html = render(hub, read(hub, tmp_path))
+    out = read(hub, tmp_path); html = render(hub, out, sel=next(n for n in walk(out["tree"]["root"]) if n.get("here"))["id"])
     btn = re.search(r"<button[^>]*data-slpopen[^>]*>", html)
     assert btn and "slnw" in btn.group(0), btn and btn.group(0)
     assert re.search(r"#sbody \.slnw\{[^}]*white-space:nowrap", hub.PAGE), "the one-line rule"
