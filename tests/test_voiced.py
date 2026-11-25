@@ -13,6 +13,7 @@ import fcntl
 import importlib.util
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1491,6 +1492,116 @@ def test_a_voice_error_carrying_a_secret_is_logged_by_its_type_only(tmp_path):
     assert client.posts(), "the text answer never went out, so the voice path was never exercised"
     assert log, "a refused voice is a log line"
     assert all(secret not in line for line in log), "a log line holds the key"
+
+
+def tts_refusing(err):
+    """A stand-in for the vendored `tts.synth` that answers no clip and the given provider error text."""
+    class Refusing:
+        @staticmethod
+        def synth(key, script, voice, out, tone=""):
+            return None, err
+    return Refusing
+
+
+def spoken_daemon(tmp_path, mod, client, socket_path, fake_tts, log):
+    """One daemon whose synthesizer is the production `spoken_clip` over a fake TTS module (#2956).
+
+    `mkstemp` is redirected into the test's folder, so the production reader runs and no temporary clip leaves it."""
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def mkstemp(prefix="", suffix=""):
+        return os.open(socket_path, os.O_CREAT | os.O_WRONLY), str(socket_path)
+
+    was, mod.tempfile.mkstemp = mod.tempfile.mkstemp, mkstemp
+    sys.modules["tts"] = fake_tts
+
+    def restore():
+        mod.tempfile.mkstemp = was
+        sys.modules.pop("tts", None)
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client,
+                        synthesizer=lambda script, voice=None, tone=None:
+                            mod.spoken_clip("the-key", script, voice=voice or mod.VOICE, tone=tone or ""),
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+    return daemon, app, restore
+
+
+def test_a_refused_tts_names_its_cause_in_the_log_once_per_run(tmp_path):
+    """Criteria (1) and (2) of #2956: the production TTS path answers its cause code to the log, and one cause is one
+    line however many answers it fails. The line never carries the spoken answer's text."""
+    mod = voiced()
+    client = FakeClient()
+    log = []
+    daemon, app, restore = spoken_daemon(tmp_path, mod, client, tmp_path / "clip.wav",
+                                         tts_refusing("RESOURCE_EXHAUSTED"), log)
+    try:
+        pending(daemon.state, app["id"])
+        append_outbox(daemon.state.outbox_for(app["id"]),
+                      {"text": "First sentence. Second sentence."},
+                      {"text": "Third sentence. Fourth sentence."})
+        asyncio.run(daemon.drain_outboxes())
+    finally:
+        restore()
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped and skipped[0].endswith("resource_exhausted"), f"the cause is unnamed: {skipped}"
+    assert len(skipped) == 1, f"one cause is one line, got {skipped}"
+    assert all(word not in skipped[0] for word in ("First", "Second", "Third", "Fourth")), "a log line holds the text"
+
+
+def test_a_refused_tts_logs_neither_the_provider_message_nor_its_secret(tmp_path):
+    """Criterion (1) of #2956, the failure path: a provider message that carries a key becomes a cause code, and the
+    log line holds neither the key nor the rest of the message."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    log = []
+    daemon, app, restore = spoken_daemon(tmp_path, mod, client, tmp_path / "clip.wav",
+                                         tts_refusing(f"400 refused key {secret}"), log)
+    try:
+        pending(daemon.state, app["id"])
+        append_outbox(daemon.state.outbox_for(app["id"]), {"text": "One. Two."})
+        asyncio.run(daemon.drain_outboxes())
+    finally:
+        restore()
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: SpeechError: refused"], f"the cause is unnamed: {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the provider's message"
+
+
+def test_a_speech_failure_with_no_cause_code_logs_its_class_once(tmp_path):
+    """Criterion (2) of #2956: an exception that carries no cause code is one line naming its class, once per run,
+    and never its own message."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    def synth(script, **kwargs):
+        raise RuntimeError(f"400 refused key {secret}")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    pending(state, app["id"])
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."}, {"text": "Three. Four."})
+    asyncio.run(daemon.drain_outboxes())
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: RuntimeError"], f"one cause is one line, got {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the exception's message"
 
 
 def test_the_dm_outbox_answers_in_the_channel_its_own_line_names(tmp_path):
