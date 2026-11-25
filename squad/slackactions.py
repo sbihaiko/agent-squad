@@ -49,8 +49,9 @@ itself. The ledger also records the thread each reply reached, so two lines that
 command once and each thread still gets its reply. Each pass also keeps its place in every outbox in
 `<state>/actions-offsets.json`, with the daemon's own time of that reading, so a pass reads only the bytes appended
 since the last one and knows how long the outbox went unread; a pass that keeps no place, and one whose outbox rotated
-below its place, reads a bounded tail of the outbox and writes one audit line naming the bytes it did not read. The
-ledger, never the offset, is what decides that a request already ran.
+below its place, reads a bounded tail of the outbox and writes one skip record to `actions-skips.jsonl` naming the bytes
+it did not read, so the run audit keeps one row shape. The ledger, never the offset, is what decides that a request
+already ran.
 
 Every audit row carries the handled key. A run a crash cut short leaves its key and its fields in the ledger and no
 audit row, so the next pass writes that row and names the unfinished command, and the key keeps a later pass from
@@ -79,6 +80,7 @@ from . import slackexecutor as X
 from . import slackpolicy as S
 
 AUDIT = "actions-audit.jsonl"        # one JSON line per action run, in the state directory (#2939)
+SKIPS = "actions-skips.jsonl"        # one JSON line per byte range a tail read left unread, so the audit keeps one shape
 HANDLED = "actions-handled.jsonl"    # one JSON line per request a pass already handled, in the state directory
 OFFSETS = "actions-offsets.json"     # the byte of each outbox the last pass read through, so a pass reads only new bytes
 PENDING = "actions-pending.jsonl"    # one JSON line per reply a failed write left for the next pass to deliver
@@ -223,6 +225,10 @@ def refusal_text(action, error, decision=None):
     if check == "identity":
         return (f"You have no grant for the {action} action in this channel: this channel gives you no role, so it "
                 "grants no action.")
+    if check == "identity_mismatch":
+        # The pass's own check: the request names a sender other than the sender of the inbox line it answers, so the
+        # reply names that mismatch and never reads as a channel that gives the sender no role.
+        return "The request names a different sender than the message it answers."
     if check == "action":
         return f"The {action} action was refused: {reason}"
     if check == "source_invalid":
@@ -230,10 +236,13 @@ def refusal_text(action, error, decision=None):
         # names that reason, never a missing command.
         return f"The {action} action was refused: {reason}"
     if check == "source":
-        # `approve_and_move` and `loop_control` keep their own executor path, so no `project.actions` command stands in
-        # for the source they need, and the reply says so.
+        # The four text actions and `deploy` run through `project.actions`, so a missing source there means the project
+        # declares no command for the action. `approve_and_move` and `loop_control` keep their own executor path, so no
+        # `project.actions` command stands in for the source they need, and the reply says that instead.
+        if action in TEXT_ACTIONS or action == X.DEPLOY:
+            return f"The {action} action was refused: {reason}. The project declares no {action} command."
         return (f"The {action} action was refused: {reason}. The {action} action never runs through project.actions, "
-                "so the project declares no command for it.")
+                "so no command stands in for the source it needs.")
     return f"The {action} action was refused ({check or 'request'}): {reason or 'the executor gave no reason'}"
 
 
@@ -446,7 +455,7 @@ def _new_rows(path, offset):
     return data[:data.rfind(b"\n") + 1].splitlines(), end
 
 
-def _request_lines(state, project_of, now, offsets=None):
+def _request_lines(state, project_of, now, offsets=None, log=None):
     """Every new request line of every outbox in file order, as `(path, line index, record, reason)`, where `reason`
     names why a line never runs and is None for a line the pass runs. Returns `(lines, ends, skips)`, where `ends` is the
     place each outbox was read through and the daemon's time of that reading, so the caller keeps both once every line is
@@ -485,6 +494,10 @@ def _request_lines(state, project_of, now, offsets=None):
         # daemon's own. A kept place that carries no time leaves the daemon no age to vouch for the lines past it.
         rotated = kept.get("offset") is None or int(kept["offset"]) > size
         observed = None if rotated else kept.get("at")
+        if observed is not None and now_ts - observed > REQUEST_WINDOW:
+            # The reading that placed the keep is older than the window, so it vouches for no age: the line's own `at`
+            # is the sole age bound, and `_stale` still refuses a line past its own window or in the future.
+            observed = None
         anchored = not rotated and kept.get("at") is None
         start = _tail_start(path) if rotated else kept["offset"]
         rows, end = _new_rows(path, start)
@@ -498,6 +511,8 @@ def _request_lines(state, project_of, now, offsets=None):
             try:
                 record = json.loads(row.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
+                if log is not None:
+                    log(f"outbox line skipped, the line is not JSON: channel {key}: {row!r}")
                 continue
             if not is_request(record):
                 continue
@@ -647,9 +662,13 @@ def _send_pending(path, outbox_for, project_of, now, log=None):
             got = json.loads(row)
         except ValueError:
             continue
-        if not isinstance(got, dict) or not isinstance(got.get("reply"), dict):
+        if not isinstance(got, dict):
             continue
         channel = str(got.get("channel") or "")
+        if not isinstance(got.get("reply"), dict):
+            if log is not None:
+                log(f"the pending reply of channel {channel!r} is not one JSON object, so it is dropped")
+            continue
         if is_request(got["reply"]):
             if log is not None:
                 log(f"the pending reply of channel {channel!r} reads as an action request, so it is dropped")
@@ -731,13 +750,22 @@ def _run_one(record, state, project_of, documents, now, runner, outbox_for, inbo
         return Run(parsed.action, parsed.sender, "", parsed.channel, 1, None,
                    f"identity: the request names no inbox line {parsed.source!r}")
     line_sender = str(line.get("user") or "")
-    if line_sender != parsed.sender:
-        return Run(parsed.action, parsed.sender, "", parsed.channel, 1, None,
-                   f"identity: the request names sender {parsed.sender!r}, not the sender of the line {line_sender!r}")
     workspace = _workspace(committed, local, parsed.channel)
     event = {"kind": "message", "workspace": workspace, "channel": parsed.channel, "user": line_sender,
              "text": str(line.get("text") or "")}
     decision = S.decide(committed, local, event, now)
+    if line_sender != parsed.sender:
+        # The pass's own check, distinct from the executor's `identity`: the request names a sender other than the one
+        # the inbox line names, so the reply names the mismatch and never claims the channel gives no role.
+        error = (f"identity_mismatch: the request names sender {parsed.sender!r}, not the sender of the line "
+                 f"{line_sender!r}")
+        text = refusal_text(parsed.action, error, decision)
+        telling = getattr(decision, "reply", None) or (getattr(decision, "kind", None) == S.DATA
+                                                       and _answers(committed, local, parsed.channel,
+                                                                    str(line.get("text") or "")))
+        reply = {"thread_ts": thread_ts, "channel": parsed.channel, "text": text} if telling else None
+        return Run(parsed.action, parsed.sender, str(getattr(decision, "role", None) or ""), parsed.channel, 1,
+                   reply, error)
     # The decision comes from the inbox line's own sender and text, and the executor's `check` reads that same decision
     # for the role, the granted action and the reply path (slackexecutor.py:215, 230, 260). So the grant the executor
     # enforces is exactly the one the policy granted this line, and the request's action adds no grant of its own. A
@@ -806,17 +834,19 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None, lo
     outbox_for = outbox_for or (lambda channel: os.path.join(state, DEFAULT_OUTBOXES, f"{channel}.jsonl"))
     ledger = Ledger(os.path.join(state, HANDLED))
     audit_path = os.path.join(state, AUDIT)
+    skips_path = os.path.join(state, SKIPS)
     offsets_path = os.path.join(state, OFFSETS)
     pending_path = os.path.join(state, PENDING)
     _send_pending(pending_path, outbox_for, project_of, now, log)   # a reply a failed write left goes out first
     _heal(ledger, audit_path)                 # a run a crash cut short keeps its audit row, and its command never reruns
     offsets = _load_offsets(offsets_path)
-    lines, ends, skips = _request_lines(state, project_of, now, offsets)
+    lines, ends, skips = _request_lines(state, project_of, now, offsets, log)
     for channel, first, last, count in skips:
-        # A first read and a rotated read take a bounded tail, so the bytes before it are never read. One audit line
-        # names the range, so a request before the tail is never dropped without a record (#2939 review, D4).
-        _append_line(audit_path, {"time": now.isoformat(), "sender": "", "role": "", "channel": channel, "action": "",
-                                  "key": "", "exit": 1, "skipped": {"from": first, "to": last, "bytes": count},
+        # A first read and a rotated read take a bounded tail, so the bytes before it are never read. One skip record
+        # names the range, so a request before the tail is never dropped without a record. It goes to its own file, so
+        # the run audit keeps one row shape (#2939 review, D4 and Debt 6).
+        _append_line(skips_path, {"time": now.isoformat(), "channel": channel,
+                                  "skipped": {"from": first, "to": last, "bytes": count},
                                   "error": f"the read did not read {count} bytes before this outbox's tail, so no "
                                            "request there runs"})
     inbox = _Inbox(state)
