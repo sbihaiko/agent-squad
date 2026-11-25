@@ -45,6 +45,10 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 - every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
   app name until #2726 records what an upload does with a `username`.
 
+Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
+`answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
+question is the inbox line whose ts the answer threads under, else the oldest line the ledger does not answer yet.
+
 A line whose text and clips all went out is in `$VOICE_STATE/outbox-seen.jsonl` by a digest of its content, so a restart
 posts no second text and speaks no second clip. A line whose text went out and whose clip Slack refused is in
 `$VOICE_STATE/outbox-posted.jsonl` with the ts its clips answer, so the next drain speaks the voice again and never posts
@@ -708,6 +712,7 @@ class State:
         self.outboxes_dir = os.path.join(directory, "outboxes")
         self.delivered_path = os.path.join(directory, "outbox-seen.jsonl")
         self.posted_path = os.path.join(directory, "outbox-posted.jsonl")
+        self.latency_path = os.path.join(directory, "answer-latency.jsonl")
         self.announced_path = os.path.join(directory, "announced.jsonl")
         self.release_events_path = os.path.join(directory, releases.RECORD)
         self.slack_dir = os.path.join(directory, "slack")
@@ -716,6 +721,7 @@ class State:
         self._registry_read = False
         self._delivered = None
         self._posted = None
+        self._latencies = None
         self._announced = None
         if self.version < SCHEMA_VERSION:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
@@ -986,6 +992,17 @@ class State:
         self._append(self.posted_path, record)
         self.posted()[digest] = record
 
+    def latencies(self):
+        """Every recorded answer latency, oldest first: one row per answered message, kept as its Slack ts pair (#2940)."""
+        if self._latencies is None:
+            self._latencies = read_lines(self.latency_path)
+        return self._latencies
+
+    def remember_latency(self, record):
+        """One durable latency row, written at once: the Slack ts of the question and the ts of its answer's post."""
+        self._append(self.latency_path, record)
+        self.latencies().append(record)
+
     def announced(self):
         """Every `(event key, event id, channel)` notice already posted, so a restart posts no release notice a second
         time, and one key that two events share is two notices, because the event id is part of the mark."""
@@ -1116,6 +1133,24 @@ def split_sentences(text):
     if not parts:
         return "", ""
     return parts[0], " ".join(parts[1:]).strip()
+
+
+def question_line(state, cid, thread):
+    """The inbox line one answer answers, as `(id, ts)`, or `(None, None)` when the inbox holds none (#2940).
+
+    The answer's thread ts is the question's Slack ts, so a line whose ts it equals is the question. When the answer
+    names no thread, or threads under a ts no inbox line holds, the question is the oldest line of the channel that no
+    recorded latency answers yet: a record never blames a newer message for an older answer."""
+    records = read_lines(state.inbox_for(cid)) if cid else []
+    if thread:
+        for record in records:
+            if record.get("ts") is not None and str(record.get("ts")) == str(thread):
+                return record.get("id"), record.get("ts")
+    answered = {row.get("id") for row in state.latencies() if row.get("id")}
+    for record in records:
+        if record.get("ts") is not None and record.get("id") not in answered:
+            return record.get("id"), record.get("ts")
+    return None, None
 
 
 def outbox_digest(record):
@@ -1929,6 +1964,25 @@ class Daemon:
             except OSError:
                 pass
 
+    def record_latency(self, cid, thread, answer_ts):
+        """Write the seconds from the question's Slack ts to the answer's post ts (#2940).
+
+        Slack's ts is epoch seconds, so the answer's own ts is the moment it went out: no wall clock is trusted, and no
+        two clocks can disagree. A ts that does not parse, or a channel whose inbox holds no unanswered line, records
+        nothing rather than a made-up number."""
+        if answer_ts is None:
+            return
+        question_id, question_ts = question_line(self.state, cid, thread)
+        if question_ts is None:
+            return
+        try:
+            seconds = round(float(answer_ts) - float(question_ts), 4)
+        except (TypeError, ValueError):
+            return
+        self.state.remember_latency({"id": question_id or f"{cid}:{question_ts}", "channel": cid,
+                                     "question_ts": str(question_ts), "answer_ts": str(answer_ts),
+                                     "seconds": seconds})
+
     async def deliver(self, record, channel=None, digest=None):
         """Answer one outbox line: the text at once, the first spoken sentence with it, then the rest as one clip.
 
@@ -1968,6 +2022,7 @@ class Daemon:
             if digest:
                 # The text is out before its voice: a crash from here repeats only the voice, never the text.
                 self.state.remember_posted(digest, ts)
+            self.record_latency(cid, thread, ts)
         else:
             ts = posted.get("ts")
         anchor = thread or ts
