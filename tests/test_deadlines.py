@@ -186,7 +186,7 @@ async def test_a_null_run_deadline_with_no_node_deadline_runs_to_its_end_and_an_
 # helper bounds both an agent call and a dispatch child, less an entry reserve, so a call that ends at the cap can still
 # enter its wave. `by` names the bound that shortened a call, so a run or node deadline is never labelled the wave
 # ceiling. A running call reads the ceiling again, so a call dispatched before the ceiling was written still ends at it.
-# A file the run names but cannot read says so once on the record.
+# A file the run names but cannot read says so once, as a diagnostic with a payload, and never as a new event kind.
 def call_starts(path, node):
     return [e for e in record.read(path / "record.jsonl") if e["event"] == "call_start" and e["node"] == node]
 
@@ -209,13 +209,34 @@ async def test_a_wave_ceiling_bounds_a_call_below_its_node_deadline(tmp_path):
 
 
 async def test_no_ceiling_file_leaves_the_call_limit_as_it_was(tmp_path):
-    eng = run_engine(long_doc(), {"a": {"output": {"x": 1}, "spend": 0.1}}, tmp_path / "r",
+    """#2840: a run that names a ceiling file it cannot read keeps the call's own limit, and the loss is a diagnostic
+    event with a payload, the one persisted shape for a note a reader may skip. `record.read` validates the kind, so an
+    event kind no other reader knows fails the read."""
+    eng = run_engine(long_doc(), {"a": {"output": {"x": 1}, "spend": 0.1}}, tmp_path / "r", run_id="run-lost",
                      options={"wave_ceiling": str(tmp_path / "absent")})
     assert (await eng.run()).verdict == "completed"
     start = call_starts(tmp_path / "r", "a")[0]
     assert start["limit"] == pytest.approx(7200, abs=1) and "limit_by" not in start
-    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl") if e["event"] == "wave_ceiling_lost"]
-    assert len(lost) == 1 and lost[0]["path"] == str(tmp_path / "absent")    # the lost bound is a first-class event
+    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl") if e["event"] == "diagnostic" and e.get("source") == "wave_ceiling"]
+    assert len(lost) == 1
+    assert lost[0]["payload"]["path"] == str(tmp_path / "absent") and lost[0]["payload"]["run"] == "run-lost"   # the lost bound names its run and its file
+
+
+async def test_a_prior_runs_ceiling_marker_is_ignored(tmp_path):
+    """#2840: the ceiling file is keyed to the run that names it. A marker a prior run left in the same folder, spent or
+    not, never bounds this run: the engine reads only the path its start recorded, so the call keeps its own deadline.
+    The diagnostic of this run's own unreadable file names this run, never the prior one."""
+    stale = tmp_path / "auto" / "wave-ceiling-run-prior"
+    stale.parent.mkdir()
+    stale.write_text(f"{int(time.time()) - 60}\n")            # a spent ceiling of a prior run
+    mine = tmp_path / "auto" / "wave-ceiling-run-now"          # the path this run names, before wave.sh writes it
+    eng = run_engine(long_doc(), {"a": {"output": {"x": 1}, "spend": 0.1}}, tmp_path / "r", run_id="run-now",
+                     options={"wave_ceiling": str(mine)})
+    assert (await eng.run()).verdict == "completed"
+    start = call_starts(tmp_path / "r", "a")[0]
+    assert "limit_by" not in start and start["limit"] == pytest.approx(7200, abs=1)   # the prior run's marker bounded nothing
+    lost = [e for e in record.read(tmp_path / "r" / "record.jsonl") if e["event"] == "diagnostic" and e.get("source") == "wave_ceiling"]
+    assert len(lost) == 1 and lost[0]["payload"]["path"] == str(mine) and lost[0]["payload"]["run"] == "run-now"
 
 
 async def test_a_spent_wave_ceiling_ends_the_call_as_a_deadline_without_a_call(tmp_path):
@@ -279,18 +300,27 @@ def test_a_run_scope_below_a_larger_node_deadline_is_named_run_deadline(tmp_path
 
 async def test_a_child_own_deadline_of_7200_under_a_run_bound_of_1800_is_run_deadline(tmp_path):
     """#2840: a child keeps the run's 1800 s bound, not its own 7200 s deadline, and the call names `run_deadline`.
-    A graph cannot carry this shape: the graph refuses a node deadline above the run's (squad/graph.py:221), and the
-    envelope refuses a child deadline above its dispatch node (squad/envelope.py:156). So the dispatch helper is read
-    with the run's 1800 s as the entry bound, and a direct Engine records the option the start carries."""
+    The test runs the whole dispatch path, never a hand-built ctx. A graph cannot carry this shape: the graph refuses a
+    node deadline above the run's (squad/graph.py:221), and the envelope refuses a child deadline above its dispatch
+    node (squad/envelope.py:156). So the dispatch node is validated at the run's 1800 s and its own deadline is raised
+    after validation, which is what admits the 7200 s child; the run scope stays the bound that shortens the call."""
     ceiling = tmp_path / "wave-ceiling-run"
     ceiling.write_text(f"{int(time.time()) + 3600}\n")
-    eng = Engine(from_doc(long_doc()), ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}}), tmp_path / "r",
-                 options={"wave_ceiling": str(ceiling)}, clock=lambda: 1000.0)
-    assert (await eng.run()).verdict == "completed"
+    d = router()
+    d["run"]["deadline"] = 1800
+    node(d, "route")["deadline"] = 1800
+    child = {"prompt": "Run tdd on the task.", "skill": "tdd", "kind": "coding", "effort": "medium", "tools": ["Read", "Edit"],
+             "stalls": 4, "spend": 1.0, "deadline": 7200, "workspace": "worktrees/child"}
+    script = {"router": {"output": {"spawns": [child]}, "spend": 0.1},
+              "route.router.1": {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2}}
+    eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "r", target=sibling_repo(tmp_path), kind_chains=KIND_CHAINS,
+                 options={"wave_ceiling": str(ceiling)})
+    eng.g.nodes["route"]["deadline"] = 7200      # the dispatch node's own deadline: the envelope admits the 7200 s child
+    await eng.run()
     assert record.read(tmp_path / "r" / "record.jsonl")[0]["engine_options"]["wave_ceiling"] == str(ceiling)
-    ctx = SimpleNamespace(dl_at=2800.0, limit_by="run_deadline")
-    seconds, by = eng.runs.bound(ctx, {"deadline": 7200})
-    assert seconds == 1800 and by == "run_deadline" and by != "wave_ceiling"
+    start = call_starts(tmp_path / "r", "route.router.1")[0]
+    assert start.get("limit_by") == "run_deadline" and start["limit_by"] != "wave_ceiling"
+    assert 0 < start["limit"] <= 1800
 
 
 @pytest.mark.heavy

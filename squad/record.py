@@ -44,7 +44,6 @@ REQUIRED = {
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],
     "autonomy_resume": ["count", "source"],   # ticket #182: one per automatic resume; `count` is its number, `source` who decided (the autonomy skill)
     "diagnostic": ["source", "node", "entry", "payload"],
-    "wave_ceiling_lost": ["source", "path", "error"],   # #2840: the run named a wave ceiling file it could not read
     "ceiling_wait": ["ceiling", "cap", "live", "holder"],   # a run or a dispatch child waits for a slot of the machine-wide ceiling (squad/caps.py)
     "workspace_commit": ["node", "entry", "workspace", "path", "status"],   # #84: the engine committed a passing node's dirty workspace (`head`), or refused (`reason`)
     "signal": ["signal", "pid", "ppid", "pgid"],   # a SIGTERM, SIGHUP or SIGINT ended the engine; the time is `ts` (squad/killed.py)

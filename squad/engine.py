@@ -87,7 +87,7 @@ class Engine:
         self.has_git = git.available(self.target)
         self.dry, self.forced, self.from_node = False, False, None
         self.waits, self.answer, self.default_applied = {}, None, []
-        self._ceiling_missing = False   # one event says the wave ceiling file the run names is gone (#2840)
+        self._ceiling_missing = False   # one diagnostic says the wave ceiling file the run names is gone (#2840)
         self.branches = {}
         self.replay = Replay(self)   # the replay half of resume
         self.runs = Children(self)   # dispatch child execution
@@ -223,8 +223,9 @@ class Engine:
 
     def wave_ceiling_epoch(self, notify=False):
         """The absolute epoch the loop wrote as the wave's age cap, or None with no ceiling option. `notify` writes one
-        first-class `wave_ceiling_lost` event when the run names a ceiling file that is missing or unreadable: the lost
-        bound is on the record as an event, not a passing diagnostic (#2840)."""
+        diagnostic event, with a payload, when the run names a ceiling file that is missing or unreadable: the lost bound
+        stays on the record in the persisted shape a reader already knows, and the payload names the run and the file
+        (#2840). A file keyed to another run is never read here: the path comes from this run's own start."""
         path = (self.record.events[0].get("engine_options") or {}).get(WAVE_CEILING) if self.record.events else None
         path = path or self.options.get(WAVE_CEILING)   # a resume reads the file the start recorded (ADR-0106)
         if not path:
@@ -234,8 +235,8 @@ class Engine:
         except (OSError, ValueError, IndexError) as x:
             if notify and not self._ceiling_missing:
                 self._ceiling_missing = True
-                self.record.append("wave_ceiling_lost", source="wave_ceiling", node=None, entry=None,
-                                   path=str(path), error=str(x)[:200])
+                self.record.append("diagnostic", source="wave_ceiling", node=None, entry=None,
+                                   payload={"path": str(path), "error": str(x)[:200], "run": self.run_id})
             return None
 
     def wave_ceiling_at(self, notify=False):
