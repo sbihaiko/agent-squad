@@ -381,11 +381,35 @@ def test_the_brief_carries_the_channel_language_and_the_persona_tone(tmp_path, m
     assert "even when the sender writes in another language" in text, text
 
 
+def test_the_brief_tells_the_session_to_name_the_channel_persona_on_its_answers(tmp_path, monkeypatch):
+    """#2935: the brief carries the channel persona's id, so the session writes `persona` on each of its own answers."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "channels.json").write_text(json.dumps({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}}))
+    revision = {
+        "project": {"language": "en-US", "persona": "hal"},
+        "personas": [{"id": "hal", "name": "HAL9K", "voice": "Charon", "tone": "Calm and precise."}],
+        "workspaces": [{"id": "T0TEAM0001", "label": "team", "class": "owned", "app": "hal9k",
+                        "channels": [{"id": "C0PROJ0001", "name": "proj-acme-app", "mode": "listen+speak",
+                                      "language": "pt-BR", "persona": "hal"}]}],
+    }
+    (state / "slack").mkdir()
+    digest = hashlib.sha256(b"acme/app").hexdigest()[:16]
+    (state / "slack" / f"{digest}.json").write_text(json.dumps(
+        {"repo": "acme/app", "sha": "a" * 40, "revision": revision, "local": {}}))
+
+    text = op.prompt_for("C0PROJ0001", str(state), "/repo")
+
+    assert '"persona":"hal"' in text, text
+
+
 def test_the_dm_brief_keeps_its_language_when_no_revision_names_a_persona(tmp_path, monkeypatch):
     """#2688: the DM has no channel persona, so the brief keeps the prototype's Portuguese answer and no tone."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
     assert "Brazilian Portuguese" in text, text
+    assert '"persona":' not in text, text
 
 
 API_ERROR = {"type": "assistant", "isApiErrorMessage": True, "error": "Connection error",

@@ -678,6 +678,19 @@ def persona_named(committed, local, name):
     return None
 
 
+def persona_with_id(committed, local, persona_id):
+    """The persona an id declares, or None. An outbox line names its persona by id, and the row comes from the
+    committed file, then the local file. A channel persona and this one differ, so a line answers under its own."""
+    wanted = str(persona_id or "").strip()
+    if not wanted:
+        return None
+    row = _row_at((committed or {}).get("personas"), "id", wanted) or \
+        _row_at((local or {}).get("personas"), "id", wanted)
+    if row is None:
+        return None
+    return Persona(str(row.get("id")), str(row.get("name")), str(row.get("voice")), str(row.get("tone")))
+
+
 def addressed(committed, local, text):
     """The persona a leading `@<name>` of a message names, or None. The match ignores case, and only a persona the
     project declares answers, so a name no persona declares reads as no address. The longest declared name wins, so a

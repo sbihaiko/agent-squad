@@ -40,6 +40,16 @@ For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
 - `text`: the answer Slack shows as the bot's message, and the detail the owner reads.
 - `speech`: the short spoken script. Omit it, and the daemon speaks `text`.
 - `channel`: the channel id. Only the DM outbox names it, because a project outbox already names its channel.
+- `persona`: the persona id the line answers under. Optional. The id must be one of the channel project's
+  `docs/squad/slack.yaml`. A line with no `persona` keeps the channel persona. A line with an unknown id keeps the
+  channel persona, and the daemon writes one log line.
+
+The operator session writes `"persona": "hal"` on each of its own answers, so its answers post as HAL9K and speak with
+the hal voice:
+
+```json
+{"thread_ts": "1762500001.000200", "text": "The full answer.", "speech": "A short sentence.", "persona": "hal"}
+```
 
 The daemon posts the text at once, speaks the first sentence while the text goes out, and speaks the rest as one clip.
 It reads every outbox on its own. The session makes no Slack call and waits for no reply.
@@ -53,6 +63,8 @@ from the active `slack.yaml` revision of the project that owns the channel.
   the owner reinstalls the app in each `owned` workspace before Slack accepts the name.
 - The daemon speaks with the persona `voice`, and the persona `tone` is the TTS style prompt.
 - A clip carries no name, so it leaves under the app name until #2726 records what an upload does with a `username`.
+- An outbox line that names a `persona` posts and speaks with that persona's name, voice and tone instead of the
+  channel persona's.
 - The brief of the session carries the channel language and the persona tone. The session answers in the channel
   language, even when the sender writes in another language.
 

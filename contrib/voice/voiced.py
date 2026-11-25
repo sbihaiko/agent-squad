@@ -1230,6 +1230,7 @@ class Daemon:
         self._unowned_logged = set()      # each release channel no app owns, whose skip is already one log line
         self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
+        self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
 
     def app_of(self, channel):
         """The app id that owns one channel, or None when no active document names it."""
@@ -1274,6 +1275,24 @@ class Daemon:
                 if row is not None:
                     return row
         return None
+
+    def outbox_persona(self, channel, thread_ts, record):
+        """The persona one outbox line answers with, and the id its `persona` field names that the project omits.
+
+        A line may carry a `persona` field holding a persona id of the channel project's active revision, so one answer
+        posts and speaks under another persona than the channel's. The field wins over the addressed persona. A line
+        with no field keeps the addressed persona, else the channel persona. An id the project does not declare keeps
+        the channel persona and is returned as the second element, so the caller tells it once."""
+        named = str(record.get("persona") or "").strip()
+        if named:
+            repo = self.state.channel_for(channel)
+            active = self.state.active_revision(repo) if repo else None
+            if active and active.get("revision"):
+                row = slackpolicy.persona_with_id(active["revision"], active.get("local") or {}, named)
+                if row is not None:
+                    return row, None
+        persona = self.addressed_persona(channel, thread_ts) or self.identity_for(channel)[1]
+        return persona, (named or None)
 
     def download_clip(self, channel, url):
         """One clip's bytes, fetched with the token of the app that serves its channel."""
@@ -1755,7 +1774,11 @@ class Daemon:
             return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
-        persona = self.addressed_persona(cid, thread) or self.identity_for(cid)[1]
+        persona, unknown = self.outbox_persona(cid, thread, record)
+        if unknown is not None and (cid, unknown) not in self._unknown_persona_logged:
+            self._unknown_persona_logged.add((cid, unknown))
+            self.log(f"voiced: outbox line names persona {unknown}, which the channel project does not declare; "
+                     "answering under the channel persona")
         voice = persona.voice if persona is not None and persona.voice else None
         tone = persona.tone if persona is not None and persona.tone else None
         posted = self.state.posted().get(digest) if digest else None
