@@ -370,8 +370,8 @@ def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tm
     assert f'(literal "{state}/outboxes/C0AAAAAA1.jsonl")' in write
     assert f'(literal "{state}/outboxes/C0AAAAAA2.jsonl")' in write
     assert f'(literal "{state}/outboxes/dm.jsonl")' not in write, "the project session may write the owner's DM outbox"
-    for granted in ("/.claude", "/.claude.json"):
-        assert granted in write, write
+    assert "/.claude" in write, write
+    assert "/.claude.json" not in write, "the owner's MCP configuration is never a write grant (#2942)"
     assert "/checkouts/" not in write, "the project checkout must stay read-only"
 
 
@@ -992,6 +992,18 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
         rule = f'(subpath "{home}/.claude/{folder}")'
         assert rule in text and text.index(rule) > allow, (folder, text)
     assert "/memory" in text[allow:], "a project memory folder stays writable"
+
+
+def test_the_profile_refuses_a_write_to_the_owner_mcp_configuration(tmp_path, monkeypatch):
+    """#2942: `~/.claude.json` holds the owner's MCP server settings, and the owner's next, unsandboxed session reads
+    it. The session still writes its Claude home, and that one file is refused after the allow."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    allow = text.index(f'(subpath "{home}/.claude")')
+    rule = f'(deny file-write* (literal "{home}/.claude.json"))'
+    assert rule in text.splitlines(), text
+    assert text.index(rule) > allow, "the deny must follow the allow: Seatbelt applies the last matching rule"
 
 
 def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):

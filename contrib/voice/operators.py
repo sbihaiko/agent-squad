@@ -545,7 +545,8 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     devices = literals((os.devnull, devnull))
     claude = f"{home}/.claude"
     # The CLI writes its own runtime under ~/.claude, so the folder stays writable. Every file there that the owner's
-    # next, unsandboxed session loads is refused after it: Seatbelt applies the last matching rule (#2925).
+    # next, unsandboxed session loads is refused after it, and so is `~/.claude.json`, the owner's MCP configuration
+    # (#2925, #2942): Seatbelt applies the last matching rule.
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
@@ -559,8 +560,10 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
-        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude") '
-        f'(literal "{home}/.claude.json") (subpath "{daemon}"))',
+        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude") (subpath "{daemon}"))',
+        # The owner's MCP configuration sits beside the Claude home, never inside it, so the allow above never covered
+        # it and no deny could follow. The owner's next, unsandboxed session loads it (#2942).
+        f'(deny file-write* (literal "{home}/.claude.json"))',
         *[f'(deny file-write* (literal "{claude}/{name}"))' for name in CLAUDE_LOADED_FILES],
         f"(deny file-write* {loaded_dirs} {memory} {top_md})",
         f"(deny file-read* {creds})",
