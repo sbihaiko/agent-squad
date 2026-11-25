@@ -16,7 +16,9 @@ def slack_yaml_paths():
     checkout reads no committed file, and one that names no project reads no local file."""
     root = pathlib.Path(CHECKOUT) if CHECKOUT else None
     d = profiles_dir()
-    project = os.environ.get("SG_PROJECT") or PROFILE_NAME or (root.name if root else "")
+    # The local file is named for the checkout folder, as slackpolicy.check and the guest runner name it; SG_PROJECT
+    # holds the board number (#2899).
+    project = (root.name if root else "") or PROFILE_NAME
     local = slack_policy().local_path(str(d), project) if d is not None and project else None
     return (root / SLACK_YAML_REL if root else None), (pathlib.Path(local) if local else None)
 
@@ -670,7 +672,7 @@ def _slack_seat(slug, checkout, project):
     lp = None
     d = profiles_dir()
     if d is not None and (project or slug):
-        try: raw = P.local_path(str(d), project or slug)
+        try: raw = P.local_path(str(d), pathlib.Path(checkout).name if checkout else slug)   # never SG_PROJECT, a board number (#2899)
         except Exception: raw = None
         lp = pathlib.Path(raw) if raw else None
     committed, local, defects = P.documents(cp, lp)

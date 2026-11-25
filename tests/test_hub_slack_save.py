@@ -66,7 +66,7 @@ def files(tmp_path, committed=None, local=None):
     c = tmp_path / "checkout" / "docs" / "squad" / "slack.yaml"
     c.parent.mkdir(parents=True, exist_ok=True)
     c.write_text(yaml.safe_dump(COMMITTED if committed is None else committed, sort_keys=False))
-    loc = tmp_path / "profiles" / "4.slack.local.yaml"
+    loc = tmp_path / "profiles" / "checkout.slack.local.yaml"
     loc.parent.mkdir(parents=True, exist_ok=True)
     loc.write_text(yaml.safe_dump(LOCAL if local is None else local, sort_keys=False))
     return c, loc
@@ -576,7 +576,7 @@ def test_the_first_save_writes_the_local_file_of_a_profile_that_holds_none(hub, 
     monkeypatch.setenv("SG_CHECKOUT", str(checkout))
     monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
     monkeypatch.setenv("SG_PROJECT", "4")
-    loc = prof / "4.slack.local.yaml"
+    loc = prof / "checkout.slack.local.yaml"
     assert not loc.exists()
     preview = hub.slack_files_set({"committed": COMMITTED, "local": LOCAL, "confirm": False})
     assert "err" not in preview, preview
@@ -606,13 +606,13 @@ def _save_slices(page):
 
 def test_the_save_dialog_names_both_files_and_their_changed_lines(hub):
     """The one preview groups its lines under each file the save would touch, so the owner approves both files."""
-    preview = {"files": {"committed": "slack.yaml", "local": "4.slack.local.yaml"},
+    preview = {"files": {"committed": "slack.yaml", "local": "checkout.slack.local.yaml"},
                "diff": {"committed": ["-  language: en-US", "+  language: pt-BR"], "local": ["-  label: client-a"]}}
     body = (_save_slices(hub.PAGE) + f"\nconst g=slGroups({json.dumps(preview)});"
             "console.log(JSON.stringify(g));console.log(diffByFile(g))")
     lines = _node(body).splitlines()
     groups = json.loads(lines[0])
-    assert [g["file"] for g in groups] == ["slack.yaml", "4.slack.local.yaml"], groups
+    assert [g["file"] for g in groups] == ["slack.yaml", "checkout.slack.local.yaml"], groups
     text = "\n".join(lines[1:])
-    assert "slack.yaml" in text and "4.slack.local.yaml" in text, text
+    assert "slack.yaml" in text and "checkout.slack.local.yaml" in text, text
     assert "Communication · +  language: pt-BR" in text, text
