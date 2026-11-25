@@ -438,6 +438,8 @@ def validate_field(documents, doc, path, field, value):
         return None
     if field == "class" and str(value) not in FIELD_CLASSES:
         return bad(f"the class is one of {', '.join(FIELD_CLASSES)}")
+    if field == "name" and "channels" in path and not str(value).strip():
+        return bad("a channel names its name")
     if field == "mode" and str(value) not in FIELD_MODES:
         return bad(f"the mode is one of {', '.join(FIELD_MODES)}")
     if field == "language" and str(value) != "" and normalize_language(value) is None:

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619, #1656).
+"""Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619, #1656, #2925).
 
 Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
-probe writes. The denials come first: a write outside the scope's outbox, a read of another scope's inbox and a foreign
-host on port 443 must each fail. Then one bounded `claude -p` call runs with the operator's tool set and `dontAsk`. Its
-HTTPS goes only through a loopback proxy that relays the model host and refuses every other target. A denial that does
-not happen, or a session that starts with another tool set, fails the probe.
+probe writes. The profile is the one a live project session runs under: it writes the outbox of each channel of one
+project, reads the inbox of each of them, and nothing else of the inbox folder. The denials come first: a write outside
+those outboxes, a read of another project's inbox and a foreign host on port 443 must each fail, while a write into each
+own outbox and a read of each own inbox must pass. Then one bounded `claude -p` call runs with the operator's tool set
+and `dontAsk`. Its HTTPS goes only through a loopback proxy that relays the model host and refuses every other target.
+A denial that does not happen, a control that does not pass, or a session that starts with another tool set, fails the
+probe.
 
 Network bound: the profile allows network out to localhost only, so the kernel refuses every foreign host, port 443
 included. How the call reaches the model follows the CLI's endpoint (`ANTHROPIC_BASE_URL`): a loopback gateway is reached
@@ -13,9 +16,10 @@ under that same loopback rule, and any other host is reached through contrib/voi
 target and refuses every other CONNECT, recording each refusal. The probe proves the kernel refusal, the refusal the proxy
 records, and a model call that succeeds.
 
-Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile. The CLI must
-reach the service it already runs, or start one, print the new session's id, and list that id; the probe stops the
-session. A service the profile refuses fails the probe, as it would fail a live operator.
+Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile, under the
+name a live project session carries (`SQUAD-OPERATOR-<key>`, #2925). The CLI must reach the service it already runs, or
+start one, print the new session's id, and list that id under that name; the probe stops the session. A service the
+profile refuses, or a name the roster does not report, fails the probe, as it would fail a live operator.
 
 One fixed folder (#2775): every run works in `session_dir()`, because the CLI remembers a trust prompt by folder path. A
 fresh folder per run made the owner's accepted prompt hold for no run, and the `--bg` session failed with "Workspace not
@@ -49,7 +53,7 @@ VOICE = Path(__file__).resolve().parent
 sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
 from model_proxy import ModelProxy  # noqa: E402
-from operators import TOOLS, profile_text  # noqa: E402
+from operators import TOOLS, marked_name, profile_text  # noqa: E402
 
 from squad import slackwriter  # noqa: E402
 
@@ -61,6 +65,9 @@ SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
+OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
+PROBE_KEY = "probe-project"             # the name a live project session carries: `SQUAD-OPERATOR-probe-project`
+PROBE_CHANNELS = ("C0PROBE01", "C0PROBE02")   # two channels of one project: one session answers both (#2925)
 PROMPT = "Reply with the single word ok. Use no tool."
 DENIED = "Operation not permitted"      # the kernel's own refusal, the only reason a denial counts
 LOOPBACK = "127.0.0.1"
@@ -163,12 +170,14 @@ def sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
         raise ProbeFailed(f"a sandboxed call passed its {timeout:.0f}s deadline") from None
 
 
-def denials(work, profile, leak, other_inbox, proxy_port):
+def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inboxes=()):
     """Run each denial under the profile, with no model in the loop, and return what got through.
 
     A denial counts only when the profile applied (the control echo ran) and the command refused with its own
     `Operation not permitted`; a failure of any other kind is unproven, so the probe fails rather than passes.
     The loopback control is the proxy's port: the model call needs it open, so a refused loopback proves nothing.
+    Each own outbox must take a write and each own inbox must give its line: without those controls, a profile that
+    refuses everything would pass the denials (#2925).
     """
     def run(command):
         return sandboxed(profile, "/bin/sh", ["-c", command], work, DENIAL_DEADLINE)
@@ -185,8 +194,46 @@ def denials(work, profile, leak, other_inbox, proxy_port):
     for name, res in (("write", write), ("read", read), ("network", network)):
         if res.returncode != 0 and DENIED not in res.stderr:
             raise ProbeFailed(f"the {name} denial is unproven: {res.stderr.strip() or 'no reason'}")
+    for outbox in outboxes:
+        granted = run(f'echo answered >> "{outbox}"')
+        if granted.returncode != 0 or denied(granted):
+            raise ProbeFailed(f"the profile refuses an own outbox, so the denial proves nothing: "
+                              f"{granted.stderr.strip() or 'no reason'}")
+    for inbox in own_inboxes:
+        granted = run(f'cat "{inbox}"')
+        if granted.returncode != 0 or OWN_SENTINEL not in granted.stdout:
+            raise ProbeFailed(f"the profile refuses an own inbox, so the denial proves nothing: "
+                              f"{granted.stderr.strip() or 'no reason'}")
     check_loopback_open(connect(LOOPBACK, proxy_port))
     return leak.exists(), SENTINEL in read.stdout, network.returncode == 0
+
+
+OWNER_FILES = ("settings.json", "CLAUDE.md")   # files the owner's next, unsandboxed session loads from ~/.claude
+OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates
+
+
+def config_denials(work, profile, home=None):
+    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925).
+
+    The check opens the file for append and writes nothing, and it never creates a file, so a profile that let it through
+    changes nothing on disk. A file the machine does not hold cannot be tried, and is skipped. Returns the files tried."""
+    root = Path(home or os.path.realpath(Path.home())) / ".claude"
+    tried = []
+    for name in OWNER_FILES:
+        path = root / name
+        if not path.is_file():
+            continue
+        done = sandboxed(profile, sys.executable, ["-c", OPEN_FOR_WRITE, str(path)], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a denial did not happen: the session may write {path}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ""))
+        tried.append(str(path))
+    return tried
+
+
+def denied(done):
+    """True when the kernel itself ran the command and refused it: a run that failed for another reason is no denial."""
+    return done.returncode != 0 and DENIED in (done.stderr or "")
 
 
 def model_endpoint(env=None):
@@ -250,10 +297,23 @@ def bg_id(stdout):
     return None
 
 
-def bg_listed(cli, sid, work):
-    """True when the CLI lists the session id in its live roster: the background service answered."""
+def bg_listed(cli, sid, work, name):
+    """True when the CLI lists the session id under `name` in its live roster: the background service answered, and the
+    session carries the operator token in its name (#2925). A session whose cwd is a project checkout is told apart
+    from a person's own session by that name alone."""
     done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
-    return sid in (done.stdout or "")
+    try:
+        rows = json.loads(done.stdout or "[]")
+    except ValueError:
+        return False
+    items = rows if isinstance(rows, list) else rows.get("agents", rows.get("sessions", []))
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        ids = {str(row.get("id") or ""), str(row.get("sessionId") or "").split("-")[0]}
+        if str(sid).split("-")[0] in ids and (row.get("name") or "") == name:   # the CLI prints the short id
+            return True
+    return False
 
 
 def bg_failure(done, work):
@@ -268,17 +328,20 @@ def bg_failure(done, work):
     return message
 
 
-def bg_session(work, profile, cli, proxy_url=None):
+def bg_session(work, profile, cli, proxy_url=None, name=None):
     """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
-    session id, and lists that id. A service the profile refuses fails here, as it does in the supervisor."""
+    session id, and lists that id under the marked name (#2925). A service the profile refuses, or a name the roster
+    does not report, fails here, as it does in the supervisor."""
+    name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
-    done = sandboxed(profile, cli, ["--bg", BG_PROMPT, "--permission-mode", "dontAsk"], work, BG_DEADLINE, proxy_env)
+    done = sandboxed(profile, cli, ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"], work,
+                     BG_DEADLINE, proxy_env)
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
         raise ProbeFailed(bg_failure(done, work))
     try:
-        if not bg_listed(cli, sid, work):
-            raise ProbeFailed(f"the --bg session {sid} did not start: the CLI does not list it")
+        if not bg_listed(cli, sid, work, name):
+            raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
     finally:
         subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
 
@@ -403,30 +466,45 @@ def guest_sessions(work, profile, cli, proxy_url=None):
             raise ProbeFailed(f"the {role} session did not succeed: {result.get('subtype')}")
 
 
-def run_probe(work, cli):
-    outbox = work / "state" / "outboxes" / "dm.jsonl"
+def project_shape(work):
+    """The folders one live project session owns: its checkout, one outbox per channel, one inbox per channel, another
+    project's inbox it must never read, and a folder outside every grant for the write denial (#2925)."""
+    checkout = work / "checkout"
+    outboxes = [work / "state" / "outboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
+    own_inboxes = [work / "state" / "inboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
-    for folder in (outbox.parent, other_inbox.parent, leak.parent):
+    for folder in (checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent):
         folder.mkdir(parents=True, exist_ok=True)
     leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
-    outbox.write_text("")
+    for outbox in outboxes:
+        outbox.write_text("")
+    for inbox in own_inboxes:
+        inbox.write_text(OWN_SENTINEL + "\n")
     other_inbox.write_text(SENTINEL + "\n")
-    profile = profile_text(str(outbox), str(other_inbox.parent), str(other_inbox.parent / "dm.jsonl"))
+    profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes])
+    return checkout, outboxes, own_inboxes, other_inbox, leak, profile
+
+
+def run_probe(work, cli):
+    checkout, outboxes, own_inboxes, other_inbox, leak, profile = project_shape(work)
     host, port, loopback = model_endpoint()
+    controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
     if loopback:
-        check_denials(*denials(work, profile, leak, other_inbox, port))
-        init, result = session(work, profile, cli)
+        check_denials(*denials(checkout, profile, leak, other_inbox, port, **controls))
+        config_denials(checkout, profile)
+        init, result = session(checkout, profile, cli)
         check_session(init, result)
-        bg_session(work, profile, cli)
+        bg_session(checkout, profile, cli)
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
-        check_denials(*denials(work, profile, leak, other_inbox, proxy.port))
+        check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, **controls))
+        config_denials(checkout, profile)
         check_proxy_refuses(proxy)
-        init, result = session(work, profile, cli, proxy.url)
+        init, result = session(checkout, profile, cli, proxy.url)
         check_session(init, result)
-        bg_session(work, profile, cli, proxy.url)
+        bg_session(checkout, profile, cli, proxy.url)
         guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
 
@@ -449,7 +527,8 @@ def main(argv=None):
     route = f"the loopback endpoint {host}:{port} carried the call" if loopback else \
         f"the proxy refused {refused} target(s) and recorded them"
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, loopback "
-          f"open); {route}; session tools {TOOLS}, dontAsk, cap ${SPEND}; a --bg session started and was listed; "
+          f"open; each own outbox took a write and each own inbox gave its line); {route}; session tools {TOOLS}, "
+          f"dontAsk, cap ${SPEND}; a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
           f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
           f"stand-in connector")

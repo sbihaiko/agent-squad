@@ -2278,3 +2278,214 @@ def test_a_project_no_hub_save_lists_notices_the_owner(tmp_path):
     assert len(posts) == 1, posts
     assert posts[0]["channel"] == OWNER
     assert "acme/app" in posts[0]["text"] and cid in posts[0]["text"]
+
+
+# #2925: a message must never wait for the five-minute supervisor pass. The daemon starts the project's operator session
+# the moment the inbox line lands. The start is a seam of its own, so a fixture that names no starter spawns no session.
+
+def startable_daemon(tmp_path, mod, starter):
+    """One daemon over a state that names one project channel, with the starter seam the case drives."""
+    state = mod.State(str(tmp_path / "state"))
+    state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
+    return mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                      log=lambda line: None, client=FakeClient(), starter=starter)
+
+
+def test_a_message_for_a_project_starts_its_operator_session_at_once(tmp_path):
+    """Criteria 4 and 6: the inbox line of a project channel starts the session of the project that owns it."""
+    mod = voiced()
+    started = []
+    daemon = startable_daemon(tmp_path, mod, lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)))
+
+    outcome = daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel"))
+
+    assert outcome == "inbox"
+    assert started == [(daemon.state.dir, "acme/app")], started
+
+
+def test_the_start_of_an_inbox_line_names_that_line(tmp_path):
+    """Criterion 4: the start a line pays for carries the inbox line's id, so a start that started nothing is reported
+    against the line that is still waiting, never as an anonymous failure."""
+    mod = voiced()
+    started = []
+
+    def starter(state_dir, repo, log=None, line=None):
+        started.append((repo, line))
+
+    daemon = startable_daemon(tmp_path, mod, starter)
+
+    assert daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel")) == "inbox"
+    row = lines(daemon.state.inbox_for("C0PROJ0001"))[0]
+    assert started == [("acme/app", row["id"])], started
+
+
+def test_a_pass_that_started_nothing_is_an_alert_that_names_the_line():
+    """Criterion 4: an ensure that exited 0 but named no session is not a success; the log names the line that waits."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stdout = io.StringIO("")
+        stderr = io.StringIO("operators: ensure acme-ghost started no session\n")
+
+        def wait(self):
+            return 0
+
+    outcome = mod.watch_operator_start(Done(), "acme/ghost", logged.append, line="m-1")
+    assert outcome["started"] is False
+    assert logged == ["voiced: inbox line m-1 for acme/ghost got no operator session: "
+                      "operators: ensure acme-ghost started no session"], logged
+
+
+def test_a_pass_that_named_its_session_reports_the_start_and_logs_nothing():
+    """Criterion 4: the watcher hands back the outcome, so a caller tells 'started and answers' from 'started nothing'."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stdout = io.StringIO("operators: ensure acme-widget started abc\n")
+        stderr = io.StringIO("")
+
+        def wait(self):
+            return 0
+
+    outcome = mod.watch_operator_start(Done(), "acme/widget", logged.append, line="m-2")
+    assert outcome["started"] is True
+    assert outcome["session"] == "abc"
+    assert logged == [], logged
+
+
+def test_the_start_operator_hands_the_pass_outcome_back(tmp_path, monkeypatch):
+    """Criterion 4: the detached pass's outcome reaches the caller through the handle, so a no-op is visible."""
+    mod = voiced()
+    script = tmp_path / "operators.py"
+    script.write_text("print('operators: ensure acme/widget started abc')\n")
+    monkeypatch.setattr(mod, "OPERATORS", str(script))
+
+    start = mod.start_operator(str(tmp_path / "state"), "acme/widget", line="m-3")
+
+    outcome = start.wait(10)
+    assert start.line == "m-3"
+    assert outcome["started"] is True and outcome["session"] == "abc", outcome
+
+
+def test_a_direct_message_starts_the_dm_session(tmp_path):
+    """Criterion 14: the owner's DM is its own session, and its line starts that one."""
+    mod = voiced()
+    started = []
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
+                        starter=lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)))
+
+    assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
+    assert started == [(daemon.state.dir, "dm")], started
+
+
+def test_a_fixture_daemon_with_no_starter_starts_no_session(tmp_path):
+    """A daemon that names no starter reads, answers and writes its outbox, and spawns nothing."""
+    mod = voiced()
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+
+    assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
+    assert daemon.wake_operator("acme/app") is False
+
+
+def test_a_refused_starter_keeps_the_inbox_line_and_logs_one_line(tmp_path):
+    """A start that fails loses no message: the line stays in the inbox for the next pass, and the log names the project."""
+    mod = voiced()
+    logged = []
+
+    def starter(state_dir, repo, log=None, line=None):
+        raise OSError("no session service")
+
+    state = mod.State(str(tmp_path / "state"))
+    state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=logged.append, client=FakeClient(), starter=starter)
+
+    assert daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel")) == "inbox"
+    assert [row["text"] for row in lines(state.inbox_for("C0PROJ0001"))] == ["what changed?"]
+    assert any("acme/app" in line and "failed" in line for line in logged), logged
+
+
+def test_the_start_operator_spawns_the_ensure_pass_for_the_project(tmp_path, monkeypatch):
+    """Criterion 4: the daemon's own starter runs one supervisor pass for one project, detached from the socket loop."""
+    mod = voiced()
+    spawned = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            spawned.append((argv, kwargs))
+            self.stderr = kwargs["stderr"]
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(mod.subprocess, "Popen", FakePopen)
+    assert mod.start_operator(str(tmp_path / "state"), "acme/app") is not False
+    argv, kwargs = spawned[0]
+    assert argv[0] == sys.executable and argv[1].endswith("operators.py"), argv
+    assert argv[argv.index("--state") + 1] == str(tmp_path / "state")
+    assert argv[argv.index("--ensure") + 1] == "acme/app"
+    assert kwargs["start_new_session"] is True and kwargs["stdout"] is kwargs["stderr"]
+
+
+def test_a_pass_that_exited_non_zero_is_logged_with_its_reason():
+    """Criterion 4: an ensure pass that started no session names the inbox line, the project and its own reason."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stderr = io.StringIO("operators: acme/ghost names no checkout; no session started\n")
+
+        def wait(self):
+            return 2
+
+    mod.watch_operator_start(Done(), "acme/ghost", logged.append, line="m-7")
+    assert logged == ["voiced: inbox line m-7 for acme/ghost got no operator session: "
+                      "operators: acme/ghost names no checkout; no session started"], logged
+
+
+def test_a_pass_that_exited_zero_logs_nothing():
+    """Criterion 4: the start a message paid for is the normal case, so it writes no log line."""
+    mod = voiced()
+    logged = []
+
+    class Done:
+        stdout = io.StringIO("operators: ensure acme/widget started abc\n")
+
+        def wait(self):
+            return 0
+
+    mod.watch_operator_start(Done(), "acme/widget", logged.append)
+    assert logged == [], logged
+
+
+def test_the_start_operator_logs_a_pass_that_exited_non_zero(tmp_path, monkeypatch):
+    """Criterion 4: the detached pass that started no session still reaches the daemon's log through the watcher."""
+    mod = voiced()
+    script = tmp_path / "operators.py"
+    script.write_text("import sys\n"
+                      "sys.stderr.write('operators: acme/ghost names no checkout; no session started\\n')\n"
+                      "sys.exit(2)\n")
+    monkeypatch.setattr(mod, "OPERATORS", str(script))
+    logged = []
+    assert mod.start_operator(str(tmp_path / "state"), "acme/ghost", log=logged.append, line="m-9") is not False
+    give_up = time.time() + 10
+    while not logged and time.time() < give_up:
+        time.sleep(0.01)
+    assert logged and "m-9" in logged[0] and "acme/ghost" in logged[0], logged
+
+
+def test_a_start_that_cannot_spawn_is_one_log_line_and_no_raise(tmp_path, monkeypatch):
+    """A Popen that fails reports the reason and returns no start, so the event loop still acknowledges the envelope."""
+    mod = voiced()
+    logged = []
+
+    def refuse(argv, **kwargs):
+        raise OSError(2, "no such file")
+
+    monkeypatch.setattr(mod.subprocess, "Popen", refuse)
+    assert mod.start_operator(str(tmp_path / "state"), "acme/app", log=logged.append) is False
+    assert logged and "acme/app" in logged[0] and "failed" in logged[0], logged

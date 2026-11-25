@@ -73,6 +73,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.request
 import xml.sax.saxutils
 from datetime import datetime
@@ -93,6 +94,7 @@ from squad import (  # noqa: E402  a release event as a post in each subscribed 
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
+OPERATORS = os.path.join(HERE, "operators.py")   # the supervisor a new inbox line wakes at once (#2925)
 CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
 GEMINI_MODEL = "gemini-2.5-flash"
@@ -284,6 +286,127 @@ def listed_revisions(path):
 
 class TipUnreadable(Exception):
     """A project's dev tip or its Slack file cannot be read: the daemon keeps the revision it holds and warns the owner."""
+
+
+class Start:
+    """One detached `--ensure` pass: its process, the inbox line that paid for it, and the outcome once it ends.
+
+    `outcome` is None while the pass runs and then `{"started", "session", "code", "reason", "verdict"}`. The watcher
+    thread fills it, and `wait` hands it to a caller, so the daemon tells a start that answers the line from a pass
+    that started nothing (#2925).
+    """
+
+    def __init__(self, proc, repo, line=None):
+        self.proc = proc
+        self.repo = repo
+        self.line = line
+        self.outcome = None
+        self._done = threading.Event()
+
+    def finished(self, outcome):
+        self.outcome = outcome
+        self._done.set()
+
+    def wait(self, timeout=None):
+        """The pass's outcome, or None when it has not ended within `timeout`. Never blocks the event loop: a caller
+        that reads it runs off the loop."""
+        self._done.wait(timeout)
+        return self.outcome
+
+
+def pass_output(proc, stream=None):
+    """Everything one detached pass printed. `stream` is the file the Popen wrote to; a Popen given a file object puts
+    nothing on `proc.stdout`, so the caller hands its own stream too. A fixture's own StringIO on the process answers as
+    well. One stream handed for both stdout and stderr is read once, and it is closed after the read."""
+    streams = [stream] if stream is not None else []
+    for name in ("stderr", "stdout"):
+        got = getattr(proc, name, None)
+        if got is not None:
+            streams.append(got)
+    text, seen = [], set()
+    for s in streams:
+        if id(s) in seen:
+            continue
+        seen.add(id(s))
+        try:
+            s.seek(0)
+            part = s.read()
+        except (OSError, ValueError):
+            part = ""
+        finally:
+            try:
+                s.close()
+            except OSError:
+                pass
+        if isinstance(part, bytes):
+            part = part.decode("utf-8", "replace")
+        if part:
+            text.append(part)
+    return "\n".join(text)
+
+
+def verdict_session(row):
+    """The session id one `--ensure` verdict line names, or "" when the row is no verdict (#2925).
+
+    A verdict is `operators: ensure <project> started <id>` or `operators: ensure <project> live <id>`, and nothing
+    else: the failure line carries words after `started`, so it never reads as a start."""
+    words = row.split()
+    if len(words) == 5 and words[0] == "operators:" and words[1] == "ensure" and words[3] in ("started", "live"):
+        return words[4]
+    return ""
+
+
+def watch_operator_start(proc, repo, log, line=None, finished=None, stream=None):
+    """Read one detached supervisor pass and report whether it left the inbox line answered (#2925).
+
+    The pass's `--ensure` prints one verdict line on stdout: `operators: ensure <project> started <id>`, or `... live
+    <id>` when a session was already there. Any other outcome, a non-zero exit or a zero exit with no verdict, is a
+    start that left the line waiting: the log names that inbox line, so the fault reaches the message that paid for the
+    pass. `stream` is the file the pass's output was written to. `finished`, if given, receives the outcome. Runs in its
+    own thread: the pass may make several bounded CLI calls, and the event loop never waits for them.
+    """
+    try:
+        code = proc.wait()
+    except (OSError, ValueError):
+        code = None
+    rows = pass_output(proc, stream).strip().splitlines()
+    verdict, session = "", ""
+    for row in rows:
+        named = verdict_session(row)
+        if named:
+            verdict, session = row, named
+    outcome = {"started": bool(verdict), "session": session,
+               "code": code, "reason": rows[-1] if rows else "", "verdict": verdict}
+    if not outcome["started"]:
+        where = f"inbox line {line} for {repo}" if line else f"the operator start for {repo}"
+        log(f"voiced: {where} got no operator session: {outcome['reason'] or 'no reason'}")
+    if finished is not None:
+        finished(outcome)
+    return outcome
+
+
+def start_operator(state_dir, repo, log=None, line=None):
+    """Start one project's operator session now when none is live (#2925).
+
+    A message must never wait for the five-minute supervisor pass. operators.py takes its own lock, so a pass in flight
+    answers first and a second start stands aside. A start that cannot run is one log line and False, never a lost
+    message: the line stays in the inbox and the next pass takes it. Otherwise the return is a `Start` handle whose
+    `wait` gives the pass's outcome, so a caller never reads a pass that started nothing as a success.
+    """
+    log = log or (lambda line: None)
+    err = tempfile.TemporaryFile(mode="w+b")
+    try:
+        proc = subprocess.Popen([sys.executable, OPERATORS, "--state", state_dir, "--ensure", repo],
+                                stdout=err, stderr=err, stdin=subprocess.DEVNULL,
+                                start_new_session=True, close_fds=True)
+    except OSError as x:
+        err.close()
+        log(f"voiced: the operator start for {repo} failed: {x.strerror or x}")
+        return False
+    start = Start(proc, repo, line)
+    threading.Thread(target=watch_operator_start, args=(proc, repo, log),
+                     kwargs={"line": line, "finished": start.finished, "stream": err}, daemon=True).start()
+    return start
 
 
 def git_output(checkout, *args):
@@ -511,6 +634,17 @@ def read_schema(directory):
     return version
 
 
+def revision_channel_ids(revision):
+    """Every channel id one Slack revision names, across its workspaces (#2925)."""
+    ids = []
+    for workspace in (revision or {}).get("workspaces") or []:
+        for row in (workspace or {}).get("channels") or [] if isinstance(workspace, dict) else []:
+            cid = str((row or {}).get("id") or "") if isinstance(row, dict) else ""
+            if cid and cid not in ids:
+                ids.append(cid)
+    return ids
+
+
 def slack_record_path(state_dir, repo):
     """The file one project's active Slack revision lives in, named by the repository it belongs to.
 
@@ -535,16 +669,25 @@ def scope_identity(state_dir, scope):
         return slackpolicy.DEFAULT_LANGUAGE, None
     if not isinstance(channels, dict):
         return slackpolicy.DEFAULT_LANGUAGE, None
+    def record_of(name):
+        try:
+            with open(slack_record_path(state_dir, name), encoding="utf-8") as f:
+                got = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return got if isinstance(got, dict) and got.get("revision") else None
+
     repo = next((name for name, entry in channels.items()
                  if isinstance(entry, dict) and str(entry.get("id")) == str(scope)), None)
+    record = record_of(repo) if repo else None
     if not repo:
-        return slackpolicy.DEFAULT_LANGUAGE, None
-    try:
-        with open(slack_record_path(state_dir, repo), encoding="utf-8") as f:
-            record = json.load(f)
-    except (OSError, ValueError):
-        return slackpolicy.DEFAULT_LANGUAGE, None
-    if not isinstance(record, dict) or not record.get("revision"):
+        # A channel the registry does not name belongs to the project whose active revision names it (#2925).
+        for name in channels:
+            got = record_of(name)
+            if got and str(scope) in revision_channel_ids(got["revision"]):
+                record = got
+                break
+    if not record:
         return slackpolicy.DEFAULT_LANGUAGE, None
     return slackpolicy.identity(record["revision"], record.get("local") or {}, scope)
 
@@ -800,9 +943,19 @@ class State:
         self._registry_read = True
 
     def channel_for(self, channel_id):
-        """The repository one project channel belongs to, or None for the DM and any channel no project owns."""
+        """The repository one project channel belongs to, or None for the DM and any channel no project owns.
+
+        The registry names the channel the daemon created for each project, and a project's active revision may name
+        more channels of its own: each of them belongs to that project too, so its message reaches its own inbox (#2925).
+        """
+        if not channel_id:
+            return None
         for repo, entry in self.channels().items():
             if entry.get("id") == channel_id:
+                return repo
+        for repo in self.channels():
+            active = self.active_revision(repo)
+            if active and str(channel_id) in revision_channel_ids(active.get("revision")):
                 return repo
         return None
 
@@ -1200,8 +1353,11 @@ class Daemon:
 
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
-                 clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None):
+                 clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None, starter=None):
         self.state = state
+        # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
+        # so a fixture or a reader never spawns a session; production passes `start_operator`.
+        self.starter = starter
         self.owner = owner
         self.transcriber = transcriber
         self.downloader = downloader
@@ -1580,11 +1736,28 @@ class Daemon:
             self.log(line)
         return got
 
+    def wake_operator(self, repo, line=None):
+        """Start the project's operator session at once when its inbox line lands (#2925).
+
+        A project with no live session never waits for the five-minute pass: the message that arrived is the reason the
+        session starts. `line` is the inbox line's id, so a pass that started nothing is reported against the message
+        still waiting. Returns the starter's handle, or False when no start ran; a refused start is one log line, and
+        the line stays in the inbox for the next pass.
+        """
+        if self.starter is None or not repo:
+            return False
+        try:
+            return self.starter(self.state.dir, repo, log=self.log, line=line)
+        except Exception as x:      # noqa: BLE001 - a start that fails is a log line, never a lost inbox line
+            self.log(f"voiced: the operator start for {repo} failed: {type(x).__name__}: {x}")
+            return False
+
     def inbox_path_of(self, event):
-        """The inbox one message belongs to: its project's when the channel names one, the DM's for an im, else None."""
+        """The inbox one message belongs to: its own channel's when a project owns the channel, the DM's for an im, else
+        None. Each channel of a project has its own inbox, which the project session watches (#2925)."""
         repo = self.state.channel_for(event.get("channel"))
         if repo:
-            return self.state.inbox_for(self.state.channels()[repo]["id"])
+            return self.state.inbox_for(str(event.get("channel")))
         if (event.get("channel_type") or "im") == "im":
             return self.state.inbox_path
         return None
@@ -2031,6 +2204,8 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         self.state.append_inbox(record, target)
+        self.wake_operator(self.state.channel_for(event.get("channel")) or (DM if target == self.state.inbox_path else ""),
+                           record["id"])
         return "inbox"
 
 
@@ -2336,7 +2511,8 @@ def main(argv):
                                  for app_id, entry in bots.items()},
                     uploaders={app_id: (lambda path, channel, thread_ts, title, token=entry:
                                         upload_clip(token, path, channel, thread_ts, title))
-                               for app_id, entry in bots.items()})
+                               for app_id, entry in bots.items()},
+                    starter=start_operator)
     # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
     daemon.refuse_channel_claims(projects)
     try:

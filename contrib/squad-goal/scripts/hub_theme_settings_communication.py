@@ -119,6 +119,15 @@ def _slack_name(path, fallback):
 def _slack_text(value):
     return "" if value is None else str(value)
 
+def _slack_channel_name(value):
+    """A channel name as the file stores it and the row shows it: no space around the text and no leading `#`
+    (SPEC 2682 #2941). Every leading `#` leaves with the blanks around it, so no stored name opens with a `#`. The hub
+    holds this format rule, so the view hands the typed text and the hub decides what the file keeps (ADR-0137)."""
+    name = _slack_text(value).strip()
+    while name.startswith("#"):
+        name = name.lstrip("#").strip()
+    return name
+
 def _slack_dicts(value):
     """The mappings of a list with the position each one holds in its own document, so the editor addresses a row by
     the place it holds in the file it writes (#2698), and a malformed entry never shifts another row's address."""
@@ -647,7 +656,8 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
     `send_grant`, `draft_for`, every poll setting, transcription and the voice reply) writes the local file. Each row
     names its file, and a control carries the field name alone: the operation addresses the channel by its Slack id,
     never by its place in a list. Every value choice comes from the policy module, the empty choice of a persona or
-    language names the value it inherits, and the Watch row marks each value the channel does not name (#2845)."""
+    language names the value it inherits, and the Watch row marks each value the channel does not name (#2845). The
+    Name row opens the list (#2941): it shows the stored name with no leading `#`, and its edit writes the same file."""
     ws_id, ch_id = group["id"], ch["id"]
     owner_doc = "committed" if ch["file"] == cf else "local"
     owner_file = cf if owner_doc == "committed" else lf
@@ -660,54 +670,67 @@ def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf)
         return {"field": field, "kind": "names",
                 "value": ", ".join(_slack_text(x) for x in values) if isinstance(values, list) else ""}
 
-    rows = [
-        {"key": "mode", "label": "Mode", "doc": owner_doc, "file": owner_file,
-         "controls": [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]},
-        {"key": "persona", "label": "Persona", "doc": owner_doc, "file": owner_file,
-         "controls": [_slack_pick("persona", owner.get("persona") or "",
-                                  _slack_persona_choices(P, committed_doc, _slack_inherit(inherited, "persona", committed_doc)))]},
-        {"key": "language", "label": "Language", "doc": owner_doc, "file": owner_file,
-         "controls": [_slack_pick("language", owner.get("language") or "",
-                                  _slack_language_options(P, _slack_inherit(inherited, "language")))]},
-        {"key": "connect", "label": "Slack Connect", "doc": owner_doc, "file": owner_file,
-         "controls": [{"field": "connect", "kind": "read", "value": "yes" if merged.get("connect") else "no"}]},
-        {"key": "roles", "label": "Accepted roles", "doc": owner_doc, "file": owner_file,
-         "controls": [names("roles", owner.get("roles"))]},
-        {"key": "announce", "label": "Announce", "doc": owner_doc, "file": owner_file,
-         "controls": [names("announce", owner.get("announce"))]},
-    ]
-    if P.channel_class(group["ws"], merged) != "guest":
-        return rows
-    poll = local.get("poll") if isinstance(local.get("poll"), dict) else {}
-    mode = _slack_text(poll.get("mode") or P.POLL_DEFAULT_MODE)
-    defaults = P.poll_defaults(mode)
-    fields = (("floor", "Floor"), ("ceiling", "Ceiling"), ("factor", "Factor"),
-              ("idle_window", "Idle window")) if mode == "exponential" \
-        else (("fast", "Fast"), ("slow", "Slow"), ("quiet_after", "Quiet after"))
-    modes = [{"value": m, "label": f"{m} (default)" if m == P.POLL_DEFAULT_MODE else m}
-             for m in P.FIELD_POLL_MODES]
-    watch = [_slack_named(_slack_pick("poll.mode", mode, modes), "Poll mode")]
-    watch += [_slack_named(_slack_written(f"poll.{name}", poll.get(name) or "", defaults.get(name)), label)
-              for name, label in fields]
-    watch.append(_slack_named(_slack_written("poll.thread_open", poll.get("thread_open") or "",
-                                             defaults.get("thread_open")), "Thread open"))
-    rows.insert(3, {"key": "delivery", "label": "Delivery", "doc": "local", "file": lf,
-                    "controls": [_slack_named(_slack_pick("speak", local.get("speak") or "draft",
-                                                          list(P.FIELD_SPEAK)), "Answer as"),
-                                 _slack_named(_slack_written("send_grant", local.get("send_grant") or ""),
-                                              "Send grant")],
-                    "note": f"granted {local['send_grant']} by the hub" if local.get("send_grant")
-                    else "no grant: a reply leaves as a draft"})
-    rows.insert(4, {"key": "draft_for", "label": "Always draft for", "doc": "local", "file": lf,
-                    "controls": [names("draft_for", local.get("draft_for"))]})
-    rows.insert(6, {"key": "watch", "label": "Watch", "doc": "local", "file": lf, "controls": watch,
-                    "note": _slack_poll_note(mode, defaults, poll)})
-    rows.insert(7, {"key": "audio", "label": "Audio", "doc": "local", "file": lf,
-                    "controls": [_slack_named(_slack_pick("transcribe", local.get("transcribe") or "off",
-                                                          list(P.FIELD_TRANSCRIBE)), "Transcribe a clip"),
-                                 {"field": "voice_reply", "kind": "check", "label": "Voice reply",
-                                  "value": bool(local.get("voice_reply"))}]})
-    return rows
+    def row(key, label, doc, file, controls, note=None):
+        out = {"key": key, "label": label, "doc": doc, "file": file, "controls": controls}
+        if note is not None:
+            out["note"] = note
+        return out
+
+    # Every row is built once, keyed by its own key, and one explicit order names the place each one holds. A conditional
+    # row never shifts a later row through an index, so the block reads the same for every channel shape (#2941).
+    built = {
+        # The channel's name opens its settings (#2941): the row shows the stored name with no leading `#`, and its chip
+        # names the file that holds the channel row, the same file an edit of the row writes.
+        "name": row("name", "Name", owner_doc, owner_file,
+                    [_slack_written("name", _slack_channel_name(owner.get("name")))]),
+        "mode": row("mode", "Mode", owner_doc, owner_file,
+                    [_slack_pick("mode", owner.get("mode") or "listen", list(P.FIELD_MODES))]),
+        "persona": row("persona", "Persona", owner_doc, owner_file,
+                       [_slack_pick("persona", owner.get("persona") or "",
+                                    _slack_persona_choices(P, committed_doc,
+                                                           _slack_inherit(inherited, "persona", committed_doc)))]),
+        "language": row("language", "Language", owner_doc, owner_file,
+                        [_slack_pick("language", owner.get("language") or "",
+                                     _slack_language_options(P, _slack_inherit(inherited, "language")))]),
+        "connect": row("connect", "Slack Connect", owner_doc, owner_file,
+                       [{"field": "connect", "kind": "read", "value": "yes" if merged.get("connect") else "no"}]),
+        "roles": row("roles", "Accepted roles", owner_doc, owner_file, [names("roles", owner.get("roles"))]),
+        "announce": row("announce", "Announce", owner_doc, owner_file, [names("announce", owner.get("announce"))]),
+    }
+    order = ["name", "mode", "persona", "language", "connect", "roles", "announce"]
+    if P.channel_class(group["ws"], merged) == "guest":
+        poll = local.get("poll") if isinstance(local.get("poll"), dict) else {}
+        mode = _slack_text(poll.get("mode") or P.POLL_DEFAULT_MODE)
+        defaults = P.poll_defaults(mode)
+        fields = (("floor", "Floor"), ("ceiling", "Ceiling"), ("factor", "Factor"),
+                  ("idle_window", "Idle window")) if mode == "exponential" \
+            else (("fast", "Fast"), ("slow", "Slow"), ("quiet_after", "Quiet after"))
+        modes = [{"value": m, "label": f"{m} (default)" if m == P.POLL_DEFAULT_MODE else m}
+                 for m in P.FIELD_POLL_MODES]
+        watch = [_slack_named(_slack_pick("poll.mode", mode, modes), "Poll mode")]
+        watch += [_slack_named(_slack_written(f"poll.{name}", poll.get(name) or "", defaults.get(name)), label)
+                  for name, label in fields]
+        watch.append(_slack_named(_slack_written("poll.thread_open", poll.get("thread_open") or "",
+                                                 defaults.get("thread_open")), "Thread open"))
+        built["delivery"] = row(
+            "delivery", "Delivery", "local", lf,
+            [_slack_named(_slack_pick("speak", local.get("speak") or "draft", list(P.FIELD_SPEAK)), "Answer as"),
+             _slack_named(_slack_written("send_grant", local.get("send_grant") or ""), "Send grant")],
+            note=f"granted {local['send_grant']} by the hub" if local.get("send_grant")
+            else "no grant: a reply leaves as a draft")
+        built["draft_for"] = row("draft_for", "Always draft for", "local", lf,
+                                 [names("draft_for", local.get("draft_for"))])
+        built["watch"] = row("watch", "Watch", "local", lf, watch,
+                             note=_slack_poll_note(mode, defaults, poll))
+        built["audio"] = row(
+            "audio", "Audio", "local", lf,
+            [_slack_named(_slack_pick("transcribe", local.get("transcribe") or "off",
+                                      list(P.FIELD_TRANSCRIBE)), "Transcribe a clip"),
+             {"field": "voice_reply", "kind": "check", "label": "Voice reply",
+              "value": bool(local.get("voice_reply"))}])
+        order = ["name", "mode", "persona", "language", "delivery", "draft_for", "connect", "watch", "audio",
+                 "roles", "announce"]
+    return [built[key] for key in order]
 
 def _slack_real_id(value):
     """A Slack id the files name, never the placeholder key a row with no id stands on."""
@@ -1001,6 +1024,13 @@ def _slack_read_value(control):
         return _slack_text(value)
     return _slack_text(value) or "none"
 
+def _slack_read_control(control):
+    """One edit control as the read-only control of another project's node (#2919): its value, and the control's own
+    label when it carries one, so a row with two controls shows each control's label and never the row's twice (#2941)."""
+    out = {"field": control.get("field"), "kind": "read", "value": _slack_read_value(control)}
+    if control.get("label"): out["label"] = control["label"]
+    return out
+
 def _slack_tree_elsewhere(node, hub):
     """A project node of another profile and its subtree, read-only (#2919): the page edits its own project's files
     only, so each control becomes the value of that project's own files, no add or remove target stays, and every node
@@ -1009,8 +1039,7 @@ def _slack_tree_elsewhere(node, hub):
         n["elsewhere"] = hub
         n.pop("channel_add", None); n.pop("channel_remove", None)
         for row in (n.get("settings") or {}).get("rows") or []:
-            row["controls"] = [{"field": c.get("field"), "kind": "read", "value": _slack_read_value(c)}
-                               for c in row.get("controls") or []]
+            row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]
 
 def _slack_walk(node):
     yield node
@@ -1980,6 +2009,11 @@ def _slack_field_value(field, value):
         return value, None
     if not isinstance(value, str):
         return None, f"{field} is a string"
+    if field == "name":
+        # The typed text loses its space and every leading `#`, and the hub refuses the text that then names nothing, so
+        # a caller of this rule alone never keeps `name: ""` (#2941). The policy keeps its own check as defence.
+        name = _slack_channel_name(value)
+        return (name, None) if name else (None, "a channel names its name")
     return value, None
 
 
@@ -2054,9 +2088,9 @@ def _slack_place_field(P, op, docs, local_name):
         return f"{name}: the channel {ch_id}: unknown field {field!r}", False
     if field.startswith("poll.") and field.split(".", 1)[1] not in SLACK_POLL_FIELDS:
         return f"{name}: the channel {ch_id}: unknown poll field {field.split('.', 1)[1]!r}", False
+    # The value rule runs before the routing and before any write, so every edit route, delivery and presentation alike,
+    # meets it (#2941). The refusal names the row once the route names it, below.
     ok_value, why = _slack_field_value(field, value)
-    if why:
-        return f"{name}: the channel {ch_id}: {why}", False
     if delivery:
         # The channel's own class wins over its workspace's, so a guest channel inside an owned workspace takes the
         # delivery fields too (#2770). The address is the local row that carries the id, never an index.
@@ -2084,6 +2118,8 @@ def _slack_place_field(P, op, docs, local_name):
     else:
         wi, ci = committed_hit["wi"], committed_hit["ci"]
     path = ["workspaces", wi, "channels", ci, field]
+    if why:
+        return f"{name}: {_slack_key(path)}: {why}", False
     row = _slack_rows_at(docs[doc], path[:-1])
     if not isinstance(row, dict):
         return f"{name}: the channel {ch_id}: the edited row does not exist", False
