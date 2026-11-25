@@ -15,6 +15,12 @@ A child that the reviewer sends back again and again spends money and produces n
    post, so the timeline would show it above the fix rounds. The comment names the head the last review read, the streak
    count and the total of reviews of the issue, with the last Blocking findings. One head gets at most one freeze comment,
    so a freeze after a rearm at the same head repeats nothing.
+   The streak counts rounds that leave a finding open, not rounds that raise a new one. Each Blocking finding has a key,
+   the hash of its file and its defect (`revformat.py --finding-keys`), and the review fact stores the keys. A CHANGES
+   round whose `## Resolved` section lists the key of every Blocking finding of the round before sets the count to 1,
+   because each of its findings is new. Any other CHANGES round adds 1: a round that leaves a finding open, drops it or
+   rewords its defect, a full review with no `## Resolved` section, and a verdict on either side with no stored keys.
+   The same-findings-twice rule and the stall rule (ADR-0134) keep reading the whole-review fingerprint.
 2. **Identical findings twice stop the fix cycle.** The next attempt uses a stronger coder model.
    A fix round that writes no artifact is the same finding unanswered, not a new finding (ADR-0134 reads a round that
    changed nothing by its fingerprint). It is the finding's first repetition, so it moves the coder at once: the round
@@ -56,8 +62,10 @@ neither reviews nor fixes that child, and the wave merges only a child whose app
 unapproved child holds its delivery past every deadline, while a finished run's unapproved child runs the deferral
 deadline, is requeued with the cause named at its bound, and a run resumed after its verdict reads as live again. The streak is a ledger fact: `tests/test_issue_ledger.py` and
 `contrib/squad-goal/scripts/test-issue-ledger.sh` (three CHANGES verdicts end the issue needs-human, an approval resets
-the streak, identical findings twice move the coder, a verdict is one fact per run and round, and a rearm clears it with
-its floor) and `contrib/squad-goal/scripts/test-runreview.sh` (the run's review gate writes the verdict, freezes the card
-and stops the requeue). `tests/test_ac_repeat.py`: two identical ac-verify failures end the loop needs-human with exactly two actor rounds, across a
+the streak, a round that resolves every previous Blocking key restarts it at 1 and any other round adds 1, the replay
+rebuilds it from the stored keys, identical findings twice move the coder, a verdict is one fact per run and round, and a rearm clears it with
+its floor) and `contrib/squad-goal/scripts/test-runreview.sh` (the run's review gate writes the verdict with its finding keys,
+freezes the card and stops the requeue), and `contrib/squad-goal/scripts/test-revformat.sh` (a key holds over a moved
+line and a new failure text, and a reworded defect changes it). `tests/test_ac_repeat.py`: two identical ac-verify failures end the loop needs-human with exactly two actor rounds, across a
 resume too; a passing scope gate between the failures does not reset the count. The severity calibration and the
 approval binding are a draft until their own tests exist (ADR-0018).

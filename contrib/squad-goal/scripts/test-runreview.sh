@@ -215,14 +215,25 @@ st() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@"; }
 reset; rm -f "$T/gh.log"
 (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=1 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
 res='- a.py:1 first finding
-- b.py:2 second finding'
+- b.py:2 second finding
+- c.py:3 a nit'
 for r in 2 3 4; do
   (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_VERDICT=CHANGES STUB_NEW="n$r.py:1 new finding $r" STUB_RESOLVED="$res" bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
   res="- n$r.py:1 new finding $r"
 done
 pj=$(st read 'x/y#7' review)
 nk=$(printf '%s' "$pj" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["verdicts"][0].get("keys") or []))' 2>/dev/null)
-[ "$nk" = 2 ] && ok "P: the review fact stores one key per Blocking finding" || ko "P: keys '$nk' in '$pj'"
+# "## Nits" is no section, so the stub's nit stays under Blocking: the keys follow the --summary count
+nb=$(python3 "$T/s/revformat.py" --summary /dev/stdin <<'M' | sed 's/blocking=\([0-9]*\).*/\1/'
+VERDICT: CHANGES
+## Blocking
+- a.py:1 first finding
+- b.py:2 second finding
+## Nits
+- c.py:3 a nit
+M
+)
+[ "$nk" = 3 ] && [ "$nk" = "$nb" ] && ok "P: the review fact stores one key per Blocking finding" || ko "P: keys '$nk' (summary '$nb') in '$pj'"
 [ "$(printf '%s' "$pj" | python3 -c 'import json,sys; print(json.load(sys.stdin)["changes"])' 2>/dev/null)" = 1 ] \
   && [ "$(st read 'x/y#7' state)" != needs-human ] && [ ! -s "$T/gh.log" ] \
   && ok "P: rounds that resolve the previous findings restart the streak and freeze nothing" || ko "P: review '$pj' state '$(st read 'x/y#7' state)'"

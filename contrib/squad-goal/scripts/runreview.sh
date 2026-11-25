@@ -66,12 +66,16 @@ case "$v" in
   *) echo "RUNREVIEW $run $child: verdict '$v' is none of APPROVE, CHANGES, BLOCKED: try again (#$iss)" >&2; exit $AGAIN;;
 esac
 fp=$(python3 "$here/revformat.py" --fingerprint "$md" 2>/dev/null) || fp=
+# #2959: the key of each Blocking finding, and of each previous one the Resolved section answers, so the ledger restarts
+# the streak when a round resolved every finding of the round before and raised only new ones (ADR-0151 rule 1).
+fk=$(python3 "$here/revformat.py" --finding-keys "$md" 2>/dev/null | paste -sd, -) || fk=
+rk=$(python3 "$here/revformat.py" --resolved-keys "$md" 2>/dev/null | paste -sd, -) || rk=
 # One review of the issue is a ledger fact (ADR-0151, ADR-0149): three CHANGES verdicts in a row end it needs-human for the
-# owner, and identical findings twice move the next fix round one place down the coder chain. A BLOCKED verdict answers no
+# owner (a round that resolves every finding of the round before starts the count again), and identical findings twice move the next fix round one place down the coder chain. A BLOCKED verdict answers no
 # finding the fix cycle can read, so it enters no streak. A ledger that refuses the event is named, never dropped.
 st=; case "$v" in APPROVE) st=approve;; CHANGES) st=changes;; esac
 if [ -n "$st" ]; then
-  lv=$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" review "$SG_REPO#$iss" "$run" "$st" "$fp" "${SQUAD_REVIEW_ROUND:-0}" 2>&1) \
+  lv=$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" review "$SG_REPO#$iss" "$run" "$st" "$fp" "${SQUAD_REVIEW_ROUND:-0}" "$fk" "$rk" 2>&1) \
     || echo "RUNREVIEW $run $child: the review fact of #$iss was refused: $lv" >&2
 else lv=; fi
 # The streak ended the issue needs-human: the card keeps the column its work reached and carries the owner freeze marker

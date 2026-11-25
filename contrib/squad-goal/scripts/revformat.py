@@ -49,6 +49,10 @@ usage: revformat.py [--max-lines N] [--fix-round] <review>
                                            landing pass makes, so it never reads a first line or a count
        revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
        revformat.py --fingerprint <review> prints the fingerprint of the review's findings
+       revformat.py --finding-keys <review>
+                                           prints the key of each Blocking finding, one per line (#2959)
+       revformat.py --resolved-keys <review>
+                                           prints the key of each answer under ## Resolved, one per line (#2959)
        revformat.py --schema               prints the JSON schema of an answer (#632)
        revformat.py --answer [--keep F] <answer>
                                            prints the review: a JSON answer rendered, a markdown one normalized;
@@ -178,6 +182,21 @@ def findings_fingerprint(review):
     """
     body = review.split(b"\n", 1)[1] if b"\n" in review else b""   # tail -n +2: the verdict line is not a finding
     return body_fingerprint(body)
+
+
+def finding_key(text):
+    """The key of one finding (#2959): `body_fingerprint` over its location and its defect, the first two fields of
+    the bullet. The failure and the fix are left out, since a fix round rewrites them when it answers the finding, so
+    a `## Resolved` answer carries the key of the Blocking finding it answers. A moved line keeps the key; a reworded
+    defect changes it, so a finding that is reworded is not resolved."""
+    return body_fingerprint(" — ".join(SEP.split(text.strip())[:2]).encode("utf-8"))
+
+
+def finding_keys(review, section=SECTIONS[0]):
+    """The key of each finding of `section` (Blocking by default, #2959), in order: the ledger stores them in the
+    review fact, so the next round's streak sees which findings it resolved (ADR-0151). Under `## Resolved` each
+    answer has a key; under a severity section only a bullet `is_finding` calls a finding has one."""
+    return [finding_key(t) for sec, t in bullets(review) if sec == section and (sec == ANSWER or is_finding(sec, t))]
 
 
 def _marker(path):
@@ -782,6 +801,10 @@ def main(argv=None):
                    " each with the reason 'no repro: markdown answer', in place (#2647, ADR-0172)")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
+    p.add_argument("--finding-keys", action="store_true",
+                   help="print the key of each Blocking finding, over its file and defect, one per line (#2959)")
+    p.add_argument("--resolved-keys", action="store_true",
+                   help="print the key of each answer under ## Resolved, read the same way (#2959)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
                    help="print the failed rounds in a row for that marker set (0 when the findings changed)")
     p.add_argument("--record-stall", nargs=5, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT", "ROUNDS"),
@@ -824,6 +847,9 @@ def main(argv=None):
         print(findings_fingerprint(sys.stdin.buffer.read() if a.review == "-" else open(a.review, "rb").read()))
         return 0
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
+    if a.finding_keys or a.resolved_keys:
+        for k in finding_keys(text, ANSWER if a.resolved_keys else SECTIONS[0]): print(k)
+        return 0
     if a.answer:
         try:
             review = answer_review(text, a.keep, plan=a.plan)
