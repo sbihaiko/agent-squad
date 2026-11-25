@@ -6,6 +6,8 @@ The seam under test is the daemon's own `refresh_slack` pass, wired as `main` wi
 whose `origin/dev` holds the Slack file, and each registry is a real file outside every checkout. No case reaches Slack
 or the network.
 """
+import ast
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -115,6 +117,26 @@ def test_the_seam_main_hands_the_daemon_is_none_when_no_registry_is_named(tmp_pa
     with_state = {"repo": "acme/alpha", "checkout": str(tmp_path), "state": str(tmp_path / "state-alpha")}
     assert mod.hub_registry_seam([with_state], {}) is mod.project_registry
     assert mod.hub_registry_seam([entry], {"SG_SLACK_REGISTRY": "/x/reg.json"}) is mod.project_registry
+
+
+def test_main_reads_the_hub_project_set_once_and_hands_that_set_to_the_registry_seam():
+    """Criterion (1): one hub seam names the projects, and the saved-sha seam reads the same set (#2961).
+
+    `main` must take the hub project set as an injectable seam and hand `hub_registry_seam` the entries that carry each
+    project's state directory. A seam built from a different set than the daemon's would drop a project it names."""
+    mod = voiced()
+    assert "projects" in inspect.signature(mod.main).parameters, "main does not take the hub project set as a seam"
+    tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
+    main = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert "hub_registry_seam" in ast.dump(main), "main hands the daemon no registry seam"
+
+
+def test_the_named_registry_is_one_shared_file_for_every_project():
+    """`SG_SLACK_REGISTRY` names one registry for every project, whatever state directory a project names (#2961)."""
+    mod = voiced()
+    entries = [{"repo": "acme/alpha", "state": "/a"}, {"repo": "acme/beta"}]
+    assert mod.hub_registries(entries, {"SG_SLACK_REGISTRY": "/x/reg.json"}) == {
+        "acme/alpha": "/x/reg.json", "acme/beta": "/x/reg.json"}
 
 
 def test_a_machine_that_names_no_registry_serves_its_project(tmp_path):

@@ -269,12 +269,18 @@ def hub_registries(projects=None, env=None):
     """repository -> the registry path of that project's own profile, read from the hub seam's entries (#2961).
 
     Every profile's hub writes its saves to its own state directory, so one registry per project is the only rule that
-    lets a save for one project reach the daemon. A project whose profile names no state directory is absent, so the
-    saved-sha check stays out of force for it alone.
+    lets a save for one project reach the daemon. `SG_SLACK_REGISTRY` names one file for every project, so it
+    short-circuits to that one shared registry, whatever state directory a project names. A project whose profile names
+    no state directory is absent, so the saved-sha check stays out of force for it alone.
     """
+    env = os.environ if env is None else env
+    entries = hub_projects() if projects is None else projects
+    repos = [str((entry or {}).get("repo") or "").strip() for entry in entries]
+    named = (env.get(SLACK_REGISTRY_ENV) or "").strip()
+    if named:      # one named file is one registry for every project, so it never resolves per entry
+        return {repo: named for repo in repos if repo}
     out = {}
-    for entry in (hub_projects() if projects is None else projects):
-        repo = str((entry or {}).get("repo") or "").strip()
+    for repo, entry in zip(repos, entries, strict=True):
         path = project_registry(entry, env) if repo else ""
         if path:
             out[repo] = path
@@ -1590,9 +1596,10 @@ class Daemon:
         """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
 
         Saving in the hub is the owner's approval, and a commit author is forgeable, so only a sha the project's own
-        profile lists is an authority (#2695). The answer covers every project the hub seam lists, not only this pass's
-        arguments, so a project outside one pass still gets its registry read. A project absent from the answer names
-        no registry, so the check is out of force for it alone.
+        profile lists is an authority (#2695). The answer covers the repository each channel registry names and every
+        project the configs seam lists, beside this pass's own projects, so a project outside one pass still gets its
+        registry read. A daemon wired with no configs seam covers only the channel registry and this pass. A project
+        absent from the answer names no registry, so the check is out of force for it alone.
         """
         if self.registry is None:
             return {}
@@ -2776,7 +2783,7 @@ async def hear(daemon, app_token, connect=None, open_connection=None, stop=None)
         wait = min(wait * 2, 60)
 
 
-def main(argv):
+def main(argv, projects=hub_projects):
     state_dir = os.environ.get("VOICE_STATE") or DEFAULT_STATE
     owner = None
     label = "com.agent-squad.voiced"
@@ -2823,13 +2830,14 @@ def main(argv):
         print(f"voiced: another daemon holds {state_dir}; this start stands aside", file=sys.stderr)
         lock.close()
         return 1
-    projects = hub_projects()
+    entries = projects()
     # Each project's own registry is the only authority for its Slack revision (#2695, #2961): the app set this start
     # opens sockets for comes from the revisions that project's registry lists alone, and no listed revision means no
-    # channel of that project.
-    registries = hub_registries(projects)
+    # channel of that project. The same hub seam feeds the daemon's configs and this start's seam, so the two never
+    # name different project sets.
+    registries = hub_registries(entries)
     listed = {repo: listed_revisions(path) for repo, path in registries.items()}
-    specs = app_keychains(project_documents_at_start(projects, listed=listed))
+    specs = app_keychains(project_documents_at_start(entries, listed=listed))
     if not specs:      # a machine with no per-project Slack file keeps one socket on the legacy Keychain entries
         specs = {"legacy": {"bot": keychain.BOT_TOKEN, "app": keychain.APP_TOKEN}}
     try:
@@ -2844,8 +2852,8 @@ def main(argv):
     daemon = Daemon(state=state, owner=owner,
                     transcriber=lambda audio, mime: transcribe(audio, mime, key),
                     downloader=lambda url: download(url, bot),
-                    client=SlackClient(bot), projects=hub_repos, configs=hub_projects,
-                    registry=hub_registry_seam(projects),
+                    client=SlackClient(bot), projects=hub_repos, configs=projects,
+                    registry=hub_registry_seam(entries),
                     synthesizer=lambda script, voice=None, tone=None:
                         spoken_clip(key, script, voice=voice or VOICE, tone=tone or ""),
                     uploader=lambda path, channel, thread_ts, title: upload_clip(bot, path, channel, thread_ts, title),
@@ -2858,7 +2866,7 @@ def main(argv):
                                for app_id, entry in bots.items()},
                     starter=start_operator)
     # Refuse a channel two projects claim before any socket answers, so the first poll already holds it.
-    daemon.refuse_channel_claims(projects)
+    daemon.refuse_channel_claims(entries)
     try:
         asyncio.run(serve(daemon, apps))
     except KeyboardInterrupt:
