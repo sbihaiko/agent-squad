@@ -132,6 +132,22 @@ def runs(log):
     return [json.loads(row) for row in log.read_text().splitlines()] if log.exists() else []
 
 
+def test_the_session_prompt_carries_the_combined_tone():
+    """#2927 criterion 7: the session reads the tone the policy composed, from the line, so an answer sounds like the
+    persona and the sender's role. The persona name alone is not enough."""
+    mod = module()
+    brief = mod.line_prompt("dm", dict(line("m1", "hello"), tone="Calm and direct. Short sentences."),
+                            str(ROOT), str(ROOT / ".scratch" / "state"))
+    assert "in this tone: Calm and direct. Short sentences." in brief, brief
+
+
+def test_a_line_with_no_tone_asks_for_the_persona_tone():
+    """#2927: a line written before a policy carries a tone still gives the session an instruction."""
+    mod = module()
+    brief = mod.line_prompt("dm", line("m1", "hello"), str(ROOT), str(ROOT / ".scratch" / "state"))
+    assert "in this tone: the project persona's tone" in brief, brief
+
+
 def test_each_inbox_line_starts_one_isolated_session(tmp_path, monkeypatch):
     """Criterion 4: three inbox lines start three sessions, and a later pass starts none for the same lines."""
     mod, wrap, log = wrapped(tmp_path, monkeypatch)
