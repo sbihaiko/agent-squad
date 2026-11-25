@@ -693,11 +693,12 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     devices = literals((os.devnull, devnull))
     config = os.path.realpath(config)
     claude = f"{home}/.claude"
-    # The CLI writes its runtime under its own config root, and some state under ~/.claude, so both stay writable.
-    # The owner's global config file is never granted, and every file under ~/.claude that the owner's next,
-    # unsandboxed session loads is refused after the folder's grant. `~/.claude.json`, the owner's MCP configuration,
-    # sits beside that folder and is refused too, since no grant ever covered it (#2925, #2942, #2963): Seatbelt
-    # applies the last matching rule.
+    # The CLI writes its runtime under its own config root, and some state under the Claude home, so both stay
+    # writable. The owner's global config file is never granted, and every file under the Claude home that the owner's
+    # next, unsandboxed session loads is refused after the folder's grant. `~/.claude.json`, the owner's MCP
+    # configuration, sits beside that folder and is refused too, since no grant ever covered it (#2925, #2942, #2963):
+    # Seatbelt applies the last matching rule. The config root also holds the CLI's login: auth moves with
+    # `CLAUDE_CONFIG_DIR`, and the empty secure-storage dir keeps the owner's keychain entry (measured, CLI 2.1.332).
     loaded_dirs = " ".join(f'(subpath "{claude}/{name}")' for name in CLAUDE_LOADED_DIRS)
     memory = f'(regex #"^{re.escape(claude)}/projects/[^/]+/memory(/|$)")'
     top_md = f'(regex #"^{re.escape(claude)}/[^/]+\\.md$")'     # a file an `@` line of CLAUDE.md loads
