@@ -512,11 +512,16 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    the fields on one line, the actions wrap beside each other, and the user ids field keeps its whole value. A narrow
    panel stacks each field under its own label, so no value is clipped. */
 #sbody .slroledet .slevr{display:grid;grid-template-columns:minmax(140px,16ch) minmax(200px,1fr) minmax(120px,16ch) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--line)}
-#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(132px,.8fr) minmax(132px,.8fr) minmax(100px,.6fr) minmax(200px,2.4fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(90px,.8fr) minmax(150px,1.5fr) minmax(170px,1.6fr) minmax(90px,.8fr) minmax(120px,1.2fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
 #sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slad input[data-slroleid],#sbody .slad input[data-slmus]{flex:1 1 220px}
+#sbody .slad input[data-slmalias],#sbody .slad select[data-slmws]{flex:1 1 150px}
+#sbody .slad select[data-slmch]{flex:1 1 240px}
+#sbody .slad select[data-slmrole]{flex:1 1 120px}
+#sbody .slmembdet .slalias{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+#sbody .slmembdet .slalias input{width:100%;min-width:0}
 @media (max-width:1240px){#sbody .slroledet .slevr,#sbody .slmembdet .slevr{grid-template-columns:1fr}
  #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
  #sbody .slroledet .slevr [role=cell][data-l]::before,#sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}
@@ -1768,6 +1773,12 @@ const slWsIds=()=>{const out=[];for(const d of [slDocsCur().committed||{},slDocs
 const slChIdsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
  for(const w of (Array.isArray(d.workspaces)?d.workspaces:[])){if(!w||String(w.id)!==String(wsId))continue;
   for(const c of (Array.isArray(w.channels)?w.channels:[]))if(c&&c.id&&out.indexOf(String(c.id))<0)out.push(String(c.id))}return out};
+const slChannelsOf=wsId=>{const out=[];for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(w&&String(w.id)===String(wsId))for(const c of (Array.isArray(w.channels)?w.channels:[]))if(c&&c.id)out.push(c);return out};
+const slWsOpt=id=>{let lab="";for(const d of [slDocsCur().committed||{},slDocsCur().local||{}])
+ for(const w of (Array.isArray(d.workspaces)?d.workspaces:[]))if(!lab&&w&&String(w.id)===String(id)&&w.label)lab=String(w.label);return lab?`${lab} · ${id}`:id};
+const slChOpt=(wsId,id)=>{const c=slChannelsOf(wsId).find(x=>String(x.id)===String(id));return c&&c.name?`#${c.name} · ${id}`:id};
+const slOptsV=(ids,labelOf,cur)=>ids.map(x=>`<option value="${slA(x)}"${x===cur?" selected":""}>${slA(labelOf(x))}</option>`).join("");
 const slRoleIds=()=>slRoleRows().map(x=>String((x||{}).id||"")).filter(Boolean);
 const slActionList=()=>Array.isArray(slR&&slR.role_actions)?slR.role_actions:[];
 const slDeployList=x=>Array.isArray(x)?x:(x&&typeof x==="object"&&Array.isArray(x.environments)?x.environments:[]);
@@ -1777,10 +1788,11 @@ const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],ac
  +`<span role=cell data-l="Actions"><span class=slacts>${acts.map(a=>`<label class=slchk><input type=checkbox data-sle="role:${i}:act:${slA(a)}"${on.indexOf(a)>=0?" checked":""} aria-label="role ${n}: ${slA(a)}"> ${esc(a)}</label>`).join("")}</span></span>`
  +`<span role=cell data-l="Deploy"><input data-sle="role:${i}:deploy" value="${slA(slDeployList(x&&x.deploy).join(", "))}" placeholder="stg" aria-label="role ${n}: deploy"></span>`
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
-const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`;
+const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,al=typeof m.alias==="string"?m.alias:"",us=(Array.isArray(m.users)?m.users:[]).join(", ");
  return `<div class="sle slmembdet" role=group aria-label="member ${n} fields"><div class=slevr role=row>`
- +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOpts(slWsIds(),m.workspace)}</select></span>`
- +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOpts(slChIdsOf(m.workspace),m.channel)}</select></span>`
+ +`<span role=cell data-l="Alias"><span class=slalias><input data-sle="${at("alias")}" value="${slA(al)}" placeholder="alias" aria-label="member ${n}: alias">${al?"":`<span class=m>no alias</span>`}<span class=m>${slA(us)}</span></span></span>`
+ +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOptsV(slWsIds(),slWsOpt,m.workspace)}</select></span>`
+ +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOptsV(slChIdsOf(m.workspace),c=>slChOpt(m.workspace,c),m.channel)}</select></span>`
  +`<span role=cell data-l="Role"><select data-sle="${at("role")}" aria-label="member ${n}: role">${slOpts(slRoleIds(),m.role)}</select></span>`
  +`<span role=cell data-l="User ids"><input data-sle="${at("users")}" value="${slA((Array.isArray(m.users)?m.users:[]).join(", "))}" placeholder="U0..., U0..." aria-label="member ${n}: user ids"></span>`
  +`<span role=cell><button data-slrmmem="${i}" aria-label="remove member ${n}">Remove</button></span></div></div>`};
@@ -1790,8 +1802,10 @@ function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.c
  h+=`<div class=slad><input data-slroleid placeholder="role id" aria-label="new role id"><button data-sladdrole>Add role</button></div>`;
  h+=`<h5 class=slws>Members ${slTag(lf)}</h5>`;
  h+=ms.length?ms.map(slMemberEditRow).join(""):`<p class=m>${esc("No member: the roles name no user.")}</p>`;
- return h+`<div class=slad><select data-slmws aria-label="new member Slack workspace">${slOpts(slWsIds(),"")}</select>`
- +`<select data-slmch aria-label="new member channel">${slOpts(slChIdsOf(slWsIds()[0]||""),"")}</select>`
+ const w0=slWsIds()[0]||"";
+ return h+`<div class=slad><input data-slmalias placeholder="alias" aria-label="new member alias">`
+ +`<select data-slmws aria-label="new member Slack workspace">${slOptsV(slWsIds(),slWsOpt,"")}</select>`
+ +`<select data-slmch aria-label="new member channel">${slOptsV(slChIdsOf(w0),c=>slChOpt(w0,c),"")}</select>`
  +`<select data-slmrole aria-label="new member role">${slOpts(slRoleIds(),"")}</select>`
  +`<input data-slmus placeholder="U0..." aria-label="new member user ids"><button data-sladdmem>Add member</button></div>`}
 function slDocOp(attr,el){const p=attr.split(":"),v=el.type==="checkbox"?!!el.checked:el.value;
@@ -1891,7 +1905,7 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
   if(dt.slrmrole!==undefined){slOp({kind:"remove",doc:"committed",path:["roles",+dt.slrmrole]});return}
   if(dt.sladdmem!==undefined){const g=s=>{const el=document.querySelector(s);return el?String(el.value||""):""};
    slOp({kind:"add",doc:"local",path:["members"],value:{workspace:g("[data-slmws]"),channel:g("[data-slmch]"),
-    role:g("[data-slmrole]"),users:g("[data-slmus]")}});return}
+    role:g("[data-slmrole]"),users:g("[data-slmus]"),alias:g("[data-slmalias]")}});return}
   if(dt.slrmmem!==undefined){slOp({kind:"remove",doc:"local",path:["members",+dt.slrmmem]});return}}
  if(!b)return;
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}

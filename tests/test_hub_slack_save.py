@@ -132,6 +132,27 @@ def test_save_shows_the_diff_of_both_files_before_it_writes(hub, tmp_path, monke
     assert yaml.safe_load(c.read_text())["project"]["language"] == "en-US"
 
 
+def test_a_member_alias_save_writes_the_local_file_and_leaves_slack_yaml_unchanged(hub, tmp_path, monkeypatch):
+    """Criterion 9 (issue #2873): the editor adds an alias to a member, and the save writes the local file alone. The
+    committed file keeps its bytes, so no alias reaches a repository. The alias is a neutral placeholder."""
+    monkeypatch.setattr(hub, "STATE", tmp_path / "state")
+    c, loc = files(tmp_path)
+    local = copy.deepcopy(LOCAL)
+    local["members"] = [{"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager", "users": ["U0OWNER001"]}]
+    loc.write_text(yaml.safe_dump(local, sort_keys=False))
+    edited = hub.slack_docs_edit({"committed": copy.deepcopy(COMMITTED), "local": copy.deepcopy(local),
+                                  "op": {"kind": "set", "doc": "local", "path": ["members", 0, "alias"],
+                                         "value": "alias-a"}}, committed=c, local=loc)
+    assert edited["err"] is None, edited
+    before = c.read_bytes()
+    out = hub.slack_files_set({"committed": edited["committed"], "local": edited["local"], "confirm": True},
+                              committed=c, local=loc)
+    assert out.get("err") is None, out
+    assert yaml.safe_load(loc.read_text())["members"][0]["alias"] == "alias-a"
+    assert c.read_bytes() == before
+    assert "alias-a" not in c.read_text()
+
+
 def test_a_local_save_is_atomic_and_applies_at_once(hub, tmp_path, monkeypatch):
     """The local file is written through a temp file and a rename, and the answer carries the file read back, so the
     change applies at once. The committed file is untouched when it has no change."""

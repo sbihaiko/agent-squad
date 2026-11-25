@@ -772,6 +772,102 @@ def test_the_member_channel_select_offers_only_its_workspace_channels(hub):
     assert "C0PROJ0001" not in row, row
 
 
+# ---------------------------------------------------------------- member aliases (SPEC 2682 #2873)
+
+def with_alias(alias="alias-a"):
+    """The local document with one member row that carries an alias. The alias is a neutral placeholder."""
+    doc = with_member()
+    doc["members"][0]["alias"] = alias
+    return doc
+
+
+def member_row(html, n=1):
+    """The markup of one member row of the roles and members editor, from its aria-label to its remove control."""
+    start = html.index(f'aria-label="member {n} fields"')
+    return html[start:html.index(f'data-slrmmem="{n - 1}"', start)]
+
+
+def test_the_editor_writes_a_member_alias_into_the_local_document(hub, tmp_path):
+    """Criterion 1 on the hub: the alias of a member is a local field, and the edit leaves the committed file alone."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "local", "path": ["members", 0, "alias"], "value": "alias-a"},
+               local=with_member())
+    assert out["err"] is None, out
+    assert out["local"]["members"][0]["alias"] == "alias-a", out["local"]
+    assert "members" not in out["committed"], out["committed"]
+
+
+def test_a_cleared_member_alias_leaves_no_alias_key(hub, tmp_path):
+    """A blank alias is no alias: the key leaves the local file, as a blank persona or language does."""
+    out = edit(hub, tmp_path, {"kind": "set", "doc": "local", "path": ["members", 0, "alias"], "value": ""},
+               local=with_alias())
+    assert out["err"] is None, out
+    assert "alias" not in out["local"]["members"][0], out["local"]
+
+
+def test_the_editor_adds_a_member_with_an_alias(hub, tmp_path):
+    """Criterion 6 on the hub: the Add member row carries an alias, and the new row keeps it."""
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "local", "path": ["members"],
+                               "value": {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
+                                         "users": ["U0OWNER002"], "alias": "alias-b"}}, local=with_member())
+    assert out["err"] is None, out
+    assert out["local"]["members"][-1]["alias"] == "alias-b", out["local"]
+    assert out["local"]["members"][-1]["users"] == ["U0OWNER002"], out["local"]
+
+
+def test_the_editor_adds_a_member_with_a_blank_alias_and_no_alias_key(hub, tmp_path):
+    out = edit(hub, tmp_path, {"kind": "add", "doc": "local", "path": ["members"],
+                               "value": {"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
+                                         "users": ["U0OWNER002"], "alias": ""}}, local=with_member())
+    assert out["err"] is None, out
+    assert "alias" not in out["local"]["members"][-1], out["local"]
+
+
+def test_a_member_row_shows_its_alias_first_and_its_user_id_as_secondary_text(hub):
+    """Criterion 2 on the page: the alias field comes before the user id, and the user id is the secondary line."""
+    row = member_row(roles_html(hub, local=with_alias()))
+    assert row.index('value="alias-a"') < row.index("U0OWNER001"), row
+    assert '<span class=m>U0OWNER001</span>' in row, row
+    assert "no alias" not in row, row
+
+
+def test_a_member_row_without_an_alias_shows_its_user_id_and_the_no_alias_hint(hub):
+    """Criterion 3 on the page: a member with no alias shows its user id and the hint `no alias`."""
+    row = member_row(roles_html(hub, local=with_member()))
+    assert "U0OWNER001" in row and "no alias" in row, row
+
+
+def test_the_alias_cell_wraps_its_controls_in_one_element(hub):
+    """Layout: the alias input, the hint and the user id share one wrapper, so the narrow grid keeps one child beside the label."""
+    row = member_row(roles_html(hub, local=with_alias()))
+    cell = row[row.index('data-l="Alias"'):row.index('data-l="Slack workspace"')]
+    assert cell.count('<span class=slalias>') == 1, cell
+    assert cell.index('<span class=slalias>') < cell.index('value="alias-a"') < cell.index("U0OWNER001"), cell
+
+
+def test_the_member_workspace_select_shows_the_label_with_the_team_id(hub):
+    """Criterion 4 on the page: the workspace choice reads its label, and its team id is the secondary text."""
+    html = roles_html(hub, local=with_member())
+    assert re.search(r'<option value="T0TEAM0001"[^>]*>team · T0TEAM0001</option>', html), html
+
+
+def test_the_member_channel_select_shows_the_channel_name_with_the_channel_id(hub):
+    """Criterion 5 on the page: the channel choice reads #name, and its channel id is the secondary text."""
+    html = roles_html(hub, local=with_member())
+    assert re.search(r'<option value="C0PROJ0001"[^>]*>#proj-agent-squad · C0PROJ0001</option>', html), html
+
+
+def test_the_add_member_row_has_an_alias_field(hub):
+    """Criterion 6 on the page: the Add member row carries an alias field that the Add control reads."""
+    html = roles_html(hub, local=with_member())
+    assert 'data-slmalias' in html and 'aria-label="new member alias"' in html, html
+
+
+def test_a_member_alias_edit_builds_a_local_operation(hub):
+    """Criterion 1 on the page: an alias edit goes to the local document, at the member's own alias path."""
+    op = doc_op(hub, "member:0:alias", {"type": "text", "value": "alias-a"})
+    assert op == {"kind": "set", "doc": "local", "path": ["members", 0, "alias"], "value": "alias-a"}, op
+
+
 def test_a_role_edit_builds_a_committed_operation_and_a_member_a_local_one(hub):
     """The edit handler places each change in the file the policy names: a role in the committed document, and a
     member in the local one. A checked action joins the role's list, and the raw user id and deploy fields travel to
