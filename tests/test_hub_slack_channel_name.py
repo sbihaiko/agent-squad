@@ -41,6 +41,15 @@ def rows_of(node):
     return {row["key"]: row for row in node["settings"]["rows"]}
 
 
+def name_key(doc, channel):
+    """The key path the policy names for one channel's `name`, derived from the fixture so a reorder never breaks it."""
+    for wi, ws in enumerate(doc.get("workspaces") or []):
+        for ci, ch in enumerate(ws.get("channels") or []):
+            if str(ch.get("id")) == channel:
+                return f"workspaces[{wi}].channels[{ci}].name"
+    raise AssertionError(f"the document names no channel {channel!r}")
+
+
 # ---------------------------------------------------------------- the read names the name row first
 
 def test_the_name_row_opens_the_channel_settings(hub, tmp_path):
@@ -90,13 +99,41 @@ def test_a_hash_and_the_surrounding_space_leave_the_stored_name(hub, tmp_path):
     assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["name"] == "release notes", out["committed"]
 
 
+def test_a_name_of_repeated_hashes_keeps_no_leading_hash(hub, tmp_path):
+    """Criterion 7: every leading `#` leaves the stored name, never only the first one."""
+    out = edit(hub, tmp_path, "C0ALERT001", "##release")
+    assert out["err"] is None, out
+    assert channel_row(out["committed"], "T0TEAM0001", "C0ALERT001")["name"] == "release", out["committed"]
+
+
+def test_the_hub_refuses_a_name_that_strips_to_nothing(hub):
+    """Criterion 6 at the hub's own value rule: a name that strips to the empty text is refused there, so a caller of
+    the hub alone never keeps `name: ""`; the policy keeps its own check as defence."""
+    for value in ("", "#", "##", "   ", "#  ", " # "):
+        assert hub._slack_field_value("name", value) == (None, "a channel names its name"), value
+    assert hub._slack_field_value("name", " #release notes ") == ("release notes", None)
+
+
+def test_the_saved_edit_survives_a_yaml_round_trip(hub, tmp_path):
+    """Criterion 4 on the file: the edited document, written and read back, holds the new name in that one row."""
+    out = edit(hub, tmp_path, "C0ALERT001", "release-notes")
+    assert out["err"] is None, out
+    path = tmp_path / "saved.slack.yaml"
+    path.write_text(yaml.safe_dump(out["committed"], sort_keys=False))
+    reloaded = yaml.safe_load(path.read_text())
+    assert channel_row(reloaded, "T0TEAM0001", "C0ALERT001")["name"] == "release-notes", reloaded
+    assert channel_row(reloaded, "T0TEAM0001", "C0PROJ0001")["name"] == "proj-agent-squad", reloaded
+    assert yaml.safe_load(path.read_text())["workspaces"][0]["label"] == "team", reloaded
+
+
 def test_an_empty_name_is_refused_and_the_refusal_names_the_row(hub, tmp_path):
     """Criterion 6: an empty name, one that is the `#` alone, and one of blanks are each refused; the message names the
     row's key in the file, and neither document changes."""
+    key = name_key(COMMITTED, "C0ALERT001")
     for value in ("", "#", "   ", "#  "):
         out = edit(hub, tmp_path, "C0ALERT001", value)
         assert out["err"], (value, out)
-        assert "workspaces[0].channels[1].name" in out["err"] and "name" in out["err"], (value, out["err"])
+        assert key in out["err"], (value, out["err"])
         assert out["committed"] == COMMITTED and out["local"] == LOCAL, (value, out)
 
 
@@ -125,6 +162,23 @@ def test_the_page_draws_the_name_row_first_with_its_file_chip(hub, tmp_path):
     assert "Name" in first and "4.slack.local.yaml" in first, first
     assert 'data-slf="C0CLISUP01|name"' in first, first
     assert 'value="support"' in first, first
+
+
+# ---------------------------------------------------------------- the rows keep one explicit order
+
+def test_the_guest_channel_rows_keep_their_order(hub, tmp_path):
+    """The settings rows of a guest channel keep one explicit order, and the Name row opens them."""
+    node = by_name(read(hub, tmp_path)["tree"]["root"], "#support")
+    assert [row["key"] for row in node["settings"]["rows"]] == [
+        "name", "mode", "persona", "language", "delivery", "draft_for", "connect", "watch", "audio",
+        "roles", "announce"], node["settings"]["rows"]
+
+
+def test_the_owned_channel_rows_keep_their_order(hub, tmp_path):
+    """The settings rows of an owned channel keep one explicit order, with no delivery row."""
+    node = by_name(read(hub, tmp_path)["tree"]["root"], "#proj-agent-squad")
+    assert [row["key"] for row in node["settings"]["rows"]] == [
+        "name", "mode", "persona", "language", "connect", "roles", "announce"], node["settings"]["rows"]
 
 
 # ---------------------------------------------------------------- another project reads only
