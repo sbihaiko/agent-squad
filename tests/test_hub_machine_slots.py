@@ -316,6 +316,7 @@ RENDER_SLOTS = """
   slotS = fixture;
   slotDraft = JSON.parse(JSON.stringify(fixture));
   setTab("set");
+  setTheme("lim");   // the page restores the last theme from localStorage, so the render names its own
   document.getElementById("lim").open = true;
   document.getElementById("lbody").innerHTML = slotsHtml();
   return true;
@@ -705,6 +706,9 @@ def test_no_machine_slots_label_overlaps_its_bar_and_the_gate_label_wraps_to_two
         assert frame["innerWidth"] == int(width), \
             f"the viewport is {frame['innerWidth']} px, not the emulated {width} px"
         assert len(frame["rows"]) == 2, f"{width} px: the table drew {len(frame['rows'])} data rows, not two"
+        first = frame["rows"][0]["label"]
+        assert first["r"] - first["l"] > 0 and first["b"] - first["t"] > 0, \
+            f"{width} px: the rows drew no box, so the page shows another Settings theme: {first}"
         for row in frame["rows"]:
             assert not _overlap(row["label"], row["bar"]), f"{width} px: {row['name']} label overlaps its bar: {row}"
             assert row["label"]["r"] <= row["bar"]["l"], \
