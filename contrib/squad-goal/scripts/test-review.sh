@@ -519,6 +519,8 @@ cat > "$T/j21" <<'R'
 R
 rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
+sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q 'passes at base .* and fails at head' && sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q 'inverted polarity' \
+  && ok "22 the fix prompt says a finding that passes at the base and fails at the head is resolved when the branch added the fix (#2869)" || ko "22 the fix prompt has no inverted-polarity instruction (#2869)"
 sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
 /usr/bin/grep -q 'Open no skill file (no SKILL.md under ~/.agents, ~/.codex or ~/.claude) and use no skill' "$T/prompt21" && ok "22 the fix prompt forbids skill files (#764)" || ko "22 the fix prompt has no skill line (#764)"
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"

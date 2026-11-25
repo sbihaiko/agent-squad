@@ -469,8 +469,8 @@ f42() { printf '{"location":"%s","defect":"d %s","failure":"y","fix":"z","repro"
 printf '{"verdict":"CHANGES","blocking":[%s,%s,%s],"debt":[],"resolved":[]}' "$(f42 a.py 'touch a.ran; test ! -f headmark')" \
   "$(f42 b.py 'touch b.ran; test -f headmark')" "$(f42 c.py 'touch c.ran; false')" > "$T/r42.json"
 r42 "$T/r42.json" --repro-base "$T/b42" bbb1111; rc=$?
-[ $rc = 0 ] && [ "$(jq -r '[.blocking[].location]|join(",")' "$T/r42.json")" = "a.py,c.py" ] && [ "$(bl42 "$T/r42.json")" = "y|repro also fails at base bbb1111; y|" ] \
-  && ok "42 a repro red at the base and the head stays Blocking with the base sha; one red only at the head has no note" \
+[ $rc = 0 ] && [ "$(jq -r '[.blocking[].location]|join(",")' "$T/r42.json")" = "a.py,c.py" ] && [ "$(bl42 "$T/r42.json")" = "repro passes at base bbb1111 and fails at head hhh2222; y|repro also fails at base bbb1111; y|" ] \
+  && ok "42 a repro red at the base and the head stays Blocking with the base sha; one red only at the head names the base it passes at and the head it fails at (#2869)" \
   || ko "42 first round: rc=$rc blocking=$(bl42 "$T/r42.json") $(cat "$T/r42.json.err")"
 [ -e "$T/b42/a.ran" ] && [ -e "$T/b42/c.ran" ] && [ ! -e "$T/b42/b.ran" ] && [ "$(ls "$T/b42" | /usr/bin/wc -l | tr -d ' ')" = 2 ] \
   && ok "42 a finding green at the head starts no base run" || ko "42 base runs: $(ls "$T/b42" | tr '\n' ' ')"
