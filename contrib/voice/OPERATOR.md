@@ -58,7 +58,9 @@ rule of the Slack policy module (`squad/slackpolicy.py`). `voiced` checks the sa
 so a line with no pending inbox line stays in the outbox. Never append to an outbox yourself.
 
 One session answers a channel, and every helper append takes an exclusive flock on the outbox while every inbox read
-takes a shared one, so two writers never interleave a line.
+takes a shared one, so two writers that take the lock never interleave a line. The helper reads only a bounded tail of
+the inbox, so its memory and latency do not grow with the queue's age. A call that repeats the same thread and text
+writes no second line, so a retry after a lost tool result posts one answer.
 
 One outbox line is one answer:
 
@@ -91,7 +93,8 @@ the kernel permits that call while it refuses every other command. It writes no 
 When a message asks for an action, the session answers in that channel that it only reads. The DM session also calls
 the helper once more for the same line, with the same `--scope` and `--thread`, and with a text that starts with
 `Proposal:`. The inbox keeps the question, so the second call answers the same pending line, and its proposal line
-lands beside the answer. A project session cannot write the DM outbox, so it proposes nothing; the executor that runs
+lands beside the answer. No structured field marks a proposal line: the executor that runs an action selects it by the
+`Proposal:` text prefix. A project session cannot write the DM outbox, so it proposes nothing; the executor that runs
 an action is #2939.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:

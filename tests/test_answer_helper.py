@@ -474,3 +474,76 @@ def test_the_inbox_read_waits_for_an_exclusive_lock(tmp_path):
             blocked = True
     assert blocked, "the inbox read did not wait for the exclusive lock"
     assert proc.wait(timeout=30) == 0, proc.stderr.read()
+
+
+# The bounded inbox read (#2949 review, Blocking 1): the helper reads only a tail of the inbox, the way
+# `operators.tail_lines` does, so its memory and latency do not grow with the age of the queue.
+
+def test_the_helper_reads_only_the_inbox_tail_so_an_old_line_never_refuses(tmp_path):
+    """Blocking 1 (#2949): the helper reads a bounded tail of the inbox, so a corrupt line older than the read bound
+    never refuses a pending line at the end, and the helper never loads the whole queue into memory."""
+    mod = helper()
+    binding, state = queued(tmp_path)
+    path = state / "inboxes" / f"{CHANNEL}.jsonl"
+    filler = json.dumps({"id": "old", "ts": "1.000001", "user": "UPROBE0001", "channel": CHANNEL, "text": "x"}) + "\n"
+    chunk = filler * 5000                  # about 440 KB of ordinary lines, beyond the read bound on each side
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(chunk)
+        f.write("this line is not JSON\n")   # a corrupt line an earlier crash left, older than the read bound
+        f.write(chunk)
+    asked(state)                           # the pending question at the very end
+
+    record = mod.answer(mod.read_binding(bound(binding)), CHANNEL, QUESTION, ANSWER)
+
+    assert outbox(state) == [{"thread_ts": QUESTION, "text": ANSWER}], record
+
+
+def test_the_helper_skips_a_torn_trailing_line_and_answers_the_line_before_it(tmp_path):
+    """Blocking 1 (#2949): the last line may be the daemon's write in flight, so the helper skips only that torn
+    trailing line and still answers the pending line before it."""
+    mod = helper()
+    binding, state = queued(tmp_path)
+    asked(state)
+    with open(state / "inboxes" / f"{CHANNEL}.jsonl", "a", encoding="utf-8") as f:
+        f.write('{"id": "torn", "ts": "2.000000"')   # no newline: a half write
+
+    mod.answer(mod.read_binding(bound(binding)), CHANNEL, QUESTION, ANSWER)
+
+    assert outbox(state) == [{"thread_ts": QUESTION, "text": ANSWER}]
+
+
+# A retried answer (#2949 review, Debt 1): a lost Bash tool_result makes the session call the helper again with the
+# same text, and the owner gets one line.
+
+def test_a_retried_call_with_the_same_text_lands_one_outbox_line(tmp_path):
+    """Debt 1 (#2949): the helper skips the append when the outbox already holds a line with the same thread_ts and
+    text, so a retry after a lost tool_result never posts the same answer twice."""
+    binding, state = queued(tmp_path)
+    asked(state)
+
+    first = run_cli(binding, "--scope", CHANNEL, "--thread", QUESTION, "--text", ANSWER)
+    second = run_cli(binding, "--scope", CHANNEL, "--thread", QUESTION, "--text", ANSWER)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert outbox(state) == [{"thread_ts": QUESTION, "text": ANSWER}]
+
+
+# A proposal line (#2949 review, Debt 3): the outbox line carries no structured field, so the executor selects a
+# proposal by the `Proposal:` text prefix, and the helper keeps that prefix byte for byte.
+
+def test_a_proposal_line_keeps_the_text_prefix_the_executor_selects_by(tmp_path):
+    """Debt 3 (#2949): the executor selects a proposal by the `Proposal:` text prefix, so the second helper call's
+    line carries that prefix unchanged beside the answer."""
+    binding, state = queued(tmp_path, channels=("dm",), dm="D0AAAAAA1")
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001",
+                            "channel": "D0AAAAAA1", "text": "restart the hub"}) + "\n")
+
+    assert run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", ANSWER).returncode == 0
+    assert run_cli(binding, "--scope", "dm", "--thread", QUESTION,
+                   "--text", "Proposal: restart the hub").returncode == 0
+
+    lines = outbox(state, "dm")
+    assert [line["text"] for line in lines] == [ANSWER, "Proposal: restart the hub"], lines
+    assert [line["text"].startswith("Proposal:") for line in lines] == [False, True], lines

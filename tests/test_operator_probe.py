@@ -44,6 +44,9 @@ def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
 
     monkeypatch.setattr(operators, "call", fake_call)
     (tmp_path / "repo").mkdir()      # a session runs in a checkout that exists; a missing one refuses the start
+    pinned = tmp_path / "state" / "operators" / "sessions"
+    pinned.mkdir(parents=True)
+    (pinned / "dm.json").write_text(json.dumps({"dm": "D0AAAAAA1"}))   # a DM start binds the pinned record alone
     operators.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
     argv = argvs[0]
     assert argv[argv.index("--tools") + 1] == operators.TOOLS
@@ -1266,10 +1269,39 @@ def test_the_answer_phase_restores_the_inbox_when_the_phase_fails(tmp_path, monk
     assert own[0].read_bytes() == before
 
 
+def test_a_line_the_daemon_appends_during_the_phase_is_never_truncated(tmp_path, monkeypatch):
+    """Debt 2 (#2949): the phase deletes only the bytes it appended. When the daemon appends a real line during the
+    probe, the inbox no longer ends at the phase's own question, so the phase fails and leaves that line in place."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    real = json.dumps({"id": "c:real", "ts": "9.0", "channel": probe.PROBE_CHANNELS[0], "text": "a real message"})
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(own[0], "a", encoding="utf-8") as f:
+            f.write(real + "\n")          # the daemon's own line, appended while the session answered
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="appended to the inbox"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert real in own[0].read_text(), "the phase deleted a line the daemon wrote"
+
+
+def test_the_operator_note_names_the_proposal_prefix_the_executor_selects_by():
+    """Debt 3 (#2949): an outbox line carries no structured proposal field, so the executor selects a proposal by the
+    `Proposal:` text prefix, and the operator note must name that rule."""
+    probe = load("operator_probe")
+    note = Path(probe.__file__).with_name("OPERATOR.md").read_text()
+
+    assert "Proposal:" in note and "prefix" in note, note
+
+
 def test_the_answer_phase_drives_the_real_helper_end_to_end(tmp_path, monkeypatch):
-    """Debt 4 (#2949): the new answer-phase cases fake `cli_call`, so a regression in `answer.py` slips through. This
-    case shells the real helper under the phase's own binding (no model) and checks the argv, the binding and the
-    outbox line together."""
+    """Debt 4 (#2949): `cli_call` is stubbed here, so this case proves the shipped helper under the phase's own
+    binding (no model); it does not prove that the live session's Bash tool ran the helper. Only the live phase does."""
     probe = load("operator_probe")
     outboxes, own = answer_folders(tmp_path, probe)
     command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,

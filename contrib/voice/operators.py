@@ -586,7 +586,9 @@ def binding(state, unit):
     """The binding file one session's answer helper reads: its state folder and the channels of its project alone. A
     started session names it in `BINDING_ENV`, so the helper answers no other channel, whatever argument it is passed.
     The DM session's binding always names `dm` among its channels, and the one DM channel its answers may post to
-    (#2949): a DM unit whose channels are empty still yields a binding the helper accepts."""
+    (#2949): a DM unit whose channels are empty still yields a binding the helper accepts. That channel is the
+    supervisor's pinned record alone, never an inbox line's own channel, so a DM start with no pinned record refuses
+    and names it."""
     path = os.path.join(root(state), "sessions", f"{unit['key']}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     channels = list(unit["channels"])
@@ -594,7 +596,13 @@ def binding(state, unit):
         channels.append(DM)
     data = {"key": unit["key"], "state": state, "channels": channels}
     if unit["key"] == DM:
-        data["dm"] = dm_channel(state)
+        # The DM channel is the supervisor's pinned record and nothing else: an inbox line anything wrote could name
+        # another channel, and the helper trusts the binding. With no pinned record, no DM session starts.
+        own = dm_channel(state, pinned=True)
+        if not own:
+            raise Refused(f"dm: no pinned DM channel at "
+                          f"{os.path.join(root(state), 'sessions', f'{DM}.json')}, so no DM session starts")
+        data["dm"] = own
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, sort_keys=True)
@@ -1103,7 +1111,13 @@ def run_pass(state, repo, check=False, only=None):
             if not os.path.isdir(by_key[key].get("checkout") or ""):
                 print(f"operators: {key} names no checkout; no session started", file=sys.stderr)
                 continue
-            sid, entry = start(by_key[key], state, repo, others)  # the record is written after each start, never at the end
+            try:
+                sid, entry = start(by_key[key], state, repo, others)  # the record is written after each start
+            except Refused as e:
+                if key == DM:            # no pinned DM channel: nothing to answer, and the pass keeps its projects
+                    print(f"operators: {key}: {e}", file=sys.stderr)
+                    continue
+                raise
             record[key] = {**prior, **entry, "id": sid, "started": int(time.time()), "missing": 0, "adopt": 0}
             started_now[key] = sid
             write_json(rec_path, record)

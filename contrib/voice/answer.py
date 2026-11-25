@@ -15,17 +15,23 @@ wrote never picks the outbox channel. This helper is the only gate on that path;
 
 A message that asks for an action gets two calls under its one line: the read-only answer, then a second call for the
 same thread whose text starts with `Proposal:`. The inbox keeps the question, so the second call answers the same
-pending line and its proposal line lands beside the answer in the same outbox.
+pending line and its proposal line lands beside the answer in the same outbox. No structured field marks a proposal:
+the executor that runs an action selects it by the `Proposal:` text prefix.
+
+A retried call for the same thread and the same text writes no second line: a lost Bash tool_result makes the session
+call the helper again, and the helper skips the append when its outbox tail already holds that line.
 
 The helper writes no other file and makes no Slack call. It runs under the session's kernel profile, so the kernel
 refuses every write beyond the session's own outboxes whatever this helper does. One session per state folder answers
 a channel, and every append to an outbox takes an exclusive flock while every inbox read takes a shared one, so two
-writers never interleave a line.
+writers that take the lock never interleave a line. An inbox read takes only the file's bounded tail, so the helper
+never loads a whole queue.
 
 usage: answer.py --scope <channel id|dm> [--thread <the inbox line's ts>] --text "<the answer>"
                  [--speech "<a 10 to 30 second summary>"] [--persona <id>]
 The DM may omit `--thread`, and then answers the newest pending line of its inbox.
-Exit 0: one outbox line was written. Exit 2: the call is refused, and nothing was written. Exit 1: the write failed.
+Exit 0: the answer's one outbox line is present, and a retry writes no second one. Exit 2: the call is refused, and
+nothing was written. Exit 1: the write failed.
 
 The binding (`VOICE_ANSWER_BINDING`) is a JSON file the supervisor writes: `key`, `state`, `channels`, and `dm` for the
 DM session.
@@ -71,21 +77,27 @@ def read_json(path, default):
 
 
 def read_lines(path):
-    """The JSON lines of one queue file. The last line may be a half write a crash left behind, so it is skipped; a
-    corrupt line before it is a broken queue that names its path.
+    """The JSON lines of one queue file, read from a bounded tail the way `operators.tail_lines` reads one: the helper
+    loads a constant amount of memory whatever the inbox's age, and the partial first line of that bounded read is
+    dropped.
 
-    The read holds a shared flock on the file, so it never meets a writer's line half written: the daemon appends a
-    line to the inbox, and a second session never appends one here (only the daemon writes an inbox)."""
+    The last line may be a half write the daemon is making right now, so it is skipped; a corrupt line before it is a
+    broken queue that names its path. An inbox whose pending line is older than the read bound answers nothing, because
+    the helper never loads the whole queue.
+
+    The read holds a shared flock on the file, so a writer that takes the matching exclusive lock never meets a line
+    half written. The daemon's own inbox append takes no lock, so a torn trailing line is still possible: the helper
+    skips that one line and nothing else."""
     out = []
     try:
-        f = open(path, encoding="utf-8")
+        f = open(path, "rb")
     except FileNotFoundError:
         return out
     except OSError as e:
         raise Refused(f"cannot read the inbox {path}: {e.strerror or e}") from e
     with f:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-        raw_lines = f.read().splitlines()
+        raw_lines = operators.tail_lines(path)
     last = len(raw_lines) - 1
     for number, raw in enumerate(raw_lines):
         raw = raw.strip()
@@ -175,6 +187,14 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
         # One exclusive flock bounds every append to this outbox, so two sessions of one state folder never interleave
         # a line: a writer that a crash left mid-line holds no lock, and the next append starts on a fresh line.
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        for raw in operators.tail_lines(outbox):     # a bounded tail, never the whole outbox
+            try:
+                held = json.loads(raw)
+            except ValueError:
+                continue
+            if (isinstance(held, dict) and str(held.get("thread_ts")) == record["thread_ts"]
+                    and str(held.get("text")) == record["text"]):
+                return held                          # a retry of this answer: the line is already there
         f.seek(0, os.SEEK_END)
         lead = ""
         if f.tell():
