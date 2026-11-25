@@ -201,6 +201,24 @@ def _members(file, doc, out, local):
             if not USER_ID.match(str(user)):
                 out.append(_defect(file, f"{base}.users[{j}]",
                                    f"user {user!r} is not a Slack user id (U... or W...)"))
+    _one_role_per_workspace(file, doc, out)
+
+
+def _one_role_per_workspace(file, doc, out):
+    """A Slack user holds one role per workspace (issue #2936): each role has one tone and one set of actions, so a
+    sender's tone and actions come from one role. The first row that gives a user a second role is the defect, and it
+    names the row and the role the user already holds."""
+    held = {}
+    for i, member in enumerate(_rows(doc.get("members"))):
+        workspace, role = str(member.get("workspace") or ""), str(member.get("role") or "")
+        users = member.get("users") if isinstance(member.get("users"), list) else []
+        for user in users:
+            first = held.setdefault((workspace, str(user)), (i, role))
+            if first[1] != role:
+                out.append(_defect(file, f"members[{i}].role",
+                                   f"user {user} already holds role {first[1]!r} in workspace {workspace} "
+                                   f"(members[{first[0]}]); a user holds one role per workspace, not {role!r} too"))
+                break
 
 
 def _secret_keys(file, node, path, out):
