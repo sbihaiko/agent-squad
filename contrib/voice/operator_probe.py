@@ -406,10 +406,10 @@ def profile_for(work, ports):
     return project_shape(work, ports)
 
 
-def answer_lines(path):
-    """Every JSON line one outbox holds, in order; the denials' plain control lines are skipped."""
+def lines_in(text):
+    """Every JSON line one text holds, in order; the denials' plain control lines are skipped."""
     out = []
-    for raw in Path(path).read_text().splitlines():
+    for raw in str(text or "").splitlines():
         try:
             record = json.loads(raw)
         except ValueError:
@@ -419,16 +419,27 @@ def answer_lines(path):
     return out
 
 
-def check_answer_call(calls):
-    """The live session's one command is the shipped helper (#2949): exactly one Bash call, and that call runs
-    `answer.py` with the scope, the thread and the text. A line that appears from any other command proves nothing."""
+def answer_lines(path):
+    """Every JSON line one outbox holds, in order; the denials' plain control lines are skipped."""
+    return lines_in(Path(path).read_text())
+
+
+def check_answer_call(calls, expected):
+    """The live session's one command is the shipped helper (#2949): exactly one Bash call, and its command parses to
+    exactly `expected` argv. A substring match would pass a command that only carries the helper's words, so the whole
+    argv is compared. The Bash tool_result must report success, so a helper that refused its line proves nothing."""
     bash = [call for call in calls if call.get("name") == "Bash"]
     if len(bash) != 1:
         raise ProbeFailed(f"the live session made {len(bash)} Bash calls, not exactly one running the helper")
     command = str((bash[0].get("input") or {}).get("command") or "")
-    for part in ("answer.py", "--scope", "--thread", "--text"):
-        if part not in command:
-            raise ProbeFailed(f"the live session's one command does not run the helper: {command!r}")
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        raise ProbeFailed(f"the live session's one command does not parse: {command!r}") from None
+    if argv != [str(part) for part in expected]:
+        raise ProbeFailed(f"the live session's one command does not run the helper exactly: {command!r}")
+    if bash[0].get("error"):
+        raise ProbeFailed(f"the helper call exited non-zero: {(bash[0].get('result') or '').strip() or 'no reason'}")
     return command
 
 
@@ -451,16 +462,19 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
             "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
             "--model", MODEL]
     _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
-    check_answer_call(tool_calls(events))
+    check_answer_call(tool_calls(events), command)
     for path, before in held.items():
         if not Path(path).read_text().startswith(before):
             raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
     answers = answer_lines(outboxes[0])
     if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
         raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")
-    stray = answer_lines(outboxes[1])
-    if stray:
-        raise ProbeFailed(f"the live session answered outside the question's channel: {outboxes[1]} holds {stray!r}")
+    # The other channel is compared against its own earlier content, never against empty: an earlier phase's JSON line
+    # is no answer of this session, and a line this session added is one (#2949).
+    other = str(outboxes[1])
+    fresh = len(answer_lines(other)) - len(lines_in(held[other]))
+    if fresh:
+        raise ProbeFailed(f"the live session answered outside the question's channel: {other} gained {fresh} line(s)")
     return answers
 
 
@@ -581,7 +595,7 @@ def tool_calls(events):
         for block in content if isinstance(content, list) else ():
             if block.get("type") == "tool_use":
                 call = {"id": block.get("id"), "name": block.get("name"), "input": block.get("input") or {},
-                        "result": None}
+                        "result": None, "error": False}
                 by_id[call["id"]] = call
                 calls.append(call)
             elif block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
@@ -589,6 +603,7 @@ def tool_calls(events):
                 if isinstance(body, list):
                     body = "\n".join(str(part.get("text", "")) for part in body if isinstance(part, dict))
                 by_id[block["tool_use_id"]]["result"] = str(body or "")
+                by_id[block["tool_use_id"]]["error"] = bool(block.get("is_error"))
     return calls
 
 

@@ -352,3 +352,86 @@ def test_a_binding_whose_state_folder_is_missing_writes_nothing_and_names_it(tmp
 
     assert not missing.exists()
     assert not (missing / "outboxes").exists()
+
+
+# The DM proposal (#2949, #2939): an action request gets its read-only answer and one proposal line, and both leave
+# through the shipped helper under the same thread. Only one session writes a state folder's outbox, so the helper
+# holds an exclusive lock on its append and a shared lock on its inbox read (DEBT 5).
+
+def test_the_second_call_for_a_dm_thread_lands_a_proposal_line(tmp_path):
+    """The DM session answers an action request, then calls the helper once more for the same line with a text that
+    starts with `Proposal:`. The second call answers the same pending line, so its line lands beside the answer."""
+    binding, state = queued(tmp_path, channels=("dm",), dm="D0AAAAAA1")
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001",
+                            "channel": "D0AAAAAA1", "text": "restart the hub"}) + "\n")
+
+    first = run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", ANSWER)
+    second = run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", "Proposal: restart the hub")
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert outbox(state, "dm") == [
+        {"thread_ts": QUESTION, "text": ANSWER, "channel": "D0AAAAAA1"},
+        {"thread_ts": QUESTION, "text": "Proposal: restart the hub", "channel": "D0AAAAAA1"},
+    ]
+
+
+class HeldLock:
+    """An exclusive flock one file holds for as long as the block runs, so a helper's own lock is observable."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        import fcntl
+        self.f = open(self.path, "a+", encoding="utf-8")
+        fcntl.flock(self.f.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        import fcntl
+        fcntl.flock(self.f.fileno(), fcntl.LOCK_UN)
+        self.f.close()
+
+
+def start(binding, *args):
+    """One helper process, left running: the caller decides whether it finished."""
+    return subprocess.Popen([sys.executable, str(VOICE / "answer.py"), *args], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env={**os.environ, **bound(binding)})
+
+
+def test_the_outbox_append_waits_for_an_exclusive_lock(tmp_path):
+    """Two writers of one state folder never interleave a line: the helper's append takes an exclusive flock, so it
+    stands still while another holder keeps it, and lands once the holder lets go."""
+    binding, state = queued(tmp_path)
+    asked(state)
+    path = state / "outboxes" / f"{CHANNEL}.jsonl"
+    path.write_text("")
+
+    with HeldLock(path):
+        proc = start(binding, "--scope", CHANNEL, "--thread", QUESTION, "--text", ANSWER)
+        try:
+            proc.wait(timeout=0.6)
+            blocked = False
+        except subprocess.TimeoutExpired:
+            blocked = True
+    assert blocked, "the append did not wait for the exclusive lock"
+    assert proc.wait(timeout=30) == 0, proc.stderr.read()
+    assert outbox(state) == [{"thread_ts": QUESTION, "text": ANSWER}]
+
+
+def test_the_inbox_read_waits_for_an_exclusive_lock(tmp_path):
+    """The inbox read takes a shared flock, so it stands still while a writer holds the exclusive lock on that file."""
+    binding, state = queued(tmp_path)
+    asked(state)
+
+    with HeldLock(state / "inboxes" / f"{CHANNEL}.jsonl"):
+        proc = start(binding, "--scope", CHANNEL, "--thread", QUESTION, "--text", ANSWER)
+        try:
+            proc.wait(timeout=0.6)
+            blocked = False
+        except subprocess.TimeoutExpired:
+            blocked = True
+    assert blocked, "the inbox read did not wait for the exclusive lock"
+    assert proc.wait(timeout=30) == 0, proc.stderr.read()
