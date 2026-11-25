@@ -23,6 +23,10 @@ itself, so those three refusals never depend on what the machine holds, and it t
 holds. A read of the session's own checkout must still pass — its own `.env` and `*.slack.local.yaml` included, since
 a project keeps them there — or a profile that refuses every read would pass.
 
+The fixed answer path (#2949): one live session, under that same profile, is asked to answer one pending inbox line
+through the shipped `answer` helper. The helper's one outbox line must thread under that question, and no other
+channel's outbox may take a line.
+
 Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile, under the
 name a live project session carries (`SQUAD-OPERATOR-<key>`, #2925). The CLI must reach the service it already runs, or
 start one, print the new session's id, and list that id under that name; the probe stops the session. A service the
@@ -102,6 +106,10 @@ BG_PROMPT = "Reply with the single word ok. Use no tool."
 BG_DEADLINE = 120.0                    # seconds, the one `claude --bg` call
 BG_LIST = ("agents", "--json")         # the CLI reads the live roster: a listed id proves the service is reachable
 PROBE_THREAD = "1700000000.000100"
+# The fixed answer path (#2949): a live session answers one pending inbox line through the shipped helper alone.
+HELPER = VOICE / "answer.py"
+ANSWER_TEXT = "probe answer"
+ANSWER_QUESTION = "probe question"
 PROBE_DRAFT = slackwriter.Draft(slackwriter.DRAFT_WORD, PROBE_CHANNEL, PROBE_THREAD,
                                 slackwriter.compose("Probe", "probe reply"), "Probe")
 # Per role: the calls its hook must refuse, as (what it is, tool, arguments, a fragment of the hook's reason).
@@ -353,10 +361,10 @@ def session(work, profile, cli, proxy_url=None):
     return init, result
 
 
-def cli_call(work, profile, cli, args, proxy_url=None):
+def cli_call(work, profile, cli, args, proxy_url=None, extra_env=None):
     """One bounded CLI call through the wrapper; return its init event, its result event and every event."""
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
-    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env()})
+    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env(), **(extra_env or {})})
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -370,6 +378,62 @@ def cli_call(work, profile, cli, args, proxy_url=None):
         raise ProbeFailed(f"the CLI call ended with no init or result event (exit {done.returncode}): "
                           f"{reason[-1] if reason else 'no output'}")
     return init, result, events
+
+
+def answer_prompt(command):
+    """The prompt that asks the live session to make its one write through the shipped answer helper (#2949)."""
+    return ("Use the Bash tool to run exactly this command once, with no change to any argument, and then reply with "
+            "the single word done:\n" + shlex.join(command))
+
+
+def answer_binding(work, channels):
+    """The binding file a session start writes (#2949): its state folder and the channels of its project alone."""
+    folder = work / "answer"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "binding.json"
+    path.write_text(json.dumps({"key": PROBE_KEY, "state": str(work / "state"), "channels": list(channels)}))
+    return path
+
+
+def answer_lines(path):
+    """Every JSON line one outbox holds, in order; the denials' plain control lines are skipped."""
+    out = []
+    for raw in Path(path).read_text().splitlines():
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            out.append(record)
+    return out
+
+
+def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
+    """Prove a live session answers through the shipped helper (#2949).
+
+    One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
+    and the live session is asked to run the helper exactly. The helper's one outbox line must thread under that
+    question, and no other channel's outbox may take a line."""
+    scope = PROBE_CHANNELS[0]
+    for outbox in outboxes:
+        Path(outbox).write_text("")          # a denial's control line is not an answer
+    question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
+                "text": ANSWER_QUESTION, "language": "en-US"}
+    with open(own_inboxes[0], "a", encoding="utf-8") as f:
+        f.write(json.dumps(question) + "\n")
+    binding = answer_binding(work, PROBE_CHANNELS)
+    command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
+    args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
+            "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
+            "--model", MODEL]
+    cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+    answers = answer_lines(outboxes[0])
+    if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
+        raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")
+    stray = answer_lines(outboxes[1])
+    if stray:
+        raise ProbeFailed(f"the live session answered outside the question's channel: {outboxes[1]} holds {stray!r}")
+    return answers
 
 
 def check_session(init, result):
@@ -596,6 +660,7 @@ def run_probe(work, cli):
         config_denials(checkout, profile)
         init, result = session(checkout, profile, cli)
         check_session(init, result)
+        answer_phase(work, profile, cli, outboxes, own_inboxes)
         bg_session(checkout, profile, cli)
         guest_sessions(work, profile, cli)
         return 0
@@ -609,6 +674,7 @@ def run_probe(work, cli):
         check_proxy_refuses(proxy)
         init, result = session(checkout, profile, cli, proxy.url)
         check_session(init, result)
+        answer_phase(work, profile, cli, outboxes, own_inboxes, proxy.url)
         bg_session(checkout, profile, cli, proxy.url)
         guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
@@ -635,7 +701,9 @@ def main(argv=None):
           f"route's loopback port open and every other loopback port refused; each own outbox took a write and each own "
           f"inbox gave its line; .env, the Slack local file, another project's checkout and each credential folder the "
           f"home holds refused, the own checkout read); {route}; session tools {TOOLS}, "
-          f"dontAsk, cap ${SPEND}; a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
+          f"dontAsk, cap ${SPEND}; a live session answered one pending inbox line through the shipped helper "
+          f"({HELPER.name}) and no other channel's outbox took a line; "
+          f"a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
           f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
           f"stand-in connector")
