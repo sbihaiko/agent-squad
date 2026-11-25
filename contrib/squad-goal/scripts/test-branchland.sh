@@ -357,6 +357,19 @@ printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n'
 r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
 head -1 "$T/st/review-fix_8-rebase-hand.md" | /usr/bin/grep -q CHANGES && ok "a kept rebase branch gets its one CHANGES round" || ko "a kept rebase branch got no round: '$(head -1 "$T/st/review-fix_8-rebase-hand.md")' '$r'"
 [ "$(cat "$T/st/auto/kept-fix_8-rebase-hand")" = origin/dev ] && ok "2571 a kept wave branch's marker gets no salvage line" || ko "2571 the kept wave marker changed: '$(cat "$T/st/auto/kept-fix_8-rebase-hand" | tr '\n' '|')'"
+# (#2866) The round rebases on a ref that is on the remote. A marker that names a wave branch the loop deleted gets its round on
+# origin/dev, the ref the conflict was found with; a stale tracking ref in the checkout does not keep the dead ref alive.
+reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); printf 'origin/wave/run-gone\n' > "$T/st/auto/kept-fix_8-rebase-hand"
+$G -C "$T/co" update-ref refs/remotes/origin/wave/run-gone "$($G -C "$T/co" rev-parse dev)"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n' "$hs" > "$T/st/review-fix_8-rebase-hand.sha"
+r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+/usr/bin/grep -q 'Rebase this branch on origin/dev,' "$T/st/review-fix_8-rebase-hand.md" && ! /usr/bin/grep -q 'wave/run-gone' "$T/st/review-fix_8-rebase-hand.md" \
+  && ok "2866 a kept marker whose ref is gone from the remote gets its round on origin/dev" || ko "2866 the round names a ref that is gone: '$(/usr/bin/grep -o 'Rebase this branch on [^,]*' "$T/st/review-fix_8-rebase-hand.md")' '$r'"
+$G -C "$T/co" update-ref -d refs/remotes/origin/wave/run-gone
+reset; hand8; hs=$($O rev-parse fix/8-rebase-hand); printf 'origin/wave/run-live\n' > "$T/st/auto/kept-fix_8-rebase-hand"; $O branch -q wave/run-live dev
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_8-rebase-hand.md"; printf '%s\n' "$hs" > "$T/st/review-fix_8-rebase-hand.sha"
+r=$(OPEN=8 SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+/usr/bin/grep -q 'Rebase this branch on origin/wave/run-live,' "$T/st/review-fix_8-rebase-hand.md" && ok "2866 a kept marker whose ref is on the remote keeps its round on that ref" || ko "2866 a live kept ref was replaced: '$(/usr/bin/grep -o 'Rebase this branch on [^,]*' "$T/st/review-fix_8-rebase-hand.md")' '$r'"
 # (#2571) A salvage branch gets a rebase round when its pusher marked it (auto/salvaged-<key>), never by its name. Its kept marker
 # keeps origin/dev on line 1 and one `salvage <tip> <base>` line per round, never a `round` line. One round per tip; a new tip on
 # the base of the last round, or a third conflict, freezes the card, calls no wave.sh, and keeps the branch and the marker.
