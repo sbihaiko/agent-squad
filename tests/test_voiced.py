@@ -2844,3 +2844,31 @@ def test_the_action_reply_is_written_through_the_states_own_outbox_path(tmp_path
     moved = [json.loads(line) for line in (elsewhere / "C0PROJ0001.jsonl").read_text().splitlines()]
     assert moved and moved[0]["text"] == "the project is green"
     assert "the project is green" not in outbox.read_text(), "the pass wrote the reply to a path it built itself"
+
+
+def test_two_action_watchers_never_run_a_pass_at_once():
+    """Finding 5: only one action pass is in flight at a time, so a slow declared command never lets a second pass
+    start and re-attempt the same request line."""
+    mod = voiced()
+    active, peak = [], []
+
+    class Daemon:
+        def run_action_requests(self):
+            active.append(1)
+            peak.append(len(active))
+            time.sleep(0.05)
+            active.pop()
+
+        def log(self, line):
+            pass
+
+    async def drive():
+        stop = asyncio.Event()
+        daemon = Daemon()
+        tasks = [asyncio.create_task(mod.watch_actions(daemon, stop, interval=0.01)) for _ in range(2)]
+        await asyncio.sleep(0.25)
+        stop.set()
+        await asyncio.gather(*tasks)
+
+    asyncio.run(drive())
+    assert peak and max(peak) == 1

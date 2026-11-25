@@ -20,14 +20,24 @@ request the pass:
 2. asks `squad/slackpolicy.decide` for the decision of that sender in that channel;
 3. builds the executor's request and hands it to `squad/slackexecutor.execute`, which checks the identity, the project,
    the channel, the action, the grant, the arguments and the deploy environment before it runs anything;
-4. runs the command the project declares for the action id, or the deploy command of the project identity;
+4. runs the command the project declares for one of the four text actions (`status`, `logs`, `request_work`,
+   `request_investigation`), or the deploy command of the project identity;
 5. appends one reply in the thread of the message, and one audit line holding the time, the sender, the role, the
-   channel, the action and the exit code.
+   channel, the action, the exit code and the one error that explains the exit (an empty error on a success).
 
 The commands come from `project.actions` of the committed `slack.yaml` (`squad/slackpolicy.project_actions`), and the
-deploy command from the project identity. The command is the project's own declaration, reviewed in its history; the
-executor never builds one from the message. A request is run once: a ledger of the requests already handled lives in
-`<state>/actions-handled.jsonl`, one JSON line per handled key.
+deploy command from the project identity. Only the four text actions and `deploy` run through `project.actions`:
+`approve_and_move` takes the board and `loop_control` takes the hub loop switch, so each keeps its own executor path
+(`slackexecutor.py:340-347`) and no declared command stands in for it.
+
+The command is the project's own declaration, reviewed in its history; the executor never builds one from the message.
+The grant the executor checks is the decision `decide` returned for the inbox line: one role, its actions and its reply
+path decide both what the pass asks and what the executor allows, so the request's action adds no grant of its own.
+
+A request is run once: a ledger of the requests already handled lives in `<state>/actions-handled.jsonl`, one JSON line
+per handled key, and the key is written with fsync before the reply, the audit line and the command itself. Each pass
+also keeps its place in every outbox in `<state>/actions-offsets.json`, so a pass reads only the bytes appended since
+the last one; the ledger, never the offset, is what decides that a request already ran.
 
 Guards: `tests/test_slack_actions.py`.
 """
@@ -43,6 +53,7 @@ from . import slackpolicy as S
 
 AUDIT = "actions-audit.jsonl"        # one JSON line per action run, in the state directory (#2939)
 HANDLED = "actions-handled.jsonl"    # one JSON line per request a pass already handled, in the state directory
+OFFSETS = "actions-offsets.json"     # the byte of each outbox the last pass read through, so a pass reads only new bytes
 DEFAULT_OUTBOXES = "outboxes"
 COMMAND_TIMEOUT = 300.0              # seconds, one declared command: a bound, never a target
 REQUEST_WINDOW = 300.0               # seconds, a request older than this is stale and never runs
@@ -159,14 +170,21 @@ def refusal_text(action, error, decision=None):
                 "grants no action.")
     if check == "action":
         return f"The {action} action was refused: {reason}"
+    if check == "source":
+        # `approve_and_move` and `loop_control` keep their own executor path, so no `project.actions` command stands in
+        # for the source they need, and the reply says so.
+        return (f"The {action} action was refused: {reason}. The {action} action never runs through project.actions, "
+                "so the project declares no command for it.")
     return f"The {action} action was refused ({check or 'request'}): {reason or 'the executor gave no reason'}"
 
 
 def sources_for(committed, local, runner=subprocess.run):
-    """The action sources of one project: the command the project declares for every action whose source answers one
-    text, and the deploy command of the project identity. An action the project declares no command for has no source,
-    so the executor refuses it by name and never guesses a command. `approve_and_move` and `loop_control` take the
-    caller's own source, because each answers a pair the executor unpacks."""
+    """The action sources of one project: the command the project declares for every text action, and the deploy
+    command of the project identity. An action the project declares no command for has no source, so the executor
+    refuses it by name and never guesses a command. `approve_and_move` and `loop_control` never run through
+    `project.actions`: each answers a pair the executor unpacks from its own source (the board and the hub loop
+    switch, `slackexecutor.py:340-347`), so this function builds none and the executor refuses them as a missing
+    source here."""
     declared = S.project_actions(committed, local)
     out = {action: CommandSource(command, runner) for action, command in declared.items() if action in TEXT_ACTIONS}
     _, command = S.deploy_target(S.project_identity(committed, local))
@@ -198,24 +216,44 @@ def _workspace(committed, local, channel):
     return ""
 
 
-def _inbox_line(state, channel, source):
-    """The inbox line with one id, from the inbox of the request's own channel, or None: one channel's inbox names its
-    own lines, so an id of another channel never matches. The inbox is read with the daemon's own rule: one JSON object
-    per line, and a broken line is skipped."""
-    path = os.path.join(state, "inboxes", f"{channel}.jsonl")
-    try:
-        with open(path, encoding="utf-8") as f:
-            rows = f.read().splitlines()
-    except OSError:
-        return None
-    for row in rows:
+class _Inbox:
+    """One pass's index of the inbox lines of each channel it reads: it reads a channel's inbox once, on the first
+    lookup, so each request is one lookup and never one read of the whole file. A line of another channel never matches,
+    because one channel's inbox names its own lines. The inbox is read with the daemon's own rule: one JSON object per
+    line, a broken line is skipped, and the first line of an id wins."""
+
+    def __init__(self, state):
+        self._state = state
+        self._rows = {}
+
+    def line(self, channel, source):
+        rows = self._rows.get(channel)
+        if rows is None:
+            rows = self._rows[channel] = self._read(channel)
+        return rows.get(str(source))
+
+    def _read(self, channel):
+        path = os.path.join(self._state, "inboxes", f"{channel}.jsonl")
+        out = {}
         try:
-            record = json.loads(row)
-        except ValueError:
-            continue
-        if isinstance(record, dict) and str(record.get("id")) == str(source):
-            return record
-    return None
+            with open(path, encoding="utf-8") as f:
+                rows = f.read().splitlines()
+        except OSError:
+            return out
+        for row in rows:
+            try:
+                record = json.loads(row)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and record.get("id") is not None:
+                out.setdefault(str(record["id"]), record)
+        return out
+
+
+def _inbox_line(state, channel, source):
+    """The inbox line with one id, from the inbox of the request's own channel, or None. One lookup through a fresh
+    index, so a caller outside the pass reads one line and never re-reads the file per request."""
+    return _Inbox(state).line(channel, source)
 
 
 def _stale(record, now_ts):
@@ -230,14 +268,70 @@ def _stale(record, now_ts):
     return None
 
 
-def _request_lines(state, project_of, now):
-    """Every request line of every outbox in file order, as `(path, line index, record, reason)`, where `reason` names
-    why a line never runs and is None for a line the pass runs.
+def _load_offsets(path):
+    """The byte each outbox was read through, by path, or an empty mapping for a missing or unreadable file."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(got, dict):
+        return {}
+    out = {}
+    for key, value in got.items():
+        try:
+            out[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
 
-    The pass reads only the outbox of a channel a project owns, so a request line in any other outbox never runs. The DM
-    outbox never carries a request, and a line older than the window is stale. A line whose channel is not the channel of
-    its outbox is refused too, so a request never acts on a channel other than the one its session can write."""
+
+def _save_offsets(path, offsets):
+    """Write the kept places atomically. The offsets only bound the cost of a pass: the ledger decides what already ran,
+    so a write that fails is no defect and the next pass reads more bytes than it needed."""
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(offsets, sort_keys=True))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        return
+
+
+def _new_rows(path, offset):
+    """The complete lines written after `offset`, and the byte after the last of them. A file shorter than its offset
+    was rotated, so it is read from the start. A last line with no newline is not yet written, so it stays unread."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return [], offset
+    if offset > size:
+        offset = 0
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], offset
+    end = offset + data.rfind(b"\n") + 1
+    return data[:data.rfind(b"\n") + 1].splitlines(), end
+
+
+def _request_lines(state, project_of, now, offsets=None):
+    """Every new request line of every outbox in file order, as `(path, line index, record, reason)`, where `reason`
+    names why a line never runs and is None for a line the pass runs. Returns `(lines, ends)`, where `ends` is the byte
+    each outbox was read through, so the caller keeps its place once every line is handled.
+
+    A pass reads only the bytes appended since the last one (`offsets`), so its cost follows the new requests, never the
+    whole history. The pass reads only the outbox of a channel a project owns, so a request line in any other outbox
+    never runs. The DM outbox never carries a request, and a line older than the window is stale. A line whose channel
+    is not the channel of its outbox is refused too, so a request never acts on a channel other than the one its
+    session can write."""
     out = []
+    ends = {}
     now_ts = now.timestamp()
     for path in sorted(glob.glob(os.path.join(state, DEFAULT_OUTBOXES, "*.jsonl"))):
         key = os.path.splitext(os.path.basename(path))[0]
@@ -247,15 +341,11 @@ def _request_lines(state, project_of, now):
             reason = f"the channel {key!r} is owned by no project"
         else:
             reason = None
-        try:
-            with open(path, encoding="utf-8") as f:
-                rows = f.read().splitlines()
-        except OSError:
-            continue
+        rows, ends[path] = _new_rows(path, (offsets or {}).get(path, 0))
         for i, row in enumerate(rows):
             try:
-                record = json.loads(row)
-            except ValueError:
+                record = json.loads(row.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
                 continue
             if not is_request(record):
                 continue
@@ -265,7 +355,7 @@ def _request_lines(state, project_of, now):
             if why is None:
                 why = _stale(record, now_ts)
             out.append((path, i, record, why))
-    return out
+    return out, ends
 
 
 class Ledger:
@@ -306,6 +396,12 @@ class Ledger:
 
 
 def _key(record):
+    """One handled key: the inbox line a request answers and the action it asks for, so the key is small and stable
+    while the request's other fields may differ. A record without both fields falls back to its own text, so a
+    malformed line still takes one key and is never audited again and again."""
+    source, action = record.get("source"), record.get("action")
+    if isinstance(source, str) and source.strip() and isinstance(action, str) and action.strip():
+        return f"{source}|{action}"
     return json.dumps(record, sort_keys=True)
 
 
@@ -329,9 +425,10 @@ def _exit_code(outcome, source):
     return 0 if code is None else int(code)
 
 
-def _run_one(record, state, project_of, documents, now, runner, outbox_for):
+def _run_one(record, state, project_of, documents, now, runner, outbox_for, inbox=None):
     """One request through the pass: the identity, the decision, the executor and the run. Returns a `Run`; the caller
-    appends the reply and the audit line, so a crash before them leaves the request unhandled."""
+    records the handled key, appends the reply and the audit line. `inbox` is the pass's one index of the inbox lines;
+    None reads a fresh one, so a caller outside the pass still gets the line."""
     channel = str(record.get("channel") or "")
     sender = str(record.get("sender") or "")
     parsed, why = parse(record)
@@ -345,7 +442,7 @@ def _run_one(record, state, project_of, documents, now, runner, outbox_for):
         # is silent and the audit is the only record.
         return Run(parsed.action, parsed.sender, "", parsed.channel, 1, None,
                    "project: no project owns this channel, so no action runs")
-    line = _inbox_line(state, parsed.channel, parsed.source)
+    line = (inbox or _Inbox(state)).line(parsed.channel, parsed.source)
     thread_ts = str((line or {}).get("ts") or record.get("thread_ts") or "")
     if line is None:
         return Run(parsed.action, parsed.sender, "", parsed.channel, 1, None,
@@ -358,6 +455,10 @@ def _run_one(record, state, project_of, documents, now, runner, outbox_for):
     event = {"kind": "message", "workspace": workspace, "channel": parsed.channel, "user": line_sender,
              "text": str(line.get("text") or "")}
     decision = S.decide(committed, local, event, now)
+    # The decision comes from the inbox line's own sender and text, and the executor's `check` reads that same decision
+    # for the role, the granted action and the reply path (slackexecutor.py:215, 230, 260). So the grant the executor
+    # enforces is exactly the one the policy granted this line, and the request's action adds no grant of its own. A
+    # channel that answers only an addressed message names no reply path for an unaddressed line, so it runs nothing.
     request = X.Request(parsed.action, parsed.arguments, project, parsed.channel, parsed.source)
     sources = sources_for(committed, local, runner)
     outcome = X.execute(request, decision, line, project,
@@ -398,22 +499,34 @@ def run_pass(state, project_of, documents, now, runner=None, outbox_for=None):
     outbox_for = outbox_for or (lambda channel: os.path.join(state, DEFAULT_OUTBOXES, f"{channel}.jsonl"))
     ledger = Ledger(os.path.join(state, HANDLED))
     audit_path = os.path.join(state, AUDIT)
+    offsets_path = os.path.join(state, OFFSETS)
+    offsets = _load_offsets(offsets_path)
+    lines, ends = _request_lines(state, project_of, now, offsets)
+    inbox = _Inbox(state)
     runs = []
-    for _, _, record, why in _request_lines(state, project_of, now):
+    for _, _, record, why in lines:
         key = _key(record)
         if ledger.has(key):
             continue
         if why is not None:
+            # A refusal has no side effect, so its audit line goes first and the key after: a crash between them at
+            # worst writes the same refusal twice, never loses the record of why nothing ran.
             _append_line(audit_path, {"time": now.isoformat(), "sender": str(record.get("sender") or ""),
                                       "role": "", "channel": str(record.get("channel") or ""),
                                       "action": str(record.get("action") or ""), "exit": 1, "error": why})
             ledger.add(key)
             continue
-        run = _run_one(record, state, project_of, documents, now, runner, outbox_for)
+        # The handled key is written with fsync before the reply, the audit line and the command itself, so a crash
+        # after any of them never runs the request a second time (#2939 review, finding 1).
+        ledger.add(key)
+        run = _run_one(record, state, project_of, documents, now, runner, outbox_for, inbox)
         if run.reply is not None:
             _append_line(outbox_for(run.channel), run.reply)
+        error = run.error
+        if not error and run.exit != 0:
+            error = f"the declared command exited {run.exit}"
         _append_line(audit_path, {"time": now.isoformat(), "sender": run.sender, "role": run.role,
-                                  "channel": run.channel, "action": run.action, "exit": run.exit})
-        ledger.add(key)
+                                  "channel": run.channel, "action": run.action, "exit": run.exit, "error": error})
         runs.append(run)
+    _save_offsets(offsets_path, ends)   # only the outboxes this pass read, so a deleted one leaves no stale entry
     return tuple(runs)
