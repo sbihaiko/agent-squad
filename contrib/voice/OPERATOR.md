@@ -35,14 +35,23 @@ carries no `text` key. A line from a bot, a stranger or a Slack Connect user nev
 `other.jsonl` with the same `language`, `persona` and `role` fields, so a reader tells which caller and channel role
 produced it.
 
-## Answer through the outbox
+## Answer through the helper
 
-Append one JSON line to the outbox of the channel the inbox line came from. The project holds one outbox per channel
-of the project:
+Answer each inbox line through the shipped `answer` helper, and through nothing else:
 
-    "$VOICE_STATE/outboxes/<channel id>.jsonl"
+    python3 <agent-squad>/contrib/voice/answer.py --scope "<the inbox line's channel>" \
+        --thread "<the inbox line's ts>" --text "<the answer>" [--speech "<a summary>"] [--persona <id>]
 
-For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
+The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
+`$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
+`VOICE_ANSWER_BINDING`: the state folder, the channels of the session's project, and the DM channel for the DM
+session. The helper refuses a channel outside that project and a thread that matches no pending inbox line, so an
+answer never lands in another channel or under a stale thread. A line must also name a channel of the project: a
+project line names its own channel, and a DM line names the binding's one DM channel. The helper reuses the binding
+rule of the Slack policy module (`squad/slackpolicy.py`). It is the only gate on the answer path: `voiced` posts the
+line as it reads it and checks no rule again. Never append to an outbox yourself.
+
+One outbox line is one answer:
 
 ```json
 {"thread_ts": "1762500001.000200", "text": "The full answer, with the detail.", "speech": "A short sentence to speak."}
@@ -56,7 +65,7 @@ For the DM, use `$VOICE_STATE/outboxes/dm.jsonl`. One line is one answer:
   `docs/squad/slack.yaml`. A line with no `persona` keeps the channel persona. A line with an unknown id keeps the
   channel persona, and the daemon writes one log line.
 
-The operator session writes `"persona": "hal"` on each of its own answers, so its answers post as HAL9K and speak with
+The operator session passes `--persona hal` on each of its own answers, so its answers post as HAL9K and speak with
 the hal voice:
 
 ```json
@@ -68,11 +77,11 @@ It reads every outbox on its own. The session makes no Slack call and waits for 
 
 ## Reads and answers, never acts
 
-The session reads and answers. It never acts: it writes no file, runs no command and makes no Slack write, and the
-kernel refuses all three. When a message asks for an action, the session answers in that channel that it only reads.
-The DM session also appends one proposal line to its own outbox. The proposal line carries the DM channel and one line
-of text that starts with `Proposal:`. A project session cannot write the DM outbox, so it proposes nothing; the
-executor that runs an action is #2939.
+The session reads and answers. It never acts beyond that: the one command it runs is the `answer` helper above, and
+the kernel permits that call while it refuses every other command. It writes no other file and makes no Slack write.
+When a message asks for an action, the session answers in that channel that it only reads. The DM session also calls
+the helper once more for the same line, with a text that starts with `Proposal:`. A project session cannot write the
+DM outbox, so it proposes nothing; the executor that runs an action is #2939.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:
 the kernel refuses the settings files, every top-level Markdown file, the skills, agents, commands, hooks, plugins,
