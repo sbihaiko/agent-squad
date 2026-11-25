@@ -466,6 +466,24 @@ def test_the_plist_keeps_the_daemon_alive_and_is_never_loaded(tmp_path):
     assert after == before
 
 
+def test_the_printed_plist_names_the_live_profiles_folder_when_none_is_given(tmp_path, monkeypatch, capsys):
+    """#2957: `voiced.py --print-plist` with no `--profiles` still names a projects folder, and it is the live copy's,
+    never the deploy checkout's example-only one; a value in SG_PROFILES_DIR wins, as install-agents.sh reads it."""
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    code = voiced().main(["--print-plist", "--state", str(tmp_path), "--owner", OWNER])
+    assert code == 0
+    env = plist_dict(ET.tostring(
+        plist_dict(capsys.readouterr().out)["EnvironmentVariables"], encoding="unicode"))
+    assert env["SG_PROFILES_DIR"].text == str(Path.home() / ".claude" / "skills" / "squad-goal" / "scripts" / "profiles")
+
+    monkeypatch.setenv("SG_PROFILES_DIR", str(tmp_path / "mine"))
+    code = voiced().main(["--print-plist", "--state", str(tmp_path), "--owner", OWNER])
+    assert code == 0
+    env = plist_dict(ET.tostring(
+        plist_dict(capsys.readouterr().out)["EnvironmentVariables"], encoding="unicode"))
+    assert env["SG_PROFILES_DIR"].text == str(tmp_path / "mine")
+
+
 # --- one channel per hub project (#1484)
 
 def configure(tmp_path, mod, client, repos):

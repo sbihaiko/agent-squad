@@ -101,6 +101,9 @@ from squad import redact as shared_redact  # noqa: E402  the one redaction modul
 from squad import slackannounce, slackpolicy  # noqa: E402  the release post (#2703) and the Slack file rules (ADR-0177)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
+# The profiles folder a printed plist names when the caller passes none (#2957): the live copy's own, never the deploy
+# checkout's, which holds only `example.sh`. install-agents.sh writes the same default into its own agents.
+LIVE_PROFILES = os.path.expanduser("~/.claude/skills/squad-goal/scripts/profiles")
 ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # the hub's seam: the one list of its projects
 OPERATORS = os.path.join(HERE, "operators.py")   # the supervisor a new inbox line wakes at once (#2925)
 CHANNEL_MAX = 80     # Slack's channel-name cap
@@ -2500,11 +2503,11 @@ async def handle_envelope(daemon, envelope, ack):
     return outcome
 
 
-def plist_text(label, python, script, state_dir, owner, checkout, profiles=""):
+def plist_text(label, python, script, state_dir, owner, checkout, profiles=LIVE_PROFILES):
     """The launchd agent that restarts the daemon after a crash. Printing it loads nothing.
 
     `profiles` is the folder the agent reads its projects from: the live copy's profiles folder, never the deploy's own,
-    which holds only `example.sh` (#2957). A caller that names none writes no SG_PROFILES_DIR."""
+    which holds only `example.sh` (#2957). A caller that names an empty value writes no SG_PROFILES_DIR."""
     esc = lambda v: xml.sax.saxutils.escape(str(v))  # noqa: E731
     profiles_line = (f"<key>SG_PROFILES_DIR</key><string>{esc(profiles)}</string>\n" if profiles else "")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -2726,7 +2729,7 @@ def main(argv):
     owner = None
     label = "com.agent-squad.voiced"
     python = sys.executable
-    profiles = ""
+    profiles = os.environ.get("SG_PROFILES_DIR") or LIVE_PROFILES   # a plist never names the deploy's example-only folder
     print_plist = False
     i = 0
     while i < len(argv):

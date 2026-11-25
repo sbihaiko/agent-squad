@@ -187,12 +187,29 @@ def test_a_paint_writes_nothing_and_the_trees_own_read_is_one_channel_read(hub, 
     assert named[TEAM] == ["C0PROJ0001", "C0ALERT001"], got
 
 
+def function_body(src, name):
+    """The body of one top-level function, from its opening brace to the matching close, by brace depth."""
+    start = src.index(name)
+    i = src.index("{", start)
+    depth = 0
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i:j + 1]
+    raise AssertionError(f"{name} has no closing brace")
+
+
 def test_the_slack_load_asks_the_channel_read_after_the_tree_is_read():
     """#2955: the page's load reads the tree, paints it, and then asks the channel read, so the read follows the tree's
-    own read and never a paint."""
+    own read and never a paint. The save repaints and re-reads too, so the drawn tree follows the hub's write."""
     src = (T.ROOT / "contrib" / "squad-goal" / "scripts" / "hub_theme_page.py").read_text()
-    line = next(ln for ln in src.splitlines() if ln.startswith("async function slLoad()"))
-    assert "slRender();slChTree()" in line, line
+    load = function_body(src, "async function slLoad(")
+    assert "slRender();slChTree()" in load, load
+    post = function_body(src, "async function slPost(")
+    assert "slChTree()" in post, post
 
 
 def test_a_workspace_the_host_cannot_read_shows_the_reason_and_the_id_field(hub, tmp_path):

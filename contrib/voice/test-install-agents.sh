@@ -11,6 +11,9 @@ mkfix() {
   cp -R "$here" "$T/src/contrib/voice"
   # voiced.py imports the squad package, and a real deploy clones the whole repo: carry its tracked files (#2894).
   (cd "$here/../.." && git ls-files -z squad | xargs -0 tar -cf -) | tar -xf - -C "$T/src"
+  # The operators agent reads its projects through the hub seam, so the deploy carries address.sh (#2957).
+  mkdir -p "$T/src/contrib/squad-goal/scripts"
+  cp "$here/../squad-goal/scripts/address.sh" "$T/src/contrib/squad-goal/scripts/"
   printf '__pycache__/\n*.pyc\n' > "$T/src/.gitignore"   # a pyc another worker writes mid-add must not enter the commit
   git -C "$T/src" init -q -b main
   git -C "$T/src" -c user.name=t -c user.email=t@t add -A
@@ -20,6 +23,8 @@ mkfix() {
   git clone -q --bare "$T/src" "$T/origin.git"
   # `print` answers 113 for a job launchd does not hold, so the unload wait never fires on this fake (#2954).
   printf '#!/bin/bash\nif [ "${1:-}" = print ]; then exit 113; fi\necho "$*" >> "%s"\n' "$T/launchctl.log" > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
+  # A fake CLI for the operator's `--check`: it lists no live session, so every project reads as one to start (#2957).
+  printf '#!/bin/bash\nif [ "$1 $2" = "agents --json" ]; then echo "[]"; exit 0; fi\nexit 2\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
   mkdir -p "$T/profiles"; : > "$T/profiles/example.sh"
   export SG_DEPLOY="$T/deploy" SG_DEPLOY_REMOTE="$T/origin.git" SG_LAUNCH_DIR="$T/LaunchAgents" LAUNCHCTL="$T/bin/launchctl"
   export VOICE_STATE="$T/state" VOICE_OWNER=U0TEST SG_PYTHON="$(command -v python3)" SG_PROFILES_DIR="$T/profiles"
@@ -42,6 +47,21 @@ grep -qF "$V" "$T/launchctl.log" && grep -qF "$O" "$T/launchctl.log" || fail "in
 # folder holds only example.sh, and an agent that falls back to it finds no project.
 [ "$(key "$V" EnvironmentVariables.SG_PROFILES_DIR)" = "$T/profiles" ] || fail "voiced plist lacks SG_PROFILES_DIR"
 [ "$(key "$O" EnvironmentVariables.SG_PROFILES_DIR)" = "$T/profiles" ] || fail "operators plist lacks SG_PROFILES_DIR"
+# #2957: the folder the plist names is the folder the agent reads, so a project profile there makes operators name its
+# session. The check runs with the plist's own EnvironmentVariables, and one session per project must be named.
+cat > "$T/profiles/widget.sh" <<P3
+: "\${SG_REPO:=acme/widget}"
+: "\${SG_CHECKOUT:=$T/src}"
+P3
+printf '{"acme/widget":{"name":"proj-widget","id":"C0WIDGET01"}}' > "$T/state/channels.json"
+"$SG_PYTHON" - "$O" "$T/deploy/contrib/voice/operators.py" "$T/bin" > "$T/check.out" 2> "$T/check.err" <<'PY'
+import plistlib, subprocess, sys
+doc = plistlib.load(open(sys.argv[1], "rb"))
+env = dict(doc["EnvironmentVariables"]); env["PATH"] = sys.argv[3] + ":" + env.get("PATH", "")
+sys.exit(subprocess.run([sys.executable, sys.argv[2], "--check"], env=env).returncode)
+PY
+[ $? = 0 ] || fail "operators --check over the emitted environment exited non-zero: $(tail -2 "$T/check.err")"
+grep -q "would start acme-widget" "$T/check.out" || fail "operators named no session for the profile the plist names: $(cat "$T/check.out")"
 
 cp "$V" "$T/v1"; cp "$O" "$T/o1"; pins_before=$(cat "$T/deploy/.git/squad-pins" 2>/dev/null | wc -l)
 bash "$here/install-agents.sh" "$B" >/dev/null 2>&1 || fail "a second install exited non-zero"
