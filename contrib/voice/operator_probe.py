@@ -59,6 +59,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VOICE = Path(__file__).resolve().parent
 sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
+import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
 from operators import SECRET_DIRS, TOOLS, marked_name, profile_text  # noqa: E402
 
@@ -139,6 +140,22 @@ def session_dir():
     """The one folder every probe run works in (#2775). The CLI remembers a trust prompt by folder path, so a fresh
     folder per run would make the owner's accepted prompt hold for no run."""
     return work_root() / "session"
+
+
+def config_root():
+    """The probe CLI's own config root (#2963): a live session's runtime state, never the owner's global config file."""
+    return Path(operators.config_root(str(work_root())))
+
+
+def config_env():
+    """The environment every probe CLI call runs under: the operator's config root and the owner's keychain name (#2963)."""
+    return operators.cli_env(str(work_root()))
+
+
+def prepare_config(checkouts):
+    """Prepare the probe's config root the way a live supervisor does, and trust each folder the probe works in."""
+    operators.prepare_config(str(work_root()))
+    operators.seed_trust(str(work_root()), [str(path) for path in checkouts])
 
 
 def check_denials(write_landed, read_leaked, network_reached):
@@ -284,18 +301,20 @@ def denials(work, profile, leak, other_inbox, proxy_port, outboxes=(), own_inbox
 
 
 OWNER_FILES = ("settings.json", "CLAUDE.md")   # files the owner's next, unsandboxed session loads from ~/.claude
+OWNER_GLOBAL = ".claude.json"                  # the owner's global config: the MCP servers its next session starts (#2963)
 OPEN_FOR_WRITE = ("import os, sys; os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND))")   # never creates
 
 
 def config_denials(work, profile, home=None):
-    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925).
+    """Prove that the profile refuses a write to each file of the owner's Claude configuration (#2925, #2963).
 
-    The check opens the file for append and writes nothing, and it never creates a file, so a profile that let it through
-    changes nothing on disk. A file the machine does not hold cannot be tried, and is skipped. Returns the files tried."""
+    The owner's global config file sits beside the Claude home, not inside it, and its MCP server entries load into the
+    owner's next, unsandboxed session, so it is tried with the settings files. The check opens the file for append and
+    writes nothing, and it never creates a file, so a profile that let it through changes nothing on disk. A file the
+    machine does not hold cannot be tried, and is skipped. Returns the files tried."""
     root = Path(home or os.path.realpath(Path.home())) / ".claude"
     tried = []
-    for name in OWNER_FILES:
-        path = root / name
+    for path in [root / name for name in OWNER_FILES] + [root.parent / OWNER_GLOBAL]:
         if not path.is_file():
             continue
         done = sandboxed(profile, sys.executable, ["-c", OPEN_FOR_WRITE, str(path)], work, DENIAL_DEADLINE)
@@ -337,7 +356,7 @@ def session(work, profile, cli, proxy_url=None):
 def cli_call(work, profile, cli, args, proxy_url=None):
     """One bounded CLI call through the wrapper; return its init event, its result event and every event."""
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
-    done = sandboxed(profile, cli, args, work, DEADLINE, proxy_env)
+    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env()})
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -376,7 +395,8 @@ def bg_listed(cli, sid, work, name):
     """True when the CLI lists the session id under `name` in its live roster: the background service answered, and the
     session carries the operator token in its name (#2925). A session whose cwd is a project checkout is told apart
     from a person's own session by that name alone."""
-    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+    done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
+                          env={**os.environ, **config_env()})
     try:
         rows = json.loads(done.stdout or "[]")
     except ValueError:
@@ -410,7 +430,7 @@ def bg_session(work, profile, cli, proxy_url=None, name=None):
     name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
     done = sandboxed(profile, cli, ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"], work,
-                     BG_DEADLINE, proxy_env)
+                     BG_DEADLINE, {**proxy_env, **config_env()})
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
         raise ProbeFailed(bg_failure(done, work))
@@ -418,7 +438,8 @@ def bg_session(work, profile, cli, proxy_url=None, name=None):
         if not bg_listed(cli, sid, work, name):
             raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
     finally:
-        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False)
+        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
+                       env={**os.environ, **config_env()})
 
 
 def expected_control(role):
@@ -560,7 +581,8 @@ def project_shape(work, ports):
         inbox.write_text(OWN_SENTINEL + "\n")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
-                           checkout=str(checkout), others=[str(other_checkout)], ports=ports)
+                           checkout=str(checkout), others=[str(other_checkout)], ports=ports,
+                           config=str(config_root()))
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile
 
 
@@ -568,6 +590,7 @@ def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
         checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [port])
+        prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, port, other_checkout=other_checkout, **controls))
         config_denials(checkout, profile)
@@ -578,6 +601,7 @@ def run_probe(work, cli):
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
         checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [proxy.port])
+        prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, other_checkout=other_checkout,
                                **controls))

@@ -33,7 +33,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
-from operators import TOOLS, marked_name, profile_text  # noqa: E402
+from operators import TOOLS, cli_env, config_root, marked_name, prepare_config, profile_text, seed_trust  # noqa: E402
 
 WRAPPER = str(ROOT / "contrib" / "squad-goal" / "scripts" / "claude-sandboxed.sh")
 SCOPE = "latency"                       # the one channel key this probe's inbox and outbox carry
@@ -161,11 +161,15 @@ class MonitorWatch:
 
 
 def start_session(cli, work, state, inbox, outbox, timeout, bounded=True):
-    """Start one armed session under the profile, and return its id."""
-    profile = profile_text([str(outbox)], str(Path(state) / "inboxes"), [str(inbox)])
+    """Start one armed session under the profile, and return its id. The CLI runs under the operator's own config root,
+    the way a live session does (#2963)."""
+    prepare_config(state)
+    seed_trust(state, [str(work)])
+    profile = profile_text([str(outbox)], str(Path(state) / "inboxes"), [str(inbox)],
+                           config=config_root(state))
     profile_path = Path(work) / f"{SCOPE}.sb"
     profile_path.write_text(profile, encoding="utf-8")
-    env = {"LATENCY_PROBE_INBOX": str(inbox), "LATENCY_PROBE_OUTBOX": str(outbox)}
+    env = {"LATENCY_PROBE_INBOX": str(inbox), "LATENCY_PROBE_OUTBOX": str(outbox), **cli_env(state)}
     done = sandboxed(profile, cli, ["--bg", "--name", marked_name(NAME), brief(inbox, outbox),
                                     "--permission-mode", "dontAsk", "--tools", TOOLS, "--allowedTools", TOOLS,
                                     "--strict-mcp-config", "--model", MODEL, "--max-budget-usd", SPEND,
@@ -215,9 +219,11 @@ def measure(state, cli, work, target, deadline, timeout, bounded=True):
 
 
 def stop_session(cli, sid, outbox, timeout):
-    """End the session by its id: a stand-in reads the queues it served from the same environment variables."""
-    env = {**os.environ, "LATENCY_PROBE_INBOX": str(queues(Path(outbox).parents[1])[0]),
-           "LATENCY_PROBE_OUTBOX": str(outbox)}
+    """End the session by its id: a stand-in reads the queues it served from the same environment variables, and the
+    real CLI reads the roster of the same config root it started under (#2963)."""
+    state = Path(outbox).parents[1]
+    env = {**os.environ, "LATENCY_PROBE_INBOX": str(queues(state)[0]),
+           "LATENCY_PROBE_OUTBOX": str(outbox), **cli_env(str(state))}
     try:
         subprocess.run([cli, "stop", sid], env=env, capture_output=True, text=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):

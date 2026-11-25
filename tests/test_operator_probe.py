@@ -123,6 +123,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", fake_denials)
     monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(probe, "session", lambda *a, **k: (
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
@@ -147,7 +148,7 @@ def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(monkeypatch
     """#2951 criterion 2: the one loopback port the profile opens is the model route's, read from the endpoint."""
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     text = load("operators").profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                          "/work/state/inboxes/dm.jsonl")
+                                          "/work/state/inboxes/dm.jsonl", config="/work/config")
     assert '(allow network-outbound (remote ip "localhost:8016"))' in text.splitlines(), text
     assert "localhost:*" not in text
     assert "*:443" not in text
@@ -158,7 +159,7 @@ def test_the_profile_grants_the_cli_background_service_its_runtime():
     the `/dev/null` device of an ignored stdio, the run dir under /tmp/cc-daemon-<uid> and that dir's unix socket."""
     operators = load("operators")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl")
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     # The unmonkeypatched device: the kernel opens the resolved spelling of `/dev/null`, so the grant must name it, the
     # way `daemon_root()` names the resolved `/tmp`. A host where `/dev/null` resolves to itself keeps the one literal.
@@ -184,7 +185,8 @@ def test_the_profile_writes_the_resolved_device_path(tmp_path, monkeypatch):
     link.symlink_to(target)
     assert os.path.realpath(str(link)) == str(target) and str(link) != str(target)
     monkeypatch.setattr(operators.os, "devnull", str(link))
-    text = operators.profile_text("/w/state/outboxes/dm.jsonl", "/w/state/inboxes", "/w/state/inboxes/dm.jsonl")
+    text = operators.profile_text("/w/state/outboxes/dm.jsonl", "/w/state/inboxes", "/w/state/inboxes/dm.jsonl",
+                                  config="/w/config")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     assert f'(literal "{link}")' in write, write
     assert f'(literal "{target}")' in write, write
@@ -292,7 +294,7 @@ def test_the_kernel_refuses_a_foreign_host_on_443_and_passes_the_endpoint_port(t
     elsewhere = socket.create_server(("127.0.0.1", 0))
     port = listener.getsockname()[1]
     profile = load("operators").profile_text(str(tmp_path / "outbox"), str(inboxes), str(inboxes / "dm.jsonl"),
-                                              ports=[port])
+                                              ports=[port], config=str(tmp_path / "config"))
     try:
         def connect(host, port):
             return probe.sandboxed(profile, sys.executable, ["-c", probe.CONNECT, host, str(port)], tmp_path, 30)
@@ -404,7 +406,7 @@ def test_the_kernel_refuses_each_read_and_keeps_the_own_checkout_readable(tmp_pa
     checkout.mkdir()
     profile = load("operators").profile_text([str(tmp_path / "outbox")], str(tmp_path / "inboxes"), [],
                                              checkout=str(checkout), others=[str(tmp_path / "other-checkout")],
-                                             ports=[1])
+                                             ports=[1], config=str(tmp_path / "config"))
     refused = probe.refuse_reads(checkout, profile, tmp_path / "other-checkout")
     assert isinstance(refused, list)
 
@@ -476,6 +478,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
     monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
 
     def fake_session(work, profile, cli, proxy_url=None):
@@ -536,15 +539,18 @@ def test_one_command_repeats_the_probe(tmp_path):
 
 
 def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_daemon():
-    """#2768 keeps every write grant a literal or a named subpath: the outbox file, the Claude home and its settings
-    file, `/dev/null`, and the CLI's own daemon runtime. No grant names a whole root."""
+    """#2768 keeps every write grant a literal or a named subpath: the outbox file, the Claude home, the CLI's own config
+    root (#2963), `/dev/null`, and the CLI's own daemon runtime. No grant names a whole root, and the owner's global
+    config file is granted to no one."""
     operators = load("operators")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl")
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     for root in ("/dev", "/tmp", "/private/tmp", "/private/var/folders"):
         assert f'(literal "{root}")' not in write and f'(subpath "{root}")' not in write
-    assert write.count("(subpath") == 2, write
+    assert write.count("(subpath") == 3, write
+    assert '(subpath "/work/config")' in write, write
+    assert ".claude.json" not in write, "the owner's global config file is granted to no one"
     assert f'(subpath "{operators.daemon_root()}")' in write
 
 
@@ -553,7 +559,8 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     probe = load("operator_probe")
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    profile = load("operators").profile_text(str(outbox), str(tmp_path), str(tmp_path / "dm.jsonl"))
+    profile = load("operators").profile_text(str(outbox), str(tmp_path), str(tmp_path / "dm.jsonl"),
+                                             config=str(tmp_path / "config"))
     leak = Path(tempfile.gettempdir()) / f"operator-probe-leak-{os.getpid()}.txt"
     try:
         done = probe.sandboxed(profile, "/bin/sh", ["-c", f'echo leaked > "{leak}"'], tmp_path, 30)
@@ -670,6 +677,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
     monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
 
     def fake_session(work, profile, cli, proxy_url=None):
@@ -824,6 +832,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
     monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
     monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(probe, "session", lambda *a, **k: (
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
 
@@ -905,16 +914,18 @@ def owner_home(tmp_path):
     (home / ".claude").mkdir(parents=True)
     for name in ("settings.json", "CLAUDE.md"):
         (home / ".claude" / name).write_text("owner file\n")
+    (home / ".claude.json").write_text("{}\n")
     return home
 
 
 def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypatch):
-    """#2925: the probe tries a write to the owner's settings and CLAUDE.md under the profile, and each is refused."""
+    """#2925, #2963: the probe tries a write to the owner's settings, CLAUDE.md and global config file under the
+    profile, and each is refused."""
     probe = load("operator_probe")
     home = owner_home(tmp_path)
     monkeypatch.setattr(probe, "sandboxed", scripted(probe))
     tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
-    assert sorted(os.path.basename(p) for p in tried) == ["CLAUDE.md", "settings.json"], tried
+    assert sorted(os.path.basename(p) for p in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
     assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
 
 
@@ -926,12 +937,62 @@ def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_
         probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
 
 
+def test_the_probe_denies_a_write_to_the_owner_global_config_file(tmp_path, monkeypatch):
+    """#2963: the owner's global config file holds the MCP servers the owner's next unsandboxed session starts, so the
+    probe proves the profile refuses a write to it, beside the settings files under the Claude home."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    (home / ".claude.json").write_text("{}\n")
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+    assert str(home / ".claude.json") in tried, tried
+
+
+def test_the_probe_runs_its_cli_calls_under_the_operator_config_root(tmp_path, monkeypatch):
+    """#2963: the CLI the probe starts keeps its runtime state under the operator's config root, and an empty
+    secure-storage dir keeps the owner's keychain name, so the probe measures the bound a live session runs under."""
+    probe = load("operator_probe")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    seen = {}
+
+    def fake(profile, cli, args, cwd, timeout, extra_env=None):
+        seen["env"] = extra_env or {}
+        out = "\n".join([json.dumps({"type": "system", "subtype": "init", "tools": probe.TOOLS.split(","),
+                                     "permissionMode": "dontAsk"}),
+                         json.dumps({"type": "result", "subtype": "success", "is_error": False})]) + "\n"
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    monkeypatch.setattr(probe, "sandboxed", fake)
+    probe.session(tmp_path / "checkout", "(version 1)(allow default)", "claude")
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == str(probe.config_root()), seen["env"]
+    assert seen["env"]["CLAUDE_SECURESTORAGE_CONFIG_DIR"] == "", seen["env"]
+
+
+def test_the_probe_reads_its_roster_under_the_operator_config_root(tmp_path, monkeypatch):
+    """#2963: the roster the probe lists, and the stop it sends, run under the operator's config root, the way the
+    supervisor reads the same service."""
+    probe = load("operator_probe")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["env"] = kwargs.get("env") or {}
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    assert not probe.bg_listed("claude", "b5ccaeeb", str(tmp_path), "SQUAD-OPERATOR-x")
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == str(probe.config_root()), seen["env"]
+
+
 def test_the_real_profile_refuses_the_owners_claude_files(tmp_path, monkeypatch):
     """The operator's own profile, applied by the kernel, refuses both writes on this machine."""
     probe = load("operator_probe")
     if sys.platform != "darwin" or not os.path.exists("/usr/bin/sandbox-exec"):
         pytest.skip("the kernel bound is macOS only")
-    profile = probe.profile_text([str(tmp_path / "out.jsonl")], str(tmp_path / "inboxes"), [])
+    profile = probe.profile_text([str(tmp_path / "out.jsonl")], str(tmp_path / "inboxes"), [],
+                                 config=str(tmp_path / "config"))
     home = os.path.realpath(os.path.expanduser("~"))
     tried = probe.config_denials(tmp_path, profile, home=home)
     assert tried, "this machine holds no owner Claude file to try"

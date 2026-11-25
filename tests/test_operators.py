@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -356,7 +357,8 @@ def test_the_full_pass_never_fails_for_a_project_with_no_checkout(tmp_path, monk
 
 
 def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tmp_path, monkeypatch):
-    """Criterion 11: the kernel bound refuses every write outside the session's outboxes and the Claude runtime."""
+    """Criterion 11: the kernel bound refuses every write outside the session's outboxes, the Claude runtime, and the
+    CLI's own config root (#2963). The owner's global config file is granted to no one."""
     op = operators(tmp_path, monkeypatch)
     hub(tmp_path, monkeypatch, op, ["acme/widget"])
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
@@ -370,15 +372,18 @@ def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tm
     assert f'(literal "{state}/outboxes/C0AAAAAA1.jsonl")' in write
     assert f'(literal "{state}/outboxes/C0AAAAAA2.jsonl")' in write
     assert f'(literal "{state}/outboxes/dm.jsonl")' not in write, "the project session may write the owner's DM outbox"
-    for granted in ("/.claude", "/.claude.json"):
-        assert granted in write, write
+    home = os.path.realpath(os.path.expanduser("~"))
+    assert f'(subpath "{home}/.claude")' in write, "the CLI's own state under the Claude home stays writable"
+    assert f'(subpath "{op.config_root(state)}")' in write, write
+    assert ".claude.json" not in write, "the session may write the owner's global config file"
     assert "/checkouts/" not in write, "the project checkout must stay read-only"
 
 
 def test_the_profile_refuses_network_outside_loopback(tmp_path, monkeypatch):
     """Criterion 12: the kernel bound refuses every network connection outside loopback."""
     op = operators(tmp_path, monkeypatch)
-    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           config=str(tmp_path / "config"))
     lines = text.splitlines()
     assert "(deny network-outbound)" in lines and "localhost:*" not in text
     assert "*:443" not in text
@@ -389,11 +394,13 @@ def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(tmp_path, m
     endpoint configuration and never from a guessed constant."""
     op = operators(tmp_path, monkeypatch)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
-    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           config=str(tmp_path / "config"))
     assert '(allow network-outbound (remote ip "localhost:8016"))' in text.splitlines(), text
     assert "localhost:*" not in text
     monkeypatch.delenv("ANTHROPIC_BASE_URL")
-    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], ports=[9317])
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           ports=[9317], config=str(tmp_path / "config"))
     assert '(allow network-outbound (remote ip "localhost:9317"))' in text.splitlines(), text
     assert "localhost:8016" not in text, "a port the caller names replaces the endpoint port"
 
@@ -404,7 +411,8 @@ def test_the_profile_refuses_reads_of_the_secret_list_and_another_checkout(tmp_p
     op = operators(tmp_path, monkeypatch)
     home = os.path.realpath(os.path.expanduser("~"))
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
-                           checkout="/work/acme", others=["/work/other", "/work/acme"])
+                           checkout="/work/acme", others=["/work/other", "/work/acme"],
+                           config=str(tmp_path / "config"))
     lines = text.splitlines()
     creds = f'(deny file-read* (subpath "{home}/.ssh") (subpath "{home}/.config/gh") (subpath "{home}/.aws"))'
     assert creds in lines, text
@@ -424,7 +432,7 @@ def test_the_profile_reallows_the_own_checkout_secret_named_files(tmp_path, monk
     op = operators(tmp_path, monkeypatch)
     own = os.path.realpath("/work/acme")
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
-                           checkout="/work/acme", others=["/work/other"])
+                           checkout="/work/acme", others=["/work/other"], config=str(tmp_path / "config"))
     lines = text.splitlines()
     assert f'(allow file-read* (subpath "{own}"))' in lines, text
     assert f'(deny file-read* (subpath "{os.path.realpath("/work/other")}"))' in lines, text
@@ -494,7 +502,12 @@ def test_the_record_is_written_after_each_start(tmp_path, monkeypatch):
     scenario(tmp_path, [])
     writes = []
     real = op.write_json
-    monkeypatch.setattr(op, "write_json", lambda path, value: (writes.append(dict(value)), real(path, value))[1])
+
+    def write_json(path, value):
+        if str(path).endswith("operators.json"):     # the config root's own files are written too (#2963)
+            writes.append(dict(value))
+        return real(path, value)
+    monkeypatch.setattr(op, "write_json", write_json)
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     assert len(writes) == 2, f"the record was written {len(writes)} times, not once per start"
     assert set(record(tmp_path)) == {"dm", "acme-widget"}
@@ -983,7 +996,8 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
     """A session moved by a message never writes a file that the owner's next, unsandboxed session loads."""
     op = operators(tmp_path, monkeypatch)
     home = os.path.realpath(os.path.expanduser("~"))
-    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"])
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           config=str(tmp_path / "config"))
     allow = text.index(f'(subpath "{home}/.claude")')
     for path in ("settings.json", "settings.local.json", "CLAUDE.md", "keybindings.json"):
         rule = f'(deny file-write* (literal "{home}/.claude/{path}"))'
@@ -1014,3 +1028,130 @@ def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeyp
     monkeypatch.setenv("FAKE_NEW", "abcdefab")
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
     assert record(tmp_path)["acme-widget"]["id"] == "abcdefab", record(tmp_path)
+
+
+# #2963: the CLI's runtime state belongs to the operator, never to the owner's home. The owner's global config file holds
+# the MCP servers the owner's next unsandboxed session starts, so no rule may grant a write to it. The CLI takes its
+# config home from CLAUDE_CONFIG_DIR, and an empty CLAUDE_SECURESTORAGE_CONFIG_DIR keeps the owner's keychain service
+# name, so the login reads from the owner's keychain with no path change and no credential moves (measured on 2.1.332).
+
+def test_the_profile_refuses_the_owner_global_config_file_and_grants_the_cli_its_own_root(tmp_path, monkeypatch):
+    """The one write grant names the operator's own config root, never the owner's global config file."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    root = op.config_root(str(tmp_path / "state"))
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(subpath "{root}")' in write, write
+    assert f'(literal "{home}/.claude.json")' not in text, "the session may write the owner's global config file"
+
+
+def test_the_operator_config_root_reads_the_owner_keychain_by_its_default_name(tmp_path, monkeypatch):
+    """An empty secure-storage dir keeps the default keychain service name: the login stays the owner's, and no
+    credential is carried into the sandbox."""
+    op = operators(tmp_path, monkeypatch)
+    env = op.cli_env(str(tmp_path / "state"))
+    assert env["CLAUDE_CONFIG_DIR"] == op.config_root(str(tmp_path / "state"))
+    assert env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] == "", env
+
+
+def test_a_started_session_keeps_its_state_in_the_operator_config_root(tmp_path, monkeypatch):
+    """The CLI a start builds runs under the operator's own config root, and the start prepares that root first."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8016")
+    (tmp_path / "home").mkdir()
+    op.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
+    root = op.config_root(str(tmp_path / "state"))
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == root, seen["env"]
+    assert seen["env"]["CLAUDE_SECURESTORAGE_CONFIG_DIR"] == "", seen["env"]
+    assert os.path.isdir(root), "the root is prepared before the CLI starts"
+
+
+def test_the_operator_root_links_the_owner_user_files_a_session_loads(tmp_path, monkeypatch):
+    """The session still loads the owner's user settings, memory, skills and transcripts: the root links each of them,
+    and the global config file stays the session's own."""
+    op = operators(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    for name in ("settings.json", "CLAUDE.md"):
+        (home / ".claude" / name).write_text("{}")
+    for name in ("skills", "projects"):
+        (home / ".claude" / name).mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    root = op.prepare_config(str(tmp_path / "state"))
+    for name in ("settings.json", "CLAUDE.md", "skills", "projects"):
+        link = os.path.join(root, name)
+        assert os.path.islink(link), f"the operator root has no link for {name}: {os.listdir(root)}"
+        assert os.path.realpath(link) == os.path.realpath(home / ".claude" / name), link
+    assert not os.path.exists(os.path.join(root, ".claude.json")), "the global config file belongs to the session"
+
+
+def test_the_operator_root_carries_only_the_trust_the_owner_recorded(tmp_path, monkeypatch):
+    """`claude --bg` refuses a folder with no trust record, and the operator root is not the owner's file. The root
+    copies the boolean the owner's config holds for that folder, and nothing else of that file moves."""
+    op = operators(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    trusted = os.path.realpath(tmp_path / "checkouts" / "trusted")
+    untrusted = os.path.realpath(tmp_path / "checkouts" / "untrusted")
+    for path in (trusted, untrusted):
+        os.makedirs(path, exist_ok=True)
+    (home / ".claude.json").write_text(json.dumps({
+        "projects": {trusted: {"hasTrustDialogAccepted": True}, untrusted: {"hasTrustDialogAccepted": False}},
+        "oauthAccount": {"emailAddress": "nobody@example.com"}}))
+    monkeypatch.setenv("HOME", str(home))
+    op.seed_trust(str(tmp_path / "state"), [trusted, untrusted])
+    path = Path(op.config_root(str(tmp_path / "state"))) / ".claude.json"
+    data = json.loads(path.read_text())
+    assert data["projects"][trusted]["hasTrustDialogAccepted"] is True, data
+    assert untrusted not in data["projects"], "a folder the owner never trusted is not trusted here"
+    assert "oauthAccount" not in data, "nothing but the trust boolean moves into the operator's config"
+
+
+def test_the_pass_reads_the_operator_roster_and_the_owner_roster(tmp_path, monkeypatch):
+    """A session started before the root moved, or by hand, lives in the owner's roster. The pass still sees it, so it
+    never starts a second session for the same project."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    live = session(found["acme/widget"], "acme-widget", "abababab-0000-0000-0000-0000000000b1", started=1)
+    (tmp_path / "state" / "operators.json").write_text(json.dumps(
+        {"dm": {"id": "dddddddd-0000-0000-0000-000000000001", "pid": 9, "started": 1}}))
+    roots = []
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        assert argv[1:3] == ["agents", "--json"], argv
+        roots.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
+        rows = [live] if env is None else []
+        return subprocess.CompletedProcess(argv, 0, json.dumps(rows), "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert roots == [op.config_root(str(tmp_path / "state")), None], "both rosters are read, the operator's first"
+    assert record(tmp_path)["acme-widget"]["adopt"] == 1, record(tmp_path)
+
+
+def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_path, monkeypatch):
+    """A session of the owner's roster carries a token of an earlier build: the stop reaches it after the operator's own
+    roster refuses the id."""
+    op = operators(tmp_path, monkeypatch)
+    tried = []
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        tried.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
+        if env is not None:
+            raise op.Refused("no such session")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    op.stop("abababab", str(tmp_path / "state"))
+    assert tried == [op.config_root(str(tmp_path / "state")), None], tried
