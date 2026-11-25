@@ -629,7 +629,16 @@ def _slack_project_node(P, seat, node_id):
     local_rows = _slack_dicts(local_doc.get("workspaces"))
     guests = P.guest_workspaces(local_doc)
     held = _slack_text(local_rows[guests[0]][1].get("label") or local_rows[guests[0]][1].get("id")) if guests else None
-    guest_slot = {"held": held, "count": len(guests), "line": f"Guest slot 1 of {len(guests)} · {held}"} if guests else None
+    refused_names = [_slack_text(g["ws"].get("label") or g["id"]) for g in groups
+                     if (g["file"], g["index"]) in refused_keys and _slack_text(g["ws"].get("label") or g["id"]) != held]
+    if not guests:
+        guest_slot = None
+    elif len(guests) > 1:
+        guest_slot = {"held": held, "count": len(guests), "tone": "err",
+                      "line": f"{len(guests)} guest workspaces; the machine serves one · {held} is served, "
+                              f"{', '.join(refused_names) or 'the other'} is refused"}
+    else:
+        guest_slot = {"held": held, "count": 1, "tone": "neutral", "line": f"Guest slot 1 of 1 · {held}"}
     label = seat["label"]
     personas = _slack_dicts(committed_doc.get("personas"))
     events = _slack_dicts(committed_doc.get("events"))
@@ -643,8 +652,10 @@ def _slack_project_node(P, seat, node_id):
     speak = sum(1 for merged, g in rows if P.can_speak(merged))
     subscribing = sum(1 for merged, g in rows if isinstance(merged.get("announce"), list) and merged.get("announce"))
     guest_nodes = [g for g in groups if any(P.guest_workspaces({"workspaces": [row]}) for row, file, i in g["rows"])]
-    now = [] if empty else [   # a project count is a fact, never a passing state: every project tile stays neutral (#2841)
-        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest"),
+    # A project count is a fact, never a passing state; only a second guest workspace earns the warning tone (#2841, #2842).
+    now = [] if empty else [
+        _slack_tile("Workspaces", f"{len(groups)} · {len(groups) - len(guest_nodes)} owned · {len(guest_nodes)} guest",
+                    tone="warn" if len(guest_nodes) > 1 else "neutral"),
         _slack_tile("Channels", f"{len(rows)} · {speak} speak"),
         _slack_tile("Personas", f"{len(personas)} · default {default_name}" if default_name
                     else f"{len(personas)} · no default"),
