@@ -181,9 +181,11 @@ def tiles(node):
 # ---------------------------------------------------------------- the tree shape
 
 def test_the_tree_has_a_project_a_workspace_and_a_channel(hub, tmp_path):
+    """Re-anchored (#2922): a read of one project's own documents that no client map names draws that project under its
+    own name, so the project is found by its kind, never by a name it shares with the node above it."""
     root = tree(hub, tmp_path)["root"]
     assert (root["kind"], root["level"]) == ("client", 1)
-    project = by_name(root, "4")
+    project = next(n for n in walk(root) if n.get("kind") == "project")
     assert (project["kind"], project["level"]) == ("project", 2)
     ws = by_name(root, "team")
     assert (ws["kind"], ws["level"]) == ("workspace", 3)

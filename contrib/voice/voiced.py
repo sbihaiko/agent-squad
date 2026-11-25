@@ -318,6 +318,31 @@ def _rows(value):
     return [row for row in (value or []) if isinstance(row, dict)] if isinstance(value, list) else []
 
 
+def listed_revision_at(checkout, listed, name=None):
+    """The newest revision the hub lists that this checkout holds, as `(sha, text)`, or None (#2934).
+
+    The hub lists the sha of its save. A later commit moves the dev tip, and a stale `origin/dev` ref lags behind it, so
+    the tip is often no listed sha. The listed sha is the approval, so the file is read at that revision itself: the
+    channel keeps the language and the persona its save declared.
+    """
+    name = name or slackpolicy.COMMITTED.as_posix()
+    best = None
+    for sha in sorted(listed or ()):
+        if git_output(checkout, "cat-file", "-e", f"{sha}:{name}") is None:
+            continue
+        stamp = (git_output(checkout, "show", "-s", "--format=%ct", sha) or "").strip()
+        try:
+            when = int(stamp or 0)
+        except ValueError:
+            when = 0
+        if best is None or when > best[0]:
+            best = (when, sha)
+    if best is None:
+        return None
+    text = git_output(checkout, "show", f"{best[1]}:{name}")
+    return None if text is None else (best[1], text)
+
+
 def project_documents_at_start(projects, listed=None):
     """repo -> the Slack document at each project's dev tip, for the app set this start opens sockets for.
 
@@ -978,12 +1003,14 @@ def audio_file(event):
     return None
 
 
-def download(url, token, limit=MAX_CLIP_BYTES):
-    """The clip's bytes with the bot token, never the URL's own public form; a clip past the cap is never read whole."""
+def download(url, token, limit=MAX_CLIP_BYTES, context=None):
+    """The clip's bytes with the bot token, never the URL's own public form; a clip past the cap is never read whole.
+
+    The call trusts the daemon's one CA bundle (#2933): a python.org build has no default store under launchd."""
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     size = 0
     chunks = []
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT, context=context or daemon_context()) as response:
         while True:
             chunk = response.read(CHUNK)
             if not chunk:
@@ -995,8 +1022,10 @@ def download(url, token, limit=MAX_CLIP_BYTES):
     return b"".join(chunks)
 
 
-def transcribe(audio, mime, key):
-    """One Gemini transcription of one clip. The key travels in a header, never in the URL or in output."""
+def transcribe(audio, mime, key, context=None):
+    """One Gemini transcription of one clip. The key travels in a header, never in the URL or in output.
+
+    The call trusts the daemon's one CA bundle (#2933), as the clip download and the socket do."""
     body = {
         "contents": [{"parts": [
             {"text": "Transcribe this audio exactly in its own language. Reply with the transcript only."},
@@ -1009,7 +1038,7 @@ def transcribe(audio, mime, key):
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT, context=context or daemon_context()) as response:
         answer = json.loads(response.read() or b"{}")
     parts = ((answer.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
     text = " ".join(part.get("text") or "" for part in parts).strip()
@@ -1199,7 +1228,9 @@ class Daemon:
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
         self._unowned_logged = set()      # each release channel no app owns, whose skip is already one log line
+        self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
+        self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
 
     def app_of(self, channel):
         """The app id that owns one channel, or None when no active document names it."""
@@ -1245,6 +1276,24 @@ class Daemon:
                     return row
         return None
 
+    def outbox_persona(self, channel, thread_ts, record):
+        """The persona one outbox line answers with, and the id its `persona` field names that the project omits.
+
+        A line may carry a `persona` field holding a persona id of the channel project's active revision, so one answer
+        posts and speaks under another persona than the channel's. The field wins over the addressed persona. A line
+        with no field keeps the addressed persona, else the channel persona. An id the project does not declare keeps
+        the channel persona and is returned as the second element, so the caller tells it once."""
+        named = str(record.get("persona") or "").strip()
+        if named:
+            repo = self.state.channel_for(channel)
+            active = self.state.active_revision(repo) if repo else None
+            if active and active.get("revision"):
+                row = slackpolicy.persona_with_id(active["revision"], active.get("local") or {}, named)
+                if row is not None:
+                    return row, None
+        persona = self.addressed_persona(channel, thread_ts) or self.identity_for(channel)[1]
+        return persona, (named or None)
+
     def download_clip(self, channel, url):
         """One clip's bytes, fetched with the token of the app that serves its channel."""
         app = self.app_of(channel)
@@ -1280,7 +1329,39 @@ class Daemon:
                 continue
             results.append(self.refresh_one(repo, entry, local_docs, local_defects))
         self.refuse_channel_claims(projects)
+        self.log_uncovered_channels(projects)
         return results
+
+    def log_uncovered_channels(self, projects=None):
+        """One line per channel a project's `slack.yaml` names while no active revision covers it (#2934).
+
+        A channel with no active revision answers with the default language and no persona, and its answers post under
+        the app name, so the owner reads one line that names the channel and the project instead of a silent default.
+        The line is written once, not one per poll."""
+        if projects is None:
+            projects = list(self.configs() or []) if self.configs is not None else []
+        for entry in projects:
+            repo = str((entry.get("repo") or "").strip())
+            if not repo or self.state.active_revision(repo):
+                continue
+            try:
+                _, text = dev_tip(str((entry.get("checkout") or "").strip()))
+            except TipUnreadable:
+                continue
+            doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), [])
+            if doc is None:
+                continue
+            for workspace in _rows(doc.get("workspaces")):
+                for channel in _rows(workspace.get("channels")):
+                    cid = str(channel.get("id") or "").strip()
+                    if not cid:
+                        continue
+                    line = (f"voiced: {repo}: channel {cid} has no active Slack revision; its lines keep the default "
+                            "language and no persona")
+                    if line in self._uncovered_logged:
+                        continue
+                    self._uncovered_logged.add(line)
+                    self.log(line)
 
     def refuse_channel_claims(self, projects=None):
         """Refuse every channel id two projects claim: one line and one DM that name both projects and the id.
@@ -1389,9 +1470,16 @@ class Daemon:
             return {"repo": repo, "sha": sha, "changed": False, "active": active}
         listed = self.listed()
         if listed is not None and sha not in listed:
-            return self.refuse_revision(
-                repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
-                sha=sha)
+            held = listed_revision_at((entry.get("checkout") or "").strip(), listed)
+            if held is None:
+                return self.refuse_revision(
+                    repo, active, [f"the revision {sha[:12]} is not listed in the hub registry, so no save approved it"],
+                    sha=sha)
+            if active is not None and active.get("sha") == held[0]:
+                return {"repo": repo, "sha": held[0], "changed": False, "active": active}
+            # The tip moved past the save. The listed sha is the approval, so its file becomes the active revision.
+            self.log(f"voiced: {repo}: the dev tip is not a saved revision; reading the listed revision {held[0][:12]}")
+            sha, text = held
         tip_defects = []
         doc = slackpolicy.read_document(text, slackpolicy.COMMITTED.as_posix(), tip_defects)
         name, local = local_docs.get(repo, (None, None))
@@ -1686,7 +1774,11 @@ class Daemon:
             return False, False
         thread = record.get("thread_ts")
         first, rest = split_sentences((record.get("speech") or text).strip())
-        persona = self.addressed_persona(cid, thread) or self.identity_for(cid)[1]
+        persona, unknown = self.outbox_persona(cid, thread, record)
+        if unknown is not None and (cid, unknown) not in self._unknown_persona_logged:
+            self._unknown_persona_logged.add((cid, unknown))
+            self.log(f"voiced: outbox line names persona {unknown}, which the channel project does not declare; "
+                     "answering under the channel persona")
         voice = persona.voice if persona is not None and persona.voice else None
         tone = persona.tone if persona is not None and persona.tone else None
         posted = self.state.posted().get(digest) if digest else None
@@ -1906,10 +1998,12 @@ class Daemon:
         clip = audio_file(event)
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
+            step = "download"
             try:
                 audio = self.download_clip(event.get("channel"), url)
                 if len(audio) > MAX_CLIP_BYTES:
                     raise ClipTooLarge(len(audio))
+                step = "transcribe"
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
             except ClipTooLarge as x:   # a clip past the inline cap is a record with its size
                 record["error"] = str(x)
@@ -1920,11 +2014,14 @@ class Daemon:
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
-                record["error"] = f"transcription failed: {type(x).__name__}"
+                kind = "transcription" if step == "transcribe" else "download"
+                record["error"] = f"{kind} failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
                 self.answer_failed_clip(record, decision)
-                self.log(f"voiced: {record['error']} for {mid}")
+                # The step and the reason, so a certificate failure reads as a download or a transcription failure and
+                # never as one vague type. `safe_reason` drops a URL query and every key-like value (#2933).
+                self.log(f"voiced: clip {step} failed: {safe_reason(x)} for {mid}")
                 return "failed"
         if not text:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
@@ -2005,6 +2102,43 @@ def ssl_context(log=None):
     return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
 
 
+_DAEMON_CONTEXT = None
+
+
+def daemon_context(log=None):
+    """The one SSL context the daemon's HTTPS calls share, built once from `ssl_context()` (#2933).
+
+    The clip download and the Gemini call trust the same bundle as the Socket Mode connection. A python.org build has
+    no default store under launchd, so a call without this context fails its own verification.
+    """
+    global _DAEMON_CONTEXT
+    if _DAEMON_CONTEXT is None:
+        _DAEMON_CONTEXT = ssl_context(log=log)
+    return _DAEMON_CONTEXT
+
+
+# A whole URL: its query or its path may hold a token, so the log keeps the reason and never the address (#2933).
+_URL = re.compile(r"https?://[^\s\"']*")
+_KEY_PARAM = re.compile(r"(?i)\b(key|token|api[_-]?key|x-goog-api-key|access_token|sig|signature|secret)=[^\s&,;\"']*")
+# A bare secret with a known provider prefix, with no `key=` before it (#2933).
+_TOKEN_PREFIX = re.compile(r"\b(?:xox[baprs]-|AIza|ghp_|sk-)[A-Za-z0-9_\-]*")
+
+
+def safe_reason(error):
+    """The reason of one failed HTTPS call, with every URL, query, key-like value and bare token removed (#2933).
+
+    A provider or verification message may carry the URL it failed on, whose query or path holds a secret, or the key
+    alone with no `key=` before it. The log keeps the reason and drops the whole URL, every `key=` or `token=` value
+    and every known token prefix, so a secret never enters a log line.
+    """
+    reason = getattr(error, "reason", None)
+    text = str(reason if reason is not None else type(error).__name__)
+    text = _URL.sub("<url>", text)
+    text = _KEY_PARAM.sub(lambda m: m.group(1) + "=<redacted>", text)
+    text = _TOKEN_PREFIX.sub("<redacted>", text)
+    return (text.strip() or type(error).__name__)[:160]
+
+
 async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
     """Answer each new outbox line as soon as it appears, until `stop` is set.
 
@@ -2057,6 +2191,9 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     """
     if isinstance(apps, str):
         apps = {"app": apps}
+    # One context for every HTTPS call of the run, built before the first task names the bundle (#2933). A clip's
+    # download and its transcription then trust the same bundle as the sockets, whatever the Python build.
+    daemon_context(log=daemon.log)
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
@@ -2083,7 +2220,7 @@ async def hear(daemon, app_token, connect=None, open_connection=None, stop=None)
     if open_connection is None:
         open_connection = lambda: channels.api(app_token, "apps.connections.open", {}, post=True)  # noqa: E731
 
-    context = ssl_context(log=daemon.log)
+    context = daemon_context()
     wait = 1
     while not (stop is not None and stop.is_set()):
         try:
