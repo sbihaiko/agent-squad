@@ -18,11 +18,23 @@ events:
 - id: prod_release
   template: 'Subiu para producao: {items}.'
 roles:
-- id: viewer
+- id: QA
   actions:
   - status
   - logs
-- id: maintainer
+  - request_investigation
+- id: Devel
+  actions:
+  - status
+  - logs
+  - request_work
+  - request_investigation
+- id: Product
+  actions:
+  - status
+  - request_work
+  - approve_and_move
+- id: Admin
   actions:
   - status
   - logs
@@ -43,8 +55,10 @@ workspaces:
     language: pt-BR
     persona: hal
     roles:
-    - viewer
-    - maintainer
+    - QA
+    - Devel
+    - Product
+    - Admin
     announce:
     - stg_release
     - prod_release
@@ -54,5 +68,7 @@ workspaces:
     language: pt-BR
     persona: hal
     roles:
-    - viewer
-    - maintainer
+    - QA
+    - Devel
+    - Product
+    - Admin
