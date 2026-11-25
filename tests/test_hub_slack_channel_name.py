@@ -10,6 +10,7 @@ The seams are the hub's editor, `slack_docs_edit`, the hub's read, `slack_overvi
 the theme's renderer run in node. No browser runs here. Every id and name is a neutral placeholder.
 """
 import copy
+import inspect
 import json
 import re
 
@@ -48,6 +49,11 @@ def name_key(doc, channel):
             if str(ch.get("id")) == channel:
                 return f"workspaces[{wi}].channels[{ci}].name"
     raise AssertionError(f"the document names no channel {channel!r}")
+
+
+def row_key(doc, channel):
+    """The key path the policy names for the channel's row itself, with the field appended by the caller."""
+    return name_key(doc, channel)[: -len("name")]
 
 
 # ---------------------------------------------------------------- the read names the name row first
@@ -112,6 +118,42 @@ def test_the_hub_refuses_a_name_that_strips_to_nothing(hub):
     for value in ("", "#", "##", "   ", "#  ", " # "):
         assert hub._slack_field_value("name", value) == (None, "a channel names its name"), value
     assert hub._slack_field_value("name", " #release notes ") == ("release notes", None)
+
+
+def test_a_name_of_hash_and_space_prefixes_keeps_no_leading_hash(hub):
+    """Criterion 7: a typed name drops every leading `#` and the blanks around it, so no stored name opens with a `#`."""
+    assert hub._slack_channel_name("# #release") == "release"
+    assert hub._slack_field_value("name", " # #release ") == ("release", None)
+
+
+def test_the_key_helper_names_a_channel_row(hub):
+    """The refusal names the row as the policy does: `workspaces[i].channels[j].name`, indexes in brackets."""
+    assert hub._slack_key(["workspaces", 0, "channels", 1, "name"]) == "workspaces[0].channels[1].name"
+
+
+def test_the_hub_checks_the_value_before_it_routes_a_delivery_edit(hub):
+    """The value rule sits before the delivery routing, so no edit route reaches a write the hub never checked."""
+    src = inspect.getsource(hub._slack_place_field)
+    assert src.index("_slack_field_value") < src.index("if delivery:"), src
+
+
+def test_a_local_only_channel_refuses_an_empty_name_with_its_row_key(hub, tmp_path):
+    """Criterion 6 on the local route: a channel the local file alone holds refuses an empty name and names the row."""
+    key = name_key(LOCAL, "C0CLISUP01")
+    out = edit(hub, tmp_path, "C0CLISUP01", "#")
+    assert out["err"] and key in out["err"], (key, out)
+    assert out["committed"] == COMMITTED and out["local"] == LOCAL, out
+
+
+def test_a_delivery_value_the_hub_cannot_read_is_refused_with_its_row_key(hub, tmp_path):
+    """The value rule reaches the delivery fields too: a non-string `speak` is refused and the message names the row."""
+    key = row_key(LOCAL, "C0CLISUP01") + "speak"
+    c, loc = F.paths(tmp_path)
+    body = {"committed": copy.deepcopy(COMMITTED), "local": copy.deepcopy(LOCAL),
+            "op": {"kind": "field", "channel": "C0CLISUP01", "field": "speak", "value": 5}}
+    out = hub.slack_docs_edit(body, committed=c, local=loc)
+    assert out["err"] and key in out["err"] and "speak is a string" in out["err"], (key, out)
+    assert out["committed"] == COMMITTED and out["local"] == LOCAL, out
 
 
 def test_the_saved_edit_survives_a_yaml_round_trip(hub, tmp_path):

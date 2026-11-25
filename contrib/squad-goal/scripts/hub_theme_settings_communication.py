@@ -121,9 +121,12 @@ def _slack_text(value):
 
 def _slack_channel_name(value):
     """A channel name as the file stores it and the row shows it: no space around the text and no leading `#`
-    (SPEC 2682 #2941). The hub holds this format rule, so the view hands the typed text and the hub decides what the
-    file keeps (ADR-0137)."""
-    return _slack_text(value).strip().lstrip("#").strip()
+    (SPEC 2682 #2941). Every leading `#` leaves with the blanks around it, so no stored name opens with a `#`. The hub
+    holds this format rule, so the view hands the typed text and the hub decides what the file keeps (ADR-0137)."""
+    name = _slack_text(value).strip()
+    while name.startswith("#"):
+        name = name.lstrip("#").strip()
+    return name
 
 def _slack_dicts(value):
     """The mappings of a list with the position each one holds in its own document, so the editor addresses a row by
@@ -2085,6 +2088,9 @@ def _slack_place_field(P, op, docs, local_name):
         return f"{name}: the channel {ch_id}: unknown field {field!r}", False
     if field.startswith("poll.") and field.split(".", 1)[1] not in SLACK_POLL_FIELDS:
         return f"{name}: the channel {ch_id}: unknown poll field {field.split('.', 1)[1]!r}", False
+    # The value rule runs before the routing and before any write, so every edit route, delivery and presentation alike,
+    # meets it (#2941). The refusal names the row once the route names it, below.
+    ok_value, why = _slack_field_value(field, value)
     if delivery:
         # The channel's own class wins over its workspace's, so a guest channel inside an owned workspace takes the
         # delivery fields too (#2770). The address is the local row that carries the id, never an index.
@@ -2112,7 +2118,6 @@ def _slack_place_field(P, op, docs, local_name):
     else:
         wi, ci = committed_hit["wi"], committed_hit["ci"]
     path = ["workspaces", wi, "channels", ci, field]
-    ok_value, why = _slack_field_value(field, value)
     if why:
         return f"{name}: {_slack_key(path)}: {why}", False
     row = _slack_rows_at(docs[doc], path[:-1])
