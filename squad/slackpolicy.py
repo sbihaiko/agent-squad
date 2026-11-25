@@ -827,6 +827,17 @@ def addressed(committed, local, text):
     return persona_named(committed, local, best) if best is not None else None
 
 
+def answers(committed, local, channel, text=""):
+    """True when one channel posts a reply to a message of this text: its mode speaks, and a channel that answers only
+    an addressed message answers this text only when the text addresses a persona. This is the reply rule `decide`
+    keeps, for a writer that posts with no decision of its own, so a `listen` channel and an unaddressed message of a
+    `reply: addressed` channel both post nothing (story 68)."""
+    channel = channel or {}
+    if not can_speak(channel):
+        return False
+    return str(channel.get("reply") or "all") != "addressed" or addressed(committed, local, text) is not None
+
+
 def identity(committed, local, channel_id):
     """The language and persona one channel answers with, from its id alone: the same chain `decide` uses.
 

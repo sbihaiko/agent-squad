@@ -27,7 +27,9 @@ the grant and the arguments against the policy decision.
    the deploy environment against the role's deploy list. The pass reads
    only the outbox of a channel a project owns and never the DM outbox, so a line in any other outbox never runs. A
    request older than a small window is stale and never runs, so a line a crashed pass left behind cannot act on a
-   channel long after its message.
+   channel long after its message. The line's `at` is the session's number, so the daemon reads it against its own
+   clock: a line more than a small tolerance in the future never runs, and neither does a line whose outbox the daemon
+   did not read within the window, because the daemon can then vouch for no age of it.
 3. **The command comes from the project, never from a message.** The committed `slack.yaml` declares one command per
    action id under `project.actions`, and the project identity declares the deploy command. The executor builds no
    command from message text, no argument of a request reaches a command line, and the declared command runs as one argv
@@ -45,7 +47,9 @@ the grant and the arguments against the policy decision.
    error on a success). A request is run once, by a ledger beside the state, and the ledger's key is the parsed request
    (the action, the arguments, the sender, the channel and the source), never the raw line, so a line with another field
    never runs the same request twice. A reply that cannot be written is recorded in the audit and kept for the next
-   pass, so the reply still leaves and the command never runs again.
+   pass, so the reply still leaves and the command never runs again. The ledger line carries the audit row's fields
+   before the run, and every audit row carries the key, so a crash that cuts a run short still gets its row from the
+   next pass, naming the unfinished command.
 
 ## Consequences
 
