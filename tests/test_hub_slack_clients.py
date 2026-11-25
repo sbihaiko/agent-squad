@@ -274,7 +274,7 @@ def test_the_renderer_draws_the_client_tree(hub, tmp_path, monkeypatch):
                    [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}], {"alpha": FOLLOWER})
     out = hub.slack_overview()
     html = render(hub, out)
-    assert 'role=tree aria-label="Communication tree"' in html
+    assert 'role=tree aria-label="Slack tree"' in html
     assert re.search(r'aria-level="1"[^>]*aria-label="One', html)
     assert re.search(r'aria-level="2"[^>]*aria-label="alpha', html)
     assert re.search(r'aria-level="4"[^>]*aria-label="#project', html)

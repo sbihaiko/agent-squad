@@ -543,7 +543,7 @@ def render(hub, out, sel=None):
 
 def test_the_tree_follows_the_wai_aria_pattern(hub, tmp_path):
     html = render(hub, read(hub, tmp_path))
-    assert 'role=tree aria-label="Communication tree"' in html
+    assert 'role=tree aria-label="Slack tree"' in html
     items = re.findall(r"<div[^>]*role=treeitem[^>]*>", html)
     assert items and all("aria-level=" in i for i in items), items[:2]
     assert sum('tabindex="0"' in i for i in items) == 1, items     # one tab stop
@@ -586,6 +586,17 @@ def test_a_long_channel_name_is_cut_and_kept_whole(hub, tmp_path):
     name = re.search(r'<span class=sltname title="(' + re.escape(full) + r')"', html)
     assert name and name.group(1) == full, name
     assert f'aria-label="{full}' in html, "the accessible name keeps the full name"
+
+
+def test_a_long_node_name_wraps_and_is_never_cut(hub, tmp_path):
+    """A node name wraps inside its row and keeps every character on screen; the badges sit beside it in one wrapping
+    group, so a narrow tree column never cuts the name to an ellipsis (#2903)."""
+    rule = _rule(hub.PAGE, "#sbody .sltname")
+    assert "overflow-wrap:anywhere" in rule, rule
+    assert "nowrap" not in rule and "ellipsis" not in rule, rule
+    assert "flex-wrap:wrap" in _rule(hub.PAGE, "#sbody .sltmain")
+    html = render(hub, read(hub, tmp_path))
+    assert re.search(r'<span class=sltmain><span class=sltname title="[^"]*">[^<]*</span><span class=sltbadges>', html), html[:800]
 
 
 def test_arrow_left_folds_a_node_that_was_never_toggled(hub, tmp_path):

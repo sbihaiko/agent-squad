@@ -309,7 +309,7 @@ def test_the_themes_keep_one_order_in_the_nav_the_phone_select_and_the_panels(hu
     assert re.findall(r"value=(\w+)", sel) == THEMES, "the phone select does not follow the nav order"
     assert re.findall(r"<details id=(\w+) class=sp", view) == THEMES, "the panels do not follow the nav order"
     assert [t.replace("&amp;", "&") for t in re.findall(r"<button data-sp=\w+>(.*?)<small", nav)] == \
-           ["Spend & limits", "Subscriptions", "Models & chains", "Communication", "Access"]
+           ["Spend & limits", "Subscriptions", "Models & chains", "Slack", "Access"]
 
 
 def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hub):

@@ -615,4 +615,4 @@ def test_the_save_dialog_names_both_files_and_their_changed_lines(hub):
     assert [g["file"] for g in groups] == ["slack.yaml", "checkout.slack.local.yaml"], groups
     text = "\n".join(lines[1:])
     assert "slack.yaml" in text and "checkout.slack.local.yaml" in text, text
-    assert "Communication · +  language: pt-BR" in text, text
+    assert "Slack · +  language: pt-BR" in text, text
