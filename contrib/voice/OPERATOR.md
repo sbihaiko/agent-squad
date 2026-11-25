@@ -70,8 +70,10 @@ It reads every outbox on its own. The session makes no Slack call and waits for 
 
 The session reads and answers. It never acts: it writes no file, runs no command and makes no Slack write, and the
 kernel refuses all three. When a message asks for an action, the session writes one action request to the outbox of the
-line's channel. The request is one JSON line with `action`, `arguments`, `sender`, `channel`, `source` (the inbox line
-id) and `thread_ts`. The daemon's checked executor reads it outside the session and outside its sandbox. The executor
+line's channel. The request is one JSON line with the reserved `kind` (`action-request`), `at` (the epoch second you
+write it), `action`, `arguments`, `sender`, `channel`, `source` (the inbox line id) and `thread_ts`. Write it at once:
+the daemon runs no request older than a few minutes. The daemon's checked executor reads it outside the session and
+outside its sandbox. The executor
 asks the policy whether the sender's role lists the action, runs the command the project declares for that action id,
 and appends one reply in the thread. It never runs the text of the message.
 

@@ -50,10 +50,11 @@ Before any of it, the daemon checks the line (#2948): it must answer a pending i
 of every link, and its text may not pass the channel's `answer_max_chars`. A refused line posts nothing and writes one row
 to `$VOICE_STATE/audit.jsonl` with its reason class.
 
-An outbox line that carries an `action` key is an action request, never an answer (#2939). The daemon posts no such
+An outbox line whose `kind` is `action-request` is an action request, never an answer (#2939). The daemon posts no such
 line: its action pass (`squad/slackactions.py`) runs in the daemon's own process, outside every session and its
 sandbox. The pass checks the request against the policy decision, runs the command the project declares, appends one
-reply in the thread and one audit line. The session never runs a command itself.
+reply in the thread and one audit line. It reads only the outbox of a channel a project owns, never the DM outbox, and
+it runs no request older than a few minutes. The session never runs a command itself.
 
 Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
 `answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
