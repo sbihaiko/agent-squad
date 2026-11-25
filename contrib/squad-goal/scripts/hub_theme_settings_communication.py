@@ -986,6 +986,36 @@ def _slack_here(seat, seats, here):
     try: return bool(path) and pathlib.Path(path).resolve() == pathlib.Path(here).resolve()
     except OSError: return False
 
+def _slack_read_value(control):
+    """The text a read-only control shows for one edit control: a select's chosen label, a check's yes or no, a text's
+    value. The empty choice of a select names what it inherits, so a read never shows a blank."""
+    kind, value = control.get("kind"), control.get("value")
+    if kind == "select":
+        opts = [o if isinstance(o, dict) else {"value": o, "label": o} for o in control.get("options") or ()]
+        hit = next((o for o in opts if _slack_text(o.get("value")) == _slack_text(value)), None)
+        return _slack_text((hit or {}).get("label") or value)
+    if kind == "check":
+        return "yes" if value in (True, "true", "yes", "1") else "no"
+    if kind == "read":
+        return _slack_text(value)
+    return _slack_text(value) or "none"
+
+def _slack_tree_elsewhere(node, hub):
+    """A project node of another profile and its subtree, read-only (#2919): the page edits its own project's files
+    only, so each control becomes the value of that project's own files, no add or remove target stays, and every node
+    names the page that edits it."""
+    for n in [node] + [d for d in _slack_walk(node) if d is not node]:
+        n["elsewhere"] = hub
+        n.pop("channel_add", None); n.pop("channel_remove", None)
+        for row in (n.get("settings") or {}).get("rows") or []:
+            row["controls"] = [{"field": c.get("field"), "kind": "read", "value": _slack_read_value(c)}
+                               for c in row.get("controls") or []]
+
+def _slack_walk(node):
+    yield node
+    for child in node.get("children") or []:
+        yield from _slack_walk(child)
+
 def _slack_clients_tree_for(P, seats, here=None):
     """The tree over the given seats: Client > Project > Workspace > Channel, the clients from the local map and one
     Unassigned node for the projects no client names."""
@@ -1008,6 +1038,8 @@ def _slack_clients_tree_for(P, seats, here=None):
             built = _slack_project_node(P, seat, f"c{i}.p{j}")
             built["node"]["here"] = _slack_here(seat, seats, here)
             built["node"]["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
+            if not built["node"]["here"]:
+                _slack_tree_elsewhere(built["node"], built["node"]["hub"])
             built["node"]["badges"] = list(built["node"]["badges"]) + [
                 _slack_badge("inherits from client", "muted", "follow") if entry["follows"]
                 else _slack_badge("own persona", "neutral", "follow")]

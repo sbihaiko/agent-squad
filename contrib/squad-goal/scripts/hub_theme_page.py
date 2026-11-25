@@ -1674,7 +1674,9 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +(n.permissions?`<p class=sltjump><a href="#slperm" data-slt-perm>Permissions</a></p>`:"")
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button>${n.open?` <a class=sltopen href="${slA(n.open)}" target=_blank rel=noopener>Open in Slack</a>`:""}</p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`
- +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+slTPreview(n)+slTChRm(n)}
+ +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTElsewhere(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+(n.elsewhere?"":slTPreview(n))+slTChRm(n)}
+/* A node of another profile's project is read-only here: the page edits its own project's files only (#2919). */
+const slTElsewhere=n=>n&&n.elsewhere&&n.kind!=="project"?`<p class=slttext>${esc("Edited on ")}<a href="${slA(n.elsewhere)}">${esc((slTPath(n.id).find(x=>x.kind==="project")||{}).name||"its project")}${esc("'s page")}</a>.</p>`:"";
 /* Add and remove a channel from its own tree node (#2918). The hub names the row each edit writes and lists the
    workspace's channels by name, the ones the files name left out; the view draws the list and sends the edit. */
 let slChList={},slChAsk={};
