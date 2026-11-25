@@ -1604,8 +1604,10 @@ function slTBind(){if(typeof document==="undefined"||!document.querySelectorAll)
  if(sel)sel.addEventListener("change",slClientPick);   // a client's default saves its project writes by itself (#2908)
  for(const el of document.querySelectorAll("[data-slt-tree]"))el.addEventListener("click",slTBack);
  for(const el of document.querySelectorAll("[data-slt-copy]"))el.addEventListener("click",()=>{const id=el.dataset.sltCopy;   // #2912
-  const done=()=>{el.textContent="copied";setTimeout(()=>{el.textContent="copy id"},1500)};
-  if(navigator.clipboard)navigator.clipboard.writeText(id).then(done,()=>{el.textContent=id})});
+  const say=ok=>{el.textContent=ok?"copied":"copy failed";setTimeout(()=>{el.textContent="copy id"},1500);return ok};
+  const legacy=()=>{try{const a=document.createElement("textarea");a.value=id;a.setAttribute("readonly","");a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.select();const ok=!!(document.execCommand&&document.execCommand("copy"));document.body.removeChild(a);return say(ok)}catch(e){return say(false)}};   // a plain http hub has no clipboard API, so the copy still runs
+  try{if(navigator.clipboard&&navigator.clipboard.writeText)return void navigator.clipboard.writeText(id).then(()=>say(true),legacy)}catch(e){}
+  legacy()});
  for(const el of document.querySelectorAll("[data-slp-sender]"))el.addEventListener("change",()=>slPvAsk(el.getAttribute("data-slp-sender"),el.value));
  for(const el of document.querySelectorAll("[data-slt-perm]"))el.addEventListener("click",e=>{e.preventDefault();slPermGo()});
  const tree=typeof document!=="undefined"&&document.getElementById&&document.getElementById("sltree");if(tree)tree.addEventListener("keydown",slTKey)}
