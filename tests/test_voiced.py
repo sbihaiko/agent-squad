@@ -680,6 +680,47 @@ def test_a_sync_reports_a_mapped_channel_that_slipped_outside_the_prefix(tmp_pat
     assert "acme/app" in log[0] and "C0APP" in log[0]
 
 
+def test_an_unlisted_mapped_channel_is_named_once_with_its_probable_cause(tmp_path):
+    """#2955: a channel the registry maps and Slack does not list is named with the probable cause, and the sync that
+    runs again on every reconnect names it once, never once per pass."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/gone": {"name": "proj-gone", "id": "C0GONE"}})
+    client = FakeClient(existing=[])
+    log = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=None, downloader=None, log=log.append,
+                        client=client, projects=lambda: ["acme/gone"])
+
+    daemon.sync_projects()
+    daemon.sync_projects()
+    daemon.sync_projects()
+
+    assert len(log) == 1, log
+    assert "acme/gone" in log[0] and "proj-gone" in log[0] and "C0GONE" in log[0], log
+    assert "the bot left the channel, or the channel does not exist" in log[0], log
+
+
+def test_a_channel_that_returns_to_slacks_list_is_named_again_when_it_disappears(tmp_path):
+    """#2955: the once-per-process line follows the live fact: a channel Slack lists again is no violation, and the next
+    disappearance is a new line, never one the process silenced for good."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    state.save_channels({"acme/gone": {"name": "proj-gone", "id": "C0GONE"}})
+    client = FakeClient(existing=[])
+    log = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=None, downloader=None, log=log.append,
+                        client=client, projects=lambda: ["acme/gone"])
+
+    daemon.sync_projects()
+    client.channels["proj-gone"] = {"id": "C0GONE", "name": "proj-gone", "is_member": True}
+    daemon.sync_projects()
+    assert len(log) == 1, log
+    del client.channels["proj-gone"]
+    daemon.sync_projects()
+
+    assert len(log) == 2, log
+
+
 def test_a_clip_in_a_project_channel_reaches_only_that_projects_inbox_and_its_answer_goes_back_there(tmp_path):
     """Criterion (b): the line lands in that project's inbox alone, and the answer is posted in the same channel."""
     mod = voiced()

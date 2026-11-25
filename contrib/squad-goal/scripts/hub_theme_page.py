@@ -1632,11 +1632,19 @@ const slTGlyph=n=>n.kind==="channel"?(n.icon==="chat"?slTKinds.chat:slTKinds.has
 /* The indent guides of one row, one per ancestor level: the line of a level draws only while that ancestor has another
    sibling after it, so a subtree's rule ends at its last child and never runs past it (mockup, #2843). */
 const slTGuides=more=>more.map(m=>`<span class="sltg${m?" more":""}" aria-hidden=true></span>`).join("");
+/* #2955: the hub's own Slack read names each mapped channel its workspace does not list, in the hub's words; the tree
+   draws that sentence as the channel's badge, so a channel Slack cannot reach never reads as a live one. */
+function slTGone(n){if(!n||n.kind!=="channel"||!n.ids)return null;
+ const l=slChList[String(n.ids.workspace||"")],list=l&&Array.isArray(l.unreachable)?l.unreachable:[];
+ const hit=list.find(g=>String(g.id)===String(n.ids.channel));
+ return hit?{text:String(hit.text||""),tone:"err",kind:"unreachable"}:null}
 function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.children.length),sel=n.id===cur;
- const label=[n.name].concat((n.badges||[]).map(b=>b.text)).join(", ");   // the accessible name carries the badges
+ if(n.kind==="workspace"&&n.channel_read)slChNeed(n.channel_read);   // the tree asks which mapped channels Slack still lists (#2955)
+ const gone=slTGone(n),badges=(n.badges||[]).concat(gone?[gone]:[]);
+ const label=[n.name].concat(badges.map(b=>b.text)).join(", ");   // the accessible name carries the badges
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
  +slTGuides(more||[])+`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span>${slTGlyph(n)}`
- +`<span class=sltmain><span class=sltname title="${slA(n.name)}">${esc(n.icon==="hash"?String(n.name).replace(/^#/,""):n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></span></div>`}
+ +`<span class=sltmain><span class=sltname title="${slA(n.name)}">${esc(n.icon==="hash"?String(n.name).replace(/^#/,""):n.name)}</span><span class=sltbadges>${badges.map(slTBadge).join("")}</span></span></div>`}
 function slTConv(n){const bubble=x=>`<div class="slcb ${slA(x.side)}${x.tone?" "+slA(x.tone):""}">${x.who?`<span class=slcbn>${esc(x.who)}</span>`:""}<span class=slcbt>${esc(x.text)}</span></div>`;
  return `<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>What happens here</h3><div class=slconv>${n.conversation.map(bubble).join("")}</div>`
  +`<details class=slcdet><summary>Details</summary>${slTTiles(n)}${slTNoteHtml(n)}</details></div>`}

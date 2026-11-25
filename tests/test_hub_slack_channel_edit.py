@@ -82,6 +82,23 @@ def test_the_route_lists_the_channels_the_files_do_not_name(hub, slack):
     assert out["channels"] == [{"id": "C0NEWCH002", "name": "design"}, {"id": "C0NEWCH001", "name": "release-notes"}], out
 
 
+def test_the_route_names_the_channels_the_files_map_and_slack_does_not_list(hub, slack):
+    """#2955: the hub's own Slack read names each channel the files map that Slack does not list, with the probable
+    cause, so the tree marks it unreachable instead of drawing it as a live channel."""
+    out = hub.slack_channels_post({"workspace": TEAM, "named": ["C0PROJ0001", "C0GONE001"]})
+    assert out["err"] is None, out
+    assert out["unreachable"] == [{"id": "C0GONE001", "text": hub.SLACK_NOT_LISTED}], out
+    assert [c["id"] for c in out["channels"]] == ["C0NEWCH002", "C0NEWCH001"], out
+
+
+def test_the_route_marks_nothing_when_the_listing_errors(hub, slack):
+    """#2955: a listing Slack refuses measures nothing, so no channel is called unreachable on a read that failed."""
+    slack["scope"] = False
+    out = hub.slack_channels_post({"workspace": TEAM, "named": ["C0PROJ0001", "C0GONE001"]})
+    assert out["manual"] is True and out["err"], out
+    assert out.get("unreachable", []) == [], out
+
+
 def test_the_route_names_the_missing_scope(hub, slack):
     slack["scope"] = False
     out = hub.slack_channels_post({"workspace": TEAM, "named": []})
@@ -116,6 +133,30 @@ def test_the_channel_detail_links_to_slack_and_offers_remove(hub, tmp_path):
     assert re.search(r'<a [^>]*href="https://app\.slack\.com/client/T0TEAM0001/C0ALERT001"[^>]*target=_blank', html), html
     assert "Open in Slack" in html
     assert re.search(r'data-sltrmch="committed:0:1"[^>]*>Remove channel<', html), html
+
+
+def _tree_with(hub, tmp_path, seed):
+    out = read(hub, tmp_path)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};" + seed + "slRender();"
+            "console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    return json.loads(_node(body))
+
+
+def test_the_tree_marks_a_mapped_channel_slack_does_not_list(hub, tmp_path):
+    """#2955: a channel node whose id the hub's Slack read does not find carries the hub's own sentence, so the owner
+    reads a channel Slack cannot reach and never a live-looking one."""
+    seed = ('slChList={"T0TEAM0001":{"err":null,"manual":false,"channels":[],"unreachable":'
+            + json.dumps([{"id": "C0ALERT001", "text": hub.SLACK_NOT_LISTED}]) + "}};")
+    html = _tree_with(hub, tmp_path, seed)
+    item = next(i for i in re.findall(r"<div[^>]*role=treeitem[^>]*>", html) if "squad-alerts" in i)
+    assert hub.SLACK_NOT_LISTED in item, item
+
+
+def test_the_tree_marks_no_channel_the_hub_lists(hub, tmp_path):
+    """#2955: the mark follows the hub's read alone: a channel the read lists carries no unreachable sentence."""
+    seed = ('slChList={"T0TEAM0001":{"err":null,"manual":false,"channels":[],"unreachable":[]}};')
+    html = _tree_with(hub, tmp_path, seed)
+    assert hub.SLACK_NOT_LISTED not in html, html
 
 
 def test_the_workspace_detail_offers_the_listed_channels_by_name(hub, tmp_path):

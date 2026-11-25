@@ -105,6 +105,9 @@ ADDRESS = os.path.join(HERE, "..", "squad-goal", "scripts", "address.sh")   # th
 OPERATORS = os.path.join(HERE, "operators.py")   # the supervisor a new inbox line wakes at once (#2925)
 CHANNEL_MAX = 80     # Slack's channel-name cap
 PROJ_PREFIX = "proj-"   # every project channel name starts with it, so a reader tells a project channel by its name
+# The probable cause a mapped channel Slack does not list leaves open (#2955). A listing answers it by an id alone:
+# a channel the bot left, and one that no longer exists, both read as absent from the public list.
+NOT_LISTED_CAUSE = "the bot left the channel, or the channel does not exist"
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
 AUDIO_TYPES = {"m4a", "mp4", "webm", "ogg", "mp3", "wav", "aac", "flac"}
@@ -1323,7 +1326,7 @@ def channel_name_violations(mapping, live):
             continue
         live_name = names.get(cid)
         if live_name is None:
-            lines.append(f"voiced: {repo} maps #{mapped_name} ({cid}), which Slack does not list")
+            lines.append(f"voiced: {repo} maps #{mapped_name} ({cid}), which Slack does not list: {NOT_LISTED_CAUSE}")
             continue
         live_bare = not live_name.startswith(PROJ_PREFIX)
         registry_bare = bool(mapped_name) and not mapped_name.startswith(PROJ_PREFIX)
@@ -1438,6 +1441,7 @@ class Daemon:
         self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
         self._guard_hits = {}    # (channel, user) -> monotonic moments of the messages inside the guard window (#2947)
         self._guard_replied = {}  # (channel, user) -> the monotonic moment of the last refusal reply (#2947)
+        self._name_lines = set()  # the channel-name lines the last sync reported, so a caught-up sync repeats none (#2955)
 
     def app_of(self, channel):
         """The app id that owns one channel, or None when no active document names it."""
@@ -1783,8 +1787,14 @@ class Daemon:
         if self.client is None or self.projects is None:
             return {"channels": self.state.channels(), "refused": []}
         got = project_channels(self.state, self.client, self.projects(), self.log)
-        for line in check_channel_names(self.state.channels(), self.client):
-            self.log(line)
+        # One line per violation, once per process: the sync runs again on every reconnect, and a channel that stays
+        # unlisted is a fact the owner reads once, never one line per pass (#2955). A rule that stops holding leaves
+        # the set, so the next break of it is a new line.
+        lines = check_channel_names(self.state.channels(), self.client)
+        for line in lines:
+            if line not in self._name_lines:
+                self.log(line)
+        self._name_lines = set(lines)
         return got
 
     def wake_operator(self, repo, line=None):
