@@ -1448,22 +1448,97 @@ def test_a_refused_tts_names_a_cause_code_never_the_provider_message(tmp_path):
         def synth(key, script, voice, out, tone=""):
             return None, "400 refused key AIza-SECRET-GEMINI-KEY"
 
-    mod.tempfile.mkstemp, was = fake_mkstemp, mod.tempfile.mkstemp
-    sys.modules["tts"] = FakeTTS
+    was = mod.tempfile.mkstemp
     try:
-        mod.spoken_clip("the-key", "the answer")
-    except mod.SpeechError as caught:
-        assert caught.cause == "refused", f"the cause code is {caught.cause!r}"
-        assert "AIza-SECRET" not in str(caught), "the provider message reached the exception text"
-    else:
-        raise AssertionError("a refused TTS raised no SpeechError")
+        mod.tempfile.mkstemp = fake_mkstemp
+        sys.modules["tts"] = FakeTTS
+        try:
+            mod.spoken_clip("the-key", "the answer")
+        except mod.SpeechError as caught:
+            assert caught.cause == "refused", f"the cause code is {caught.cause!r}"
+            assert "AIza-SECRET" not in str(caught), "the provider message reached the exception text"
+        else:
+            raise AssertionError("a refused TTS raised no SpeechError")
     finally:
         mod.tempfile.mkstemp = was
         sys.modules.pop("tts", None)
+    assert "tts" not in sys.modules, "the fake tts outlived its case"
     assert mod.speech_cause("400 refused key AIza-SECRET-GEMINI-KEY") == "refused"
     assert mod.speech_cause("RESOURCE_EXHAUSTED") == "resource_exhausted"
     assert mod.speech_cause("no audio in the answer") == "no_audio"
     assert mod.speech_cause(None) == "no_audio"
+
+
+def test_a_raising_tts_becomes_a_cause_code_never_its_message(tmp_path):
+    """Criterion (1) of #2956: a TTS backend that raises instead of answering still yields a cause code, so the log
+    names the cause and the provider's own message — which can carry a key — never leaves `spoken_clip`."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+
+    def case(error, expected):
+        path = tmp_path / "clip.wav"
+
+        def fake_mkstemp(prefix="", suffix=""):
+            return os.open(path, os.O_CREAT | os.O_WRONLY), str(path)
+
+        class FakeTTS:
+            @staticmethod
+            def synth(key, script, voice, out, tone=""):
+                raise error
+
+        was = mod.tempfile.mkstemp
+        try:
+            mod.tempfile.mkstemp = fake_mkstemp
+            sys.modules["tts"] = FakeTTS
+            try:
+                mod.spoken_clip("the-key", "the answer")
+            except mod.SpeechError as caught:
+                assert caught.cause == expected, f"the cause code is {caught.cause!r}"
+                assert secret not in str(caught), "the provider message reached the exception text"
+            else:
+                raise AssertionError("a raising TTS raised no SpeechError")
+        finally:
+            mod.tempfile.mkstemp = was
+            sys.modules.pop("tts", None)
+        assert "tts" not in sys.modules, "the fake tts outlived its case"
+        assert not path.exists(), "a failed clip stayed on disk"
+
+    case(RuntimeError("RESOURCE_EXHAUSTED"), "resource_exhausted")
+    case(RuntimeError(f"400 refused key {secret}"), "refused")
+    case(RuntimeError(), "refused")
+
+
+def test_a_foreign_error_carrying_its_own_cause_is_logged_by_its_class_only(tmp_path):
+    """Criterion (1) of #2956, review: a third-party error may carry a `.cause` of its own, and that text is the
+    provider's, so the daemon trusts no foreign attribute and logs the class alone, once per run."""
+    mod = voiced()
+    secret = "AIza-SECRET-GEMINI-KEY"
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    log = []
+    state = mod.State(str(tmp_path))
+    state.save_channels(channels)
+
+    class ProviderError(RuntimeError):
+        def __init__(self, cause):
+            super().__init__(cause)
+            self.cause = cause
+
+    def synth(script, **kwargs):
+        raise ProviderError(f"400 refused key {secret}")
+
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
+                        log=log.append, client=client, synthesizer=synth,
+                        uploader=lambda path, channel, thread_ts, title: ("F0001", None))
+
+    append_outbox(state.outbox_for(app["id"]), {"text": "One. Two."}, {"text": "Three. Four."})
+    asyncio.run(daemon.drain_outboxes())
+
+    skipped = [line for line in log if line.startswith("voiced: speech skipped:")]
+    assert skipped == ["voiced: speech skipped: ProviderError"], f"the class alone, once, got {skipped}"
+    assert all(secret not in line for line in log), "a log line holds the key"
+    assert all("refused key" not in line for line in log), "a log line holds the foreign cause's text"
 
 
 def test_a_speech_failure_names_its_cause_once_per_run(tmp_path):

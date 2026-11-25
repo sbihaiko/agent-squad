@@ -1195,6 +1195,14 @@ def speech_cause(err):
     return "refused"
 
 
+def error_cause(x):
+    """The cause code of a failed speech call: only the code `spoken_clip` minted, never a foreign attribute's text.
+
+    A third-party error can carry a `.cause` of its own, and that text is the provider's, so this reader trusts no
+    attribute: only a `SpeechError` holds a cause that passed through `speech_cause`."""
+    return x.cause if isinstance(x, SpeechError) else None
+
+
 def spoken_clip(key, script, voice=VOICE, tone=""):
     """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it.
 
@@ -1207,6 +1215,10 @@ def spoken_clip(key, script, voice=VOICE, tone=""):
     except subprocess.TimeoutExpired:
         _drop_clip(path)
         raise SpeechError("timeout") from None
+    except Exception as x:      # noqa: BLE001 - a provider that raises is still one cause code, never its own text
+        _drop_clip(path)
+        text = str(x).strip()
+        raise SpeechError(speech_cause(text) if text else "refused") from None
     if not got:
         _drop_clip(path)
         raise SpeechError(speech_cause(err))
@@ -1468,7 +1480,7 @@ class Daemon:
         self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
         self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
-        self._speech_logged = set()   # each (error class, cause code) already logged, so one cause is one line (#2956)
+        self._speech_logged = set()   # each cause code, or class when it holds none, already logged (#2956)
         self._guard_hits = {}    # (channel, user) -> monotonic moments of the messages inside the guard window (#2947)
         self._guard_replied = {}  # (channel, user) -> the monotonic moment of the last refusal reply (#2947)
 
@@ -2058,9 +2070,10 @@ class Daemon:
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
             # The cause code, never the provider text: a provider message can carry request material, and this log is
             # never redacted. One cause is one line, so a voice that refuses every answer never floods the log.
-            cause = getattr(x, "cause", None)
-            if (type(x).__name__, cause) not in self._speech_logged:
-                self._speech_logged.add((type(x).__name__, cause))
+            cause = error_cause(x)
+            key = cause or f"class:{type(x).__name__}"
+            if key not in self._speech_logged:
+                self._speech_logged.add(key)
                 name = type(x).__name__
                 self.log(f"voiced: speech skipped: {name}: {cause}" if cause else f"voiced: speech skipped: {name}")
             return None
