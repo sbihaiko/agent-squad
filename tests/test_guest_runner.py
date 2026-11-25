@@ -541,6 +541,38 @@ def test_a_session_answer_that_holds_the_connector_page_text_reads_as_the_page(t
         assert [m["ts"] for m in page] == REAL_TS
 
 
+CAUSE_FIELDS = ("subtype=error_during_execution", "api_error_status=529", "terminal_reason=max_turns",
+                "stop_reason=tool_use", "num_turns=3")
+
+
+def test_a_failed_poll_names_the_cli_answer_fields_and_never_its_text(tmp_path):
+    """#2867: every failure path names the metadata of the CLI answer in the reason, so the runner log says why a poll
+    failed. The cause holds the answer's status fields and no result text: the channel's content never reaches the log."""
+    envelope = {"type": "result", "subtype": "error_during_execution", "api_error_status": 529,
+                "terminal_reason": "max_turns", "stop_reason": "tool_use", "num_turns": 3}
+
+    def failed(answer, code=0):
+        return lambda argv, **kwargs: subprocess.CompletedProcess(argv, code, answer, stderr="")
+
+    def answer(result, **extra):
+        return json.dumps({**envelope, **extra, "result": result})
+
+    cases = [
+        ("an error answer", failed(answer(SECRET, is_error=True))),
+        ("an answer that is not JSON", failed(answer(SECRET))),
+        ("an answer object that carries an error", failed(answer(json.dumps({"error": SECRET})))),
+        ("a page the reader cannot read", failed(answer(json.dumps({"messages": [SECRET]})))),
+        ("a non-zero exit", failed(answer(SECRET), code=1)),
+    ]
+    for label, runner in cases:
+        with pytest.raises(G.SessionFailed) as caught:
+            G.run_session(["claude"], tmp_path, runner)
+        reason = str(caught.value)
+        for field in CAUSE_FIELDS:
+            assert field in reason, (label, reason)
+        assert SECRET not in reason, (label, reason)
+
+
 def test_a_failed_poll_names_the_shape_of_the_page_and_never_its_text(tmp_path):
     """#2859: a page the runner cannot read logs its shape, by keys and types only, never a message text."""
     with pytest.raises(G.SessionFailed) as caught:
