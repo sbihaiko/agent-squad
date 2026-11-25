@@ -1651,16 +1651,26 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
 const slTOpt=o=>typeof o==="string"?{value:o,label:o}
  :{value:String((o||{}).value==null?"":o.value),label:String((o||{}).label==null?(o||{}).value:o.label)};
 function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(el&&el.value!==undefined?el.value:"");
- return {kind:"field",channel:String(ch),field:String(field),value:v}}
-function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),doc=slDocsCur()[row.doc];
+ const k=String(ch);   // `project` and `ws:<id>` name a row above a channel; a Slack id never takes either shape (#2901)
+ if(k==="project")return {kind:"field",scope:"project",field:String(field),value:v};
+ if(k.indexOf("ws:")===0)return {kind:"field",scope:"workspace",workspace:k.slice(3),field:String(field),value:v};
+ return {kind:"field",channel:k,field:String(field),value:v}}
+function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),docs=slDocsCur();
+ if(sc==="project"){const p=(docs.committed||{}).project;return p&&p[f]!==undefined&&p[f]!==null?String(p[f]):""}
+ if(sc.indexOf("ws:")===0){const id=sc.slice(3);
+  for(const d of ["committed","local"])for(const w of Array.isArray((docs[d]||{}).workspaces)?docs[d].workspaces:[])
+   if(w&&String(w.id)===id&&w[f]!==undefined&&w[f]!==null)return Array.isArray(w[f])?w[f].join(", "):String(w[f]);
+  return ""}
+ const doc=docs[row.doc];
  if(doc)for(const w of Array.isArray(doc.workspaces)?doc.workspaces:[])for(const x of Array.isArray(w&&w.channels)?w.channels:[])
   if(x&&String(x.id)===ch){const v=f.indexOf("poll.")===0?(x.poll||{})[f.slice(5)]:x[f];
    return v===undefined||v===null?"":Array.isArray(v)?v.join(", "):f==="voice_reply"?!!v:String(v)}
  return c.value===undefined||c.value===null?"":String(c.value)}
-function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),f=String(c.field||""),
- at=ch&&f?`data-slf="${slA(ch)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
+function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),f=String(c.field||""),
+ tgt=ch||sc,   // the channel id, `project` or `ws:<id>`: the target the hub named for the row (#2901)
+ at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
  sv=v===undefined||v===null?"":String(v),
- id=`slf_${ch}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
+ id=`slf_${tgt}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  ph=c.default?` placeholder="default: ${slA(c.default)}"`:(f.indexOf("poll.")===0?` placeholder="the policy default"`:"");
  if(c.kind==="read")return `<span class=slsetval>${esc(c.value||"no")}</span>`;
  if(c.kind==="check")return `<label class=slchk><input type=checkbox class=slsetctl id="${slA(id)}" ${at} aria-label="${lab}"${v?" checked":""}> ${esc(c.label||f)}</label>`;

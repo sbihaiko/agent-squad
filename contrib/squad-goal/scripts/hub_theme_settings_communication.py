@@ -356,15 +356,16 @@ def _slack_language_options(P, empty):
     """The empty choice first, then every language the policy supports (#2845), never a copy in this read."""
     return [empty] + [{"value": language, "label": language} for language in P.LANGUAGES]
 
-def _slack_default_rows(P, committed_doc, empties, values):
+def _slack_default_rows(P, committed_doc, empties, values, scope):
     """The persona and language rows of a project or a workspace node: each select offers the policy's choices, and its
-    empty choice names the value it inherits (#2845)."""
+    empty choice names the value it inherits (#2845). The control names the scope its edit writes, so the view hands the
+    intent back and the hub decides the file (#2901, ADR-0137)."""
     return [{"key": "persona", "label": "Persona",
-             "controls": [_slack_pick("persona", values.get("persona") or "",
-                                      _slack_persona_choices(P, committed_doc, empties["persona"]))]},
+             "controls": [{**_slack_pick("persona", values.get("persona") or "",
+                                         _slack_persona_choices(P, committed_doc, empties["persona"])), "scope": scope}]},
             {"key": "language", "label": "Language",
-             "controls": [_slack_pick("language", values.get("language") or "",
-                                      _slack_language_options(P, empties["language"]))]}]
+             "controls": [{**_slack_pick("language", values.get("language") or "",
+                                         _slack_language_options(P, empties["language"])), "scope": scope}]}]
 
 def _slack_tree_project_settings(P, committed_doc, local_doc):
     """The project's default persona and language (#2845). The project is the end of the chain, so its empty choice is
@@ -372,7 +373,7 @@ def _slack_tree_project_settings(P, committed_doc, local_doc):
     project = P.project_settings(committed_doc, local_doc)
     values = {"persona": project["persona"], "language": project["stored_language"]}
     empties = {"persona": _slack_not_set(), "language": _slack_not_set()}
-    return _slack_default_rows(P, committed_doc, empties, values)
+    return _slack_default_rows(P, committed_doc, empties, values, "project")
 
 def _slack_tree_workspace_settings(P, committed_doc, local_doc, group):
     """A workspace's default persona and language (#2845). Its empty choice names the project value or the default the
@@ -384,7 +385,7 @@ def _slack_tree_workspace_settings(P, committed_doc, local_doc, group):
     inherited = P.resolution(committed_doc, local_doc, above)
     values = {"persona": ws.get("persona"), "language": ws.get("language")}
     empties = {key: _slack_inherit(inherited, key, committed_doc) for key in ("persona", "language")}
-    return _slack_default_rows(P, committed_doc, empties, values)
+    return _slack_default_rows(P, committed_doc, empties, values, f"ws:{_slack_text(group['id'])}")
 
 def _slack_poll_note(mode, defaults, poll):
     """The Watch row's one line: the row names itself, then the channel's poll settings as the policy reads them, with the
@@ -1605,6 +1606,51 @@ def _slack_field_value(field, value):
     return value, None
 
 
+def _slack_place_default(P, scope, field, value, docs, local_name, ws_id=""):
+    """One edit of the project's or a workspace's own persona and language (#2901). The scope `project` writes the
+    committed file's `project` mapping; the scope `workspace` writes the row that carries `ws_id`, in the file that
+    holds it. An empty choice inherits, so its key leaves the file, never an empty string. Returns (error, changed)."""
+    fields = ("persona", "language")
+    if not field:
+        return f"the scope {scope}: the operation names the field it writes", False
+    if field not in fields:
+        return f"the scope {scope}: unknown field {field!r}", False
+    if not isinstance(value, str):
+        return f"the {field} is a string", False
+    if scope == "project":
+        doc, path = "committed", ["project", field]
+    elif scope == "workspace":
+        ws_id = _slack_text(ws_id).strip()
+        if not ws_id:
+            return "the scope workspace: the operation names the workspace id", False
+        hit = next(((d, i) for d in ("committed", "local")
+                    for i, ws in _slack_dicts(docs[d].get("workspaces")) if str(ws.get("id")) == ws_id), None)
+        if hit is None:
+            return f"the workspace {ws_id} is in neither file", False
+        doc, path = hit[0], ["workspaces", hit[1], field]
+    else:
+        return f"the scope {scope}: it names a project or a workspace", False
+    name = _slack_doc_name(doc, None, local_name)
+    hit = P.validate_field(docs, doc, path, field, value)
+    if hit:
+        return f"{name}: {hit[0]}: {hit[1]}", False
+    target = docs[doc]
+    if doc == "committed" and path[0] == "project":
+        if not isinstance(target.get("project"), dict):
+            if value == "":
+                return None, False
+            target["project"] = {}
+        row = target["project"]
+    else:
+        row = _slack_rows_at(target, path[:-1])
+    if not isinstance(row, dict):
+        return f"{name}: {_slack_key(path)}: the edited row does not exist", False
+    if value == "":
+        row.pop(field, None)   # an empty select inherits, so the key leaves the file
+    else:
+        row[field] = value
+    return None, True
+
 def _slack_place_field(P, op, docs, local_name):
     """One tree-pane edit: the operation names the channel by its Slack id and the field it writes, and the hub finds the
     row that carries that id. A delivery field (`SLACK_GUEST_FIELDS` and every `poll.*`) writes the local file, where a
@@ -1612,6 +1658,9 @@ def _slack_place_field(P, op, docs, local_name):
     channel yet writes none of its fields is created only when a delivery field needs it, so the row it writes is the
     row that carries the id. Returns (error, changed)."""
     ch_id, field, value = _slack_text(op.get("channel")).strip(), _slack_text(op.get("field")), op.get("value")
+    if _slack_text(op.get("scope")):
+        return _slack_place_default(P, _slack_text(op.get("scope")), field, value, docs, local_name,
+                                    op.get("workspace"))
     if not ch_id:
         return "the operation names the Slack id of the channel", False
     if not field:
