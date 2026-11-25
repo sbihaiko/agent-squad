@@ -389,6 +389,18 @@ def registry(state, repo=REPO, found=None):
     return units
 
 
+def report_no_project(units, found):
+    """Name the mismatch in the error log: the channel map asks for a project the hub does not list (#2957).
+
+    A deploy whose agents read the wrong profiles folder finds only `example.sh`, so the hub names no project while
+    `channels.json` names one. The pass starts no session for it, and this line says why instead of staying silent."""
+    named = [u.get("repo") or u["key"] for u in units if u["key"] != DM]
+    if found or not named:
+        return
+    print(f"operators: the hub names no project, but the channel map names {len(named)}: {', '.join(named)}; "
+          "check SG_PROFILES_DIR and address.sh --list", file=sys.stderr)
+
+
 def as_unit(unit, repo=REPO):
     """One unit from a unit dict or a bare key, so a caller may name `dm` or a project key alone."""
     if isinstance(unit, dict):
@@ -808,7 +820,9 @@ def run_pass(state, repo, check=False, only=None):
     session at once instead of at the next five-minute pass (#2925). That pass prints one verdict line: `started <id>`,
     `live <id>`, or a reason on stderr and exit 2 when the project has no session at all."""
     state = os.path.abspath(state)
-    units = registry(state, repo)
+    found = checkouts()
+    units = registry(state, repo, found)
+    report_no_project(units, found)
     # Every project checkout, read before `only` narrows the pass: each session refuses the reads of the others (#2951).
     others = [unit.get("checkout") or "" for unit in units]
     only_unit = None

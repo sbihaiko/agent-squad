@@ -14,6 +14,9 @@ LAUNCH_DIR=${SG_LAUNCH_DIR:-$HOME/Library/LaunchAgents}
 LAUNCHCTL=${LAUNCHCTL:-launchctl}
 PY=${SG_PYTHON:-$(command -v python3)}
 STATE=${VOICE_STATE:-$HOME/.local/state/agent-squad/voiced}
+# The folder both agents read their projects from (#2957). It is the live copy's profiles folder: the deploy checkout's
+# own profiles folder holds only example.sh, so an agent that fell back to it would find no project.
+PROFILES=${SG_PROFILES_DIR:-$HOME/.claude/skills/squad-goal/scripts/profiles}
 PINS="$DEPLOY/.git/squad-pins"
 CLAUDE_BIN=$(command -v claude) || { echo "install-agents: claude is not on PATH" >&2; exit 1; }
 
@@ -35,7 +38,7 @@ git -C "$DEPLOY" checkout -q --detach "$sha"
 mkdir -p "$LAUNCH_DIR"
 V="$LAUNCH_DIR/com.squad.voiced.plist"
 O="$LAUNCH_DIR/com.squad.operators.plist"
-"$PY" "$DEPLOY/contrib/voice/voiced.py" --print-plist --label com.squad.voiced --python "$PY" > "$V.tmp"
+"$PY" "$DEPLOY/contrib/voice/voiced.py" --print-plist --label com.squad.voiced --python "$PY" --profiles "$PROFILES" > "$V.tmp"
 mv "$V.tmp" "$V"
 cat > "$O.tmp" <<P2
 <?xml version="1.0" encoding="UTF-8"?>
@@ -49,6 +52,7 @@ cat > "$O.tmp" <<P2
 <key>HOME</key><string>$HOME</string>
 <key>VOICE_STATE</key><string>$STATE</string>
 <key>VOICE_REPO</key><string>$DEPLOY</string>
+<key>SG_PROFILES_DIR</key><string>$PROFILES</string>
 </dict>
 <key>RunAtLoad</key><true/>
 <key>StartInterval</key><integer>300</integer>

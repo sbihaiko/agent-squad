@@ -23,6 +23,8 @@ SUITES = (
     "contrib/voice/test-uninstall-agents.sh",
     "contrib/voice/test-install-agents-bootstrap.sh",
 )
+# Each script and its suite by repository path, so the delta selector names this guard for a change to any of them (#2957).
+SELECTED_PATHS = SCRIPTS + SUITES
 
 
 def test_each_agent_script_is_named_and_has_its_test_beside_it():
@@ -32,6 +34,8 @@ def test_each_agent_script_is_named_and_has_its_test_beside_it():
         spelled = f"contrib/voice/test-{name}"
         assert spelled in SUITES, f"no suite beside {rel}"
         assert (ROOT / spelled).is_file(), f"{spelled} is missing beside {rel}"
+    for rel in SELECTED_PATHS:
+        assert (ROOT / rel).is_file(), f"{rel} is missing"
 
 
 @pytest.mark.macos_bound   # launchctl and plists: the suites need the macOS userland the loop runs on (ADR-0139)
