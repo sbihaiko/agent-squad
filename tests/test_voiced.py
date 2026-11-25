@@ -2579,8 +2579,9 @@ def test_an_action_request_line_is_never_posted_and_the_pass_runs_it(tmp_path):
     (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
         {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
          "text": "what is the status?"}) + "\n")
-    request = {"action": "status", "arguments": {}, "sender": OWNER, "channel": "C0PROJ0001",
-               "source": "C0PROJ0001:1762500100.000100", "thread_ts": "1762500100.000100"}
+    request = {"kind": "action-request", "action": "status", "arguments": {}, "sender": OWNER,
+               "channel": "C0PROJ0001", "source": "C0PROJ0001:1762500100.000100",
+               "thread_ts": "1762500100.000100", "at": time.time()}
     outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
     outbox.parent.mkdir(exist_ok=True)
     outbox.write_text(json.dumps(request) + "\n")
@@ -2597,3 +2598,31 @@ def test_an_action_request_line_is_never_posted_and_the_pass_runs_it(tmp_path):
     assert posted and posted[0]["thread_ts"] == "1762500100.000100"
     audit = [json.loads(line) for line in (tmp_path / "actions-audit.jsonl").read_text().splitlines()]
     assert audit[0]["action"] == "status" and audit[0]["sender"] == OWNER and audit[0]["exit"] == 0
+
+
+def test_the_action_reply_is_written_through_the_states_own_outbox_path(tmp_path):
+    """#2939: the pass writes the reply through the state's own `outbox_for`, never a path it builds itself, so a state
+    that moves its outboxes still reaches the drain that reads them."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    request = {"kind": "action-request", "action": "status", "arguments": {}, "sender": OWNER,
+               "channel": "C0PROJ0001", "source": "C0PROJ0001:1762500100.000100",
+               "thread_ts": "1762500100.000100", "at": time.time()}
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps(request) + "\n")
+    elsewhere = tmp_path / "moved-outboxes"
+    elsewhere.mkdir()
+    state.outbox_for = lambda key: str(elsewhere / f"{key}.jsonl")
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    daemon.action_documents = lambda channel: (ACTION_DOCS, ACTION_LOCAL)
+    assert daemon.run_action_requests() == 1
+    moved = [json.loads(line) for line in (elsewhere / "C0PROJ0001.jsonl").read_text().splitlines()]
+    assert moved and moved[0]["text"] == "the project is green"
+    assert "the project is green" not in outbox.read_text(), "the pass wrote the reply to a path it built itself"
