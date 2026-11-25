@@ -392,6 +392,16 @@ def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path,
     assert "Proposal:" in text and "outboxes/dm.jsonl" in text, text
 
 
+def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
+    """#2939: the project brief tells the session to append one request line, and to never run a command."""
+    op = operators(tmp_path, monkeypatch)
+    text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
+    assert "never run a command" in text, text
+    for field in ('"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
+        assert field in text, (field, text)
+    assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") in text
+
+
 def test_the_dm_session_keeps_its_own_scope_and_the_agent_squad_repository(tmp_path, monkeypatch):
     """Criterion 14: the DM is its own session, in the agent-squad repository, on its own inbox and outbox."""
     op = operators(tmp_path, monkeypatch)
@@ -934,14 +944,14 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
 
 
 def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):
-    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It answers in the
-    channel that this session does not run actions yet."""
+    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It writes one
+    action request to the outbox of the line's channel, and runs no command itself (#2939)."""
     op = operators(tmp_path, monkeypatch)
     found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
     unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": found["acme/widget"], "channels": ["C0AAAAAA1"]}
     text = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
     assert "outboxes/dm.jsonl" not in text and "Proposal:" not in text, text
-    assert "never acts" in text and "only reads" in text, text
+    assert "never acts" in text and "never run a command" in text, text
 
 
 def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeypatch):

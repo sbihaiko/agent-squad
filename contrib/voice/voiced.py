@@ -45,6 +45,11 @@ The reverse direction is the outbox. An operator session appends one JSON line (
 - every clip uses the persona `voice` and `tone` of the channel, and the clip carries no name, so it leaves under the
   app name until #2726 records what an upload does with a `username`.
 
+An outbox line that carries an `action` key is an action request, never an answer (#2939). The daemon posts no such
+line: its action pass (`squad/slackactions.py`) runs in the daemon's own process, outside every session and its
+sandbox. The pass checks the request against the policy decision, runs the command the project declares, appends one
+reply in the thread and one audit line. The session never runs a command itself.
+
 Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
 `answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
 question is the inbox line whose ts the answer threads under, else the oldest line the ledger does not answer yet.
@@ -92,6 +97,7 @@ import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
 from squad import (  # noqa: E402  a release event as a post in each subscribed owned channel (#2703)
+    slackactions,  # the action request pass that runs outside every session (#2939)
     slackannounce,
     slackpolicy,  # the one home of the Slack file rules (ADR-0177)
 )
@@ -112,6 +118,7 @@ CONFIG_POLL = 60.0                    # how long a moved dev tip waits for its r
 VOICE = "Kore"                        # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
+ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 SENTENCE = re.compile(r"[^.!?]+(?:[.!?]+|$)")
 SCHEMA_FILE = "schema.json"
@@ -2058,6 +2065,10 @@ class Daemon:
                 self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
                 continue
             for record in records:
+                if slackactions.is_request(record):
+                    # An action request is not an answer: the action pass runs it and appends its own reply line
+                    # (#2939). This drain never posts the request text.
+                    continue
                 cid = (record.get("channel") or channel or "").strip()
                 refusal = self.refused_channels.get(cid)
                 if refusal:      # a channel two projects claim is held, never posted, and is told once
@@ -2083,6 +2094,33 @@ class Daemon:
                 if fails + 1 == MAX_DELIVER_ATTEMPTS:
                     self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
         return count
+
+    def action_documents(self, channel):
+        """The `(committed, local)` Slack files of the project that owns one channel, from its active revision. A channel
+        with no active revision reads as empty files, so its request gets the policy's refusal and no action (#2939)."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if active and active.get("revision"):
+            return active["revision"], active.get("local") or {}
+        return {}, {}
+
+    def run_action_requests(self, now=None):
+        """Run every action request no earlier pass ran, outside every operator session and its sandbox (#2939).
+
+        The sessions write one request line to an outbox; this pass reads it, asks the policy for the sender's decision,
+        checks the request through the executor, runs the command the project declares, appends one reply in the
+        thread and one audit line. It is a call in the daemon's own process, so no request reaches a sandboxed session.
+        """
+        runs = slackactions.run_pass(
+            self.state.dir,
+            lambda channel: self.state.channel_for(channel) or "",
+            self.action_documents,
+            now or datetime.now(),
+            outbox_for=self.state.outbox_for,
+        )
+        for run in runs:
+            self.log(f"voiced: action {run.action or 'none'} for {run.sender} in {run.channel} exited {run.exit}")
+        return len(runs)
 
     def policy_decision(self, event):
         """The decision of one socket event, always: from the loaded files of the project that owns its channel.
@@ -2383,6 +2421,20 @@ async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
         await asyncio.sleep(interval)
 
 
+async def watch_actions(daemon, stop=None, interval=ACTION_POLL):
+    """Run each new action request as soon as the session writes it, until `stop` is set.
+
+    The pass runs in a worker thread, so a slow declared command never holds the socket loop. A failed pass is a log
+    line, never a watcher that stops running actions.
+    """
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.run_action_requests)
+        except Exception as x:      # noqa: BLE001 - one bad request is a log line, never a daemon that stops acting
+            daemon.log(f"voiced: action pass failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
     """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
@@ -2427,12 +2479,13 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
+    actions = asyncio.create_task(watch_actions(daemon, stop))
     hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
                for token in apps.values()]
     try:
         await asyncio.gather(*hearing)
     finally:
-        tasks = (outboxes, configs, releases_task, *hearing)
+        tasks = (outboxes, configs, releases_task, actions, *hearing)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

@@ -81,6 +81,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0175](0175-a-timeout-a-suite-explains-is-unproven.md) | A timeout that a suite of the same tree explains is unproven: the runner names its held gate slots so the suite takes none twice, the cap clock never stops, and a history row carries the tree sha |
 | [0176](0176-two-landings-run-at-once-and-git-arbitrates-the-push.md) | Two landings run at once and git arbitrates the push: `single.sh` takes one of `SG_SINGLE_SLOTS` slots, a landing passes two, and the refused push repeats from its fetch |
 | [0177](0177-slack-rules-in-the-project.md) | A project commits `slack.yaml` and the profile keeps `slack.local.yaml`: one pure module at `squad/slackpolicy.py` validates both and names each failing key, `squad slack check` reports them, a token, an unsafe persona name, a foreign voice, an over-long tone, a foreign language, a guest id, `prod` and a `secret` key are refused, and a commit guard refuses a local file |
+| [0178](0178-a-project-declares-the-command-of-each-action.md) | A project declares the command of each action under `project.actions`; the session writes one request line, and the executor runs the declared command outside the session, never a command built from a message |
 
 ## Adding an ADR
 
