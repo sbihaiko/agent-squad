@@ -607,6 +607,16 @@ def test_the_permissions_section_lists_the_project_roles_with_their_actions_and_
     assert roles["colleague"]["members"] == []
 
 
+def test_the_members_offer_only_people_who_hold_an_accepted_role(hub, tmp_path):
+    """The sender preview lists the people the policy takes. A person whose only role the channel refuses is not
+    offered, because the policy never reads their message (review DEBT 3)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "colleague",
+                             "users": ["U0REFUSED1"]})
+    assert permissions(hub, tmp_path, local=local)["members"] == ["U0OWNER001"], \
+        permissions(hub, tmp_path, local=local)["members"]
+
+
 def test_the_section_counts_distinct_eligible_people(hub, tmp_path):
     local = json.loads(json.dumps(LOCAL))
     local["members"].append({"workspace": "T0TEAM0001", "channel": "C0PROJ0001", "role": "manager",
@@ -655,6 +665,28 @@ def test_the_preview_calls_decide_with_one_message_event_and_no_other_call(hub, 
     monkeypatch.setattr(hub, "slack_policy", lambda: P)
     preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
     assert [e["kind"] for e in seen] == ["message"], seen
+
+
+def test_a_decide_that_raises_returns_an_error_not_a_bare_500(hub, tmp_path, monkeypatch):
+    """A channel absent from the files must not answer a bare 500: a policy that raises reads as `err`, the way the
+    document-read path reports a failure (review DEBT 2)."""
+    P = hub.slack_policy()
+
+    def boom(*a, **k):
+        raise LookupError("no such channel")
+
+    monkeypatch.setattr(P, "decide", boom)
+    monkeypatch.setattr(hub, "slack_policy", lambda: P)
+    got = preview(hub, tmp_path, workspace="T0TEAM0001", channel="C0PROJ0001", user="U0OWNER001")
+    assert got.get("err") and "LookupError" in got["err"], got
+
+
+def test_the_preview_offers_the_owner_own_post(hub, tmp_path):
+    """The hub route accepts `own=1`, so the preview offers the owner's own post and the query sets that flag (review
+    DEBT 4)."""
+    html = render(hub, read(hub, tmp_path), "c0.p0.w1.c0")
+    assert '<option value="own"' in html, html[html.index("Try a sender"):][:600]
+    assert 'q.set("own","1")' in hub.PAGE, "the query sets own=1 for the own-post sender"
 
 
 def test_a_reply_with_no_persona_shows_the_policy_mark_and_no_empty_name(hub, tmp_path):
@@ -776,7 +808,7 @@ def test_the_tree_page_links_the_permissions_section_and_offers_the_sender_previ
     assert len(select) == 1, select
     options = [a.get("value") for t, a, parents in elements
                if t == "option" and any(p == "select" and "data-slp-sender" in pa for p, pa in parents)]
-    assert options == ["U0OWNER001", "stranger", "bot"], options
+    assert options == ["U0OWNER001", "stranger", "bot", "own"], options
 
     out = read(hub, tmp_path)
     body = (_slices(hub.PAGE) + f"\nslR={json.dumps(out)};slT=slR.tree;slTsel='c0.p0.w0.c0';" + "slRender=()=>{};"

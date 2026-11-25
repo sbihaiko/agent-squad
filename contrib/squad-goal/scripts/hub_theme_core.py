@@ -664,8 +664,9 @@ def squad_roots(sg_squad, sg_checkout, checkout, here):
     SQUAD_ROOT, the value its profile file set at import; hubmux.py pins it there, #2820), then SG_CHECKOUT, the
     profile's checkout as the hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3];
     the live copy under ~/.claude has none). Rule layer: no hub state, no I/O."""
+    parents = pathlib.Path(here).resolve().parents
     out = []
-    for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
+    for r in (sg_squad, sg_checkout, checkout, str(parents[3]) if len(parents) > 3 else ""):
         if r and r not in out: out.append(r)
     return out
 
