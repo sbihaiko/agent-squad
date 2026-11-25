@@ -1168,6 +1168,41 @@ def outbox_digest(record):
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+SPEECH_CAUSES = {"no audio in the answer": "no_audio", "no TTS model answered": "no_model"}
+_SPEECH_CODE = re.compile(r"^[A-Z][A-Z_]{2,39}$")   # a provider status, never its free-text message
+
+
+class SpeechError(RuntimeError):
+    """The TTS path refused a clip: `cause` is a short code, never the provider's text (#2956)."""
+
+    def __init__(self, cause):
+        super().__init__(cause)
+        self.cause = cause
+
+
+def speech_cause(err):
+    """The safe cause code of a refused TTS answer: a known phrase or a provider status, never its message text.
+
+    A provider message can carry request material, and the daemon's log is never redacted, so the free text never
+    leaves this reader. A status that names no known phrase is a plain refusal."""
+    text = (err or "").strip()
+    if not text:
+        return "no_audio"
+    if text in SPEECH_CAUSES:
+        return SPEECH_CAUSES[text]
+    if _SPEECH_CODE.match(text):
+        return text.lower()
+    return "refused"
+
+
+def error_cause(x):
+    """The cause code of a failed speech call: only the code `spoken_clip` minted, never a foreign attribute's text.
+
+    A third-party error can carry a `.cause` of its own, and that text is the provider's, so this reader trusts no
+    attribute: only a `SpeechError` holds a cause that passed through `speech_cause`."""
+    return x.cause if isinstance(x, SpeechError) else None
+
+
 def spoken_clip(key, script, voice=VOICE, tone=""):
     """One spoken clip as a WAV path, through the repository's one TTS path (tts.synth); the key never leaves it.
 
@@ -1175,14 +1210,27 @@ def spoken_clip(key, script, voice=VOICE, tone=""):
     import tts  # the vendored TTS beside this file, so the daemon keeps no second copy of it
     fd, path = tempfile.mkstemp(prefix="voiced-", suffix=".wav")
     os.close(fd)
-    got, err = tts.synth(key, script, voice, path, tone=tone)
+    try:
+        got, err = tts.synth(key, script, voice, path, tone=tone)
+    except subprocess.TimeoutExpired:
+        _drop_clip(path)
+        raise SpeechError("timeout") from None
+    except Exception as x:      # noqa: BLE001 - a provider that raises is still one cause code, never its own text
+        _drop_clip(path)
+        text = str(x).strip()
+        raise SpeechError(speech_cause(text) if text else "refused") from None
     if not got:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        raise RuntimeError(err or "no audio")
+        _drop_clip(path)
+        raise SpeechError(speech_cause(err))
     return got
+
+
+def _drop_clip(path):
+    """Remove one temporary clip; a missing file is no error on a failure path."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def upload_clip(token, path, channel, thread_ts=None, title=None):
@@ -1432,6 +1480,7 @@ class Daemon:
         self._uncovered_logged = set()    # each channel a file names with no active revision, already one log line
         self._held = set()   # digest -> its hold line was told, so one held answer is not one line per poll
         self._unknown_persona_logged = set()   # each (channel, persona id) one line names that the project omits
+        self._speech_logged = set()   # each cause code, or class when it holds none, already logged (#2956)
         self._guard_hits = {}    # (channel, user) -> monotonic moments of the messages inside the guard window (#2947)
         self._guard_replied = {}  # (channel, user) -> the monotonic moment of the last refusal reply (#2947)
 
@@ -2019,8 +2068,14 @@ class Daemon:
         try:
             return self.synthesizer(script, voice=voice, tone=tone) or None
         except Exception as x:      # noqa: BLE001 - a refused TTS is a log line, and the text answer stands alone
-            # The error type only: a provider message can carry request material, and this log is never redacted.
-            self.log(f"voiced: speech skipped: {type(x).__name__}")
+            # The cause code, never the provider text: a provider message can carry request material, and this log is
+            # never redacted. One cause is one line, so a voice that refuses every answer never floods the log.
+            cause = error_cause(x)
+            key = cause or f"class:{type(x).__name__}"
+            if key not in self._speech_logged:
+                self._speech_logged.add(key)
+                name = type(x).__name__
+                self.log(f"voiced: speech skipped: {name}: {cause}" if cause else f"voiced: speech skipped: {name}")
             return None
 
     def upload_for(self, channel):
