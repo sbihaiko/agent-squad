@@ -33,13 +33,19 @@ the grant and the arguments against the policy decision.
    command from message text, no argument of a request reaches a command line, and the declared command runs as one argv
    with no shell, so a declared value that names `;`, `|`, `$(` or a backtick is refused. Every declared action id gets its
    command source, so a declared request action runs its command too. An action with no declared command has no source,
-   and the executor refuses it by name.
+   and the executor refuses it by name. A declared value that is not one argv keeps its source and its reason, and the
+   executor refuses the action as an invalid source, so the refusal never reads as a missing command.
 4. **The action vocabulary stays closed.** `project.actions` accepts only the ids the role vocabulary names, so a
-   project never declares an owner-only action. The deploy list of the role bounds the environment, and production
-   stays with the owner.
+   project never declares an owner-only action. The deploy list of the role bounds the environment, and the project
+   identity's own environment bounds it too: a request that names another environment is refused. Production stays with
+   the owner.
 5. **Every run is recorded and answered.** One reply leaves in the thread of the message, naming the grant when the
-   request is refused. One audit line records the time, the sender, the role, the channel, the action and the exit
-   code. A request is run once, by a ledger beside the state.
+   request is refused. The audit holds one line per run and one line per refused request, in the same file, carrying the
+   time, the sender, the role, the channel, the action, the exit code and one error that explains the exit (an empty
+   error on a success). A request is run once, by a ledger beside the state, and the ledger's key is the parsed request
+   (the action, the arguments, the sender, the channel and the source), never the raw line, so a line with another field
+   never runs the same request twice. A reply that cannot be written is recorded in the audit and kept for the next
+   pass, so the reply still leaves and the command never runs again.
 
 ## Consequences
 

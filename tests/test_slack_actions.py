@@ -240,6 +240,8 @@ def test_a_refused_request_writes_its_audit_line_too(tmp_path):
     inbox(state, user=STRANGER)
     ask(state, sender=STRANGER)
     run(state)
+    # A refused request writes exactly one audit line: the refusal keeps the same file as a run and adds no second row.
+    assert len(audit(state)) == 1, audit(state)
     line = audit(state)[0]
     assert line["exit"] == 1 and line["sender"] == STRANGER and line["role"] == ""
 
@@ -287,8 +289,115 @@ def test_a_crash_after_the_reply_never_runs_the_declared_command_twice(tmp_path)
     finally:
         A._append_line = real
     assert len(replies(state)) == 1
+    # The crash must not lose the audit line: it is written whatever raises after the reply.
+    assert len(audit(state)) == 1, "the crash lost the audit line"
     run(state, runner)
     assert len(runner.calls) == 1
+    assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_failed_reply_write_keeps_the_audit_line_and_the_reply_for_the_next_pass(tmp_path):
+    """Findings 2 and 4: a reply write that fails leaves the audit line, and the pass keeps the reply for its next one,
+    so the second pass writes exactly one audit row and one reply and never runs the declared command again."""
+    state = str(tmp_path)
+    line = inbox(state)
+    ask(state)
+    runner = Runner(stdout="the project is green")
+    outbox_path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    real = A._append_line
+
+    def fail_the_reply(path, record):
+        if path == outbox_path and record.get("text") == "the project is green":
+            raise OSError("no space left on device")
+        real(path, record)
+
+    A._append_line = fail_the_reply
+    try:
+        run(state, runner)
+    finally:
+        A._append_line = real
+    assert len(audit(state)) == 1, "the failed reply write lost the audit line"
+    assert audit(state)[0]["exit"] == 1 and "reply" in audit(state)[0]["error"]
+    assert replies(state) == []
+    assert len(runner.calls) == 1
+    run(state, runner)
+    assert len(runner.calls) == 1, "the second pass ran the declared command again"
+    assert len(audit(state)) == 1, audit(state)
+    assert replies(state) == [{"thread_ts": line["ts"], "channel": CHANNEL, "text": "the project is green"}]
+
+
+def test_two_request_lines_that_parse_alike_but_differ_in_thread_ts_run_once(tmp_path):
+    """Finding 1 (BLOCKING): the handled key names the parsed request, so two lines that parse to the same action,
+    arguments, sender, channel and source never run the declared command twice, even when their thread ts differs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, thread_ts="1.0")
+    ask(state, thread_ts="1.000000")
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runner.calls) == 1, runner.calls
+    assert len(runs) == 1
+    assert len(replies(state)) == 1
+
+
+def test_a_rotated_outbox_reads_only_a_bounded_tail(tmp_path, monkeypatch):
+    """Finding 5 (DEBT): an outbox that rotated below its kept place is read from a bounded tail, not the whole file, so
+    a rotation never costs a full re-read of the answer history."""
+    monkeypatch.setattr(A, "FIRST_READ_BYTES", 200)
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    early = A.request_record("status", channel=CHANNEL, sender=OWNER,
+                             source="C0PROJ0001:1762500700.000700", at=NOW.timestamp())
+    late_source = "C0PROJ0001:1762500800.000800"
+    late = A.request_record("status", channel=CHANNEL, sender=OWNER, source=late_source, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(early) + "\n")
+        f.write(("x" * 300 + "\n") * 3)
+        f.write(json.dumps(late) + "\n")
+    kept = os.path.join(state, A.OFFSETS)
+    with open(kept, "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: 1_000_000}))      # a place past the rotated file's size
+    inbox(state, mid=late_source)
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+
+
+def test_a_declared_command_that_is_not_one_argv_is_refused_as_invalid_never_as_missing(tmp_path):
+    """Finding 6 (DEBT): a declared command that names a shell metacharacter keeps its source with the reason, so the
+    refusal names the invalid command and never claims the project declares no command."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["status"] = "echo green; rm -rf /"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "one argv" in text, text
+    assert "never runs through project.actions" not in text, "an invalid command read as a missing one"
+
+
+def test_the_project_identity_environment_bounds_a_deploy_on_top_of_the_roles_list(tmp_path):
+    """Finding 7 (DEBT): the role lists `stg` and the project identity declares `qa`, so a request for `stg` is refused:
+    the identity's environment bounds the deploy as well as the role's deploy list (slackexecutor.py:182-186)."""
+    state = str(tmp_path)
+    inbox(state, user="U0DEPLOY01")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["deploy"] = {"environment": "qa", "command": "make deploy-qa"}
+    committed["roles"][2]["deploy"] = ["stg"]
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    assert "qa" in runs[0].error and "stg" in runs[0].error, runs[0].error
 
 
 def test_a_request_whose_sender_is_not_the_sender_of_the_line_is_refused(tmp_path):
