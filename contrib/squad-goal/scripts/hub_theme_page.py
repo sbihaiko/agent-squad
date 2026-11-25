@@ -1667,14 +1667,14 @@ async function slPvAsk(id,sender){const n=slTNode(id);if(!n||!n.ref)return;
  if(slSnd&&slSnd.node===id&&slSnd.sender===sender){slSnd={node:id,sender,data};slPvShow()}}
 function slPvShow(){slRender();const el=typeof document!=="undefined"&&document.querySelector&&document.querySelector("[data-slp-sender]");if(el&&el.focus)el.focus()}
 function slPermGo(){const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slperm");if(!el)return;if(el.focus)el.focus({preventScroll:true});const r=el.getBoundingClientRect?el.getBoundingClientRect():null;const vh=globalThis.innerHeight||0;if(el.scrollIntoView&&(!r||r.top<0||r.bottom>vh))el.scrollIntoView({block:"start"})}
-function slTreeHtml(){const roots=slTRoots();const out=[],cur=slTsel;
+function slTreeHtml(){const roots=slTRoots(),T=slT||{},out=[],cur=slTsel;
  const walk=(n,more)=>{out.push(slTItem(n,cur,more));if(!slTOpen(n))return;const kids=n.children||[];
   kids.forEach((c,i)=>walk(c,more.concat([i<kids.length-1])))};for(const r of roots)walk(r,[]);
- const lost=(slT&&Array.isArray(slT.unknown_projects)&&slT.unknown_projects.length)
-  ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+slT.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
+ const lost=(Array.isArray(T.unknown_projects)&&T.unknown_projects.length)
+  ?`<p class="m sltunknown" role=status>${esc("Not on this hub: "+T.unknown_projects.join(", "))}</p>`:"";   // a named project the hub does not hold is never dropped in silence (#2827)
  return `<div class="slttop${slTshow?" sltshow":""}"><div class=sltcol>`
- +(slT.notice?`<div class="mx err sltnotice" role=status><b>${esc(slT.notice.title)}</b><br>${esc(slT.notice.text)}</div>`:"")
- +(slT.guest_slot?`<p class=sltguest>${esc(slT.guest_slot.line||"")}</p>`:"")
+ +(T.notice?`<div class="mx err sltnotice" role=status><b>${esc(T.notice.title)}</b><br>${esc(T.notice.text)}</div>`:"")
+ +(T.guest_slot?`<p class=sltguest>${esc(T.guest_slot.line||"")}</p>`:"")
  +`<div role=tree aria-label="Communication tree" class=sltree id=sltree>${out.join("")}</div>${lost}</div>`
  +`<div class=sltdetail id=sltdetail tabindex="-1">${roots.length?slTDetail():`<p class=m>${esc("No project in the client map yet.")}</p>`}</div></div>`}
 function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
