@@ -211,6 +211,38 @@ def test_a_start_binds_the_session_to_its_project_for_the_answer_helper(tmp_path
     assert binding["state"] == state, binding
 
 
+def test_a_dm_start_binds_the_session_to_the_one_dm_channel(tmp_path, monkeypatch):
+    """#2949 criterion (2): the DM session's binding names the DM channel, so a dm inbox line that names a project
+    channel cannot carry that channel into the dm outbox."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen.update(env or {})
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True)
+    (tmp_path / "repo").mkdir(exist_ok=True)
+    line = {"id": "dm:1", "ts": "1762500000.000100", "user": "UPROBE0001", "channel": "D0AAAAAA1", "text": "hi"}
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps(line) + "\n")
+    op.start("dm", str(state), str(tmp_path / "repo"))
+    binding = json.loads(Path(seen["VOICE_ANSWER_BINDING"]).read_text())
+    assert binding["channels"] == ["dm"], binding
+    assert binding["dm"] == "D0AAAAAA1", binding
+
+
+def test_the_brief_names_the_helper_as_the_one_command_a_session_runs(tmp_path, monkeypatch):
+    """#2949 criterion (5): the read-only limit and the one answer path agree, so a session that follows the brief
+    runs the helper and no other command."""
+    op = operators(tmp_path, monkeypatch)
+    for key in ("C0AAAAAA1", "dm"):
+        text = op.prompt_for(key, str(tmp_path / "state"), "/repo")
+        assert "runs no command" not in text.lower(), text
+        assert "the one command" in text.lower() and op.ANSWER in text, text
+
+
 def test_the_brief_arms_one_monitor_per_inbox_of_the_project(tmp_path, monkeypatch):
     """Criterion 9: one Monitor per inbox of the project's channels, each on its own call."""
     op = operators(tmp_path, monkeypatch)
