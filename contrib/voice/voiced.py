@@ -131,6 +131,7 @@ OUTBOX_POLL = 0.2                     # how long an answer waits for its post, w
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
+ACTION_HEARTBEAT = 60                 # empty action passes between two heartbeat log lines (#2939)
 GUARD_WINDOW = 60.0                   # the guard counts one sender's messages in this window (#2947)
 GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
 AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
@@ -1143,6 +1144,50 @@ def read_lines(path):
     return out
 
 
+def names_request_kind(text):
+    """True when one outbox line's raw text carries the reserved request kind. The test reads the text before the parse,
+    so a malformed or oddly shaped request line still never reaches the channel as an answer."""
+    return '"kind"' in text and slackactions.KIND in text
+
+
+def request_source(text):
+    """The source of one request line, read from its raw text, or a word that names why it cannot be read. The drain logs
+    it for a line it skips, so the log names the message the request answers."""
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return "unreadable"
+    if not isinstance(record, dict):
+        return "unreadable"
+    return str(record.get("source") or "unknown")
+
+
+def read_outbox_answers(path):
+    """The answer lines of one outbox and the raw lines that name the request kind, as `(answers, requests)`.
+
+    The request kind is read from the raw text, before the JSON parse, so a line that names it never becomes an answer
+    whatever its shape. A half line a crash left behind is skipped."""
+    answers, requests = [], []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                text = raw.strip()
+                if not text:
+                    continue
+                if names_request_kind(text):
+                    requests.append(text)
+                    continue
+                try:
+                    record = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    answers.append(record)
+    except OSError:
+        pass
+    return answers, requests
+
+
 def message_id(event):
     """Slack's own id for one message: client_msg_id, else channel and ts, which name it once."""
     client_msg_id = event.get("client_msg_id")
@@ -1443,6 +1488,7 @@ class Daemon:
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+        self._action_passes = 0   # empty action passes since the last one ran a request, for the heartbeat line
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
@@ -2205,7 +2251,11 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            records = read_lines(path)
+            records, requests = read_outbox_answers(path)
+            for raw in requests:
+                # An action request is not an answer: the pass runs it and appends its own reply line (#2939). The raw
+                # line is named in the log, so a skip is never silent.
+                self.log(f"voiced: action request not posted: channel {channel or DM} source {request_source(raw)}")
             if records and channel and not self.channel_accepts_answer(channel):
                 # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
                 self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
@@ -2279,6 +2329,13 @@ class Daemon:
         )
         for run in runs:
             self.log(f"voiced: action {run.action or 'none'} for {run.sender} in {run.channel} exited {run.exit}")
+        if runs:
+            self._action_passes = 0
+        else:
+            # A pass that ran no request is still visible: one line every ACTION_HEARTBEAT passes says the pass is alive.
+            self._action_passes += 1
+            if self._action_passes % ACTION_HEARTBEAT == 0:
+                self.log(f"voiced: action pass ran no request ({self._action_passes} quiet passes)")
         return len(runs)
 
     def policy_decision(self, event):
