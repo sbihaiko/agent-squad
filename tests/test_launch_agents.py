@@ -10,6 +10,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 VOICE = ROOT / "contrib" / "voice"
 AGENTS = ("install-agents", "rollback-agents", "uninstall-agents")
+# A named behaviour of install-agents.sh: it waits for launchd to release the old job before the bootstrap (#2954).
+SUITES = AGENTS + ("install-agents-bootstrap",)
 
 
 def test_each_agent_script_is_named_and_has_its_test_beside_it():
@@ -21,7 +23,7 @@ def test_each_agent_script_is_named_and_has_its_test_beside_it():
 @pytest.mark.macos_bound   # launchctl and plists: the suites need the macOS userland the loop runs on (ADR-0139)
 @pytest.mark.heavy
 def test_the_launch_job_suites_pass_against_a_fake_launchctl():
-    for name in AGENTS:
+    for name in SUITES:
         done = subprocess.run(["bash", str(VOICE / f"test-{name}.sh")], capture_output=True, text=True, timeout=120,
                               check=False)
         assert done.returncode == 0, f"test-{name}.sh failed: {done.stdout}{done.stderr}"

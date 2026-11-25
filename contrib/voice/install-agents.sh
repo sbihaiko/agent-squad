@@ -58,8 +58,21 @@ cat > "$O.tmp" <<P2
 P2
 mv "$O.tmp" "$O"
 
+# launchd unloads a booted-out job asynchronously: a bootstrap sent before the unload ends answers "Bootstrap failed: 5:
+# Input/output error" and leaves the job unloaded (#2954). The wait is bounded so a stuck job fails loud, never hangs.
+wait_unloaded() {
+  i=0
+  while "$LAUNCHCTL" print "gui/$(id -u)/$1" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge "${SG_BOOTOUT_WAIT_TRIES:-30}" ]; then return 1; fi
+    sleep "${SG_BOOTOUT_WAIT_SECONDS:-0.1}"
+  done
+  return 0
+}
 for L in com.squad.voiced com.squad.operators; do
   "$LAUNCHCTL" bootout "gui/$(id -u)/$L" 2>/dev/null || true
-  "$LAUNCHCTL" bootstrap "gui/$(id -u)" "$LAUNCH_DIR/$L.plist"
+  wait_unloaded "$L" || { echo "install-agents: launchd still holds $L after bootout" >&2; exit 1; }
+  "$LAUNCHCTL" bootstrap "gui/$(id -u)" "$LAUNCH_DIR/$L.plist" \
+    || { echo "install-agents: bootstrap of $L failed" >&2; exit 1; }
 done
 echo "installed com.squad.voiced and com.squad.operators from $(git -C "$DEPLOY" rev-parse --short HEAD)"
