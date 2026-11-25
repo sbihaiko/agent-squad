@@ -836,6 +836,14 @@ def test_a_member_row_without_an_alias_shows_its_user_id_and_the_no_alias_hint(h
     assert "U0OWNER001" in row and "no alias" in row, row
 
 
+def test_the_alias_cell_wraps_its_controls_in_one_element(hub):
+    """Layout: the alias input, the hint and the user id share one wrapper, so the narrow grid keeps one child beside the label."""
+    row = member_row(roles_html(hub, local=with_alias()))
+    cell = row[row.index('data-l="Alias"'):row.index('data-l="Slack workspace"')]
+    assert cell.count('<span class=slalias>') == 1, cell
+    assert cell.index('<span class=slalias>') < cell.index('value="alias-a"') < cell.index("U0OWNER001"), cell
+
+
 def test_the_member_workspace_select_shows_the_label_with_the_team_id(hub):
     """Criterion 4 on the page: the workspace choice reads its label, and its team id is the secondary text."""
     html = roles_html(hub, local=with_member())

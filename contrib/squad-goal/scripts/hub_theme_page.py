@@ -480,7 +480,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
    the fields on one line, the actions wrap beside each other, and the user ids field keeps its whole value. A narrow
    panel stacks each field under its own label, so no value is clipped. */
 #sbody .slroledet .slevr{display:grid;grid-template-columns:minmax(140px,16ch) minmax(200px,1fr) minmax(120px,16ch) auto;gap:8px;align-items:start;padding:6px 0;border-bottom:1px solid var(--line)}
-#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(132px,.8fr) minmax(132px,.8fr) minmax(100px,.6fr) minmax(200px,2.4fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+#sbody .slmembdet .slevr{display:grid;grid-template-columns:minmax(90px,.8fr) minmax(150px,1.5fr) minmax(170px,1.6fr) minmax(90px,.8fr) minmax(120px,1.2fr) auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
 #sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
@@ -488,6 +488,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slad input[data-slmalias],#sbody .slad select[data-slmws]{flex:1 1 150px}
 #sbody .slad select[data-slmch]{flex:1 1 240px}
 #sbody .slad select[data-slmrole]{flex:1 1 120px}
+#sbody .slmembdet .slalias{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+#sbody .slmembdet .slalias input{width:100%;min-width:0}
 @media (max-width:1240px){#sbody .slroledet .slevr,#sbody .slmembdet .slevr{grid-template-columns:1fr}
  #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
  #sbody .slroledet .slevr [role=cell][data-l]::before,#sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}
@@ -1668,7 +1670,7 @@ const slRoleEditRow=(x,i)=>{const on=Array.isArray(x&&x.actions)?x.actions:[],ac
  +`<span role=cell><button data-slrmrole="${i}" aria-label="remove role ${n}">Remove</button></span></div></div>`};
 const slMemberEditRow=(m,i)=>{const n=i+1,at=f=>`member:${i}:${f}`,al=typeof m.alias==="string"?m.alias:"",us=(Array.isArray(m.users)?m.users:[]).join(", ");
  return `<div class="sle slmembdet" role=group aria-label="member ${n} fields"><div class=slevr role=row>`
- +`<span role=cell data-l="Alias"><input data-sle="${at("alias")}" value="${slA(al)}" placeholder="alias" aria-label="member ${n}: alias">${al?"":`<span class=m>no alias</span>`}<span class=m>${slA(us)}</span></span>`
+ +`<span role=cell data-l="Alias"><span class=slalias><input data-sle="${at("alias")}" value="${slA(al)}" placeholder="alias" aria-label="member ${n}: alias">${al?"":`<span class=m>no alias</span>`}<span class=m>${slA(us)}</span></span></span>`
  +`<span role=cell data-l="Slack workspace"><select data-sle="${at("workspace")}" aria-label="member ${n}: Slack workspace">${slOptsV(slWsIds(),slWsOpt,m.workspace)}</select></span>`
  +`<span role=cell data-l="Channel"><select data-sle="${at("channel")}" aria-label="member ${n}: channel">${slOptsV(slChIdsOf(m.workspace),c=>slChOpt(m.workspace,c),m.channel)}</select></span>`
  +`<span role=cell data-l="Role"><select data-sle="${at("role")}" aria-label="member ${n}: role">${slOpts(slRoleIds(),m.role)}</select></span>`

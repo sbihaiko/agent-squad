@@ -303,9 +303,19 @@ def test_the_hub_read_carries_the_policy_languages_and_poll_defaults(hub, tmp_pa
         out["poll_defaults"]
 
 
-def test_the_hub_asks_the_policy_for_the_poll_mode_default(hub, policy):
-    """The policy names the default poll mode, and the hub uses it: no `two_state` rule lives outside the policy."""
-    assert policy.POLL_DEFAULT_MODE == "two_state"
+def test_the_hub_asks_the_policy_for_the_poll_mode_default(hub, tmp_path, policy):
+    """The hub reads the policy's default poll mode, so a changed policy changes the overview and the Watch row."""
+    seen = policy.POLL_DEFAULT_MODE
+    policy.POLL_DEFAULT_MODE = "exponential"
+    try:
+        out = read(hub, tmp_path)
+        assert out["poll_default_mode"] == "exponential", out["poll_default_mode"]
+        node = by_name(out["tree"]["root"], "#support")
+        mode = {c["field"]: c for c in rows(node)["watch"]["controls"]}["poll.mode"]
+        assert mode["value"] == "exponential", mode
+        assert option(mode, "exponential")["label"] == "exponential (default)", mode["options"]
+    finally:
+        policy.POLL_DEFAULT_MODE = seen
 
 
 # ---------------------------------------------------------------- the renderer
