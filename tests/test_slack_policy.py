@@ -548,6 +548,8 @@ def test_a_guard_field_the_file_omits_reads_the_default():
     assert S.validate(committed, local) == []
     got = S.guard(committed)
     assert got == {"rate": 2, "max_chars": 4000, "answer_max_chars": 8000, "read_wrappers": []}
+
+
 def test_the_project_declares_the_command_of_each_action():
     """#2939: a project declares one command per action id, and the reader hands it to the executor. The local file
     declares none, so it never widens what a role may run."""
@@ -566,6 +568,18 @@ def test_an_action_command_outside_the_role_vocabulary_is_refused_by_its_key():
     defects = S.validate(committed, local)
     assert "project.actions.publish_to_prod" in keys(defects), defects
     assert "owner" in str(defects)
+
+
+def test_action_commands_in_the_local_file_are_refused_by_name():
+    """project.actions lives in the committed file (ADR-0177), so a local `project.actions` row, empty or not, is a
+    defect that names the local file and says where the row belongs."""
+    committed, local = files()
+    for bad in ({}, {"status": "echo hi"}, ["squad status"]):
+        local["project"] = {"actions": bad}
+        defects = S.validate(committed, local)
+        named = [d for d in defects if d.key == "project.actions" and d.file == "slack.local.yaml"]
+        assert named, defects
+        assert "committed" in named[0].reason, named[0].reason
 
 
 def test_an_action_command_that_is_empty_or_not_one_mapping_is_refused():
