@@ -332,8 +332,22 @@ def render(hub, out, sel=None):
 
 
 def _fetched(hub, out, sel, script):
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel={json.dumps(sel)};\n" + script)
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slTsel={json.dumps(sel)};{_read_seed(out)}\n" + script)
     return json.loads(_node(body))
+
+
+def _read_seed(out):
+    """The answer to the Slack tree's channel read (#2955), for every workspace node that asks it (#2962). The tree
+    reads which mapped channels Slack still lists; seeding that answer keeps the read out of the fetch stub, so a test
+    counts only what the client pane posts."""
+    seen, stack = {}, [((out.get("tree") or {}).get("root") or {})]
+    while stack:
+        n = stack.pop()
+        ask = n.get("channel_read") if isinstance(n, dict) else None
+        if ask and ask.get("workspace"):
+            seen[str(ask["workspace"])] = {"err": None, "manual": False, "channels": [], "unreachable": []}
+        stack.extend((n or {}).get("children") or [])
+    return f"slChList={json.dumps(seen)};"
 
 
 def test_the_client_pane_shows_an_add_project_control_and_a_delete_client_button(hub, tmp_path, monkeypatch):
