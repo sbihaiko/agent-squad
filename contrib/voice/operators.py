@@ -496,14 +496,19 @@ def persona_lines(state, unit):
 
 def action_line(state, unit):
     """What the brief does with a message that asks for an action. The DM session proposes it to the owner in its own
-    outbox. A project session cannot write the DM outbox, so it answers in the line's channel alone (#2925); the
-    executor that runs an action is #2939."""
+    outbox. A project session writes one action request to the outbox of the line's channel, and the daemon's checked
+    executor runs it outside this session (#2939): the session never runs a command."""
     if unit["key"] == DM:
         return ("When a message asks for an action, answer in its channel that this session only reads, and append one "
                 f"proposal line to the owner's DM outbox {outbox_path(state, DM)} carrying\n"
                 '  {"channel":"<the DM inbox line\'s channel>","text":"Proposal: <the action, one line>"}.')
-    return ("When a message asks for an action, answer in its channel that this session only reads and does not run "
-            "actions yet.")
+    return ("When a message asks for an action, never run a command: append ONE request line to the outbox of the "
+            "line's channel, and the daemon's executor checks the sender's role and runs it:\n"
+            '  {"action":"<the action id>","arguments":{<the arguments the action takes, or {}>},'
+            '"sender":"<the inbox line\'s user>","channel":"<the inbox line\'s channel>",'
+            '"source":"<the inbox line\'s id>","thread_ts":"<the inbox line\'s ts>"}\n'
+            "  The action ids, and the roles that grant them, come from the project's Slack files; the executor's "
+            "answer reaches the channel as a reply in the thread.")
 
 
 def monitor_lines(state, unit):

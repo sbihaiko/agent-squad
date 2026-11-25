@@ -548,3 +548,30 @@ def test_a_guard_field_the_file_omits_reads_the_default():
     assert S.validate(committed, local) == []
     got = S.guard(committed)
     assert got == {"rate": 2, "max_chars": 4000, "answer_max_chars": 8000, "read_wrappers": []}
+def test_the_project_declares_the_command_of_each_action():
+    """#2939: a project declares one command per action id, and the reader hands it to the executor. The local file
+    declares none, so it never widens what a role may run."""
+    committed, local = files()
+    committed["project"]["actions"] = {"status": "squad status", "logs": "tail -n 50 run.log"}
+    assert S.validate(committed, local) == []
+    assert S.project_actions(committed, local) == {"status": "squad status", "logs": "tail -n 50 run.log"}
+    local["project"] = {"actions": {"status": "rm -rf /"}}
+    assert S.project_actions(committed, local)["status"] == "squad status"
+
+
+def test_an_action_command_outside_the_role_vocabulary_is_refused_by_its_key():
+    """#2939: an owner-only action stays with the owner, so a project never declares a command for one."""
+    committed, local = files()
+    committed["project"]["actions"] = {"publish_to_prod": "make release"}
+    defects = S.validate(committed, local)
+    assert "project.actions.publish_to_prod" in keys(defects), defects
+    assert "owner" in str(defects)
+
+
+def test_an_action_command_that_is_empty_or_not_one_mapping_is_refused():
+    """#2939: a command the executor could not run is refused by its key, and a shape the reader cannot use too."""
+    committed, local = files()
+    committed["project"]["actions"] = {"status": "  "}
+    assert "project.actions.status" in keys(S.validate(committed, local))
+    committed["project"]["actions"] = ["squad status"]
+    assert "project.actions" in keys(S.validate(committed, local))
