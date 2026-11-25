@@ -69,3 +69,11 @@ def test_a_workspace_keeps_its_now_tiles(hub, tmp_path):
     assert "conversation" not in ws
     html = render(hub, out, sel=ws["id"])
     assert "What happens here" not in html and "sltnow" in html
+
+
+def test_the_channel_note_moves_under_details_beside_the_tiles(hub, tmp_path):
+    out = read(hub, tmp_path)
+    ch = by_name(out["tree"]["root"], "#proj-agent-squad")
+    html = render(hub, out, sel=ch["id"])
+    det = html.index("<details class=slcdet>")
+    assert html.index("sltnote") > det, "the note sits under Details, not under the conversation"

@@ -455,6 +455,16 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltcrumb button:hover{color:var(--fg)}#sbody .sltcrumb .sp{color:var(--mute)}
 #sbody .slth{margin:6px 0 2px;font-size:var(--fs-display);font-weight:600;line-height:1.25;color:var(--fg);overflow-wrap:anywhere}   /* the node title is the largest text of the pane (#2841) */
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
+/* The channel conversation (#2917): a person's message on the left, the persona's on the right, a plain fact between. */
+#sbody .slconv{display:flex;flex-direction:column;gap:8px;max-width:640px}
+#sbody .slcb{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:12px;max-width:85%;font-size:var(--fs-body);color:var(--fg)}
+#sbody .slcb.in{align-self:flex-start;background:var(--inset);border:1px solid var(--line)}
+#sbody .slcb.out{align-self:flex-end;background:var(--bubble);border:1px solid var(--bubble-line)}
+#sbody .slcb.out.draft{border-style:dashed}
+#sbody .slcb.sys{align-self:center;max-width:100%;padding:2px 8px;background:none;border:0;color:var(--mute);font-size:var(--fs-caption);text-align:center}
+#sbody .slcbn{font-size:var(--fs-caption);color:var(--mute);font-weight:600}
+#sbody .slcdet{margin-top:10px}#sbody .slcdet summary{cursor:pointer;color:var(--mute);font-size:var(--fs-caption)}
+#sbody .slcdet .setblk{margin-top:8px}
 /* The channel verdict answers first (#2912): one sentence above the Now tiles, in the body size. The copy-id control
    keeps the Slack id reachable with no id in the subtitle. */
 #sbody .sltverdict{margin:0 0 12px;font-size:var(--fs-body);font-weight:600;color:var(--fg);max-width:72ch}
@@ -1618,10 +1628,17 @@ function slTItem(n,cur,more){const open=slTOpen(n),kids=!!(n.children&&n.childre
  return `<div role=treeitem id="slt_${slA(n.id)}" aria-level="${n.level}" data-slt="${slA(n.id)}"${kids?` aria-expanded="${open?"true":"false"}"`:""}${sel?' aria-selected="true" tabindex="0"':' tabindex="-1"'} aria-label="${slA(label)}" class="slti lv${n.level}${sel?" sel":""}">`
  +slTGuides(more||[])+`<span class=sltarrow aria-hidden=true>${kids?(open?"▾":"▸"):""}</span>${slTGlyph(n)}`
  +`<span class=sltmain><span class=sltname title="${slA(n.name)}">${esc(n.icon==="hash"?String(n.name).replace(/^#/,""):n.name)}</span><span class=sltbadges>${(n.badges||[]).map(slTBadge).join("")}</span></span></div>`}
-function slTNow(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
+function slTConv(n){const bubble=x=>`<div class="slcb ${slA(x.side)}${x.tone?" "+slA(x.tone):""}">${x.who?`<span class=slcbn>${esc(x.who)}</span>`:""}<span class=slcbt>${esc(x.text)}</span></div>`;
+ return `<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>What happens here</h3><div class=slconv>${n.conversation.map(bubble).join("")}</div>`
+ +`<details class=slcdet><summary>Details</summary>${slTTiles(n)}${slTNoteHtml(n)}</details></div>`}
+// A channel tells its conversation first and keeps its tiles under Details (#2917); every other node shows its tiles.
+function slTNow(n){return Array.isArray(n.conversation)&&n.conversation.length?slTConv(n):slTTiles(n)}
+function slTTiles(n){const tiles=(n.now||[]).map(t=>`<div class="tile ${esc(t.tone||"neutral")}"><span class=tk>${esc(t.key)}</span><span class=tv>${esc(t.value)}</span>${t.sub?`<span class=tss>${esc(t.sub)}</span>`:""}</div>`);
  const cols=Math.min(tiles.length,5);   // the tile count names the row's columns: five for a channel, four for a workspace (#2841)
  return tiles.length?`<div class=setblk data-blk=now data-theme=slk><h3 class=blkh>Now</h3><div class="now sltnow sltn${cols}">${tiles.join("")}</div></div>`:""}
-function slTNote(n){const t=(n.detail||{}).note;   /* the channel's one sentence under its tiles (#2842) */
+// A channel that tells its conversation keeps its note under Details, beside the tiles it explains (#2917).
+function slTNote(n){return Array.isArray(n.conversation)&&n.conversation.length?"":slTNoteHtml(n)}
+function slTNoteHtml(n){const t=(n.detail||{}).note;   /* the channel's one sentence under its tiles (#2842) */
  return t?`<p class=sltnote><span class=sltni aria-hidden=true>ⓘ</span> ${esc(t)}</p>`:""}
 /* The guest slot line (#2842): one plain line when the machine serves one guest workspace, and an alert with its title
    and its sentence when a second one is refused. Every value is text. */

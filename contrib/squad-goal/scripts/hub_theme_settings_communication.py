@@ -485,9 +485,12 @@ def _slack_tree_node_channel(P, committed_doc, local_doc, group, ch, node_id, re
                        "as drafts for your review" if announcement else "",
                        "neutral" if announcement else "muted")]
     note = P.channel_note(merged, members, announcement)
+    permissions = _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged)
     node = {"id": node_id, "level": 4, "kind": "channel", "name": f"#{name}", "children": [], "icon": icon,
             "badges": badges, "now": now, "ref": {"workspace": ws_id, "channel": ch_id},
-            "permissions": _slack_tree_permissions(P, committed_doc, local_doc, ws_id, ch_id, merged),
+            "conversation": _slack_channel_conversation(persona, merged, members, listen_only, announcement,
+                                                        permissions, reply_value),
+            "permissions": permissions,
             "detail": {"title": f"#{name}", "sub": label, "text": "", "note": note,
                        "verdict": _slack_channel_verdict(persona, merged, members, listen_only)}}
     # The detail pane edits the channel by its Slack id, and each field names the file that owns it (#2844).
@@ -508,6 +511,39 @@ def _slack_channel_verdict(persona, merged, members, listen_only):
     if not members:
         return f"Nobody can ask {who} here: no member holds a role this channel accepts."
     return f"{who} answers {count} here: anyone who holds {roles}."
+
+
+def _slack_channel_conversation(persona, merged, members, listen_only, announcement, permissions, reply):
+    """The channel detail's short conversation (#2917): what happens in the channel as a Slack user sees it. Each line is
+    {side, who, text, tone}: `in` is a person who writes, `out` the persona, `sys` a plain fact between them. The hub
+    writes every line from the policy's answers, so the view holds no rule (ADR-0137)."""
+    who = persona.name if persona else "The agent"
+    accepted = [r for r in permissions.get("roles") or () if r.get("accepted")]
+    roles = [_slack_text(r) for r in merged.get("roles") or ()]
+    actions = list(dict.fromkeys(_slack_text(a) for r in accepted for a in r.get("actions") or ()))
+    ask = actions[0] if actions else "status"
+    line = lambda side, by, text, tone="": {"side": side, "who": by, "text": text, "tone": tone}   # noqa: E731
+    out = []
+    if members:
+        count = "1 person" if len(members) == 1 else f"{len(members)} people"
+        holds = "holds" if len(members) == 1 else "hold"
+        out.append(line("in", f"someone who holds {roles[0]}", f"@{who} {ask}?"))
+        if listen_only:
+            out.append(line("sys", "", f"{who} stays quiet here. A proposal with the {roles[0]} actions reaches your DM.",
+                            "quiet"))
+        else:
+            draft = reply == "draft"
+            out.append(line("out", who, f"Here is the {ask}: …", "draft" if draft else ""))
+            fact = f"{who} answers the {count} who {holds} {' or '.join(roles)}. They can ask for: {', '.join(actions)}."
+            out.append(line("sys", "", fact + (" Each answer waits as a draft for your review." if draft else ""),
+                            "quiet"))
+    else:
+        out.append(line("sys", "", "Nobody here holds a role this channel accepts.", "quiet"))
+    out.append(line("in", "anyone else", f"@{who} deploy now"))
+    out.append(line("sys", "", f"{who} reads it and never obeys it. No reply.", "quiet"))
+    if announcement:
+        out.append(line("out", who, f"Draft for your review: {', '.join(announcement)}.", "draft"))
+    return out
 
 
 def _slack_tree_settings(P, committed_doc, local_doc, group, ch, merged, cf, lf):
