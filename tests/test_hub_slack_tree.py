@@ -1168,3 +1168,108 @@ def test_the_slack_theme_takes_the_free_width_and_keeps_prose_short(hub):
     # row's label column stops at 240 px.
     assert "max-width:1080px" in _rule(page, "#sbody .sltnow")
     assert "minmax(120px,240px)" in _rule(page, "#sbody .sltrow")
+
+
+# ---------------------------------------------------------------- the channel detail speaks plainly (#2912)
+
+def test_a_channel_row_shows_one_hash_mark(hub, tmp_path):
+    """The channel name already carries its `#`, so the row draws no second hash beside it (#2912)."""
+    html = render(hub, read(hub, tmp_path))
+    rows = re.split(r"(?=<div[^>]*role=treeitem)", html)
+    channel = next(r for r in rows if 'aria-label="#proj-agent-squad' in r)
+    assert channel.count("#") == 1, channel
+
+
+def test_the_channel_subtitle_names_no_raw_id_and_offers_a_copy(hub, tmp_path):
+    """The subtitle names the workspace alone; a copy control keeps the Slack id reachable (#2912)."""
+    out = read(hub, tmp_path)
+    ch = by_name(out["tree"]["root"], "#proj-agent-squad")
+    assert ch["detail"]["sub"] == "team", ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    sub = re.search(r"<p class=sltsub>([^<]*)</p>", html)
+    assert sub and "C0PROJ0001" not in sub.group(1), sub and sub.group(1)
+    btn = re.search(r"<button[^>]*data-slcid=\"C0PROJ0001\"[^>]*>([^<]*)</button>", html)
+    assert btn and "copy id" in btn.group(1).lower(), html[html.index("sltsub"):html.index("sltsub") + 600]
+
+
+def test_the_copy_id_control_copies_the_channel_id(hub):
+    """The copy control writes the channel id to the clipboard and confirms it in words (#2912)."""
+    body = (_slices(hub.PAGE) +
+            "\nconst got=[];globalThis.navigator={clipboard:{writeText:t=>{got.push(t);return Promise.resolve()}}};"
+            "slCopyId('C0PROJ0001');console.log(JSON.stringify(got))")
+    assert json.loads(_node(body)) == ["C0PROJ0001"]
+
+
+def test_the_show_the_tree_button_shows_only_with_the_tree_folded(hub):
+    """The button clears the fold, so it draws only while the fold is set; a wide pane shows the tree beside the
+    detail and needs no way back to it (#2912)."""
+    page = hub.PAGE
+    assert "display:none" in _rule(page, "#sbody .sltback"), "the button is hidden until the fold is set"
+    narrow = re.search(r"@container \(max-width:700px\)\{([^}]*\}[^}]*)\}", page)
+    assert narrow and ".slttop.sltshow .sltback{display:inline-flex}" in narrow.group(1).replace(" ", ""), narrow
+    assert "#sbody .sltback{display:inline-flex}" not in page, "no width alone shows the button"
+
+
+def test_a_workspace_badge_reads_our_workspace_or_guest_workspace(hub, tmp_path):
+    """The class badge and the class tile speak the user's words, never the file's class name (#2912)."""
+    root = tree(hub, tmp_path)["root"]
+    assert [b["text"] for b in by_name(root, "team")["badges"]][:1] == ["our workspace"], by_name(root, "team")
+    assert tiles(by_name(root, "team"))["Class"]["value"] == "our workspace", tiles(by_name(root, "team"))
+    assert [b["text"] for b in by_name(root, "client-a")["badges"]][:1] == ["guest workspace"]
+    assert tiles(by_name(root, "client-a"))["Class"]["value"] == "guest workspace"
+    assert by_name(root, "client-a")["detail"]["sub"] == "guest workspace · T0CLIENT01"
+
+
+def test_a_channel_with_no_eligible_member_reads_never_obeyed(hub, tmp_path):
+    """A message nobody may answer is `read, never obeyed`, and the badge says nobody can ask (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    root = tree(hub, tmp_path, local=local)["root"]
+    now = tiles(by_name(root, "#support"))
+    assert now["A member's message"]["value"] == "read, never obeyed", now
+    assert any(b["text"] == "nobody can ask" for b in by_name(root, "#support")["badges"]), by_name(root, "#support")
+
+
+def test_a_listen_channel_with_no_member_shows_a_neutral_badge(hub, tmp_path):
+    """A listen-only channel that answers nobody is its designed state, so its badge is neutral; a channel that speaks
+    and answers nobody keeps the warning tone (#2912)."""
+    root = tree(hub, tmp_path)["root"]
+    alert = next(b for b in by_name(root, "#squad-alerts")["badges"] if b["text"] == "nobody can ask")
+    assert alert["tone"] == "neutral", alert
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    support = next(b for b in by_name(tree(hub, tmp_path, local=local)["root"], "#support")["badges"]
+                   if b["text"] == "nobody can ask")
+    assert support["tone"] == "warn", support
+
+
+def test_the_project_counts_read_in_the_users_words(hub, tmp_path):
+    project = next(n for n in walk(tree(hub, tmp_path)["root"]) if n.get("kind") == "project")
+    assert tiles(project)["Workspaces"]["value"] == "2 · 1 our workspace · 1 guest workspace", tiles(project)
+
+
+def test_a_truncated_workspace_name_keeps_its_full_name(hub, tmp_path):
+    """Every tree row keeps its whole name in the tooltip, a workspace row included (#2912)."""
+    committed = json.loads(json.dumps(COMMITTED))
+    committed["workspaces"][0]["label"] = "team-with-a-very-long-label-that-runs-past-the-tree-column"
+    html = render(hub, read(hub, tmp_path, committed=committed))
+    full = "team-with-a-very-long-label-that-runs-past-the-tree-column"
+    assert re.search(r'<span class=sltname title="' + re.escape(full) + r'"', html), html[:1200]
+
+
+def test_the_channel_detail_opens_with_the_verdict(hub, tmp_path):
+    """One sentence above the Now tiles says who can ask the persona, and the hub writes it (#2912)."""
+    out = read(hub, tmp_path)
+    ch = by_name(out["tree"]["root"], "#proj-agent-squad")
+    assert ch["detail"]["verdict"] == "U0OWNER001 can ask this persona here.", ch["detail"]
+    html = render(hub, out, sel=ch["id"])
+    assert re.search(r"<p class=sltverdict>U0OWNER001 can ask this persona here\.</p>", html), html[:1200]
+    assert html.index("sltverdict") < html.index("sltnow"), "the verdict stands above the Now tiles"
+
+
+def test_the_verdict_says_nobody_can_ask(hub, tmp_path):
+    """A channel whose roles no member holds says so in its verdict (#2912)."""
+    local = json.loads(json.dumps(LOCAL))
+    local["members"] = [m for m in local["members"] if m["channel"] != "C0CLISUP01"]
+    ch = by_name(tree(hub, tmp_path, local=local)["root"], "#support")
+    assert ch["detail"]["verdict"] == "Nobody can ask this persona here.", ch["detail"]
