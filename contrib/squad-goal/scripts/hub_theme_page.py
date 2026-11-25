@@ -517,7 +517,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slroledet .slevr input:not([type=checkbox]),#sbody .slroledet .slevr select,#sbody .slmembdet .slevr input:not([type=checkbox]),#sbody .slmembdet .slevr select{width:100%;min-width:0}
 #sbody .slacts{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0}
 #sbody .slad input[data-slroleid],#sbody .slad input[data-slmus]{flex:1 1 220px}
-#sbody .slad input[data-slmalias],#sbody .slad select[data-slmws]{flex:1 1 150px}
+#sbody .slad input[data-slmalias]{flex:1 1 150px}
+#sbody .slad select[data-slmws]{flex:1 1 190px}   /* a phone puts the workspace on its own line, so its team id is never cut */
 #sbody .slad select[data-slmch]{flex:1 1 240px}
 #sbody .slad select[data-slmrole]{flex:1 1 120px}
 #sbody .slmembdet .slalias{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
