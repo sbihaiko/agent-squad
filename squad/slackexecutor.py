@@ -227,6 +227,8 @@ def check(request, decision, line, project, listed=None, logins=None, identity=N
     if request.action not in ACTIONS:
         return Refusal("action", f"the {request.action!r} action exists for no role: a role grants only "
                                  f"{', '.join(sorted(ACTIONS))}, so an owner-only action stays with the owner")
+    # The request's action must be one the decision's role grants. The request comes from the session's outbox line, so
+    # a session that writes an action the sender's role never granted is refused here, before any command source runs.
     if request.action not in _actions(decision):
         return Refusal("grant", f"the role {decision.role!r} does not list action {request.action!r}")
     if getattr(decision, "kind", None) == S.PROPOSAL:

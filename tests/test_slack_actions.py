@@ -140,8 +140,8 @@ def test_the_declared_command_runs_outside_the_session_through_the_caller(tmp_pa
     runner = Runner()
     runs = run(state, runner)
     assert len(runs) == 1
-    assert [command for command, _ in runner.calls] == [STATUS_COMMAND]
-    assert runner.calls[0][1].get("shell") is True
+    assert [command for command, _ in runner.calls] == [["echo", "the", "project", "is", "green"]]
+    assert runner.calls[0][1].get("shell") is False
     # The command runs through the caller's runner, in the caller's own process: the runner records the process that
     # calls it, so a pass that handed the command to another process would name a different pid.
     assert runner.pids == [os.getpid()]
@@ -194,7 +194,7 @@ def test_the_deploy_list_of_the_role_bounds_the_target_and_runs_the_declared_com
     ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
     runner = Runner(stdout="deployed to stg")
     runs = run(state, runner)
-    assert runner.calls and runner.calls[0][0] == DEPLOY_COMMAND
+    assert runner.calls and runner.calls[0][0] == ["make", "deploy-stg"]
     assert runs[0].exit == 0
     assert replies(state)[0]["text"] == "deployed to stg"
     assert runs[0].channel == CHANNEL and line["ts"] == replies(state)[0]["thread_ts"]
@@ -435,7 +435,7 @@ def test_a_declared_command_of_a_request_action_runs(tmp_path):
     runner = Runner(stdout="done")
     runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
                       runner=runner)
-    assert [command for command, _ in runner.calls] == ["echo done"]
+    assert [command for command, _ in runner.calls] == [["echo", "done"]]
     assert runs[0].exit == 0
     assert replies(state)[0]["text"] == "done"
 
@@ -492,19 +492,6 @@ def test_an_outbox_shorter_than_its_kept_place_is_read_from_the_start(tmp_path):
     runner = Runner()
     runs = run(state, runner)
     assert len(runs) == 1 and len(runner.calls) == 1
-
-
-def test_the_handled_key_is_the_inbox_line_and_the_action(tmp_path):
-    """Finding 8: the ledger keys one request on the inbox line it answers and its action, so the key is small and the
-    inbox line is found once per pass."""
-    state = str(tmp_path)
-    inbox(state)
-    ask(state)
-    run(state, Runner())
-    path = os.path.join(state, A.HANDLED)
-    with open(path, encoding="utf-8") as f:
-        keys = [json.loads(line)["key"] for line in f if line.strip()]
-    assert keys == [f"{MID}|status"]
 
 
 def test_the_reply_of_an_action_that_never_runs_through_project_actions_names_it(tmp_path):
@@ -569,3 +556,128 @@ def test_every_audit_line_carries_an_error_field_that_names_why_it_exited(tmp_pa
     run(green)
     assert audit(green)[0]["error"] == ""
 
+
+
+def test_a_second_request_line_with_the_same_source_and_action_runs(tmp_path):
+    """Finding 10 (BLOCKING 2): the handled key names the whole request line, so a second request with the same source
+    and action but different arguments is a different request and runs, with its own audit line."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    documents_here = lambda channel: (committed, copy.deepcopy(LOCAL))  # noqa: E731
+    ask(state, action="request_work", arguments={"title": "first"})
+    ask(state, action="request_work", arguments={"title": "second"})
+    runner = Runner(stdout="done")
+    runs = A.run_pass(state, lambda channel: PROJECT, documents_here, NOW, runner=runner)
+    assert len(runs) == 2, runs
+    assert len(runner.calls) == 2, runner.calls
+    assert len(audit(state)) == 2, audit(state)
+
+
+def test_the_handled_key_names_the_whole_request_line(tmp_path):
+    """Finding 10 (BLOCKING 2): the key holds the arguments and the sender, so two requests that share the source and the
+    action never collapse into one handled key."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    documents_here = lambda channel: (committed, copy.deepcopy(LOCAL))  # noqa: E731
+    ask(state, action="request_work", arguments={"title": "first"})
+    ask(state, action="request_work", arguments={"title": "second"})
+    A.run_pass(state, lambda channel: PROJECT, documents_here, NOW, runner=Runner(stdout="done"))
+    path = os.path.join(state, A.HANDLED)
+    with open(path, encoding="utf-8") as f:
+        keys = [json.loads(line)["key"] for line in f if line.strip()]
+    assert len(keys) == 2 and keys[0] != keys[1], keys
+
+
+def test_a_deploy_request_from_a_status_only_role_is_refused_by_the_action_grant(tmp_path):
+    """Finding 11 (BLOCKING 3 / DEBT 4): the inbox line asks for a deploy and the request asks for a deploy, and the
+    colleague's role lists `status` only. The refusal comes from the grant's action list, never from the decision's
+    kind alone."""
+    state = str(tmp_path)
+    inbox(state, user=PEER, text="please deploy to stg")
+    ask(state, action="deploy", sender=PEER, arguments={"environment": "stg"})
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    assert runs[0].error.startswith("grant:"), runs[0].error
+    assert "deploy" in runs[0].error and "colleague" in runs[0].error
+
+
+def test_the_declared_command_runs_as_one_argv_without_a_shell(tmp_path):
+    """Finding 12 (DEBT 1): the declared command is one argv, never a shell line, so no metacharacter of a declared
+    value reaches a shell."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    run(state, runner)
+    assert runner.calls[0][0] == ["echo", "the", "project", "is", "green"], runner.calls[0][0]
+    assert runner.calls[0][1].get("shell") is False
+
+
+def test_a_declared_command_that_names_a_shell_metacharacter_never_runs(tmp_path):
+    """Finding 12 (DEBT 1): a declared command that carries `;`, `|`, `$(` or a backtick is refused, so a project value
+    can never chain a second command."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["status"] = "echo green; rm -rf /"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+
+
+def test_a_crash_between_the_key_and_the_refusal_audit_writes_no_second_row(tmp_path):
+    """Finding 13 (DEBT 2): the handled key is written before the refusal's audit line, so a crash between the two
+    writes never repeats the audit row on the next pass."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)      # a stale line: the pass's own refusal branch
+    run(state)
+    assert len(audit(state)) == 1
+    second = "C0PROJ0001:1762500400.000400"
+    inbox(state, mid=second)
+    ask(state, source=second, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    real = A._append_line
+
+    def crash_on_audit(path, record):
+        if path.endswith(A.AUDIT):
+            raise RuntimeError("the pass died before the audit line")
+        real(path, record)
+
+    A._append_line = crash_on_audit
+    try:
+        with pytest.raises(RuntimeError):
+            run(state)
+    finally:
+        A._append_line = real
+    run(state)
+    assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
+    """Finding 14 (DEBT 6): the first pass of a state with no kept place reads a bounded tail of each outbox, so a long
+    answer history costs one bounded read and a request at the very start never runs."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    early = A.request_record("status", channel=CHANNEL, sender=OWNER,
+                             source="C0PROJ0001:1762500500.000500", at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(early) + "\n")
+        f.write(("x" * 2000 + "\n") * 800)          # an answer history past the bounded first read
+    inbox(state, mid="C0PROJ0001:1762500600.000600")
+    ask(state, source="C0PROJ0001:1762500600.000600")
+    runner = Runner()
+    runs = run(state, runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1
