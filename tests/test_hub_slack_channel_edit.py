@@ -173,3 +173,20 @@ def test_a_workspace_the_host_cannot_read_shows_the_reason_and_the_id_field(hub,
     html = _detail(hub, tmp_path, "team", seed)
     assert "channels:read" in html, html
     assert re.search(r"<details[^>]*><summary>Slack ids</summary>.*data-slci=\"committed:0\"", html, re.S), html
+
+
+def test_a_render_reads_no_channel_list_and_the_page_load_reads_each_workspace_once(hub, tmp_path):
+    """#2949: the renderer holds no read. The page's own load asks each workspace's channel list once, after the tree is
+    in hand, so a render posts nothing and the tree still draws the hub's sentence for a channel Slack cannot reach."""
+    out = read(hub, tmp_path)
+    want = sorted({n["channel_read"]["workspace"] for n in T.walk(out["tree"]["root"]) if n.get("channel_read")})
+    assert want, "the fixture names at least one readable workspace, or this test proves nothing"
+    load = hub.PAGE[hub.PAGE.index("async function slLoad()"):hub.PAGE.index("async function slPost(")]
+    script = ('let CALLS=[];globalThis.fetch=(u,o)=>{'
+              'if(String(u)==="/api/slack/channels"){CALLS.push(JSON.parse(o.body).workspace);return new Promise(()=>{})}'
+              'return Promise.resolve({json:()=>Promise.resolve(__OUT__)})};'
+              'slS={};slR=__OUT__;slT=__OUT__.tree;slRender();const atRender=CALLS.slice();'
+              'slLoad().then(()=>console.log(JSON.stringify({atRender,calls:CALLS})))').replace("__OUT__", json.dumps(out))
+    got = json.loads(_node(_slices(hub.PAGE) + "\n" + load + "\n" + script))
+    assert got["atRender"] == [], "a render posts nothing, the channel list included"
+    assert sorted(got["calls"]) == want, got["calls"]
