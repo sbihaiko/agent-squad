@@ -1347,3 +1347,18 @@ def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_pat
     monkeypatch.setattr(op, "call", fake_call)
     op.stop("abababab", str(tmp_path / "state"))
     assert tried == [op.config_root(str(tmp_path / "state")), None], tried
+
+
+def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, capsys):
+    """#2949 criterion (2): `dm_channel` reads the inbox tail and reports one line for a corrupt line it skips, so a
+    broken queue stays visible instead of silently dropping the DM channel."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True, exist_ok=True)
+    (state / "inboxes" / "dm.jsonl").write_text('{"channel": "D0AAAAAA1"}\nnot json\n')
+
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+    err = capsys.readouterr().err
+    assert "dm.jsonl" in err and "corrupt" in err, err
+    assert err.count("operators: skipped") == 1, err

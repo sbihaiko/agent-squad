@@ -319,3 +319,36 @@ def test_the_helper_refuses_a_scope_that_escapes_the_state_folder(tmp_path):
         mod.answer(mod.read_binding(bound(binding)), "../../leak", QUESTION, ANSWER)
 
     assert leak.read_text() == json.dumps(line) + "\n"
+
+
+def test_the_dm_fallback_reads_the_answered_lines_channel_not_the_oldest(tmp_path):
+    """Criterion (2): a DM session whose binding names no channel must never compare the answered line against the
+    oldest line's channel. The daemon posts to the channel the answered line itself names, so a second DM channel that
+    arrived after the first must not make the answer refuse."""
+    mod = helper()
+    binding, state = queued(tmp_path, channels=("dm",))
+    oldest, answered_ts = "1762500000.000100", "1762500000.000200"
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{oldest}", "ts": oldest, "user": "UPROBE0001", "channel": "D0OLD0001",
+                            "text": "hi"}) + "\n")
+        f.write(json.dumps({"id": f"dm:{answered_ts}", "ts": answered_ts, "user": "UPROBE0001",
+                            "channel": "D0NEW0002", "text": "hi"}) + "\n")
+
+    mod.answer(mod.read_binding(bound(binding)), "dm", answered_ts, ANSWER)
+
+    assert outbox(state, "dm") == [{"thread_ts": answered_ts, "text": ANSWER, "channel": "D0NEW0002"}]
+
+
+def test_a_binding_whose_state_folder_is_missing_writes_nothing_and_names_it(tmp_path):
+    """Criterion (4): a state folder that does not exist refuses before the outbox is resolved, so the helper creates
+    no folder and the refusal names the missing folder."""
+    mod = helper()
+    missing = tmp_path / "gone"
+    binding = tmp_path / "binding.json"
+    binding.write_text(json.dumps({"key": "acme-widget", "state": str(missing), "channels": [CHANNEL]}))
+
+    with pytest.raises(mod.Refused, match="does not exist"):
+        mod.answer(mod.read_binding(bound(binding)), CHANNEL, QUESTION, ANSWER)
+
+    assert not missing.exists()
+    assert not (missing / "outboxes").exists()
