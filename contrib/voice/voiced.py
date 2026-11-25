@@ -978,12 +978,14 @@ def audio_file(event):
     return None
 
 
-def download(url, token, limit=MAX_CLIP_BYTES):
-    """The clip's bytes with the bot token, never the URL's own public form; a clip past the cap is never read whole."""
+def download(url, token, limit=MAX_CLIP_BYTES, context=None):
+    """The clip's bytes with the bot token, never the URL's own public form; a clip past the cap is never read whole.
+
+    The call trusts the daemon's one CA bundle (#2933): a python.org build has no default store under launchd."""
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     size = 0
     chunks = []
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT, context=context or daemon_context()) as response:
         while True:
             chunk = response.read(CHUNK)
             if not chunk:
@@ -995,8 +997,10 @@ def download(url, token, limit=MAX_CLIP_BYTES):
     return b"".join(chunks)
 
 
-def transcribe(audio, mime, key):
-    """One Gemini transcription of one clip. The key travels in a header, never in the URL or in output."""
+def transcribe(audio, mime, key, context=None):
+    """One Gemini transcription of one clip. The key travels in a header, never in the URL or in output.
+
+    The call trusts the daemon's one CA bundle (#2933), as the clip download and the socket do."""
     body = {
         "contents": [{"parts": [
             {"text": "Transcribe this audio exactly in its own language. Reply with the transcript only."},
@@ -1009,7 +1013,7 @@ def transcribe(audio, mime, key):
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT, context=context or daemon_context()) as response:
         answer = json.loads(response.read() or b"{}")
     parts = ((answer.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
     text = " ".join(part.get("text") or "" for part in parts).strip()
@@ -1906,10 +1910,12 @@ class Daemon:
         clip = audio_file(event)
         if clip:
             url = clip.get("url_private_download") or clip.get("url_private") or ""
+            step = "download"
             try:
                 audio = self.download_clip(event.get("channel"), url)
                 if len(audio) > MAX_CLIP_BYTES:
                     raise ClipTooLarge(len(audio))
+                step = "transcribe"
                 text = (self.transcriber(audio, clip.get("mimetype") or "audio/mp4") or "").strip()
             except ClipTooLarge as x:   # a clip past the inline cap is a record with its size
                 record["error"] = str(x)
@@ -1920,11 +1926,14 @@ class Daemon:
                 self.log(f"voiced: {record['error']} for {mid}")
                 return "failed"
             except Exception as x:      # noqa: BLE001 - a clip no model could read is data, never an inbox line
-                record["error"] = f"transcription failed: {type(x).__name__}"
+                kind = "transcription" if step == "transcribe" else "download"
+                record["error"] = f"{kind} failed: {type(x).__name__}"
                 record["answer"] = one_sentence(record["error"])
                 self.state.append_other(record)
                 self.answer_failed_clip(record, decision)
-                self.log(f"voiced: {record['error']} for {mid}")
+                # The step and the reason, so a certificate failure reads as a download or a transcription failure and
+                # never as one vague type. `safe_reason` drops a URL query and every key-like value (#2933).
+                self.log(f"voiced: clip {step} failed: {safe_reason(x)} for {mid}")
                 return "failed"
         if not text:
             # An owner message with nothing to transcribe or read is still data, and it is always acknowledged.
@@ -2005,6 +2014,37 @@ def ssl_context(log=None):
     return ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
 
 
+_DAEMON_CONTEXT = None
+
+
+def daemon_context(log=None):
+    """The one SSL context the daemon's HTTPS calls share, built once from `ssl_context()` (#2933).
+
+    The clip download and the Gemini call trust the same bundle as the Socket Mode connection. A python.org build has
+    no default store under launchd, so a call without this context fails its own verification.
+    """
+    global _DAEMON_CONTEXT
+    if _DAEMON_CONTEXT is None:
+        _DAEMON_CONTEXT = ssl_context(log=log)
+    return _DAEMON_CONTEXT
+
+
+_KEY_PARAM = re.compile(r"(?i)\b(key|token|api[_-]?key|x-goog-api-key|access_token|sig|signature|secret)=[^\s&,;\"']*")
+
+
+def safe_reason(error):
+    """The reason of one failed HTTPS call, with any URL query and key-like value removed (#2933).
+
+    A provider or verification message may carry the URL it failed on, and that URL may carry a query. The log keeps
+    the reason and drops the query and every `key=` or `token=` value, so a secret never enters a log line.
+    """
+    reason = getattr(error, "reason", None)
+    text = str(reason if reason is not None else type(error).__name__)
+    text = re.sub(r"\?[^\s\"']*", "", text)
+    text = _KEY_PARAM.sub(lambda m: m.group(1) + "=<redacted>", text)
+    return (text.strip() or type(error).__name__)[:160]
+
+
 async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
     """Answer each new outbox line as soon as it appears, until `stop` is set.
 
@@ -2057,6 +2097,9 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     """
     if isinstance(apps, str):
         apps = {"app": apps}
+    # One context for every HTTPS call of the run, built before the first task names the bundle (#2933). A clip's
+    # download and its transcription then trust the same bundle as the sockets, whatever the Python build.
+    daemon_context(log=daemon.log)
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
@@ -2083,7 +2126,7 @@ async def hear(daemon, app_token, connect=None, open_connection=None, stop=None)
     if open_connection is None:
         open_connection = lambda: channels.api(app_token, "apps.connections.open", {}, post=True)  # noqa: E731
 
-    context = ssl_context(log=daemon.log)
+    context = daemon_context()
     wait = 1
     while not (stop is not None and stop.is_set()):
         try:
