@@ -457,7 +457,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .sltsub{margin:0 0 8px;font-size:var(--fs-caption);color:var(--mute)}
 /* The channel conversation (#2917): a person's message on the left, the persona's on the right, a plain fact between. */
 #sbody .slconv{display:flex;flex-direction:column;gap:8px;max-width:640px}
-#sbody .slcb{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:12px;max-width:85%;font-size:var(--fs-body);color:var(--fg)}
+#sbody .slcb{display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:var(--radius-xl);max-width:85%;font-size:var(--fs-body);color:var(--fg)}
 #sbody .slcb.in{align-self:flex-start;background:var(--inset);border:1px solid var(--line)}
 #sbody .slcb.out{align-self:flex-end;background:var(--bubble);border:1px solid var(--bubble-line)}
 #sbody .slcb.out.draft{border-style:dashed}
@@ -468,7 +468,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 /* The channel verdict answers first (#2912): one sentence above the Now tiles, in the body size. The copy-id control
    keeps the Slack id reachable with no id in the subtitle. */
 #sbody .sltverdict{margin:0 0 12px;font-size:var(--fs-body);font-weight:600;color:var(--fg);max-width:72ch}
-#sbody .sltids{margin:-4px 0 8px}#sbody .sltcopy{min-height:24px;padding:0 8px;font-size:var(--fs-caption)}
+#sbody .sltids{margin:-4px 0 8px}#sbody .sltcopy{padding:0 8px;font-size:var(--fs-caption)}   /* the copy button keeps the token control height: 32px on the desktop and 44px on the phone */
 #sbody .slttext{margin:0 0 8px;font-size:var(--fs-body);color:var(--mute);max-width:72ch}
 #tab-set #sbody .sltnow{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));max-width:1080px}   /* a count the block does not name still fills one row; the named rules below set the exact columns (#2841). Both ids outrank the generic two-column `.now` */
 #tab-set #sbody .sltn5{grid-template-columns:repeat(5,minmax(0,1fr))}   /* a channel's five tiles take one row at a desktop width (#2841) */
