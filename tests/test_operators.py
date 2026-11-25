@@ -356,10 +356,24 @@ def test_the_full_pass_never_fails_for_a_project_with_no_checkout(tmp_path, monk
     assert set(record(tmp_path)) == {"dm", "acme-widget"}, record(tmp_path)
 
 
+def profiles_folder(tmp_path, monkeypatch, *projects):
+    """The profiles folder the seam reads, with one project profile per name and always the template."""
+    folder = tmp_path / "profiles"
+    folder.mkdir(exist_ok=True)
+    (folder / "example.sh").write_text(': "${SG_REPO:=owner/repo}"\n')
+    for name in projects:
+        checkout = tmp_path / "checkouts" / name
+        checkout.mkdir(parents=True, exist_ok=True)
+        (folder / f"{name}.sh").write_text(f': "${{SG_REPO:=acme/{name}}}"\n: "${{SG_CHECKOUT:={checkout}}}"\n')
+    monkeypatch.setenv("SG_PROFILES_DIR", str(folder))
+    return folder
+
+
 def test_a_pass_that_finds_no_project_names_the_channel_maps_mismatch(tmp_path, monkeypatch, capsys):
     """#2957: the hub lists no project while the channel map names one, as a deploy whose profiles folder holds only
     example.sh does. The pass starts nothing, and the error log names the mismatch instead of staying silent."""
     op = operators(tmp_path, monkeypatch)
+    profiles_folder(tmp_path, monkeypatch)            # the documented cause: the folder holds only example.sh
     hub(tmp_path, monkeypatch, op, [])                # the hub seam answers: no profile names a repository
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
     scenario(tmp_path, [])
@@ -367,6 +381,52 @@ def test_a_pass_that_finds_no_project_names_the_channel_maps_mismatch(tmp_path, 
     assert set(record(tmp_path)) == {"dm"}, record(tmp_path)   # only the owner's own session starts
     err = capsys.readouterr().err
     assert "acme/widget" in err and "no project" in err, err
+
+
+def test_a_pass_with_no_project_and_no_channel_map_reports_no_fault(tmp_path, monkeypatch, capsys):
+    """#2957: a configuration with no project is valid, so a pass with no channel map and no hub project names no
+    mismatch: the error log stays empty."""
+    op = operators(tmp_path, monkeypatch)
+    profiles_folder(tmp_path, monkeypatch)            # the template alone is a valid configuration here
+    hub(tmp_path, monkeypatch, op, [])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_a_pass_the_hub_answers_for_reports_no_fault(tmp_path, monkeypatch, capsys):
+    """#2957: when the hub names a project there is no mismatch, so the error log stays empty."""
+    op = operators(tmp_path, monkeypatch)
+    profiles_folder(tmp_path, monkeypatch, "widget")
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_a_profiles_folder_with_a_project_is_no_mismatch(tmp_path, monkeypatch, capsys):
+    """#2957: the owner's own profiles folder is a valid configuration even when the hub names no project, so the pass
+    prints no fault line; the warning is for the example-only folder alone."""
+    op = operators(tmp_path, monkeypatch)
+    profiles_folder(tmp_path, monkeypatch, "widget")   # a project profile the owner wrote on purpose
+    hub(tmp_path, monkeypatch, op, [])                # the hub seam answers no project this pass
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_a_profiles_folder_with_a_project_starts_its_session(tmp_path, monkeypatch):
+    """Criterion 2 (#2957): the agents read their projects from SG_PROFILES_DIR, so a folder with a project profile
+    makes the pass start one session for that project, through the hub seam production reads."""
+    op = operators(tmp_path, monkeypatch)
+    profiles_folder(tmp_path, monkeypatch, "widget")   # acme/widget, checkout under the tmp tree
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert "acme-widget" in record(tmp_path), record(tmp_path)
+    assert any("SQUAD-OPERATOR-acme-widget" in c for c in started(tmp_path)), calls(tmp_path)
 
 
 def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tmp_path, monkeypatch):

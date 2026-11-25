@@ -400,13 +400,30 @@ def registry(state, repo=REPO, found=None):
     return units
 
 
+def example_only_profiles():
+    """True when the profiles folder is unset or holds no profile but `example.sh`: the documented cause of #2957.
+
+    The folder is the one the hub seam reads, `SG_PROFILES_DIR` or the profiles folder beside `address.sh`. A folder
+    with any other profile is a configuration the owner wrote on purpose, so a hub that lists no project is not this
+    fault, and the pass reports nothing."""
+    folder = os.environ.get("SG_PROFILES_DIR") or os.path.normpath(
+        os.path.join(HERE, "..", "squad-goal", "scripts", "profiles"))
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return True                                # a folder that is not there holds no project to read
+    return not any(n.endswith(".sh") and n != "example.sh" for n in names)
+
+
 def report_no_project(units, found):
     """Name the mismatch in the error log: the channel map asks for a project the hub does not list (#2957).
 
     A deploy whose agents read the wrong profiles folder finds only `example.sh`, so the hub names no project while
-    `channels.json` names one. The pass starts no session for it, and this line says why instead of staying silent."""
+    `channels.json` names one. The pass starts no session for it, and this line says why instead of staying silent.
+    The line prints only for that cause: a folder the owner filled with projects is a valid configuration, and a pass
+    over it reports no fault (#2957)."""
     named = [u.get("repo") or u["key"] for u in units if u["key"] != DM]
-    if found or not named:
+    if found or not named or not example_only_profiles():
         return
     print(f"operators: the hub names no project, but the channel map names {len(named)}: {', '.join(named)}; "
           "check SG_PROFILES_DIR and address.sh --list", file=sys.stderr)
