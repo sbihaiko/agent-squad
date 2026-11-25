@@ -9,7 +9,8 @@ only a fallback (#2855).
 
 A shadow poll (the default) records each decision in the shadow record and makes no write call. A session that passes
 its deadline is killed, its channel stays due, and the next tick polls it again. The runner logs one line per poll: the
-channel id and the decision count. It never logs message text.
+channel id and the decision count, and a failed poll also names the status fields of the CLI answer (#2867). It never
+logs message text or result text.
 
 The runner starts and stops by profile: `start` spawns `run` as a detached process and records its pid in the state
 folder, and `stop` signals that pid.
@@ -49,7 +50,8 @@ class RunnerError(Exception):
 
 
 class SessionFailed(Exception):
-    """A session exited non-zero, or its result holds no page. The reason names no message text."""
+    """A session exited non-zero, or its result holds no page. The reason names the status fields of the CLI answer, so
+    a failed poll names its cause, and it holds no message text and no result text (#2867)."""
 
 
 def shape_of(value):
@@ -186,6 +188,45 @@ def session_answer(answer):
     return json.loads(fenced.group(1) if fenced else text)
 
 
+CAUSE_FIELDS = ("subtype", "api_error_status", "terminal_reason", "stop_reason", "num_turns")
+_NOT_JSON = object()    # the CLI's stdout is not JSON at all, so the answer carries no field to name
+
+
+def answer_of(text):
+    """The JSON value the CLI printed, with the parse error of a text that is not JSON. `_NOT_JSON` stands for that text,
+    and a JSON value that is not an object is still an answer the session made. The caller keeps the error so the
+    `SessionFailed` it raises from _NOT_JSON stays chained to the `JSONDecodeError` that caused it (#2867)."""
+    try:
+        return json.loads(text), None
+    except (ValueError, TypeError) as e:
+        return _NOT_JSON, e
+
+
+def answer_cause(outer):
+    """The metadata of one CLI answer that names why its session failed (#2867): its status fields, and no text. The
+    result text, the answer's error text and every message stay out, so the runner log names a cause and never content.
+    A field whose value is not scalar is named by its type, so a present-but-unprintable field still tells absent from
+    present."""
+    if not isinstance(outer, dict):
+        return ""
+    parts = []
+    for key in CAUSE_FIELDS:
+        value = outer.get(key)
+        if isinstance(value, bool):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, (str, int, float)):
+            parts.append(f"{key}={value}")
+        elif isinstance(value, (list, dict)):
+            parts.append(f"{key}=<{type(value).__name__}>")
+    return " ".join(parts)
+
+
+def _failed(reason, outer=None):
+    """One failure reason with the answer's metadata appended, so a failed poll names its cause (#2867)."""
+    cause = answer_cause(outer)
+    return f"{reason} ({cause})" if cause else reason
+
+
 def run_session(argv, folder, runner=subprocess.run, env=None):
     """Run one session and return the page it read. The page the read tool returned, kept by the `PostToolUse` hook, wins
     over the session's final answer: the model reformats the page and the shape of its answer varies (#2855). A non-zero
@@ -197,27 +238,27 @@ def run_session(argv, folder, runner=subprocess.run, env=None):
     kept = None
     try:
         done = runner(argv, cwd=folder, capture_output=True, text=True, timeout=DEADLINE, env=env, check=False)
+        outer, parse_error = answer_of(done.stdout)
         if done.returncode != 0:
-            raise SessionFailed(f"exit {done.returncode}")
+            raise SessionFailed(_failed(f"exit {done.returncode}", outer))
         kept = read_page(page)
     finally:
         discard_page(page)
     if kept is not None:
         return kept
-    try:
-        outer = json.loads(done.stdout)
-    except (ValueError, TypeError) as e:
-        raise SessionFailed("no page in the result: the CLI answer is not JSON") from e
+    if outer is _NOT_JSON:
+        raise SessionFailed("no page in the result: the CLI answer is not JSON") from parse_error
     if not isinstance(outer, dict) or outer.get("is_error") or outer.get("error"):
-        raise SessionFailed("the session answered an error")
+        raise SessionFailed(_failed("the session answered an error", outer))
     try:
         result = session_answer(outer.get("result"))
     except (ValueError, TypeError) as e:
-        raise SessionFailed(f"no page in the result: the answer is not JSON ({shape_of(outer.get('result'))})") from e
+        raise SessionFailed(_failed(f"no page in the result: the answer is not JSON "
+                                    f"({shape_of(outer.get('result'))})", outer)) from e
     if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
-        raise SessionFailed("the session answered an error")
+        raise SessionFailed(_failed("the session answered an error", outer))
     if P.read_failed(result):
-        raise SessionFailed(f"no page in the result: {shape_of(result)}")
+        raise SessionFailed(_failed(f"no page in the result: {shape_of(result)}", outer))
     return P.messages_of(result)
 
 
