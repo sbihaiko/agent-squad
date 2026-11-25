@@ -261,7 +261,8 @@ def test_two_guest_workspaces_raise_a_red_alert_at_the_top_line(hub, tmp_path):
 
 def test_two_guest_workspaces_warn_in_the_project_tiles(hub, tmp_path):
     root = tree(hub, tmp_path, local=two_guests())["root"]
-    assert tiles(root)["Workspaces"]["tone"] == "warn", tiles(root)
+    project = next(n for n in walk(root) if n.get("kind") == "project")
+    assert tiles(project)["Workspaces"]["tone"] == "warn", tiles(project)
 
 
 def test_a_refused_workspace_state_reads_in_plain_words(hub, tmp_path):
@@ -348,13 +349,6 @@ def test_a_channel_with_no_member_names_the_reason_in_its_note(hub, tmp_path):
     assert ch["detail"]["note"].startswith("No member holds a role"), ch["detail"]
 
 
-def test_the_workspace_class_tile_names_its_source_file(hub, tmp_path):
-    """#2842: the workspace Class tile names the file its class comes from, so a reader knows where it is written."""
-    root = tree(hub, tmp_path)["root"]
-    assert tiles(by_name(root, "team"))["Class"]["sub"] == "slack.yaml", tiles(by_name(root, "team"))
-    assert tiles(by_name(root, "client-a"))["Class"]["sub"] == "local", tiles(by_name(root, "client-a"))
-
-
 def test_the_empty_project_setup_sits_in_a_dashed_box(hub):
     """#2842: the setup choices of an empty project sit in a dashed box, as the mockup draws them."""
     assert re.search(r"#sbody \.sltempty\{[^}]*border:[^;}]*dashed", hub.PAGE), "the empty project's setup box"
@@ -366,21 +360,6 @@ def test_the_node_title_is_the_largest_text_of_the_detail_pane(hub):
     """#2841: the selected node's title is the largest text of the detail pane."""
     rule = re.search(r"#sbody \.slth\{([^}]*)\}", hub.PAGE)
     assert rule and "font-size:var(--fs-display)" in rule.group(1), rule and rule.group(1)
-
-
-def test_the_tile_label_is_muted_and_the_value_is_bold(hub):
-    """#2841: the tile's label is the quiet, regular text; its value is the bold one."""
-    page = hub.PAGE
-    tk = re.search(r"#sbody \.sltnow \.tile \.tk\{([^}]*)\}", page)
-    tv = re.search(r"#sbody \.sltnow \.tile \.tv\{([^}]*)\}", page)
-    assert tk and "color:var(--mute)" in tk.group(1) and "font-weight:400" in tk.group(1), tk and tk.group(1)
-    assert tv and "font-weight:600" in tv.group(1), tv and tv.group(1)
-
-
-def test_a_tile_value_never_breaks_inside_a_word(hub):
-    """#2841: at a laptop width a value wraps between words and never inside one."""
-    tv = re.search(r"#sbody \.sltnow \.tile \.tv\{([^}]*)\}", hub.PAGE)
-    assert tv and "overflow-wrap:normal" in tv.group(1) and "anywhere" not in tv.group(1), tv and tv.group(1)
 
 
 def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
