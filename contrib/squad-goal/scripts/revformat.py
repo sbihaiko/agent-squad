@@ -624,7 +624,7 @@ def repro_check(path, checkout, sha, base=None, prev=None):
     (REPRO_NO_SANDBOX) proved nothing: the finding stays Blocking and the reason is printed.
 
     #2565: with `base` (TREE, SHA), a repro red at the head also runs at the base, in TREE, within REPRO_BASE_BUDGET for
-    all base runs, each capped at the budget left. Green at the base: the finding stays Blocking. Red at the base: it stays Blocking with "repro also fails
+    all base runs, each capped at the budget left. Green at the base: the finding stays Blocking with "repro passes at base <sha> and fails at head <sha>" (#2869). Red at the base: it stays Blocking with "repro also fails
     at base <sha>", unless the previous answer `prev` (ANSWER, SHA) holds the same repro in its Blocking findings and SHA
     is another head; then it moves to Debt, naming the base and both heads. A base run that proves nothing keeps the finding Blocking, and the
     reason is printed.
@@ -663,7 +663,7 @@ def repro_check(path, checkout, sha, base=None, prev=None):
                 brc = run_repro(item[REPRO], btree, min(REPRO_TIMEOUT, REPRO_BASE_BUDGET - spent))
                 spent += time.monotonic() - t0
                 if brc == 0:
-                    blocking.append(item)
+                    blocking.append(dict(item, failure=f"repro passes at base {bsha} and fails at head {sha}; {item['failure']}"))
                     continue
                 if brc == REPRO_REFUSED:
                     why = "repro sandbox refused (sandbox-exec exit 71)"

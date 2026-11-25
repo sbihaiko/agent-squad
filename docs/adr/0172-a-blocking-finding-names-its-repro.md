@@ -33,7 +33,7 @@ check: a line that exits non-zero while the defect is present.
    A repro that fails at the head also runs at the base: the merge-base of the head and the base ref, never the base tip,
    in a throwaway worktree of it that is removed after the run; never in the checkout or the reviewed tree. A repro runs
    once at the head in a review. The base runs share one budget per review, and each base run is capped at the budget
-   left. A repro that exits 0 at the base keeps its finding Blocking. A repro that fails at the base
+   left. A repro that exits 0 at the base keeps its finding Blocking, with a note that the repro passes at the base and fails at the head; the fix-round prompt tells the reviewer that such a finding is resolved when the branch added the fix the repro detects, a repro with inverted polarity. A repro that fails at the base
    too keeps its finding Blocking on its first round, marked with the base sha, because a missing behavior also fails at
    the base. When the previous round's answer holds the same repro, its whitespace normalized, in its Blocking findings,
    and the previous head is a strict ancestor of the head, the repro fails at every tree the branch has shown, so no fix can clear it: the finding moves to Debt, marked with the
