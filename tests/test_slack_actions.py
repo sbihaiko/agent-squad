@@ -119,6 +119,13 @@ def audit(state):
         return [json.loads(line) for line in f if line.strip()]
 
 
+def skips(state):
+    """The byte-range skip rows, which live in their own file so the run audit keeps one row shape."""
+    path = os.path.join(state, A.SKIPS)
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
 def test_the_session_writes_one_request_with_the_line_the_sender_the_channel_and_the_action():
     """Criterion 1: the request holds the inbox line id, the sender, the channel and one action id."""
     record = A.request_record("status", channel=CHANNEL, sender=OWNER, source=MID)
@@ -946,9 +953,9 @@ def test_a_session_clock_ahead_of_the_daemon_does_not_keep_a_request_fresh(tmp_p
     assert "future" in audit(state)[0]["error"]
 
 
-def test_a_request_the_daemon_did_not_observe_within_the_window_never_runs(tmp_path):
-    """Debt 4: the age comes from the daemon's own observation, not from the line. The last pass read the outbox
-    longer ago than the window, so a line found past that place could be older than the window and never runs."""
+def test_a_request_written_now_runs_when_the_kept_reading_is_older_than_the_window(tmp_path):
+    """Blocking 1: the kept reading is older than the window, so it vouches for no age, and the line's own `at` is the
+    sole age bound. A request written now runs; a fresh request is never refused as stale for a quiet outbox."""
     state = str(tmp_path)
     path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -957,11 +964,30 @@ def test_a_request_the_daemon_did_not_observe_within_the_window_never_runs(tmp_p
         f.write("")                                     # an empty outbox the pass read before
     with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
         f.write(json.dumps({path: {"offset": 0, "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}}))
-    ask(state, at=NOW.timestamp())                      # the line itself claims it is fresh
+    ask(state, at=NOW.timestamp())                      # the line itself says it is fresh
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+    assert "did not read" not in audit(state)[0]["error"], audit(state)[0]["error"]
+
+
+def test_a_stale_line_is_refused_by_its_own_time_when_the_kept_reading_is_older_than_the_window(tmp_path):
+    """Blocking 1: when the kept reading is older than the window the line's own `at` is the sole age bound, so a line
+    past its own window still never runs."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    inbox(state)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # an empty outbox the pass read before
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0, "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}}))
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)   # the line's own `at` is past the window
     runner = Runner()
     assert run(state, runner) == ()
     assert runner.calls == []
-    assert "did not read" in audit(state)[0]["error"], audit(state)[0]["error"]
+    assert "older than" in audit(state)[0]["error"], audit(state)[0]["error"]
 
 
 def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
@@ -982,10 +1008,12 @@ def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
     runs = run(state, runner)
     assert [r.action for r in runs] == ["status"], runs
     assert len(runner.calls) == 1
-    skipped = [row for row in audit(state) if row.get("skipped")]
-    assert len(skipped) == 1, audit(state)
-    assert skipped[0]["skipped"]["bytes"] > 0 and skipped[0]["skipped"]["from"] == 0, skipped[0]
-    assert "did not read" in skipped[0]["error"], skipped[0]["error"]
+    rows = skips(state)
+    assert len(rows) == 1, rows
+    assert rows[0]["skipped"]["bytes"] > 0 and rows[0]["skipped"]["from"] == 0, rows[0]
+    assert "did not read" in rows[0]["error"], rows[0]["error"]
+    # The skip lives in its own file, so the run audit keeps one row shape and no skip row leaks into it.
+    assert [row for row in audit(state) if "skipped" in row] == [], audit(state)
 
 
 def test_a_quiet_outbox_read_again_keeps_its_observation_fresh(tmp_path):
@@ -1068,3 +1096,87 @@ def test_a_pending_reply_whose_channel_no_project_owns_is_held_and_then_dropped(
         left = [json.loads(line) for line in f if line.strip()]
     assert [row["reply"]["thread_ts"] for row in left] == ["1.0"], left     # the fresh row waits, the stale one is gone
     assert sum("no project owns" in line for line in log) == 2, log
+
+
+def test_a_non_json_outbox_line_is_logged_and_skipped(tmp_path):
+    """Debt 2: a line the pass scans that is not JSON leaves no request and is logged, so a malformed line is never
+    dropped silently. The message is the one `voiced.read_outbox_answers` uses."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("this is not json\n")
+    log = []
+    runner = Runner()
+    assert A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner, log=log.append) == ()
+    assert runner.calls == []
+    assert any("outbox line skipped, the line is not JSON" in line for line in log), log
+
+
+def test_a_text_action_with_no_declared_command_names_the_missing_command(tmp_path):
+    """Debt 3: a text action the project declares no command for says the project declares no such command, never that
+    the action never runs through project.actions."""
+    state = str(tmp_path)
+    inbox(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["actions"] = ["status", "logs"]     # the manager's role grants `logs`, so the grant passes
+    ask(state, action="logs")
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "declares no logs command" in text, text
+    assert "never runs through project.actions" not in text, text
+
+
+def test_a_loop_control_refusal_names_the_missing_project_actions_source():
+    """Debt 3: approve_and_move and loop_control keep their own executor path, so their refusal says the action never
+    runs through project.actions and no command stands in for the source it needs."""
+    text = A.refusal_text("loop_control", "source: the loop_control action needs a loop switch source")
+    assert "project.actions" in text, text
+    assert "no command stands in for the source it needs" in text, text
+    # A text action keeps the other wording: the project simply declares no command for it.
+    assert "declares no status command" in A.refusal_text("status", "source: the status action needs a status source")
+
+
+def test_a_pending_row_whose_reply_is_not_an_object_is_logged_and_dropped(tmp_path):
+    """Debt 4: a pending row whose reply is not one object is dropped with one log line, mirroring the request case, so
+    a corrupted row is never lost silently."""
+    state = str(tmp_path)
+    pending_path = os.path.join(state, A.PENDING)
+    A._write_lines(pending_path, [{"channel": CHANNEL, "reply": "not an object", "at": NOW.timestamp()}])
+    log = []
+    A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=Runner(), log=log.append)
+    assert any("not one JSON object" in line for line in log), log
+    with open(pending_path, encoding="utf-8") as f:
+        assert [line for line in f if line.strip()] == []
+
+
+def test_a_request_whose_sender_differs_replies_with_the_identity_mismatch_text(tmp_path):
+    """Debt 5: a request whose sender differs from the inbox line's sender is refused with its own check, and the reply
+    names the mismatch instead of claiming the channel gives no role."""
+    state = str(tmp_path)
+    inbox(state, user=PEER)
+    ask(state, sender=OWNER)                    # the owner is a manager, so the grant is not the reason
+    runs = run(state)
+    assert runs[0].error.startswith("identity_mismatch:"), runs[0].error
+    assert "grant" not in runs[0].error, runs[0].error
+    assert replies(state)[0]["text"] == "The request names a different sender than the message it answers."
+
+
+def test_a_skip_row_is_written_to_its_own_file_not_the_run_audit(tmp_path):
+    """Debt 6: a byte-range skip is written to actions-skips.jsonl, so actions-audit.jsonl keeps one row shape and no
+    empty-field skip row lands in the run audit."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(("x" * 2000 + "\n") * 800)      # a history past the bounded first read
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    assert len(skips(state)) == 1, skips(state)
+    assert [row for row in audit(state) if "skipped" in row] == [], audit(state)
