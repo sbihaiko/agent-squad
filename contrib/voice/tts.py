@@ -3,7 +3,7 @@
 Vendored from the `slack-hal9k` skill, so this repository runs and times the pipeline it ships. A caller finds it by name
 with `python3 -m squad.skillpath --script tts.py` (squad/skillpath.py) and never by a path.
 
-usage: tts.py <text> [--voice Kore] [--tone STYLE] [--out /tmp/say.wav] [--service <keychain service>]
+usage: tts.py <text> [--voice Charon] [--tone STYLE] [--out /tmp/say.wav] [--service <keychain service>]
 
 The key comes from the macOS Keychain first, then GOOGLE_API_KEY in the project's .env, then in a sibling project's .env
 — the sibling is named with --sibling-env or SG_TTS_SIBLING (default: the agent-squad checkout beside this skill's
@@ -94,10 +94,10 @@ def synth(key, text, voice, out, tone=""):
 
 def main(argv):
     if not argv:
-        print("usage: tts.py <text> [--voice Kore] [--tone STYLE] [--out file.wav] [--project <slug>] [--service S] [--sibling-env PATH]",
+        print("usage: tts.py <text> [--voice Charon] [--tone STYLE] [--out file.wav] [--project <slug>] [--service S] [--sibling-env PATH]",
               file=sys.stderr)
         return 2
-    text, voice, tone, out, project, service, sibling = "", "Kore", "", "/tmp/hal9k-say.wav", "agent-squad", None, None
+    text, voice, tone, out, project, service, sibling = "", "Charon", "", "/tmp/hal9k-say.wav", "agent-squad", None, None
     rest = list(argv)
     i = 0
     while i < len(rest):
