@@ -126,11 +126,17 @@ def listing():
     items = out if isinstance(out, list) else out.get("agents", out.get("sessions", []))
     rows = []
     for a in items:
-        sid = a.get("sessionId") or a.get("id")
+        sid = a.get("id") or a.get("sessionId")   # the short id: `claude --bg` prints it and `claude stop` takes it
         if sid:
             rows.append({"id": str(sid), "pid": a.get("pid"), "name": a.get("name") or "", "cwd": a.get("cwd") or "",
                          "started": a.get("startedAt") or 0})
     return rows
+
+
+def short_id(sid):
+    """The short form of a session id: the first group of a full id, or the id itself. A record an older build wrote
+    holds the full id, and the CLI lists the short one, so both name the same session."""
+    return str(sid or "").split("-")[0]
 
 
 def folder_for(name):
@@ -623,7 +629,7 @@ def plan(state, units, sessions, record, stopped, now=None):
     purpose. A `restarts` entry is (unit, session, why): the session is listed but took no turn (#2923).
     """
     now = time.time() if now is None else now
-    live = {s["id"]: s for s in sessions}
+    live = {short_id(s["id"]): s for s in sessions}
     owned = {}
     for s in sessions:
         key = carried(s.get("name"))
@@ -645,7 +651,7 @@ def plan(state, units, sessions, record, stopped, now=None):
             stops.extend((s["id"], key) for s in mine[1:])
             mine = mine[:1]
         if not mine:
-            if held.get("id") in live:
+            if short_id(held.get("id")) in live:
                 clears.append(key)                 # the CLI lists it but it carries no token: it is not ours
                 continue
             if not held.get("id"):                 # a project the record never held: nothing to keep, nothing to count
@@ -659,7 +665,7 @@ def plan(state, units, sessions, record, stopped, now=None):
                 record[key] = {**held, "missing": missing}
             continue
         only = mine[0]
-        if held.get("id") == only["id"]:
+        if short_id(held.get("id")) == short_id(only["id"]):
             why = stalled(state, unit, only, now)  # a listed session that took no turn is dead, not alive (#2923)
             if why:
                 restarts.append((unit, only, why))

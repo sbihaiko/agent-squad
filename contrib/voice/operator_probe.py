@@ -287,7 +287,8 @@ def bg_listed(cli, sid, work, name):
     for row in items:
         if not isinstance(row, dict):
             continue
-        if (row.get("sessionId") or row.get("id")) == sid and (row.get("name") or "") == name:
+        ids = {str(row.get("id") or ""), str(row.get("sessionId") or "").split("-")[0]}
+        if str(sid).split("-")[0] in ids and (row.get("name") or "") == name:   # the CLI prints the short id
             return True
     return False
 
