@@ -4,6 +4,7 @@ bound. A fake CLI never stands in for the permission boundary, so the denial cas
 import importlib.util
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -260,8 +261,9 @@ def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
 
 
 def test_a_bg_session_starts_in_the_projects_own_service(tmp_path, monkeypatch):
-    """#2943: the `--bg` call and the roster read and stop that follow it carry the project's own service root, so the
-    probe exercises the service the supervisor starts, never the owner's shared one."""
+    """#2943: the `--bg` call and the stop that follows it carry the project's own service root, so the probe exercises
+    the service the supervisor starts, never the owner's shared one. The roster read carries none, as the supervisor's
+    read does: the CLI lists every session of the machine whatever root it is given (measured)."""
     probe = load("operator_probe")
     service = str(tmp_path / "service")
     seen = []
@@ -279,7 +281,10 @@ def test_a_bg_session_starts_in_the_projects_own_service(tmp_path, monkeypatch):
     probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", service=service)
     assert seen
     for argv, env in seen:
-        assert env.get("TERMUX_VERSION") == "1" and env.get("PREFIX") == service, (argv, env)
+        if argv[1] == "agents":
+            assert env.get("TERMUX_VERSION") is None and "PREFIX" not in env, (argv, env)
+        else:
+            assert env.get("TERMUX_VERSION") == "1" and env.get("PREFIX") == service, (argv, env)
 
 
 def test_an_untrusted_workspace_names_the_one_folder_to_trust(tmp_path, monkeypatch):
@@ -606,6 +611,60 @@ def test_the_probe_proves_the_shared_service_is_out_of_reach(tmp_path, monkeypat
     monkeypatch.setattr(probe, "sandboxed", scripted(probe, service_open=True))
     with pytest.raises(probe.ProbeFailed, match="shared service"):
         probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+
+
+def test_the_control_socket_name_is_one_constant_beside_the_service_env(tmp_path, monkeypatch):
+    """#2943: the probe derives the CLI's control socket from one constant, so the name the shared root refuses and
+    the name the project's own root reaches can never drift apart."""
+    probe = load("operator_probe")
+    ops = probe.operators
+    assert ops.CONTROL_SOCKET == "control.sock"
+    monkeypatch.setattr(ops, "CONTROL_SOCKET", "probe-control.sock")
+    seen = []
+
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        seen.append(args[-1])
+        if args[-1].startswith(os.path.join(ops.daemon_root(), "")):
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        return subprocess.CompletedProcess(args, 1, "", "No such file or directory\n")
+
+    monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
+    service = str(tmp_path / "service")
+    shared = probe.service_denial(tmp_path, "(version 1)(allow default)", service)
+    assert shared == os.path.join(ops.daemon_root(), "probe-control.sock"), shared
+    assert seen == [shared, os.path.join(service, "probe-control.sock")], seen
+
+
+def test_the_service_denial_requires_the_projects_own_root(tmp_path):
+    """#2943: with no root the positive control is skipped, so the denial alone would pass a profile that refuses
+    every service. The project's root is required."""
+    probe = load("operator_probe")
+    with pytest.raises(TypeError):
+        probe.service_denial(tmp_path, "(version 1)(allow default)")
+
+
+def test_the_probe_roster_read_carries_no_service_root(tmp_path, monkeypatch):
+    """#2943: the supervisor reads the roster with no service root, because the CLI lists every session of the machine
+    whatever root it is given (measured). The probe's own read mirrors the supervisor."""
+    probe = load("operator_probe")
+    service = str(tmp_path / "service")
+    envs = []
+
+    def fake_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        return subprocess.CompletedProcess(args, 0, "b5ccaeeb-0000-0000-0000-000000000001\n", "")
+
+    def fake_run(argv, **kwargs):
+        envs.append(kwargs.get("env") or {})
+        row = {"id": "b5ccaeeb", "sessionId": "b5ccaeeb-0000-0000-0000-000000000001",
+               "name": f"SQUAD-OPERATOR-{probe.PROBE_KEY}"}
+        return subprocess.CompletedProcess(argv, 0, json.dumps([row]), "")
+
+    monkeypatch.setattr(probe, "sandboxed", fake_sandboxed)
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", service=service)
+    roster = [env for env in envs if env.get("TERMUX_VERSION") is None]
+    assert roster, envs
+    assert all("PREFIX" not in env for env in roster), envs
 
 
 @pytest.mark.sandbox_bound
@@ -991,8 +1050,9 @@ def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypa
     profile, and each is refused."""
     probe = load("operator_probe")
     home = owner_home(tmp_path)
-    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
-    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+    monkeypatch.setattr(probe, "config_root", lambda: str(tmp_path / "config"))
+    monkeypatch.setattr(probe, "sandboxed", config_stub(probe, []))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
     assert sorted(os.path.basename(p) for p in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
     assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
 
@@ -1002,7 +1062,7 @@ def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_
     home = owner_home(tmp_path)
     monkeypatch.setattr(probe, "sandboxed", scripted(probe, config_open=True))
     with pytest.raises(probe.ProbeFailed, match="may write"):
-        probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+        probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
 
 
 def test_the_probe_denies_a_write_to_the_owner_global_config_file(tmp_path, monkeypatch):
@@ -1010,10 +1070,79 @@ def test_the_probe_denies_a_write_to_the_owner_global_config_file(tmp_path, monk
     probe proves the profile refuses a write to it, beside the settings files under the Claude home."""
     probe = load("operator_probe")
     home = owner_home(tmp_path)
-    (home / ".claude.json").write_text("{}\n")
-    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
-    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+    monkeypatch.setattr(probe, "config_root", lambda: str(tmp_path / "config"))
+    monkeypatch.setattr(probe, "sandboxed", config_stub(probe, []))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
     assert str(home / ".claude.json") in tried, tried
+
+
+def config_stub(probe, starts, touch_owner=None):
+    """A sandbox stand-in for `config_denials`: the append is the kernel's refusal, and a CLI start answers its events,
+    writing the owner's global config file only when `touch_owner` names it."""
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        if cli not in ("/bin/sh", sys.executable):
+            starts.append(list(args))
+            if touch_owner is not None:
+                Path(touch_owner).write_text("{}\n")
+            out = "\n".join([json.dumps({"type": "system", "subtype": "init", "tools": probe.TOOLS.split(","),
+                                         "permissionMode": "dontAsk"}),
+                             json.dumps({"type": "result", "subtype": "success", "is_error": False})]) + "\n"
+            return subprocess.CompletedProcess(args, 0, out, "")
+        if probe.OPEN_FOR_WRITE in args:
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        raise AssertionError(f"an unexpected probe call: {args}")
+    return run_sandboxed
+
+
+def test_config_denials_runs_a_start_that_costs_the_owner_file_nothing(tmp_path, monkeypatch):
+    """#2942 AC1: the owner's global config file is refused, and one start under the same profile still succeeds and
+    leaves that file untouched: the CLI keeps its state under the config root it is given. A deny that cost the
+    session its start fails the probe here."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(probe, "config_root", lambda: str(cfg))
+    owner = home / ".claude.json"
+    before = (owner.stat().st_mtime_ns, owner.stat().st_size)
+    starts = []
+    monkeypatch.setattr(probe, "sandboxed", config_stub(probe, starts))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
+    assert sorted(os.path.basename(path) for path in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
+    assert len(starts) == 1, starts
+    assert (owner.stat().st_mtime_ns, owner.stat().st_size) == before, "the start wrote the owner's global config file"
+
+
+def test_config_denials_fails_when_the_start_writes_the_owners_global_config_file(tmp_path, monkeypatch):
+    """#2942 AC1: the deny is harmless only while the start keeps its state under the config root. A start that writes
+    the owner's global config file proves the profile does not divert it, so the probe fails."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(probe, "config_root", lambda: str(cfg))
+    monkeypatch.setattr(probe, "sandboxed", config_stub(probe, [], touch_owner=home / ".claude.json"))
+    with pytest.raises(probe.ProbeFailed, match="wrote the owner's global config file"):
+        probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
+
+
+def test_config_denials_fails_when_the_start_under_the_profile_fails(tmp_path, monkeypatch):
+    """#2942 AC1: a session that cannot start under the profile proves nothing, so the probe fails rather than passing
+    on the append refusal alone."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(probe, "config_root", lambda: str(cfg))
+
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        if probe.OPEN_FOR_WRITE in args:
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        return subprocess.CompletedProcess(args, 1, "", "Not logged in\n")
+
+    monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
+    with pytest.raises(probe.ProbeFailed, match="no init or result event"):
+        probe.config_denials(tmp_path, "(version 1)(allow default)", "claude", home=home)
 
 
 def test_the_probe_runs_its_cli_calls_under_the_operator_config_root(tmp_path, monkeypatch):
@@ -1055,13 +1184,22 @@ def test_the_probe_reads_its_roster_under_the_operator_config_root(tmp_path, mon
 
 
 @pytest.mark.sandbox_bound   # a nested refusal says "Operation not permitted" too, so only a real apply proves this (ADR-0139)
+@pytest.mark.claude_bound
 def test_the_real_profile_refuses_the_owners_claude_files(tmp_path, monkeypatch):
-    """The operator's own profile, applied by the kernel, refuses both writes on this machine."""
+    """The operator's own profile, applied by the kernel, refuses both writes on this machine, and the same profile
+    starts one real session under the config root (#2942 AC1)."""
     probe = load("operator_probe")
     if sys.platform != "darwin" or not os.path.exists("/usr/bin/sandbox-exec"):
         pytest.skip("the kernel bound is macOS only")
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(probe, "config_root", lambda: str(cfg))
+    monkeypatch.setattr(probe, "config_env", lambda: {"CLAUDE_CONFIG_DIR": str(cfg),
+                                                      "CLAUDE_SECURESTORAGE_CONFIG_DIR": ""})
     profile = probe.profile_text([str(tmp_path / "out.jsonl")], str(tmp_path / "inboxes"), [],
-                                 config=str(tmp_path / "config"))
-    home = os.path.realpath(os.path.expanduser("~"))
-    tried = probe.config_denials(tmp_path, profile, home=home)
+                                 config=str(cfg))
+    cli = shutil.which("claude")
+    if cli is None:
+        pytest.skip("no claude CLI on this machine")
+    tried = probe.config_denials(tmp_path, profile, cli, home=os.path.realpath(os.path.expanduser("~")))
     assert tried, "this machine holds no owner Claude file to try"
