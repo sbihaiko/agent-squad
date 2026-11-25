@@ -128,7 +128,10 @@ def call(argv, cwd=None, timeout=DEADLINE, env=None):
 
 
 def listing():
-    """Every live session the CLI lists: id, pid, name, cwd and start time, one dict each."""
+    """Every live session the CLI lists: id, pid, name, cwd and start time, one dict each.
+
+    The roster read is the CLI's own and names no service root (#2943): measured with `PREFIX` set, it still lists every
+    session of the machine. The stop is the call that carries the root."""
     try:
         out = json.loads(call([CLI, "agents", "--json"]).stdout or "[]")
     except ValueError as e:
@@ -506,7 +509,22 @@ def daemon_root():
     return os.path.realpath(DAEMON)
 
 
-def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None):
+def service_root(state, key):
+    """The background service root of one project (#2943): a folder under the operator record, so a session reaches
+    the service that started it and no other. The owner's shared root (`daemon_root`) stays outside every profile."""
+    return os.path.realpath(os.path.join(root(state), "services", key))
+
+
+def service_env(service):
+    """The two variables that keep the CLI's background service under one root (#2943). The CLI reads `PREFIX` when it
+    reads `TERMUX_VERSION`, and it puts its run dir and its socket dir under `<PREFIX>/tmp`.
+
+    Every call that must reach that service carries them: the `--bg` start and the stop. The roster read carries none:
+    the CLI lists every session of the machine, whatever root the caller names (#2943, measured)."""
+    return {"TERMUX_VERSION": "1", "PREFIX": str(service)}
+
+
+def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None, service=None):
     """The kernel bound of one operator session: write only its project's outboxes, read only its project's inboxes,
     reach loopback only on the model route (#2925, #2951).
 
@@ -523,13 +541,19 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
     or the proxy's port when the endpoint is remote. It defaults to the endpoint's port, read from
     `ANTHROPIC_BASE_URL`, so no port is guessed.
 
-    The background service (#2768): `claude --bg` reaches the service the CLI already runs, or starts one, so the session
+    The background service (#2768, #2943): `claude --bg` reaches the service the CLI runs, or starts one, so the session
     needs the service's own runtime. It takes `/dev/null` for the ignored stdio of a detached spawn, it writes its run dir
-    and its control socket under `daemon_root()`, and it connects to that socket. Without them the service cannot start
-    and posix_spawn fails with EPERM.
+    and its control socket under `service`, and it connects to that socket. Without them the service cannot start and
+    posix_spawn fails with EPERM. `service` is one project's own root (`service_root`), so the owner's shared service,
+    which starts the sessions no sandbox bounds, stays outside the profile. A caller that names no root gets no service
+    grant at all, never the shared one.
     """
     home = os.path.realpath(os.path.expanduser("~"))
-    daemon = daemon_root()
+    service_dir = os.path.realpath(service) if service else None
+    # The service root is named only when the caller names one: a profile with no service grant refuses every daemon,
+    # so a caller that forgets the root fails closed (#2943).
+    service_write = f' (subpath "{service_dir}")' if service_dir else ""
+    service_net = [f'(allow network-outbound (remote unix-socket (subpath "{service_dir}")))'] if service_dir else []
     outboxes = [outboxes] if isinstance(outboxes, str) else list(outboxes)
     own_inboxes = [own_inboxes] if isinstance(own_inboxes, str) else list(own_inboxes)
     checkout = os.path.realpath(checkout) if checkout else None
@@ -560,7 +584,7 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         "(version 1)",
         "(allow default)",
         "(deny file-write*)",
-        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude") (subpath "{daemon}"))',
+        f'(allow file-write* {devices} {literals(outboxes)} (subpath "{home}/.claude"){service_write})',
         # The owner's MCP configuration sits beside the Claude home, never inside it, so the allow above never covered
         # it and no deny could follow. The owner's next, unsandboxed session loads it (#2942).
         f'(deny file-write* (literal "{home}/.claude.json"))',
@@ -575,7 +599,7 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         f'(allow file-read* {literals(own_inboxes)})',
         "(deny network-outbound)",
         *[f'(allow network-outbound (remote ip "localhost:{port}"))' for port in ports],
-        f'(allow network-outbound (remote unix-socket (subpath "{daemon}")))',
+        *service_net,
     ]) + "\n"
 
 
@@ -644,6 +668,8 @@ def start(unit, state, repo, others=()):
     own_repo = os.path.realpath(repo)
     others = [path for path in others if path and os.path.realpath(path) != own_repo]
     os.makedirs(root(state), exist_ok=True)
+    service = service_root(state, key)            # the project's own background service root, never the shared one (#2943)
+    os.makedirs(service, exist_ok=True)
     outboxes = [os.path.realpath(outbox_path(state, scope)) for scope in unit["channels"]]
     inboxes = os.path.realpath(os.path.join(state, "inboxes"))
     own = [os.path.join(inboxes, f"{scope}.jsonl") for scope in unit["channels"]]
@@ -653,7 +679,7 @@ def start(unit, state, repo, others=()):
         proxy = start_proxy(key, state, host, port)
     ports = [port] if host in LOOPBACK else [proxy["port"]]
     try:
-        profile = profile_text(outboxes, inboxes, own, checkout=checkout, others=others, ports=ports)
+        profile = profile_text(outboxes, inboxes, own, checkout=checkout, others=others, ports=ports, service=service)
         profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
         os.makedirs(os.path.dirname(profile_path), exist_ok=True)
         with open(profile_path, "w", encoding="utf-8") as f:
@@ -661,10 +687,10 @@ def start(unit, state, repo, others=()):
     except OSError:
         retire_proxy({"proxy": proxy})
         raise
-    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]),
+    entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]), "service": service,
              "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()}}
     env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
-    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1"})
+    env.update({"SQUAD_SIGNAL_PROFILE": profile, "SQUAD_CLAUDE_CLI": CLI, SANDBOXED: "1", **service_env(service)})
     if proxy is not None:
         entry["proxy"] = proxy
         env["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy['port']}"
@@ -683,9 +709,25 @@ def start(unit, state, repo, others=()):
     return "", entry
 
 
-def stop(sid):
-    """Stop one session by id. A refusal raises Refused, and the caller keeps ownership and retries later."""
+def stop(sid, service=None):
+    """Stop one session by id, through the service root that started it (#2943).
+
+    A session an older build started lives under the owner's shared service, where the private root finds nothing, so a
+    stop the private root refuses retries the CLI's own service. A stop both services refuse raises Refused, and the
+    caller keeps ownership and retries later."""
+    env = {**os.environ, **service_env(service)} if service else None
+    try:
+        call([CLI, "stop", sid], env=env)
+        return
+    except Refused:
+        if env is None:
+            raise
     call([CLI, "stop", sid])
+
+
+def service_of(state, key, record):
+    """The service root one project's session runs under: the root its record names, else its current root."""
+    return (record.get(key) or {}).get("service") or service_root(state, key)
 
 
 def root(state):
@@ -748,7 +790,7 @@ def plan(state, units, sessions, record, stopped, now=None, ensure=False):
         record[key] = {**held, "adopt": adopt}
         if adopt >= ADOPT_PASSES:
             adopts.append((key, only))
-            kept = {k: held[k] for k in ("profile", "proxy", "checkout", "channels", "name") if k in held}
+            kept = {k: held[k] for k in ("profile", "proxy", "checkout", "channels", "name", "service") if k in held}
             record[key] = {**kept, "id": only["id"], "pid": only["pid"], "started": only["started"], "missing": 0,
                            "adopt": 0}
     for key in sorted(set(record) - set(wanted)):  # a project the registry dropped loses its session
@@ -881,7 +923,7 @@ def run_pass(state, repo, check=False, only=None):
             # A session that took no turn is stopped and replaced in one pass, and ownership drops only once the CLI
             # confirms the stop (#2923). A stop that fails keeps the session, as any other stop does.
             try:
-                stop(session["id"])
+                stop(session["id"], service_of(state, key, record))
             except Refused as e:
                 tries = int(((record.get(key) or {}).get("stop") or {}).get("tries") or 0) + 1
                 record[key] = {**record[key], "stop": {"tries": tries, "next": time.time() + min(2.0 ** tries, BACKOFF_MAX)}}
@@ -911,7 +953,7 @@ def run_pass(state, repo, check=False, only=None):
         now = time.time()
         for sid, key in stops:
             try:
-                stop(sid)
+                stop(sid, service_of(state, key, record) if key else None)
             except Refused as e:
                 if key:
                     tries = int(((record.get(key) or {}).get("stop") or {}).get("tries") or 0) + 1
