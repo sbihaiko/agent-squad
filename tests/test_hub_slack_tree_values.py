@@ -189,6 +189,26 @@ def test_a_row_that_names_no_value_anywhere_inherits_the_default(hub, tmp_path):
     assert language["options"][0] == {"value": "", "label": "Inherit (en-US · from default)"}, language["options"]
 
 
+def test_an_inherited_persona_label_uses_the_id_when_the_object_names_no_name(hub):
+    """The policy's persona object may carry its id alone. The inherited choice then names that id, never `none`, so it
+    matches the id the project select lists (review BLOCKING 1)."""
+    class IdOnly:
+        id = "hal"
+    result = {"persona": IdOnly(), "persona_source": "project",
+              "language": "en-US", "language_source": "project"}
+    assert hub._slack_inherit(result, "persona")["label"] == "Inherit (hal · from project)"
+
+
+def test_an_inherited_persona_label_names_the_committed_persona_name(hub):
+    """Given the committed file, the inherited label names the persona by the name the project select shows for that id,
+    not its id, so both choices read the same (review BLOCKING 1)."""
+    class IdOnly:
+        id = "hal"
+    result = {"persona": IdOnly(), "persona_source": "project",
+              "language": "en-US", "language_source": "project"}
+    assert hub._slack_inherit(result, "persona", COMMITTED)["label"] == "Inherit (HAL9K · from project)"
+
+
 def test_the_project_selects_offer_not_set(hub, tmp_path):
     """Criterion 1 at the project level: nothing is above the project, so its empty choice says `Not set`."""
     root = tree(hub, tmp_path)["root"]
@@ -234,7 +254,7 @@ def test_the_watch_row_shows_the_poll_settings_and_marks_each_default(hub, tmp_p
     assert fields["poll.thread_open"]["default"] == defaults["thread_open"] == "30m"
     for name in ("fast", "slow", "quiet_after", "thread_open"):
         assert "(default)" in watch["note"] and defaults[name] in watch["note"], watch["note"]
-    assert watch["note"].startswith("Watch: "), watch["note"]
+    assert "Watch" not in watch["note"], watch["note"]   # the row label already says Watch (review DEBT 1)
     mode = fields["poll.mode"]
     assert mode["value"] == "two_state"
     assert option(mode, "two_state")["label"] == "two_state (default)", mode["options"]
@@ -287,12 +307,16 @@ def test_the_poll_defaults_follow_the_policy_and_not_a_copy(hub, tmp_path, polic
         policy._POLL_DEFAULTS["fast"] = seen
 
 
-def test_the_page_holds_no_poll_default_of_its_own(hub):
-    """Criterion 4 on the page: the poll defaults never appear as literals in the served page."""
-    page = hub.PAGE
-    for literal in ('"1m"', "'1m'", '"10m"', "'10m'", '"30m"', "'30m'", '"15m"', "'15m'", '"5m"', "'5m'",
-                    '"1h"', "'1h'"):
-        assert literal not in page, f"the page holds the poll default {literal}"
+def test_the_page_holds_no_poll_default_of_its_own(hub, tmp_path, policy):
+    """Criterion 4 on the page: every `default: <value>` the rendered Watch row carries is a value the policy's
+    `poll_defaults` names, so the page never holds or invents a poll default of its own. The check reads the rendered
+    value, so it does not depend on a quote style and it catches an unquoted or concatenated default (review DEBT 5)."""
+    allowed = {str(v) for mode in policy.FIELD_POLL_MODES for v in policy.poll_defaults(mode).values()}
+    html = render(hub, read(hub, tmp_path), "w1.c0")
+    found = re.findall(r"default: ([^\"<]+)", html)
+    assert found, "the rendered detail pane shows a poll default"
+    for value in found:
+        assert value.strip() in allowed, (value, sorted(allowed))
 
 
 def test_a_narrow_detail_pane_stacks_a_row_under_its_label(hub):
