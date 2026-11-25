@@ -1356,6 +1356,31 @@ def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, c
     assert err.count("operators: skipped") == 1, err
 
 
+def test_a_contradicting_dm_line_never_changes_the_pinned_channel(tmp_path, monkeypatch):
+    """Debt 2 (#2949): the supervisor's own record pins the DM channel, so a newer inbox line that names another
+    channel never moves the session's binding. `dm_channel` reads the record first and logs the fallback it took."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "operators" / "sessions").mkdir(parents=True)
+    (state / "operators" / "sessions" / "dm.json").write_text(json.dumps({"dm": "D0AAAAAA1"}))
+    (state / "inboxes").mkdir(parents=True)
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0ZZZZZZ"}) + "\n")
+
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+
+def test_dm_channel_pinned_reads_no_inbox_line(tmp_path, monkeypatch):
+    """Debt 2 and 6 (#2949): with no pinned record, a caller that needs an authoritative channel gets no answer, never
+    the channel of an inbox line that anything may have written."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True)
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0AAAAAA1"}) + "\n")
+
+    assert op.dm_channel(str(state), pinned=True) == ""
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+
 # The brief's helper line, per unit (#2949 review): the DM answers `dm`, a project answers the line's channel, and a
 # channel persona's id rides inline. The DM binding always names the dm scope, so the helper's own binding check passes.
 
@@ -1406,6 +1431,30 @@ def test_the_answer_line_names_no_persona_for_a_channel_that_declares_none(tmp_p
     unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
 
     assert "--persona" not in op.answer_lines(str(tmp_path / "state"), unit)
+
+
+def test_the_answer_line_quotes_the_text_as_a_single_quoted_literal(tmp_path, monkeypatch):
+    """Debt 3 (#2949): the answer text is an unescaped shell template, so a quote, a backtick or `$(...)` in an answer
+    breaks the command the session runs. The line quotes it as a literal instead."""
+    op = operators(tmp_path, monkeypatch)
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    line = op.answer_lines(str(tmp_path / "state"), unit)
+
+    assert "--text '<the answer>'" in line, line
+    assert '--text "<the answer>"' not in line, line
+    assert "--thread '<the inbox line" in line, line
+
+
+def test_the_brief_names_the_quoting_rule_for_the_answer_text(tmp_path, monkeypatch):
+    """Debt 3 (#2949): the brief tells the session to pass the answer as a quoted literal, so an owner message with a
+    quote never becomes extra shell."""
+    op = operators(tmp_path, monkeypatch)
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    brief = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
+
+    assert "single-quoted literal" in brief, brief
 
 
 def test_a_dm_binding_names_the_dm_scope_and_the_helper_accepts_it(tmp_path, monkeypatch):

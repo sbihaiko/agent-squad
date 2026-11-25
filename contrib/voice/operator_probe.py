@@ -449,33 +449,42 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
     One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
     and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
     outbox line must thread under the question, and no other channel's outbox may take a line. The phase appends to
-    each outbox and never truncates one, so a denial's control line an earlier phase wrote stays for its verdict."""
+    each outbox and never truncates one, so a denial's control line an earlier phase wrote stays for its verdict. It
+    owns the one inbox it appends its own question to, so it truncates that file back to its earlier length before it
+    returns, even when the phase fails: `bg_session` and `guest_sessions` reuse this state folder, and neither may read
+    a question this phase left behind."""
     scope = PROBE_CHANNELS[0]
     held = {str(outbox): Path(outbox).read_text() for outbox in outboxes}
+    inbox = Path(own_inboxes[0])
+    inbox_before = inbox.stat().st_size if inbox.exists() else 0
     question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
                 "text": ANSWER_QUESTION, "language": "en-US"}
-    with open(own_inboxes[0], "a", encoding="utf-8") as f:
+    with open(inbox, "a", encoding="utf-8") as f:
         f.write(json.dumps(question) + "\n")
-    binding = write_binding(work)
-    command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
-    args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
-            "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
-            "--model", MODEL]
-    _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
-    check_answer_call(tool_calls(events), command)
-    for path, before in held.items():
-        if not Path(path).read_text().startswith(before):
-            raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
-    answers = answer_lines(outboxes[0])
-    if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
-        raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")
-    # The other channel is compared against its own earlier content, never against empty: an earlier phase's JSON line
-    # is no answer of this session, and a line this session added is one (#2949).
-    other = str(outboxes[1])
-    fresh = len(answer_lines(other)) - len(lines_in(held[other]))
-    if fresh:
-        raise ProbeFailed(f"the live session answered outside the question's channel: {other} gained {fresh} line(s)")
-    return answers
+    try:
+        binding = write_binding(work)
+        command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
+        args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
+                "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
+                "--model", MODEL]
+        _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+        check_answer_call(tool_calls(events), command)
+        for path, before in held.items():
+            if not Path(path).read_text().startswith(before):
+                raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
+        answers = answer_lines(outboxes[0])
+        if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
+            raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")
+        # The other channel is compared against its own earlier content, never against empty: an earlier phase's JSON
+        # line is no answer of this session, and a line this session added is one (#2949).
+        other = str(outboxes[1])
+        fresh = len(answer_lines(other)) - len(lines_in(held[other]))
+        if fresh:
+            raise ProbeFailed(f"the live session answered outside the question's channel: {other} gained {fresh} line(s)")
+        return answers
+    finally:
+        with open(inbox, "r+b") as f:
+            f.truncate(inbox_before)       # the question this phase appended is its own; no later phase answers it
 
 
 def check_session(init, result):

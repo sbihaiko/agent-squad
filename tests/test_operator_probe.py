@@ -4,6 +4,7 @@ bound. A fake CLI never stands in for the permission boundary, so the denial cas
 import importlib.util
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -1228,3 +1229,76 @@ def test_an_earlier_json_line_in_another_outbox_does_not_fail_the_phase(tmp_path
 
     monkeypatch.setattr(probe, "cli_call", fake_cli)
     probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_phase_leaves_the_inbox_as_it_found_it(tmp_path, monkeypatch):
+    """Blocking 1 (#2949): `bg_session` and `guest_sessions` reuse this state folder, so the synthetic question the
+    phase appends must be gone when the phase returns: a later phase reads the queue it created, never this one."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    own[0].write_text(json.dumps({"id": "c:x", "ts": "1.0", "channel": probe.PROBE_CHANNELS[0], "text": "earlier"}) + "\n")
+    before = own[0].read_bytes()
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert own[0].read_bytes() == before
+
+
+def test_the_answer_phase_restores_the_inbox_when_the_phase_fails(tmp_path, monkeypatch):
+    """Blocking 1 (#2949): a failed phase restores the inbox too, so the phase after it never reads a stray question."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    before = own[0].read_bytes()
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, []
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="Bash"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert own[0].read_bytes() == before
+
+
+def test_the_answer_phase_drives_the_real_helper_end_to_end(tmp_path, monkeypatch):
+    """Debt 4 (#2949): the new answer-phase cases fake `cli_call`, so a regression in `answer.py` slips through. This
+    case shells the real helper under the phase's own binding (no model) and checks the argv, the binding and the
+    outbox line together."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+               "--text", probe.ANSWER_TEXT]
+    seen = {}
+
+    def stub_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        seen["binding"] = json.loads(Path(extra_env["VOICE_ANSWER_BINDING"]).read_text())
+        done = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                              env={**os.environ, **extra_env}, check=False)
+        assert done.returncode == 0, done.stderr
+        text = done.stdout.strip() or "answer: wrote one line"
+        return {}, {}, events_of([("Bash", {"command": shlex.join(command)}, text)])
+
+    monkeypatch.setattr(probe, "cli_call", stub_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert seen["binding"]["channels"] == list(probe.PROBE_CHANNELS), seen["binding"]
+    got = [json.loads(raw) for raw in outboxes[0].read_text().splitlines() if raw.strip()]
+    assert got == [{"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}], got
+
+
+def test_a_quoted_answer_renders_a_prompt_that_parses_back_to_its_argv():
+    """Debt 3 (#2949): the probe asks the session to run the helper as one shell line, so an answer with a quote, a
+    backtick or `$(...)` must survive the prompt unchanged."""
+    probe = load("operator_probe")
+    command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+               "--text", "It's a \"quote\", a `tick` and $(rm -rf /)"]
+
+    text = probe.answer_prompt(command)
+
+    assert shlex.split(text.splitlines()[-1]) == command, text
