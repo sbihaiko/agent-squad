@@ -59,6 +59,16 @@ def test_a_wait_past_the_bound_whose_every_slot_holder_is_queued_for_the_lock_is
     assert "queued for lock gate" in finding.detail
 
 
+def test_the_four_field_marker_serial_sh_writes_is_a_queued_waiter(tmp_path):
+    """serial.sh writes epoch, lock, pid and priority (#2887); the older three-field marker still reads."""
+    state = tmp_path / "st"
+    since = int(time.time())
+    write(state / "locks" / "waiting" / f"gate-{os.getpid()}", f"{since}\tgate\t{os.getpid()}\t0\n")
+    assert livecheck.lock_waits(state) == [(since, "gate", os.getpid())]
+    lock_wait(state, "gate", os.getpid(), since)
+    assert livecheck.lock_waits(state) == [(since, "gate", os.getpid())]
+
+
 def test_a_wait_inside_the_bound_is_no_starvation(tmp_path):
     state, caps = tmp_path / "st", tmp_path / "caps"
     lock_wait(state, "gate", os.getpid(), int(time.time()))

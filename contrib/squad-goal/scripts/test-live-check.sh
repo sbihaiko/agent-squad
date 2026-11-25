@@ -46,13 +46,17 @@ age() { python3 -c 'import os,sys,time; t=time.time()-float(sys.argv[2]); os.uti
 lc() { bash "$d/live-check.sh" "$@"; }
 now=$(date +%s)
 
-# 1) A child starved by a queued slot holder is reported (ADR-0163, ADR-0164, #1166).
+# 1) A child starved by a queued slot holder is reported (ADR-0163, ADR-0164, #1166). The queue marker is the one serial.sh
+# writes (#2887): a live pid holds lock gate, and serial.sh, the slot holder, queues for it, so the reading meets the real format.
 fresh
-h=$(hold); lease_since=$(date +%s)   # the lease is written after its holder starts, as caps.try_take writes it
-printf '{"holder":"gate-1","pid":%s,"since":%s}\n' "$h" "$lease_since" > "$T/caps/gates/gate-1.json"
+h=$(hold); mkdir -p "$T/st/locks/gate"; echo "$h" > "$T/st/locks/gate/pid"
+SERIAL_POLL_SECONDS=0.1 SERIAL_WAIT_SECONDS=300 bash "$d/serial.sh" gate true >/dev/null 2>&1 & q=$!; pids+=("$q")
+i=0; while [ ! -e "$T/st/locks/waiting/gate-$q" ] && [ $i -lt 100 ]; do sleep 0.02; i=$((i+1)); done
+[ -e "$T/st/locks/waiting/gate-$q" ] && ok "serial.sh records its queue marker" || ko "no queue marker from serial.sh pid $q"
+lease_since=$(date +%s)   # the lease is written after its holder starts, as caps.try_take writes it
+printf '{"holder":"gate-1","pid":%s,"since":%s}\n' "$q" "$lease_since" > "$T/caps/gates/gate-1.json"
 printf '{"ceiling":"caps.gates","holder":"run-1","pid":%s}\n' "$h" > "$T/caps/waiting/gates-run-1.json"
 age "$T/caps/waiting/gates-run-1.json" 1000
-printf '%s\tgate\t%s\n' "$((now-1000))" "$h" > "$T/st/locks/waiting/gate-$h"
 out=$(lc --once --bound 60 2>&1); rc=$?
 [ $rc = 1 ] && printf '%s\n' "$out" | /usr/bin/grep -q "^STARVED run-1:" \
   && ok "a child starved by a queued slot holder is reported" || ko "starvation: rc $rc, '$out'"
@@ -60,17 +64,18 @@ case "$out" in *"queued for lock gate"*) ok "the report names the lock the slot 
 [ "$(cut -f2 "$T/st/live-check-result" 2>/dev/null)" = fail ] \
   && case "$(cut -f5 "$T/st/live-check-result" 2>/dev/null)" in *STARVED*) true;; *) false;; esac \
   && ok "the result record names the finding, so a reader sees what the run found" || ko "record: '$(cat "$T/st/live-check-result" 2>&1)'"
-# The same wait is no starvation while no slot holder queues for the lock: nothing is starved.
-rm -f "$T/st/locks/waiting/gate-$h"
-out=$(lc --once --bound 60 2>&1); rc=$?
-[ $rc = 0 ] && case "$out" in *STARVED*) false;; *) true;; esac \
-  && ok "a slot wait whose holders are not queued for the lock is no starvation" || ko "unstarved wait: rc $rc, '$out'"
-# ...nor inside the bound.
-printf '%s\tgate\t%s\n' "$now" "$h" > "$T/st/locks/waiting/gate-$h"
+# The same queue is no starvation inside the bound.
 age "$T/caps/waiting/gates-run-1.json" 5
 out=$(lc --once --bound 60 2>&1); rc=$?
 [ $rc = 0 ] && case "$out" in *STARVED*) false;; *) true;; esac \
   && ok "a wait inside the bound is no starvation" || ko "in-bound wait: rc $rc, '$out'"
+# A slot wait whose holder is not queued for the lock is no starvation: the lease names the lock's live holder instead.
+age "$T/caps/waiting/gates-run-1.json" 1000
+printf '{"holder":"gate-1","pid":%s,"since":%s}\n' "$h" "$lease_since" > "$T/caps/gates/gate-1.json"
+out=$(lc --once --bound 60 2>&1); rc=$?
+[ $rc = 0 ] && case "$out" in *STARVED*) false;; *) true;; esac \
+  && ok "a slot wait whose holders are not queued for the lock is no starvation" || ko "unstarved wait: rc $rc, '$out'"
+kill "$q" 2>/dev/null; wait "$q" 2>/dev/null
 
 # 2) An unproven entry with no obligation, or with an expired one, is reported (ADR-0164).
 fresh
