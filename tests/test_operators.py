@@ -810,6 +810,20 @@ def test_the_profile_reaches_only_the_projects_own_service(tmp_path, monkeypatch
     assert op.daemon_root() not in text, "the owner's shared service is outside the profile (#2943)"
 
 
+def test_a_profile_with_no_service_grants_no_unix_socket_and_names_the_config_root_last(tmp_path, monkeypatch):
+    """#2943: a caller that names no service root gets no service grant at all, never the shared one. The one write
+    grant ends with the config root, and no unix-socket rule follows."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    root = os.path.realpath(tmp_path / "config")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
+    assert not [line for line in text.splitlines() if "unix-socket" in line], text
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    devices = " ".join(f'(literal "{path}")' for path in dict.fromkeys((os.devnull, os.path.realpath(os.devnull))))
+    assert write == (f'(allow file-write* {devices} (literal "/state/outboxes/C1.jsonl") '
+                     f'(subpath "{home}/.claude") (subpath "{root}"))'), write
+
+
 def test_a_started_session_gets_its_own_service_root(tmp_path, monkeypatch):
     """#2943: the start moves the CLI's background service under the project's own root and records that root, so the
     profile the session runs under grants that root and no other."""
@@ -858,15 +872,15 @@ def test_a_stop_falls_back_to_the_cli_own_service_for_a_session_an_older_build_s
 
     def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
         seen.append(env)
-        if env is not None:
+        if env.get("CLAUDE_CONFIG_DIR"):
             raise op.Refused("stop exited 1: No session matching 'aaaaaaaa'")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(op, "call", fake_call)
-    op.stop("aaaaaaaa", None, str(tmp_path / "service"))
+    op.stop("aaaaaaaa", str(tmp_path / "state"), str(tmp_path / "service"))
     assert len(seen) == 2, seen
     assert seen[0]["PREFIX"] == str(tmp_path / "service") and seen[0]["TERMUX_VERSION"] == "1"
-    assert seen[1] is None
+    assert "PREFIX" not in seen[1] and "CLAUDE_CONFIG_DIR" not in seen[1], seen[1]
 
 
 def test_a_stop_that_fails_under_the_projects_own_service_is_never_retried_on_the_shared_one(tmp_path, monkeypatch):
@@ -880,9 +894,52 @@ def test_a_stop_that_fails_under_the_projects_own_service_is_never_retried_on_th
         raise op.Refused("stop exited 1: the service is not running")
 
     monkeypatch.setattr(op, "call", fake_call)
+    service = str(tmp_path / "service")
     with pytest.raises(op.Refused):
-        op.stop("aaaaaaaa", str(tmp_path / "service"))
+        op.stop("aaaaaaaa", str(tmp_path / "state"), service)
     assert len(seen) == 1, seen
+    assert seen[0]["PREFIX"] == service and seen[0]["TERMUX_VERSION"] == "1", seen[0]
+    assert seen[0]["CLAUDE_CONFIG_DIR"] == op.config_root(str(tmp_path / "state")), seen[0]
+
+
+def test_a_stop_that_names_no_state_root_is_never_retried_on_the_shared_service(tmp_path, monkeypatch):
+    """#2943: only a stop that tried the operator's own root may fall back. With no state root the call already ran
+    against the owner's roster, so a retry could stop a foreign session whose id collides."""
+    op = operators(tmp_path, monkeypatch)
+    seen = []
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        seen.append(env)
+        raise op.Refused(f"stop exited 1: {op.NO_SUCH_SESSION} 'aaaaaaaa'")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    with pytest.raises(op.Refused):
+        op.stop("aaaaaaaa", None, str(tmp_path / "service"))
+    assert len(seen) == 1, seen
+
+
+def test_the_shared_service_retry_runs_with_the_owner_environment(tmp_path, monkeypatch):
+    """#2943: the fallback reaches the owner's roster and the owner's shared service. The operator's own config home
+    and service root are dropped, so the retry carries the environment the pre-root build passed."""
+    op = operators(tmp_path, monkeypatch)
+    seen = []
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/operator/config")
+    monkeypatch.setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
+    monkeypatch.setenv("TERMUX_VERSION", "1")
+    monkeypatch.setenv("PREFIX", "/operator/service")
+    owner = {k: v for k, v in os.environ.items()
+             if k not in ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "TERMUX_VERSION", "PREFIX")}
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        seen.append(env)
+        if len(seen) == 1:
+            raise op.Refused(f"stop exited 1: {op.NO_SUCH_SESSION} 'aaaaaaaa'")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    op.stop("aaaaaaaa", str(tmp_path / "state"), str(tmp_path / "service"))
+    assert len(seen) == 2, seen
+    assert seen[1] == owner, seen[1]
 
 
 def test_a_stop_that_both_services_refuse_is_named(tmp_path, monkeypatch):
@@ -1391,8 +1448,8 @@ def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_pat
     tried = []
 
     def fake_call(argv, cwd=None, timeout=None, env=None):
-        tried.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
-        if env is not None:
+        tried.append((env or {}).get("CLAUDE_CONFIG_DIR"))
+        if env.get("CLAUDE_CONFIG_DIR"):
             raise op.Refused(f"stop exited 1: {op.NO_SUCH_SESSION} 'abababab'")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
