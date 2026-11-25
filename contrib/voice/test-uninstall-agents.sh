@@ -16,7 +16,8 @@ mkfix() {
   git -C "$T/src" -c user.name=t -c user.email=t@t add -A
   git -C "$T/src" -c user.name=t -c user.email=t@t commit -q -m proven; A=$(git -C "$T/src" rev-parse HEAD)
   git clone -q --bare "$T/src" "$T/origin.git"
-  printf '#!/bin/bash\necho "$*" >> "%s"\n' "$T/launchctl.log" > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
+  # `print` answers 113 for a job launchd does not hold, so the unload wait never fires on this fake (#2954).
+  printf '#!/bin/bash\nif [ "${1:-}" = print ]; then exit 113; fi\necho "$*" >> "%s"\n' "$T/launchctl.log" > "$T/bin/launchctl"; chmod +x "$T/bin/launchctl"
   export SG_DEPLOY="$T/deploy" SG_DEPLOY_REMOTE="$T/origin.git" SG_LAUNCH_DIR="$T/LaunchAgents" LAUNCHCTL="$T/bin/launchctl"
   export VOICE_STATE="$T/state" VOICE_OWNER=U0TEST SG_PYTHON="$(command -v python3)"
 }
