@@ -535,6 +535,12 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slad select[data-slmrole]{flex:1 1 120px}
 #sbody .slmembdet .slalias{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
 #sbody .slmembdet .slalias input{width:100%;min-width:0}
+/* The members block reads its own width, not the window's (#2911): a wide window with a narrow settings panel stacks each
+   member field under its label, so no select is cut. */
+#sbody .slmembdet{container-type:inline-size}
+@container (max-width:760px){#sbody .slmembdet .slevr{grid-template-columns:1fr}
+ #sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
+ #sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}}
 @media (max-width:1240px){#sbody .slroledet .slevr,#sbody .slmembdet .slevr{grid-template-columns:1fr}
  #sbody .slroledet .slevr [role=cell],#sbody .slmembdet .slevr [role=cell]{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px;align-items:start}
  #sbody .slroledet .slevr [role=cell][data-l]::before,#sbody .slmembdet .slevr [role=cell][data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}
@@ -1853,20 +1859,20 @@ function slRolesEditHtml(r){const rs=slRoleRows(),ms=slMemberRows(),cf=r.files.c
  const w0=slWsIds()[0]||"";slPeopleNeed();
  const pick=slWhoPick.length?`<div class=slwhopick role=group aria-label="${slA("Choose the person")}">${slWhoPick.map(p=>`<button type=button data-slmpick="${slA(p.id)}">${esc(p.name||p.handle)} <span class=m>@${esc(p.handle)}</span></button>`).join("")}</div>`:"";
  const manual=slPeopleManual[w0]?`<details class=sladv><summary>${esc("Slack ids")}</summary><input data-slmus aria-label="new member Slack id"></details>`:"";
- return h+`<div class=slad><input data-slmwho placeholder="email or @name" aria-label="new member: email or @name">`
+ return h+`<div class=slad><input data-slmwho value="${esc(slWhoQ)}" placeholder="email or @name" aria-label="new member: email or @name">`
  +`<select data-slmws aria-label="new member Slack workspace">${slOptsV(slWsIds(),slWsOpt,"")}</select>`
  +`<select data-slmch aria-label="new member channel">${slOptsV(slChIdsOf(w0),c=>slChOpt(w0,c),"")}</select>`
  +`<select data-slmrole aria-label="new member role">${slOpts(slRoleIds(),"")}</select>`
  +`<button data-sladdmem>Add member</button>${manual}</div>`
  +(slWhoMsg?`<p class="slwhomsg${slWhoMsg.startsWith("!")?" err":""}" role=status>${esc(slWhoMsg.replace(/^!/,""))}</p>`:"")+pick}
-let slWhoAt=null;   // the workspace, channel and role the add row held when the owner asked
-function slMemberAdd(at,p){slPeople[at.workspace]={...(slPeople[at.workspace]||{}),[p.id]:p};slWhoMsg="";slWhoPick=[];slWhoAt=null;
+let slWhoAt=null,slWhoQ="";   // slWhoQ: the text the owner typed, kept until a person is added   // the workspace, channel and role the add row held when the owner asked
+function slMemberAdd(at,p){slPeople[at.workspace]={...(slPeople[at.workspace]||{}),[p.id]:p};slWhoMsg="";slWhoPick=[];slWhoAt=null;slWhoQ="";
  slOp({kind:"add",doc:"local",path:["members"],value:{workspace:at.workspace,channel:at.channel,role:at.role,users:p.id,alias:p.handle||p.name||""}})}
 function slMemberAddAsk(){const g=s=>{const el=document.querySelector(s);return el?String(el.value||"").trim():""};
  const at={workspace:g("[data-slmws]"),channel:g("[data-slmch]"),role:g("[data-slmrole]")},who=g("[data-slmwho]"),raw=g("[data-slmus]");
  if(raw){slMemberAdd(at,{id:raw,handle:"",name:""});return}   // the one raw path: a workspace this host cannot read
  if(!who){slWhoMsg="!Type an email or an @name.";slRender();return}
- slWhoMsg="Looking up "+who;slWhoPick=[];slWhoAt=at;slRender();
+ slWhoQ=who;slWhoMsg="Looking up "+who;slWhoPick=[];slWhoAt=at;slRender();
  fetch("/api/slack/people",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({workspace:at.workspace,q:who})})
  .then(r=>r.json()).then(o=>{if(o&&o.manual)slPeopleManual[at.workspace]=true;const ms=(o&&o.matches)||[];
   if(ms.length===1){slMemberAdd(at,ms[0]);return}

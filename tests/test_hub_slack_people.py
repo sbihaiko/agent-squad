@@ -124,3 +124,12 @@ def test_the_members_editor_shows_people_and_no_slack_id(hub):
     assert re.search(r"<option[^>]*>team</option>", html), html
     assert re.search(r"<option[^>]*>#project</option>", html), html
     assert re.search(r'placeholder="email or @name"', html), html
+
+
+def test_the_typed_text_stays_while_the_owner_picks_one_of_several(hub):
+    body = (_slices(hub.PAGE) + f"\nslDocs={json.dumps(DOCS)};slSavedDocs=slClone(slDocs);globalThis.fetch=()=>new Promise(()=>{{}});"
+            + 'slWhoQ="an";slWhoPick=[{id:"U0PERSON01",handle:"ana",name:"Ana"},{id:"U0PERSON03",handle:"anabel",name:"Anabel"}];'
+            + 'console.log(JSON.stringify(slRolesEditHtml({files:{committed:"slack.yaml",local:"x.slack.local.yaml"}})))')
+    html = json.loads(_node(body))
+    assert re.search(r'<input data-slmwho value="an"', html), html
+    assert "Anabel" in html and "@anabel" in html, html
