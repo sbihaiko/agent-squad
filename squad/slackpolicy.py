@@ -162,6 +162,14 @@ def _roles(file, doc, out):
             for env in items:
                 if str(env).strip().lower() == "prod":
                     out.append(_defect(file, f"roles[{i}].deploy", "a role never deploys to prod; production stays with the owner"))
+        if "ignore" in role and not isinstance(role.get("ignore"), bool):
+            out.append(_defect(file, f"roles[{i}].ignore", "the ignore flag is true or false"))
+        if role.get("ignore") is True:
+            # An ignore role answers nothing, so it grants nothing either (issue #2929).
+            if role.get("actions"):
+                out.append(_defect(file, f"roles[{i}].actions", "an ignore role lists no action"))
+            if items:
+                out.append(_defect(file, f"roles[{i}].deploy", "an ignore role lists no deploy target"))
         if isinstance(role.get("actions"), (list, tuple)):
             actions = role_actions()
             for j, action in enumerate(role["actions"]):
@@ -720,6 +728,19 @@ def _member_role(local, workspace_id, channel_id, user, accepted):
     return roles[0] if roles else None
 
 
+def _ignored_role(committed, local, workspace_id, channel_id, user, accepted):
+    """The ignore role this user holds in this channel, or None. Only a role the channel accepts counts, and every
+    membership is read, so the ignore role wins whatever the order of the member rows (issue #2929)."""
+    silent = {str(row.get("id")) for row in _rows(committed.get("roles")) if row.get("ignore") is True}
+    for member in _rows(local.get("members")):
+        if (str(member.get("workspace")), str(member.get("channel"))) != (workspace_id, channel_id):
+            continue
+        role = str(member.get("role"))
+        if role in silent and role in accepted and user in {str(u) for u in member.get("users") or []}:
+            return role
+    return None
+
+
 def _role_actions(committed, role):
     for row in _rows(committed.get("roles")):
         if str(row.get("id")) == role:
@@ -1024,6 +1045,10 @@ def decide(committed, local, event, now, thread_state=None):
     tone = compose_tone(getattr(persona, "tone", ""), member_tone(committed, roles))
     if str(event.get("kind") or "message") != "message" or event.get("own"):
         return Decision(IGNORE, role, (), language, persona, None, False, next_poll, voice, (), tone)
+    ignored = _ignored_role(committed, local, workspace_id, channel_id, user, {str(name) for name in channel.get("roles") or []})
+    if ignored is not None:
+        # An accepted ignore role silences every message of its member, and it wins over the member's other roles (#2929).
+        return Decision(IGNORE, ignored, (), language, persona, None, False, next_poll, voice, (), tone)
     if event.get("bot") or event.get("external") or role is None:
         return Decision(DATA, role, (), language, persona, None, False, next_poll, voice, (), tone)
     reply = _reply_path(class_, channel, user)

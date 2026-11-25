@@ -1679,7 +1679,7 @@ SLACK_CH_FIELDS = ("id", "name", "mode", "language", "persona", "roles", "announ
 # in the committed file; a member carries its Slack workspace, channel, role and user ids, and it lives in the local file
 # alone (ADR-0177). The file a row lives in is a placement rule here; the value's own rule stays in the policy module,
 # which validates the edited documents below.
-SLACK_ROLE_FIELDS = ("id", "actions", "deploy", "tone")
+SLACK_ROLE_FIELDS = ("id", "actions", "deploy", "tone", "ignore")
 SLACK_MEMBER_FIELDS = ("workspace", "channel", "role", "users", "alias")
 ROLE_IN_COMMITTED = "the roles of the project live in the committed file"
 MEMBER_IN_LOCAL = "the members of a role live in the local file"
@@ -1973,6 +1973,9 @@ def _slack_row_value_ok(path, value, field):
             value = [x for x in re.split(r"[,\s]+", value) if x]
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             return False, f"{key}: {field} is a list of names", value
+    elif field == "ignore":
+        if not isinstance(value, bool):
+            return False, f"{key}: ignore is true or false", value
     elif not isinstance(value, str):
         return False, f"{key}: {field} is a string", value
     return True, None, value

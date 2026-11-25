@@ -110,6 +110,31 @@ def test_each_role_row_offers_the_ignore_checkbox(hub):
 
 
 def test_checking_ignore_writes_the_flag_and_clears_actions_and_deploy(hub):
-    op = _page(hub, 'console.log(JSON.stringify(slDocOp("role:0:ignore",{type:"checkbox",checked:true})))')
-    assert op["kind"] == "set" and op["doc"] == "committed" and op["path"] == ["roles", 0], op
-    assert op["value"] == {"id": "QA", "ignore": True, "actions": []}, op
+    ops = _page(hub, 'console.log(JSON.stringify(slDocOp("role:0:ignore",{type:"checkbox",checked:true})))')
+    assert [(o["kind"], o["doc"], o["path"], o["value"]) for o in ops] == [
+        ("set", "committed", ["roles", 0, "actions"], []), ("set", "committed", ["roles", 0, "deploy"], []),
+        ("set", "committed", ["roles", 0, "ignore"], True)], ops
+    off = _page(hub, 'console.log(JSON.stringify(slDocOp("role:1:ignore",{type:"checkbox",checked:false})))')
+    assert off["path"] == ["roles", 1, "ignore"] and off["value"] is False, off
+
+
+def test_the_hub_applies_the_ignore_ops_in_order(hub):
+    docs = copy.deepcopy(DOCS)
+    for field, value in (("actions", []), ("deploy", []), ("ignore", True)):
+        op = {"kind": "set", "doc": "committed", "path": ["roles", 0, field], "value": value}
+        out = hub.slack_docs_edit({**docs, "local_name": "x.slack.local.yaml", "op": op})
+        assert not out.get("err"), (field, out)
+        docs = {"committed": out["committed"], "local": out["local"]}
+    assert docs["committed"]["roles"][0] == {"id": "QA", "actions": [], "deploy": [], "ignore": True}, docs
+
+
+def test_the_hub_refuses_the_ignore_flag_while_the_role_lists_actions(hub):
+    op = {"kind": "set", "doc": "committed", "path": ["roles", 0, "ignore"], "value": True}
+    out = hub.slack_docs_edit({**copy.deepcopy(DOCS), "local_name": "x.slack.local.yaml", "op": op})
+    assert out.get("err") and "ignore role lists no action" in out["err"], out
+
+
+def test_the_hub_refuses_an_ignore_value_that_is_not_a_boolean(hub):
+    op = {"kind": "set", "doc": "committed", "path": ["roles", 0, "ignore"], "value": "yes"}
+    out = hub.slack_docs_edit({**copy.deepcopy(DOCS), "local_name": "x.slack.local.yaml", "op": op})
+    assert out.get("err") and "ignore is true or false" in out["err"], out
