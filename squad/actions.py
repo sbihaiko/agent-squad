@@ -72,11 +72,19 @@ def merge_land(target, worktree, branch, message, timeout=None, replace=False):
     c = commit(worktree, message, timeout)
     if not c.ok:
         return c
+    tip = git.run(["rev-parse", "--verify", "-q", f"refs/heads/{branch}"], target, timeout=timeout)
+    head = git.head(worktree)
+    flag: dict = {}
+    switched = tip.returncode == 0 and tip.stdout.strip() != head
+    if switched:    # the child left the named branch (#2864): its head is the work, and it lands only when it holds the branch's tip
+        if git.run(["merge-base", "--is-ancestor", tip.stdout.strip(), head], target, timeout=timeout).returncode != 0:
+            return ActionResult(False, ["land_branch_switched"], git.head(target), {"branch": branch, "head": head})
+        branch, flag = head, {"land_branch_switched": True}
     if replace and before == replace and git.run(["merge-base", "--is-ancestor", "HEAD", branch], target, timeout=timeout).returncode == 1:
         r = git.run(["reset", "-q", "--hard", branch], target, timeout=timeout)
         if r.returncode != 0:
             return ActionResult(False, ["land_replace_failed"], git.head(target), {"stderr": r.stderr.strip()[-400:]})
-        return ActionResult(True, [], git.head(target), {"before": before, "rewritten": True})
+        return ActionResult(True, [], git.head(target), {"before": before, "rewritten": True, **flag})
     log = git.run(["log", "--format=%B", f"HEAD..{branch}"], target, timeout=timeout)
     refs = dict.fromkeys(m.group(0) for m in re.finditer(r"(?m)^Refs #\d+$", log.stdout if log.returncode == 0 else ""))
     if refs:
@@ -85,4 +93,4 @@ def merge_land(target, worktree, branch, message, timeout=None, replace=False):
     if r.returncode != 0:
         git.run(["merge", "--abort"], target)
         return ActionResult(False, ["merge_conflict"], git.head(target), {"stderr": (r.stdout + r.stderr).strip()[-400:]})
-    return ActionResult(True, [], git.head(target), {"before": before})
+    return ActionResult(True, [], git.head(target), {"before": before, **flag})
