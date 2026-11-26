@@ -83,9 +83,13 @@ sg_battery_run() {
   if [ "${rc:-0}" = 0 ] && [ -n "$out" ]; then
     defs=$(sed -n 's/^SLOW-UNMARKED (deferred to the serial run): \(.*\) took [0-9.]* s,.*$/\1/p' "$out" | sort -u)
     if [ -n "$defs" ]; then
-      set -- $defs
-      echo "serial line: $(printf '%s ' "$@")run once more, serially, at the project line"
-      env $nogate $nopy "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "$@" || rc=$?
+      # (#2976) One recorded id per line, never one word: a parametrized node id holds spaces, and a split id sends `contrib`
+      # to pytest as a path, which exits 4 and leaves the gate unknown. The printed line quotes each id, so a reader sees
+      # the boundary the joined text hides.
+      local -a ids=(); local id
+      while IFS= read -r id; do [ -z "$id" ] || ids+=("$id"); done <<<"$defs"
+      echo "serial line: $(printf "'%s' " "${ids[@]}")run once more, serially, at the project line"
+      env $nogate $nopy "$py" -m pytest -p no:deepeval -p no:xdist -m 'not heavy' "${ids[@]}" || rc=$?
     fi
   fi
   set +f
