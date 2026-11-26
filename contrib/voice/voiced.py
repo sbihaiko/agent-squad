@@ -164,6 +164,22 @@ class ClipTooLarge(Exception):
 
 
 FULL_FAILED = "Your message did not reach the project session."
+FULL_REASONS = {"deadline": "Your message stopped at the project session deadline.",
+                "spend_cap": "Your message stopped at the project session spend cap.",
+                "stopped": "Your message stopped when you asked."}
+STOP_TEXT = "!stop"
+
+
+MENTION = re.compile(r"^(?:\s*<@[^>]+>)+")   # one or more leading Slack bot mentions, as a DM or a channel adds
+
+
+def is_stop(text):
+    """Whether one message asks to end its project's running turn (#2968).
+
+    Only the message `!stop` itself stops, after the leading bot mentions Slack puts on a DM or a channel message are
+    dropped: `@the-bot !stop` stops too, so a stop never becomes a turn by its mention prefix. Any other word beside
+    `!stop` keeps the message an ordinary turn."""
+    return MENTION.sub("", str(text or "")).strip() == STOP_TEXT
 
 
 def one_sentence(text):
@@ -1626,7 +1642,8 @@ class Daemon:
         self.state = state
         self.full_cli = full_cli
         self.turns = []
-        self.full_locks = {}
+        self.turn_order = fullturn.TurnOrder()
+        self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
         self.full_guard = threading.Lock()
         # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
         # so a fixture or a reader never spawns a session; production passes `start_operator`.
@@ -2541,7 +2558,9 @@ class Daemon:
     def start_full_turn(self, record, decision):
         """Start one owner message as one turn of its project's session, off the envelope path, so the ack is not held."""
         self.state.remember_message(record["id"])
-        worker = threading.Thread(target=self.full_turn, args=(record, decision), daemon=True)
+        repo = self.state.channel_for(record.get("channel"))
+        ticket = self.turn_order.arrive(repo)
+        worker = threading.Thread(target=self.full_turn, args=(record, decision, repo, ticket), daemon=True)
         with self.full_guard:
             self.turns.append(worker)
         worker.start()
@@ -2551,6 +2570,26 @@ class Daemon:
             turns = list(self.turns)
         for worker in turns:
             worker.join()
+
+    def stop_full_turn(self, record):
+        """End the turn one project runs now, outside the queue (#2968), and write the stop's one audit line.
+
+        A `!stop` never becomes a turn of its own: `handle` reads it before it queues the message. The stop ends
+        nothing when the project runs no turn, and the line tells the two apart. The running turn writes its own
+        line, a failed turn named `stopped`, so a stop that ends a turn leaves both lines and no lost message.
+
+        The dedup marker is durable before the kill, so a crash between the two drops a redelivered stop as a
+        duplicate instead of killing a second time and leaving a second line for one user action (#2968 review). Only
+        the requester who started the turn ends it: `TurnRegistry.stop` compares that identity, so a full role handed
+        to anyone else clears nothing."""
+        repo = self.state.channel_for(record.get("channel"))
+        self.state.remember_message(record["id"])
+        ended = bool(repo) and self.live_turns.stop(repo, record.get("user"))
+        self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
+                                 "role": record.get("role"), "channel": record.get("channel"), "repo": repo,
+                                 "decision": "stop", "ended": ended})
+        self.log(f"voiced: stop for {repo or 'no project'} ended the running turn: {ended}")
+        return "stopped"
 
     def project_checkout(self, repo):
         """The checkout of one project: from the rows that carry one (`configs`, the hub's project list), then from any
@@ -2563,29 +2602,31 @@ class Daemon:
                 return row["checkout"]
         return None
 
-    def full_turn(self, record, decision):
-        """Run the turn in the project checkout, one turn at a time per project, then post its final text in the thread.
+    def full_turn(self, record, decision, repo, ticket):
+        """Run the turn in the project checkout, one turn at a time per project in arrival order, then post its final
+        text in the thread.
 
         Every turn ends with one audit line and, where the channel takes answers, one post: a turn that raises is a
         failed turn, never a lost message (#2965 review)."""
-        repo = self.state.channel_for(record.get("channel"))
         turn = fullturn.Turn(None, "", None, True)
         try:
-            checkout = self.project_checkout(repo)
-            with self.full_guard:
-                lock = self.full_locks.setdefault(repo, threading.Lock())
-            with lock:
+            self.turn_order.wait(repo, ticket)
+            try:
+                checkout = self.project_checkout(repo)
                 if checkout is not None:
-                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
+                                             registry=self.live_turns, user=record.get("user"))
+            finally:
+                self.turn_order.leave(repo)
         except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
-                                 "reason": None, **turn.audit()})
+                                 **turn.audit()})
         if not self.channel_accepts_answer(record.get("channel")):
             self.log(f"voiced: full turn in {record.get('channel')} kept: the channel is listen only")
             return
-        answer = FULL_FAILED if turn.failed else shared_redact.redact(turn.text)
+        answer = FULL_REASONS.get(turn.reason, FULL_FAILED) if turn.failed else shared_redact.redact(turn.text)
         self.post_text(record.get("channel"), record.get("ts"), answer, persona=decision.persona)
 
     def policy_decision(self, event):
@@ -2673,11 +2714,12 @@ class Daemon:
         return {str(row.get("ts")) for row in self.state.posted().values() if row.get("ts")}
 
     def handle(self, envelope):
-        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here.
+        """Record one envelope: "inbox", "other", "duplicate", "failed", "ignored", "full" or "stopped". No ack here.
 
         The policy decision decides what the event becomes: an ignored event writes no line, a bot, a stranger and a
         Slack Connect user stay data, and every line carries the language, the persona and the caller role. A `listen`
-        channel never receives a post, neither the failure reply nor the answer.
+        channel never receives a post, neither the failure reply nor the answer. A `!stop` of a full role ends the
+        project's running turn before this method queues anything (#2968).
         """
         if (envelope.get("type") or "events_api") != "events_api":
             return "ignored"
@@ -2781,6 +2823,8 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         if decision.session == slackpolicy.SESSION_FULL:
+            if is_stop(text):
+                return self.stop_full_turn(record)
             self.start_full_turn(record, decision)
             return "full"
         self.state.append_inbox(record, target)
