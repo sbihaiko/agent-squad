@@ -1663,3 +1663,27 @@ def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, mon
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
     assert Path(seen["audit"]) != Path(probe.denials_path(str(seen["work"] / "state"))), seen
+
+
+def test_the_probe_profile_grants_the_relay_folder_its_gate_policy_names(tmp_path, monkeypatch):
+    """#2994: a denied call of the gated `--bg` session goes to the permission relay (#2972), so the hook writes in the
+    relay folder its policy names. The probe's profile grants that one folder, and the folder exists before the
+    session starts, the way the supervisor prepares it."""
+    probe = load("operator_probe")
+    shape = probe.project_shape(tmp_path, [8016])
+    checkout, other_checkout, profile = shape[0], shape[5], shape[-1]
+    doc = json.loads(probe.gate_documents(tmp_path, checkout, other_checkout)[0].read_text())
+    relay = doc["relay"]["state"]
+    assert Path(relay).is_dir(), relay
+    assert f'(subpath "{os.path.realpath(relay)}")' in profile, "the profile grants no write on the relay folder"
+
+
+def test_the_probe_gate_ends_a_denied_call_inside_its_audit_wait(tmp_path):
+    """#2994: no owner answers the probe's relay, so its denied call ends by the relay's timeout. That timeout fits
+    inside the wait for the audit line, never the production wait of ten minutes."""
+    probe = load("operator_probe")
+    checkout, other = tmp_path / "checkout", tmp_path / "other"
+    checkout.mkdir()
+    other.mkdir()
+    doc = json.loads(probe.gate_documents(tmp_path, checkout, other)[0].read_text())
+    assert 0 < float(doc["relay"]["timeout"]) < probe.GATE_DEADLINE, doc["relay"]
