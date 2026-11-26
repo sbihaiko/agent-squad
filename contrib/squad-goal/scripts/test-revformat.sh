@@ -556,4 +556,38 @@ python3 "$src" --answer "$T/r45.json" > "$T/r45.md" 2>/dev/null
   && /usr/bin/grep -q 'the repro sandbox cannot start at abc1234' "$T/r45.err" \
   && ok "45 a sandbox that cannot start proves nothing: the finding stays Blocking and the reason is named" \
   || ko "45 no sandbox: rc=$rc summary='$(python3 "$src" --summary "$T/r45.md" 2>&1)' $(cat "$T/r45.err")"
+# 46) #2959: --finding-keys prints one key per Blocking finding, hashed over its file and its defect, and --resolved-keys
+# prints the key of each answer under ## Resolved, read the same way. A Debt bullet and an answered `fixed` bullet are no
+# Blocking finding. A moved line and a new failure or fix text keep the key; a reworded defect changes it.
+cat > "$T/k1.md" <<'M'
+VERDICT: CHANGES
+## Blocking
+- src/a.py:12 — null deref — an empty list raises TypeError — return [] when the list is empty
+- src/b.py:40 — the lock is never released — a second writer waits forever — release it in finally
+## Debt
+- src/c.py:3 — a long name — none — rename it
+M
+cat > "$T/k2.md" <<'M'
+VERDICT: CHANGES
+## Blocking
+- src/d.py:7 — a new defect — it fails — fix it
+## Resolved
+- src/a.py:15 — null deref — fixed: the empty list returns [] — test_empty passes
+- src/b.py:44 — the lock is never released — fixed: released in finally — test_lock passes
+M
+cat > "$T/k3.md" <<'M'
+VERDICT: CHANGES
+## Blocking
+- src/a.py:99 — null deref — another failure text — another fix
+- src/b.py:40 — the lock leaks — a second writer waits forever — release it in finally
+M
+k1=$(python3 "$src" --finding-keys "$T/k1.md" 2>&1); r2=$(python3 "$src" --resolved-keys "$T/k2.md" 2>&1); k3=$(python3 "$src" --finding-keys "$T/k3.md" 2>&1)
+[ "$(printf '%s\n' "$k1" | /usr/bin/grep -cE '^[0-9a-f]{16}$')" = 2 ] && [ "$(printf '%s\n' "$k1" | wc -l | tr -d ' ')" = 2 ] \
+  && ok "46 --finding-keys prints one key per Blocking finding and none for Debt" || ko "46 keys '$k1'"
+[ -n "$k1" ] && [ "$k1" = "$r2" ] && ok "46 a Resolved answer carries the key of the finding it answers, at a moved line" \
+  || ko "46 resolved '$r2' vs blocking '$k1'"
+[ "$(printf '%s\n' "$k3" | head -1)" = "$(printf '%s\n' "$k1" | head -1)" ] && [ "$(printf '%s\n' "$k3" | sed -n 2p)" != "$(printf '%s\n' "$k1" | sed -n 2p)" ] \
+  && ok "46 a new failure text keeps the key, a reworded defect changes it" || ko "46 k3 '$k3' vs k1 '$k1'"
+[ "$(python3 "$src" --finding-keys "$T/k2.md" | wc -l | tr -d ' ')" = 1 ] && [ -z "$(python3 "$src" --resolved-keys "$T/k1.md")" ] \
+  && ok "46 a Resolved answer is no Blocking key, and a full review has no resolved key" || ko "46 sections mixed"
 rm -rf "$T"; exit $fail

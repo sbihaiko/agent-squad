@@ -35,6 +35,8 @@ case "\${STUB_VERDICT:-APPROVE}" in
   *) printf '**VERDICT: %s**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding%s\n## Nits\n- c.py:3 a nit\n' "\$STUB_VERDICT" "\${STUB_EXTRA:+
 - \$STUB_EXTRA}" > "$T/st/review-\$key.md";;
 esac
+# a fix round that resolves the previous findings: one new Blocking finding, and each resolved bullet (#2959)
+[ -n "\${STUB_NEW:-}" ] && printf '**VERDICT: CHANGES**\n## Blocking\n- %s\n## Resolved\n%s\n' "\$STUB_NEW" "\$STUB_RESOLVED" > "$T/st/review-\$key.md"
 git rev-parse HEAD > "$T/st/review-\$key.sha"; printf 'wave/%s\n' "\$1" > "$T/st/review-\$key.base"
 echo "\$br \$(git rev-parse --short=9 HEAD) VERDICT: \${STUB_VERDICT:-APPROVE}"
 EOF
@@ -183,12 +185,14 @@ for r in 1 2 3; do (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_
 [ "$(st read 'x/y#7' state)" = needs-human ] && [ "$(/bin/ls "$T/st/cq" | /usr/bin/grep -c 'reviewfreeze')" = 1 ] \
   && ok "L: a freeze after a rearm at the same head queues no second comment" || ko "L: state '$(st read 'x/y#7' state)', queue '$(/bin/ls "$T/st/cq")'"
 
-# M) #1406: a child whose head equals its base has nothing to review. childreview.sh exits 6, which is no "try again": the
-# issue is requeued once with the no-change reason, the ledger holds the head, the run exits 1 and never retries the review.
+# M) #1406, #2984: a child whose head equals its base has nothing to review. childreview.sh exits 6, which is no "try again":
+# the run ends the issue's dispatch once through `wave.sh fail ... nochange` (#2245), never a requeue that a later run repeats
+# on the same base. The ledger holds the head, the run exits 1 and never retries the review.
 reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "M: a no-change child exits 1, never try again (5)" || ko "M: exit $rc: $out"
-[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && /usr/bin/grep -q 'the child made no change past .* in run run-1: provisional: the fix for #7 already exists' "$T/wave.log" \
-  && ok "M: one requeue, with the no-change reason" || ko "M: wave.log '$(cat "$T/wave.log")'"
+[ "$(/usr/bin/grep -c '^wave.sh fail 7 run-1 ' "$T/wave.log")" = 1 ] && /usr/bin/grep -q '^wave.sh fail 7 run-1 the child made no change past .* in run run-1: provisional: the fix for #7 already exists.* nochange$' "$T/wave.log" \
+  && ok "M: one no-change fail, with the child's reason" || ko "M: wave.log '$(cat "$T/wave.log")'"
+! /usr/bin/grep -q '^wave.sh requeue' "$T/wave.log" && ok "M: a no-change child is never requeued (#2984)" || ko "M: wave.log '$(cat "$T/wave.log")'"
 mh=$($G -C "$T/wt" rev-parse HEAD)
 [ "$(lq)" = "$mh" ] && ok "M: the requeue fact holds this head" || ko "M: fact '$(lq)'"
 : > "$T/wave.log"; STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 >/dev/null 2>&1; rc=$?
@@ -202,9 +206,38 @@ reset; out=$(SG_CHILD_KIND=probe STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1
 [ -z "$(lq)" ] && ok "N: a probe leaves no ledger requeue fact" || ko "N: fact '$(lq)'"
 reset; out=$(SG_CHILD_KIND=coding STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "N: a no-change coding child still exits 1" || ko "N: coding exit $rc: $out"
-[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$($G -C "$T/wt" rev-parse HEAD)" ] \
-  && ok "N: a coding child is requeued once, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
+[ "$(/usr/bin/grep -c '^wave.sh fail 7 run-1 .* nochange$' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$($G -C "$T/wt" rev-parse HEAD)" ] \
+  && ok "N: a coding child ends one no-change fail, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
 reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "N: a child of no named kind is a code child" || ko "N: unnamed kind exit $rc: $out"
+
+# P) #2959: the review fact keeps the key of each Blocking finding, and a round whose Resolved section lists the key of every
+# previous Blocking finding restarts the streak at 1, so a branch that fixes each round's findings is never frozen.
+st() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" "$@"; }
+reset; rm -f "$T/gh.log"
+(cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=1 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+res='- a.py:1 first finding
+- b.py:2 second finding
+- c.py:3 a nit'
+for r in 2 3 4; do
+  (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_VERDICT=CHANGES STUB_NEW="n$r.py:1 new finding $r" STUB_RESOLVED="$res" bash "$T/s/runreview.sh" run-1 route.1.1 7 >/dev/null 2>&1)
+  res="- n$r.py:1 new finding $r"
+done
+pj=$(st read 'x/y#7' review)
+nk=$(printf '%s' "$pj" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["verdicts"][0].get("keys") or []))' 2>/dev/null)
+# "## Nits" is no section, so the stub's nit stays under Blocking: the keys follow the --summary count
+nb=$(python3 "$T/s/revformat.py" --summary /dev/stdin <<'M' | sed 's/blocking=\([0-9]*\).*/\1/'
+VERDICT: CHANGES
+## Blocking
+- a.py:1 first finding
+- b.py:2 second finding
+## Nits
+- c.py:3 a nit
+M
+)
+[ "$nk" = 3 ] && [ "$nk" = "$nb" ] && ok "P: the review fact stores one key per Blocking finding" || ko "P: keys '$nk' (summary '$nb') in '$pj'"
+[ "$(printf '%s' "$pj" | python3 -c 'import json,sys; print(json.load(sys.stdin)["changes"])' 2>/dev/null)" = 1 ] \
+  && [ "$(st read 'x/y#7' state)" != needs-human ] && [ ! -s "$T/gh.log" ] \
+  && ok "P: rounds that resolve the previous findings restart the streak and freeze nothing" || ko "P: review '$pj' state '$(st read 'x/y#7' state)'"
 
 rm -rf "$T"; exit $fail

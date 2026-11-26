@@ -250,6 +250,68 @@ def test_a_review_fact_follows_a_rearm_floor_and_a_rearm_clears_it(tmp_path):
     assert review(tmp_path, "r9", "changes", "f9") == "recorded"
 
 
+def _streak(st, key="a/b#7"):
+    return json.loads(run(st, "read", key, "review").stdout)
+
+
+def test_the_review_fact_stores_the_keys_of_its_blocking_findings(tmp_path):
+    """#2959: the review fact keeps one key per Blocking finding, and the resolved keys of a fix round."""
+    assert review(tmp_path, "r1", "changes", "f1", "1", "k1,k2", "") == "recorded"
+    assert review(tmp_path, "r1", "changes", "f2", "2", "k3", "k1,k2") == "recorded"
+    v = _streak(tmp_path)["verdicts"]
+    assert v[0]["keys"] == ["k1", "k2"] and v[0]["resolved"] == [], v
+    assert v[1]["keys"] == ["k3"] and v[1]["resolved"] == ["k1", "k2"], v
+
+
+def test_a_round_that_resolves_every_previous_finding_restarts_the_streak(tmp_path):
+    """#2959 (ADR-0151 rule 1): a CHANGES round whose Resolved section lists the key of every previous Blocking finding
+    raised only new findings, so the streak counts it as the first of a new run."""
+    review(tmp_path, "r1", "changes", "f1", "1", "k1,k2", "")
+    review(tmp_path, "r1", "changes", "f2", "2", "k3", "k1,k2")
+    assert _streak(tmp_path)["changes"] == 1
+    review(tmp_path, "r1", "changes", "f3", "3", "k4", "k3")
+    review(tmp_path, "r1", "changes", "f4", "4", "k5", "k4")
+    d = _streak(tmp_path)
+    assert d["changes"] == 1 and not d["stopped"], "a branch that fixes each round's findings is never frozen"
+
+
+def test_a_round_that_leaves_a_previous_finding_unresolved_adds_one(tmp_path):
+    """#2959: a dropped, reworded or still open finding is not listed under Resolved, so the round adds 1."""
+    review(tmp_path, "r1", "changes", "f1", "1", "k1,k2", "")
+    review(tmp_path, "r1", "changes", "f2", "2", "k2b", "k1")   # k2 reworded as k2b: not resolved
+    assert _streak(tmp_path)["changes"] == 2
+    assert review(tmp_path, "r1", "changes", "f3", "3", "k9", "k2b,k7") == "recorded"
+    d = _streak(tmp_path)
+    assert d["changes"] == 1, "every previous key resolved, extra resolved keys do no harm"
+
+
+def test_a_full_review_with_no_resolved_section_adds_one(tmp_path):
+    review(tmp_path, "r1", "changes", "f1", "1", "k1", "")
+    review(tmp_path, "r2", "changes", "f2", "0", "k2", "")
+    assert _streak(tmp_path)["changes"] == 2
+    assert review(tmp_path, "r3", "changes", "f3", "0", "k3", "") == "frozen", "three counted CHANGES still freeze"
+
+
+def test_a_verdict_with_no_stored_keys_counts_as_before(tmp_path):
+    review(tmp_path, "r1", "changes", "f1")                      # a verdict from before #2959: no keys
+    review(tmp_path, "r1", "changes", "f2", "2", "k2", "k1")
+    assert _streak(tmp_path)["changes"] == 2
+    review(tmp_path, "r1", "changes", "f3", "3")                 # a new verdict with no keys
+    assert _streak(tmp_path)["changes"] == 3
+
+
+def test_the_whole_review_fingerprint_still_moves_the_coder_and_the_replay_agrees(tmp_path):
+    """#2959: a restart of the streak leaves the same-findings-twice rule on the whole-review fingerprint (ADR-0151
+    rule 2, ADR-0134), and the replay rebuilds the restarted streak from the stored keys."""
+    review(tmp_path, "r1", "changes", "same", "1", "k1", "")
+    review(tmp_path, "r1", "changes", "same", "2", "k1", "k1")
+    d = _streak(tmp_path)
+    assert d["changes"] == 1 and d["seen"] == 2 and d["moves"] == 1, d
+    assert run(tmp_path, "coder", "a/b#7").stdout.strip() == "1"
+    r = run(tmp_path, "replay", "a/b#7")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
 def test_replay_agrees_with_a_ledger_its_events_rebuild(tmp_path):
     """ADR-0149 rule 6: a prefix goes only after a replay of the ledger gives the same states."""
     run(tmp_path, "fail", "a/b#60", "r1", "k", "first")

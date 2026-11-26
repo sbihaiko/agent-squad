@@ -20,6 +20,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py requeue <key> <run> <head>            the run requeued the issue's child on this head: prints recorded|duplicate|floor
        issue_ledger.py requeued <key> <run>                  the head the run requeued the issue on, "" when it did not
        issue_ledger.py review <key> <run> <verdict> <findings> [round]  one review of the issue's work: prints recorded|reset|duplicate|frozen|floor
+                       [keys] [resolved]  comma lists: the keys of its Blocking findings, and of the previous ones it resolved (#2959)
        issue_ledger.py coder <key>                           the places down the coder chain the next attempt starts
        issue_ledger.py board <key> <run> <column> <req> [instant] [writer]  one board write: prints recorded|duplicate|stale|floor
        issue_ledger.py boardw <key> <run> <column> [actor]   that write landed, at this instant, by this actor: prints written|duplicate|superseded
@@ -421,6 +422,12 @@ def _conflict(rec, ev):   # -> (first|repeat|held|duplicate|floor, changed): a r
     return "first", True
 
 
+def _key_list(v):   # -> list|None: the keys of a review event, a list or a comma list; None when the event names none (#2959)
+    if v is None: return None
+    if isinstance(v, str): return [k for k in v.split(",") if k]
+    return [str(k) for k in v if k] if isinstance(v, list) else None
+
+
 def _review(rec, ev):   # -> (recorded|reset|duplicate|frozen|floor, changed): one review of the issue's work (ADR-0151)
     run, v, f, rnd = ev["run"], ev["verdict"], ev["findings"], str(ev.get("round") or 0)
     if v not in VERDICTS: raise ValueError(f"not a review verdict: {v!r} (one of {', '.join(VERDICTS)})")
@@ -428,11 +435,21 @@ def _review(rec, ev):   # -> (recorded|reset|duplicate|frozen|floor, changed): o
     if run in floor_runs(rec): return "floor", False   # a run from before the rearm counts toward nothing after it
     R = rec["review"] = review_fact(rec)
     if any(x.get("run") == run and str(x.get("round") or 0) == rnd for x in R["verdicts"]): return "duplicate", False
-    R["verdicts"].append({"run": run, "round": rnd, "verdict": v, "findings": f, "ts": time.time()})
+    keys, res = _key_list(ev.get("keys")), _key_list(ev.get("resolved"))
+    prev = next((x for x in reversed(R["verdicts"]) if isinstance(x, dict)), {})
+    entry = {"run": run, "round": rnd, "verdict": v, "findings": f, "ts": time.time()}
+    if keys is not None: entry["keys"] = keys
+    if res is not None: entry["resolved"] = res
+    R["verdicts"].append(entry)
     if v == "approve":
         R["changes"], R["moves"], R["seen"], R["findings"] = 0, 0, 0, ""
         return "reset", True   # the stop an earlier streak set stays: only the owner lifts it (ADR-0029)
-    R["changes"] += 1
+    # #2959: a round whose Resolved section lists the key of every Blocking finding of the previous round raised only new
+    # findings, so the streak restarts at 1. A dropped or reworded finding is not listed, a full review has no Resolved
+    # section, and a verdict from before the keys has none stored: each of them adds 1, as before.
+    was = _key_list(prev.get("keys"))
+    if was and res is not None and set(was) <= set(res) and prev.get("verdict") == "changes": R["changes"] = 1
+    else: R["changes"] += 1
     R["seen"] = R["seen"] + 1 if f and f == R["findings"] else (1 if f else 0)   # identical findings twice move the coder (#702)
     R["moves"] += 1 if f and R["seen"] % 2 == 0 else 0
     R["findings"] = f
@@ -582,8 +599,11 @@ def requeued(key, run):   # the head the run requeued the issue on, "" when it d
     return ((load(key).get("requeued") or {}).get(run) or {}).get("head", "")
 
 
-def review(key, run, verdict, findings="", rnd=0):   # -> recorded|reset|duplicate|frozen|floor: one review of the issue
-    return transition(key, {"op": "review", "run": run, "verdict": verdict, "findings": findings, "round": rnd})
+def review(key, run, verdict, findings="", rnd=0, keys=None, resolved=None):   # -> recorded|reset|duplicate|frozen|floor
+    """One review of the issue. `keys` names its Blocking findings and `resolved` the previous ones its Resolved section
+    answers, each a list or a comma list (#2959); None stores no keys, the shape of a verdict from before them."""
+    return transition(key, {"op": "review", "run": run, "verdict": verdict, "findings": findings, "round": rnd,
+                            "keys": keys, "resolved": resolved})
 
 
 def board(key, run, column, req="", instant=None, by=""):
@@ -710,7 +730,8 @@ def replay(key):   # -> [what differs]: the state rebuilt from the ledger's even
             diffs.append(f"{led}.frozen: stored {L.get('stopped')!r}, {OLD[led]}-{parse(key)[2]}.runs {'ends' if frozen else 'does not end'} with frozen")
     fresh = {"review": review_fact({})}
     for v in (rec.get("review") or {}).get("verdicts") or []:
-        _review(fresh, {"run": v.get("run"), "verdict": v.get("verdict"), "findings": v.get("findings", ""), "round": v.get("round")})
+        _review(fresh, {"run": v.get("run"), "verdict": v.get("verdict"), "findings": v.get("findings", ""), "round": v.get("round"),
+                        "keys": v.get("keys"), "resolved": v.get("resolved")})
     got, had = fresh["review"], review_fact(rec)
     for f in ("changes", "moves", "seen", "findings"):
         if got[f] != had[f]: diffs.append(f"review.{f}: stored {had[f]!r}, replay {got[f]!r}")
@@ -755,7 +776,7 @@ def main(argv):
         elif op == "requeue" and len(rest) >= 2: print(requeue(key, rest[0], rest[1]))
         elif op == "requeued" and rest: print(requeued(key, rest[0]))
         elif op == "conflict" and len(rest) >= 2: print(conflict(key, rest[0], rest[1]))
-        elif op == "review" and len(rest) >= 3: print(review(key, rest[0], rest[1], rest[2], *(rest[3:4] or [0])))
+        elif op == "review" and len(rest) >= 3: print(review(key, rest[0], rest[1], rest[2], *(rest[3:4] or [0]), *rest[4:6]))
         elif op == "replay":
             diffs = replay(key)
             if diffs:
