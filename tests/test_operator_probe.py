@@ -680,8 +680,20 @@ def full_stand_in(tmp_path, monkeypatch, remembers):
     return str(path)
 
 
+def holder_listing(session):
+    """The process table's seam: it names the session on the first call, as a live holder does, then reports it gone."""
+    calls = []
+
+    def listing():
+        calls.append(1)
+        return [["claude", "--resume", session]] if len(calls) == 1 else []
+
+    return listing
+
+
 def test_a_full_turn_returns_on_resume_the_word_it_was_given_on_stdin(tmp_path, monkeypatch):
-    """#2965 criteria (4) to (6) and (13): the second full turn resumes the first session and returns its stdin word."""
+    """#2965 criteria (4) to (6) and (13): the second full turn resumes the first session and returns its stdin word.
+    #2969: the phase then proves a real `--resume` holder is seen, and a turn runs after it closes."""
     probe = load("operator_probe")
     cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
 
@@ -690,7 +702,23 @@ def test_a_full_turn_returns_on_resume_the_word_it_was_given_on_stdin(tmp_path, 
 
     monkeypatch.setattr(probe, "sandboxed", no_sandbox)
     monkeypatch.setattr(probe, "cli_call", no_sandbox)
-    probe.full_turn_phase(tmp_path, cli)
+    probe.full_turn_phase(tmp_path, cli, listing=holder_listing("sess-probe-0001"))
+
+
+def test_a_full_turn_phase_fails_when_the_process_table_never_names_the_session(tmp_path, monkeypatch):
+    """#2969 AC4: the probe fails unless the live listing shows the holder, so a refusal it never saw proves nothing."""
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
+    with pytest.raises(probe.ProbeFailed, match="process table"):
+        probe.full_turn_phase(tmp_path, cli, listing=lambda: [])
+
+
+def test_a_full_turn_phase_is_unproven_when_the_process_table_is_unreadable(tmp_path, monkeypatch):
+    """#2969 review: an unreadable listing is unproven, never a silent pass."""
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
+    with pytest.raises(probe.ProbeFailed, match="unreadable"):
+        probe.full_turn_phase(tmp_path, cli, listing=lambda: None)
 
 
 def test_a_full_turn_that_forgets_the_stdin_word_fails_the_probe(tmp_path, monkeypatch):

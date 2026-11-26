@@ -199,6 +199,30 @@ def test_a_terminal_that_holds_the_session_refuses_the_turn_and_names_the_reason
     assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
     rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
     assert rows[-1]["reason"] == "terminal-holds-session" and rows[-1]["failed"] is True, rows
+    assert rows[-1]["refused"] is True and rows[-1]["session"] is None, rows
+
+
+def test_a_terminal_holding_the_session_before_any_saved_id_refuses_the_first_turn(tmp_path, stand_in):
+    """#2969 review: a live interactive claude refuses the turn even before the state folder saves a session."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"))
+    daemon.live_argvs = lambda: [["claude"]]
+    deliver(daemon, channel, "first")
+    assert calls(stand_in) == [], calls(stand_in)
+    posts = [p for p in client.posts() if p.get("channel") == channel]
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
+    rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
+    assert rows[-1]["refused"] is True and rows[-1]["reason"] == "terminal-holds-session", rows
+
+
+def test_an_unknown_process_listing_refuses_the_turn(tmp_path, stand_in):
+    """#2969 review Blocking: an unreadable process table refuses the turn, never runs it blind."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), live=lambda: None)
+    deliver(daemon, channel, "hello")
+    assert calls(stand_in) == [], calls(stand_in)
+    posts = [p for p in client.posts() if p.get("channel") == channel]
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
+    rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
+    assert rows[-1]["refused"] is True, rows
 
 
 def test_a_turn_runs_once_the_terminal_closes(tmp_path, stand_in):
