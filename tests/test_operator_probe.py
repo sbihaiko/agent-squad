@@ -1728,6 +1728,9 @@ print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session
 """
 
 
+NEVER_HOLDING_NAME = "claude-exec-stand-in"
+
+
 def holder_stand_in(tmp_path, body=HOLDER_STAND_IN, name="claude-holder-stand-in"):
     path = tmp_path / name
     path.write_text(body.format(python=sys.executable))
@@ -1748,7 +1751,7 @@ def test_a_turn_is_refused_while_a_live_cli_holds_the_session(tmp_path):
 def test_a_live_process_that_never_holds_the_session_fails_the_probe(tmp_path):
     probe = load("operator_probe")
     with pytest.raises(probe.ProbeFailed, match="never appeared in the process table"):
-        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXEC_STAND_IN, "claude-exec-stand-in"), wait=1.0)
+        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXEC_STAND_IN, NEVER_HOLDING_NAME), wait=1.0)
 
 
 def test_the_holder_wait_ends_at_once_when_the_reading_agrees():
@@ -1761,3 +1764,11 @@ def test_the_holder_wait_gives_up_at_its_deadline():
     probe = load("operator_probe")
     assert probe.wait_for_holder("sess", present=False, wait=0.2, holder=lambda session: 4321) is False
     assert probe.wait_for_holder("sess", present=True, wait=0.2, holder=lambda session: None) is False
+
+
+def test_the_never_holding_stand_in_never_names_the_cli(tmp_path):
+    """#3002: the stand-in is listed under its own argv until its `execv` ends. A name the CLI check matches is a
+    holder in that window, and a slow runner reads it first, so the stand-in never names the CLI."""
+    fullturn = load("fullturn")
+    path = holder_stand_in(tmp_path, EXEC_STAND_IN, NEVER_HOLDING_NAME)
+    assert not fullturn.is_claude([sys.executable, path, "-p", "--resume", "sess", "--verbose"])
