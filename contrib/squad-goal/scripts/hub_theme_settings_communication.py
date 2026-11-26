@@ -993,6 +993,20 @@ def _slack_project_node(P, seat, node_id):
             "guest_slot": guest_slot, "notice": notice, "defects": defects}
 
 
+def _slack_theme_personas(seats, clients):
+    """Each client's personas as the Personas theme answers them, by client id: one `{id, name}` for each row the theme
+    lists for that client. The client detail's Default persona select reads this map, so the select and the theme answer
+    one merge and never drift apart (#3016). A merge that cannot answer leaves the map empty, and the caller keeps its
+    own list."""
+    try:
+        groups = personas_overview(seats=seats, clients=clients).get("groups") or []
+    except Exception as e:
+        print(f"hub: the personas could not be merged: {type(e).__name__}: {e}", file=sys.stderr)
+        return {}
+    return {_slack_text(g.get("id")): [{"id": row["id"], "name": row["name"]} for row in g.get("rows") or ()]
+            for g in groups}
+
+
 def _slack_persona_options(P, seats):
     """The persona ids and names the client's projects declare, each once, in project order: the choices a default
     persona may take."""
@@ -1091,6 +1105,7 @@ def _slack_clients_tree_for(P, seats, here=None, own=False):
         for p in g["projects"]:
             if p["id"] not in by_id and p["id"] not in unknown: unknown.append(p["id"])
     nodes, all_defects, slots, channels = [], [], [], 0
+    theme_personas = _slack_theme_personas(seats, clients)   # the select answers the theme's rows for the same client (#3016)
     for i, g in enumerate(groups):
         children, with_slack = [], 0
         for j, entry in enumerate(g["projects"]):
@@ -1120,9 +1135,11 @@ def _slack_clients_tree_for(P, seats, here=None, own=False):
                 "ask": {"id": f"c{i}", "op": "delete_client", "client": g["id"],
                         "text": f"Delete {g['name']}? Its projects return to the Add project list"
                                 + (f": {', '.join(held)}." if held else ".")} if g["id"] else None,
-                # The default-persona select of a client holds its projects' personas, and the hub's own when it holds no
-                # project yet: a client just created still offers the personas its first project may follow (#2922).
-                "persona_options": _slack_persona_options(P, seats_of or seats),
+                # The default-persona select holds the Personas theme's own rows for the client, so the two agree (#3016).
+                # A client with no project has no theme row, and it keeps the hub's personas so its default can change at
+                # once (#2922); the theme group of one unnamed project is keyed by that project's id.
+                "persona_options": theme_personas.get(g["id"] or (g["projects"][0]["id"] if g["projects"] else ""))
+                                    or _slack_persona_options(P, seats_of or seats),
                 "detail": {"title": g["name"], "sub": "",
                            "text": "A client groups projects in the local client map, never in a repository. Changing its "
                                    "default persona sets it in each project that follows the client, by itself; a project with "

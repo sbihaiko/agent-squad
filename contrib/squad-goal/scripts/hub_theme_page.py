@@ -1536,7 +1536,8 @@ function slPersonaSection(r){const cf=r.files.committed,ps=r.personas||[],ids=sl
  const rows=use.map(p=>{const o=byId[String(p.id)]||{},used=(o.channels||[]).length?o.channels.map(esc).join(", "):"no channel";
   return `<tr><td data-l="Persona"><span class=nw><b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span></span></td><td data-l="Voice"><span class=nw>${esc(p.voice)}</span></td><td data-l="Tone">${esc(p.tone)}</td><td data-l="Used by">${used}</td><td><button type=button class=slnw data-slpopen="${slA(p.id)}">${String(slPOpen)===String(p.id)?"Close":"Edit"}</button></td></tr>`});
  const open=slPOpen?slPersonaAt(slDocs,slPOpen):null;
- return `<section class=slsec><h4>Personas ${slTag(cf)}</h4>`
+ // The theme edits one persona once for every client that uses it, so the section names it (#3016).
+ return `<section class=slsec><h4>Personas ${slTag(cf)}</h4><p class=sltjump><a href="#set-prs" data-sp=prs>${esc("Open the Personas theme")}</a></p>`
  +(use.length?`<table class=slt2><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Used by</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<p class=m>${esc("No persona: the project declares no identity.")}</p>`)
  +`<div class=sldef><span class=sl>Default persona</span><select data-sldefault aria-label="default persona">${slPickOpts(ids,cur,"none")}</select>${slTag(cf)}</div>`
  +(open?slPersonaDetail(open):"")
@@ -1576,7 +1577,8 @@ function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.childr
    Settings; another project names the page that edits them, so no section reads as global. */
 function slTProject(n){if(!n||n.kind!=="project")return "";
  if(n.here)return slReadHtml(slR);
- return n.hub?`<p class=slttext>${esc("Its personas, roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
+ // Its personas are edited once for every client in the Personas theme; its roles and events stay on its own page (#3016).
+ return n.hub?`<p class=slttext>${esc("Its personas are edited in the ")}<a href="#set-prs" data-sp=prs>${esc("Personas theme")}</a>${esc(". Its roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
 const slTOpen=n=>!!(n.children&&n.children.length)&&slTopen[n.id]!==false;
@@ -1691,6 +1693,7 @@ const slTClient=n=>{if(n.kind!=="client"||n.own)return "";   // the page of one 
  const del=n.ask?`<div class=sltacts><button type=button class=sltdanger data-slcask="${slA(n.id)}">${esc("Delete client")}</button></div>`:"";
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
+ +`<p class=sltjump><a href="#set-prs" data-sp=prs>${esc("Open the Personas theme")}</a></p>`   // the theme edits the personas of every client (#3016)
  +slTRefused(n)+projects+del};
 /* The project's one control (#2922): Remove from client. The question it shows is the hub's, and it names the project
    and the client. */
