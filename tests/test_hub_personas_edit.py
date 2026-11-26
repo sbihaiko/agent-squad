@@ -18,6 +18,7 @@ import tempfile
 import pytest
 import yaml
 
+from squad import clients as CL
 from squad import personas as PS
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -176,6 +177,23 @@ def test_the_preview_names_each_project_file_and_writes_none(hub, tmp_path, monk
     assert not (tmp_path / "state" / "slack-wt").exists(), "the preview made a worktree"
 
 
+@pytest.mark.heavy   # one real repository and its worktree
+def test_the_read_answers_the_landing_branch_never_an_uncommitted_hub_worktree_file(hub, tmp_path, monkeypatch):
+    """A hub worktree left with an uncommitted edit answers nothing: the theme reads the document committed on the
+    landing branch, so a refused or unlanded save never draws itself as the project's declaration."""
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": BLUE_A}, git=True)
+    co, c, _origin = made["alpha"]
+    wt = tmp_path / "hubs" / "alpha"
+    subprocess.run(["git", "-C", str(co), "worktree", "add", "-q", "--detach", str(wt), "HEAD"],
+                   check=True, timeout=60)
+    (wt / "docs" / "squad" / "slack.yaml").write_text(yaml.safe_dump(BLUE_B, sort_keys=False))
+    got = hub._pr_newest_committed({"id": "alpha", "label": "alpha", "checkout": str(co),
+                                    "committed": yaml.safe_load(c.read_text()), "committed_path": str(c),
+                                    "cf": "slack.yaml"})
+    assert got["committed"]["personas"][0] == BLUE_A["personas"][0], got
+
+
 @pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_confirmed_save_writes_each_project_from_its_own_tree_with_one_commit_and_one_push(
         hub, tmp_path, monkeypatch):
@@ -283,11 +301,18 @@ def test_a_confirmed_settle_writes_the_chosen_copy_to_each_client_project_and_cl
     out = hub.personas_edit({"persona": "blue", "client": "acme", "copy": "beta", "confirm": True})
     assert out.get("err") is None, out
     assert [s["project"] for s in out["saved"]] == ["alpha", "beta"], out
+    landed_docs = {}
     for slug in ("alpha", "beta"):
-        _co, _c, origin = made[slug]
+        co, _c, origin = made[slug]
         landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
                                 capture_output=True, text=True, check=True, timeout=60).stdout
         assert yaml.safe_load(landed)["personas"][0] == \
+               {"id": "blue", "name": "Blue9", "voice": "Sulafat", "tone": "Warm."}, slug
+        # The branch the checkout tracks carries the choice, so the project itself is settled, not the hub's tree alone.
+        subprocess.run(["git", "-C", str(co), "fetch", "-q", "origin"], check=True, timeout=60)
+        subprocess.run(["git", "-C", str(co), "reset", "--hard", "-q", "origin/dev"], check=True, timeout=60)
+        landed_docs[slug] = yaml.safe_load((co / "docs" / "squad" / "slack.yaml").read_text())
+        assert landed_docs[slug]["personas"][0] == \
                {"id": "blue", "name": "Blue9", "voice": "Sulafat", "tone": "Warm."}, slug
     _co, _c, origin = made["gamma"]
     landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
@@ -299,6 +324,10 @@ def test_a_confirmed_settle_writes_the_chosen_copy_to_each_client_project_and_cl
     after = hub.personas_overview()
     acme_after = next(g for g in after["groups"] if g["id"] == "acme")
     assert acme_after["rows"][0]["drift"] is False, acme_after
+    # The landed branches alone settle the row: a read of the projects' own documents carries no drift.
+    seats = [{**seat(slug), "committed": doc} for slug, doc in landed_docs.items()]
+    row = PS.groups(seats, CL.normalize(CLIENTS))[0]["rows"][0]
+    assert row["drift"] is False, row
 
 
 # ---------------------------------------------------------------- the page: the editor, the preview and the sample
@@ -357,6 +386,17 @@ def test_the_preview_body_names_no_confirm_and_the_confirm_body_confirms(hub):
         assert body["persona"] == "blue", body
         assert body["fields"] == {"name": "Blue", "voice": "Kore", "tone": "Calm."}, body
         assert body["projects"] == ["alpha"], body
+
+
+def test_the_body_follows_the_editor_mode_not_a_stale_copy_field(hub):
+    """The editor's mode decides the body: a field edit that still carries a copy project from an earlier choice posts
+    its fields and projects, never the copy."""
+    edit = {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm.", "projects": ["alpha"], "all": [],
+            "mode": "fields", "copy": "beta"}
+    tail = (f"prS={{voices:[],tone_max:300}};prEd={json.dumps(edit)};console.log(prBody(false))")
+    body = json.loads(_node(_src(hub, tail)))
+    assert body == {"persona": "blue", "fields": {"name": "Blue", "voice": "Kore", "tone": "Calm."},
+                    "projects": ["alpha"], "confirm": False}, body
 
 
 def test_the_sample_button_plays_the_chosen_voice_through_the_sample_route(hub):

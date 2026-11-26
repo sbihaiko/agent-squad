@@ -26,13 +26,16 @@ def personas_fields():
 
 
 def _pr_newest_committed(seat):
-    """The seat with the committed document the theme reads: the newer of the project's checkout file and the hub's own
-    worktree file for that project.
+    """The seat with the committed document the theme reads: the newer of the project's checkout file and the document
+    the hub's own worktree holds committed on the landing branch for that project.
 
     The hub writes and lands a persona save from its own worktree, and the project's checkout follows the branch on its
     own schedule. So a read that took the checkout alone would keep drawing a drift the save already settled (#3015
-    acceptance 5). The checkout wins once it is at least as new, so a later pull or a hand edit answers the theme. A
-    worktree the hub holds no file in leaves the seat as it stands, and every failure keeps the checkout's document."""
+    acceptance 5). The checkout wins once it is at least as new, so a later pull or a hand edit answers the theme.
+
+    The hub's document is read from `origin/<land>` alone, never from the worktree's working file: a refused or unlanded
+    save leaves the working file ahead of the branch, so the working file answers nothing. A worktree the hub holds no
+    file in leaves the seat as it stands, and every failure keeps the checkout's document."""
     try:
         checkout_path = pathlib.Path(_slack_text(seat.get("committed_path")))
         wt, why = slack_worktree(loop=seat.get("checkout"), name=seat.get("id"))
@@ -41,8 +44,14 @@ def _pr_newest_committed(seat):
         hub_path = pathlib.Path(wt) / SLACK_YAML_REL
         if not hub_path.is_file() or hub_path.stat().st_mtime <= checkout_path.stat().st_mtime:
             return seat
-        doc = _slack_read_doc(hub_path)
-        if not doc:
+        out = _slack_git(wt, "show", f"refs/remotes/origin/{LAND}:{SLACK_YAML_REL}")
+        if out.returncode:
+            return seat
+        try:
+            doc = yaml.safe_load(out.stdout)
+        except yaml.YAMLError:
+            return seat
+        if not isinstance(doc, dict) or not doc:
             return seat
         return {**seat, "committed": doc, "committed_path": hub_path, "cf": _slack_name(hub_path, "slack.yaml")}
     except (OSError, TypeError, ValueError):

@@ -2165,17 +2165,17 @@ const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks a
 const prRows=()=>((prS||{}).groups||[]).flatMap(g=>g.rows||[]);
 const prRowAt=id=>prRows().find(r=>String(r.id)===String(id))||null;
 function prStartEdit(id){const r=prRowAt(id);if(!r||r.read_only)return;
- prEd={id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
+ prEd={mode:"fields",id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
  prPlan=null;prPMsg="";prRender()}
 /* A drifted row offers one copy for each project that declares the id (#3015): the choice starts an edit that names the
    client and the copy, and the hub alone decides the targets, so a project of another client is never written. */
 function prCopyStart(client,project){const g=((prS||{}).groups||[]).find(x=>String(x.id)===String(client));if(!g)return;
  const r=(g.rows||[]).find(x=>(x.copies||[]).some(c=>String(c.project)===String(project)));if(!r)return;
  const cp=(r.copies||[]).find(c=>String(c.project)===String(project));if(!cp)return;
- prEd={id:r.id,name:cp.name,voice:cp.voice,tone:cp.tone,client:g.id,copy:cp.project,copies:(r.copies||[]).slice()};
+ prEd={mode:"copy",id:r.id,name:cp.name,voice:cp.voice,tone:cp.tone,client:g.id,copy:cp.project,copies:(r.copies||[]).slice()};
  prPlan=null;prPMsg="";prRender()}
 function prStopEdit(){prEd=null;prPlan=null;prPMsg="";prRender()}
-function prBody(confirm){if(prEd.copy)return JSON.stringify({persona:prEd.id,client:prEd.client,copy:prEd.copy,
+function prBody(confirm){if(prEd.mode==="copy")return JSON.stringify({persona:prEd.id,client:prEd.client,copy:prEd.copy,
  confirm:!!confirm});
  return JSON.stringify({persona:prEd.id,fields:{name:prEd.name,voice:prEd.voice,tone:prEd.tone},
  projects:prEd.projects,confirm:!!confirm})}
@@ -2201,7 +2201,7 @@ function prPlanHtml(){const rows=((prPlan||{}).rows)||[];if(!rows)return"";
   +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
 function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
  const limit=max==null?"the policy's":prTxt(max);
- if(d.copy)return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
+ if(d.mode==="copy")return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
   +`<fieldset class=prf><legend>Copy</legend>${(d.copies||[]).map(c=>`<label><input type=radio name=prcopy data-prcopy="${prTxt(c.project)}"${String(c.project)===String(d.copy)?" checked":""}> ${prTxt(c.label)} <span class=prfile>${prFile(c.file)}</span> — <b>${prTxt(c.name)}</b> · ${prTxt(c.voice)} · ${prTxt(c.tone)}</label>`).join("")}</fieldset>`
   +`<p class=m>The preview writes the chosen copy into each project of this client that declares ${prTxt(d.id)}.</p>`
   +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
@@ -2244,7 +2244,7 @@ $("#prbody").addEventListener("input",e=>{if(!prEd)return;const t=e.target;
  if(t.id==="prname"){prEd.name=t.value;return}
  if(t.id==="prtone"){prEd.tone=t.value}});
 $("#prbody").addEventListener("change",e=>{if(!prEd)return;const t=e.target,dt=t.dataset||{};
- if(dt.prcopy!==undefined&&prEd.copy){const c=(prEd.copies||[]).find(x=>String(x.project)===String(dt.prcopy));
+ if(dt.prcopy!==undefined&&prEd.mode==="copy"){const c=(prEd.copies||[]).find(x=>String(x.project)===String(dt.prcopy));
   if(c){prEd.copy=c.project;prEd.name=c.name;prEd.voice=c.voice;prEd.tone=c.tone;prRender()}return}
  if(t.id==="prvoice"){prEd.voice=t.value;return}
  if(dt.prproj!==undefined){const ids=new Set(prEd.projects);if(t.checked)ids.add(dt.prproj);else ids.delete(dt.prproj);
