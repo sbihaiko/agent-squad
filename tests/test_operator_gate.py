@@ -119,6 +119,37 @@ def test_the_gate_attaches_to_the_bg_session(tmp_path, monkeypatch):
     assert doc["answer"] == str(ANSWER), doc
 
 
+def test_the_gate_of_a_project_session_declares_its_wrapper_and_inbox(tmp_path, monkeypatch):
+    op = operators_module()
+    argvs = []
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        argvs.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000002\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    repo = tmp_path / "repo"
+    checkout = tmp_path / "project"
+    repo.mkdir()
+    checkout.mkdir()
+    state = tmp_path / "state"
+    record = Path(op.voiced.slack_record_path(str(state), "sbihaiko/project"))
+    record.parent.mkdir(parents=True)
+    wrapper = f"{checkout / 'scripts' / 'read-status.sh'} --short"
+    record.write_text(json.dumps({"revision": {"guard": {"read_wrappers": [wrapper]},
+                                               "workspaces": [{"channels": [{"id": INBOX}]}]}}))
+    unit = {"key": "project", "repo": "sbihaiko/project", "checkout": str(checkout), "channels": [INBOX]}
+    op.start(unit, str(state), str(repo))
+    argv = argvs[0]
+    assert argv[0] == op.WRAPPER and argv[1] == "--bg", argv[:3]
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    doc = json.loads(Path(command.split()[-1]).read_text())
+    assert doc["wrappers"] == [wrapper], doc
+    assert doc["inboxes"] == [os.path.realpath(str(state / "inboxes" / f"{INBOX}.jsonl"))], doc
+    assert doc["checkout"] == os.path.realpath(checkout), doc
+
+
 def test_the_kernel_profile_lets_the_gate_write_its_audit(tmp_path):
     op = operators_module()
     audit = str(tmp_path / "state" / "operators" / "denials.jsonl")
@@ -188,6 +219,23 @@ def test_read_denies_a_path_outside_the_project_checkout(tmp_path):
         assert "outside the project checkout" in reason or "another project checkout" in reason, reason
 
 
+def test_read_denies_a_secret_name_in_any_path_component(tmp_path):
+    tree_ = tree(tmp_path)
+    checkout = Path(tree_["checkout"])
+    for path in (checkout / ".env" / "config.txt", checkout / "sub" / ".env.production" / "notes.txt",
+                 checkout / "config" / "slack.local.yaml" / "notes.txt",
+                 checkout / "docs" / "team.slack.local.yaml" / "notes.txt"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+        allowed, reason, _ = call(run(tmp_path, tree_, read_event(path)))
+        assert not allowed, f"Read allowed {path}"
+        assert "secret" in reason, reason
+    plain = checkout / "docs" / "environment.md"
+    plain.write_text("x")
+    allowed, reason, _ = call(run(tmp_path, tree_, read_event(plain)))
+    assert allowed, reason
+
+
 def test_read_denies_the_secret_list(tmp_path, monkeypatch):
     home = tmp_path / "home"
     for name in (".ssh", ".config/gh", ".aws"):
@@ -220,6 +268,23 @@ def test_bash_allows_the_answer_helper_and_no_other_command(tmp_path):
         allowed, reason, _ = call(run(tmp_path, tree_, bash_event(command)))
         assert not allowed, f"Bash allowed {command!r}"
         assert "helper" in reason or "Bash" in reason, reason
+
+
+def test_bash_denies_the_answer_helper_under_a_program_that_is_not_an_interpreter(tmp_path):
+    tree_ = tree(tmp_path)
+    for program in ("/evil/python3", "/evil/python", "./python3", "bin/python3"):
+        command = f"{program} {ANSWER} --scope {INBOX} --text hi"
+        allowed, reason, _ = call(run(tmp_path, tree_, bash_event(command)))
+        assert not allowed, f"Bash allowed {command!r}"
+        assert "helper" in reason, reason
+
+
+def test_bash_allows_the_answer_helper_under_the_running_interpreter_by_its_path(tmp_path):
+    tree_ = tree(tmp_path)
+    command = f"{sys.executable} {ANSWER} --scope {INBOX} --text hi"
+    allowed, reason, given = call(run(tmp_path, tree_, bash_event(command)))
+    assert allowed, reason
+    assert shlex.split(given["command"]) == shlex.split(command), given
 
 
 def test_bash_allows_the_action_request_call_of_the_answer_helper(tmp_path):
@@ -297,6 +362,14 @@ def test_each_denial_writes_one_audit_line_with_its_reason(tmp_path):
     assert "at" in lines[0], lines[0]
     run(tmp_path, tree_, bash_event("wget http://example.com/x"))
     assert len(audit_lines(tree_)) == 2
+
+
+def test_a_denial_whose_audit_write_fails_blocks_the_call(tmp_path):
+    tree_ = tree(tmp_path)
+    (tmp_path / "state" / "operators").write_text("a file where the audit folder belongs")
+    done = run(tmp_path, tree_, bash_event("curl http://example.com"))
+    assert done.returncode == 2, f"a failed audit write exited {done.returncode}: {done.stdout}"
+    assert done.stdout.strip() == "", f"a blocked call still answered: {done.stdout}"
 
 
 def test_an_allowed_call_writes_no_audit_line(tmp_path):

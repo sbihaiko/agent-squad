@@ -22,8 +22,8 @@ The live phases of `contrib/voice/operator_probe.py` hold that measurement.
 block. The decision function raises on a policy it cannot read, and the script turns that into the block.
 
 **The audit.** Every denial appends one JSON line to the audit file the policy names: the time, the tool, the decision,
-the reason and a bounded, redacted excerpt of the call. The line is best effort: a failed write never turns a denial
-into an allow.
+the reason and a bounded, redacted excerpt of the call. The line is written before the answer: a failed write blocks the
+call, so a denial is never answered without its line.
 
 The policy is one JSON document the supervisor writes at the session start (`contrib/voice/operators.py`), never a value
 the model can reach: `checkout`, `inboxes`, `wrappers`, `answer`, `others` (every other project checkout) and `audit`.
@@ -43,6 +43,7 @@ from squad.redact import redact  # noqa: E402  the shared redaction of a value t
 TOOLS = ("Read", "Monitor", "TaskStop", "Bash")
 TAIL = ("tail", "-n", "0", "-F")          # the one Monitor command, as `OPERATOR.md` prints it
 HELPER_FLAGS = ("--scope", "--thread", "--text", "--speech", "--persona", "--kind", "--action", "--arguments")
+ANSWER_PROGRAMS = ("python3", "python")
 ACTION_REQUEST = "action-request"          # the helper kind of a request line (squad/slackactions.KIND)
 HELPER_KINDS = ("answer", "proposal", ACTION_REQUEST)
 ANSWER_REQUIRED = ("--scope", "--text")
@@ -151,7 +152,6 @@ def decide(pol, event):
 
 def _secret_reason(pol, path):
     """The reason this resolved path is on the secret list, else None."""
-    name = os.path.basename(path)
     home = os.path.realpath(os.path.expanduser("~"))
     for folder in SECRET_DIRS:
         if _inside(path, os.path.realpath(os.path.join(home, folder))):
@@ -159,10 +159,11 @@ def _secret_reason(pol, path):
     for folder in pol.others:
         if _inside(path, folder):
             return f"{path} is another project checkout, not this session's {pol.checkout}"
-    if name == ".env" or name.startswith(".env."):
-        return f"the secret list refuses a Read of {path}: a project's .env carries its secrets"
-    if name == SECRET_NAME or name.endswith("." + SECRET_NAME):
-        return f"the secret list refuses a Read of {path}: the profile's local Slack file carries its secrets"
+    for part in path.split(os.sep):
+        if part == ".env" or part.startswith(".env."):
+            return f"the secret list refuses a Read of {path}: a project's .env carries its secrets"
+        if part == SECRET_NAME or part.endswith("." + SECRET_NAME):
+            return f"the secret list refuses a Read of {path}: the profile's local Slack file carries its secrets"
     return None
 
 
@@ -266,12 +267,21 @@ def _bash(pol, given):
     return _allow({**given, "command": judged})
 
 
+def _interpreter(program):
+    """True for a bare `python3` or `python`, or for an absolute path whose real file is the running interpreter."""
+    if program in ANSWER_PROGRAMS:
+        return True
+    return os.path.isabs(program) and os.path.realpath(program) == os.path.realpath(sys.executable)
+
+
 def _helper(pol, argv):
     """`(True, None)` for one allowed call of the shipped answer helper, `(False, "")` for an argv that is no helper
     call at all, and `(True, reason)` for a helper call the helper's own arguments refuse."""
-    program = os.path.basename(argv[0])
-    if program not in ("python3", "python") or len(argv) < 2:
+    program = argv[0]
+    if os.path.basename(program) not in ANSWER_PROGRAMS or len(argv) < 2:
         return False, ""
+    if not _interpreter(program):
+        return True, f"the answer helper runs only under a bare python3 or python, not {program!r}"
     if os.path.realpath(os.path.expanduser(argv[1])) != os.path.realpath(pol.answer):
         return False, ""
     rest = argv[2:]
@@ -348,18 +358,14 @@ def audit_line(event, reason, now=None):
 
 
 def audit(path, event, reason, now=None):
-    """Append one audit line, best effort: a fill the hook cannot write never turns a denial into an allow."""
+    """Append one audit line. A write the hook cannot make raises, so the hook blocks the call instead of answering it."""
     if not path:
-        return None
+        return
     line = audit_line(event, reason, now)
-    try:
-        folder = os.path.dirname(path)
-        if folder:
-            os.makedirs(folder, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line, sort_keys=True) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-    except OSError:
-        return line
-    return line
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(line, sort_keys=True) + "\n")
+        f.flush()
+        os.fsync(f.fileno())

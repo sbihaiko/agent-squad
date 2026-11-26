@@ -49,16 +49,17 @@ session, so the session's reach is set by the gate and not by the message.
    reply itself is a log line. The daemon keeps answering the next message.
 7. **A `PreToolUse` hook decides every tool call of a project operator session.** The hook names four tools and denies
    every other tool name with a reason.
-   - `Read` passes only for a path inside the project checkout. It denies the secret list: a `.env` file, a
-     `slack.local.yaml` file or one that ends in `.slack.local.yaml`, the owner's `~/.ssh`, `~/.config/gh` and `~/.aws`,
-     and every other project checkout.
+   - `Read` passes only for a path inside the project checkout. It denies the secret list: a path with a `.env` or
+     `.env.*` component, a path with a `slack.local.yaml` component or one that ends in `.slack.local.yaml`, the owner's
+     `~/.ssh`, `~/.config/gh` and `~/.aws`, and every other project checkout.
    - `Monitor` passes only as the exact command `tail -n 0 -F <inbox>`, where the inbox is one of the session's own.
    - `TaskStop` passes.
    - `Bash` passes only for the answer helper, in one of its three forms (an answer, a proposal, or an action request),
      and for each command line the project declares under `guard.read_wrappers`. It denies a command with a shell
      control operator, a substitution or a redirection.
    An allowed call answers with the input the hook judged, so the executed command equals the judged command. Each
-   denial writes one audit line with its reason. An error in the hook blocks the call, so the hook fails closed.
+   denial writes one audit line with its reason, and a failed write blocks the call. An error in the hook blocks the
+   call, so the hook fails closed.
    The gate reads its policy from one file the supervisor writes at the session start, never from a value the model
    can reach.
 
