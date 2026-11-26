@@ -263,7 +263,7 @@ def test_a_holder_never_reads_as_a_queued_waiter(tmp_path):
     st = tmp_path / "st"
     env = _env(st) | {"SG_PS": str(_slow_reader(tmp_path)), "SERIAL_POLL_SECONDS": "0.05"}
     with _grouped(["bash", str(d / "serial.sh"), "gate", "sleep", "30"], env=env,
-                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as holder:
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL):
         pidf = st / "locks" / "gate" / "pid"
         deadline = time.time() + 20
         while time.time() < deadline and not (pidf.exists() and pidf.read_text().strip()):
