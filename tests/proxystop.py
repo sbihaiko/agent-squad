@@ -16,6 +16,15 @@ def live_proxy_pids(parent_pid):
     return [int(pid) for pid in result.stdout.split()]
 
 
+def describe(pids):
+    """One line per pid: its parent and its command line, so a leak names the test folder its refusals path holds (#2989)."""
+    lines = []
+    for pid in pids:
+        result = subprocess.run(["ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
+        lines.append(f"{pid}: {result.stdout.strip() or 'gone'}")
+    return "\n".join(lines)
+
+
 def track_starts(module):
     """Record each proxy the module starts, so the test that started it ends it at teardown."""
     start = module.start_proxy
