@@ -27,6 +27,20 @@ VOICE = ROOT / "contrib" / "voice"
 
 OWNER = "U0OWNER"
 STRANGER = "U0STRANGER"
+TEAM = "T0TEAM0001"   # the workspace the fake events name, whose owner the hub registry holds (#2966)
+
+
+def owners_registry(tmp_path, owners=None):
+    """The hub registry holding one owner id per workspace, as the hub route writes it (#2966).
+
+    The seam answers the owners file for a bare entry alone, so a project keeps the saved-sha check out of force and
+    the owner still resolves. A case that proves the saved sha keeps its own registry."""
+    path = tmp_path / "slack-saved.json"
+    path.write_text(json.dumps({"owners": {TEAM: OWNER} if owners is None else owners}))
+
+    def seam(entry):
+        return "" if str((entry or {}).get("repo") or "").strip() else str(path)
+    return seam
 CLIP_SECONDS = 20.0
 TARGET_SECONDS = 0.5 * CLIP_SECONDS + 5.0     # the spec's own target for a clip's line
 
@@ -93,6 +107,7 @@ def clip_event(ts="1762500000.000100", user=OWNER, text="", envelope_id="env-1",
                 "channel_type": channel_type,
                 "channel": channel,
                 "user": user,
+                "team": TEAM,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
                 "text": text,
@@ -119,6 +134,7 @@ def message_event(text="hello operator", user=OWNER, ts="1762500001.000200", env
                 "channel_type": channel_type,
                 "channel": channel,
                 "user": user,
+                "team": TEAM,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
                 "text": text,
@@ -150,7 +166,8 @@ def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=O
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=owner,
                         transcriber=transcriber or FakeTranscriber(),
                         downloader=downloader or (lambda url: b"audio-bytes"),
-                        log=log or (lambda line: None), client=client, projects=projects)
+                        log=log or (lambda line: None), client=client, projects=projects,
+                        registry=owners_registry(tmp_path))
     asyncio.run(mod.serve(daemon, "xapp-fake", connect=lambda url, **kw: socket,
                           open_connection=lambda: {"url": "wss://fake"}, stop=stop))
     return mod, daemon, socket
@@ -2586,7 +2603,8 @@ def startable_daemon(tmp_path, mod, starter):
     state = mod.State(str(tmp_path / "state"))
     state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
     return mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
-                      log=lambda line: None, client=FakeClient(), starter=starter)
+                      log=lambda line: None, client=FakeClient(), starter=starter,
+                      registry=owners_registry(tmp_path))
 
 
 def test_a_message_for_a_project_starts_its_operator_session_at_once(tmp_path):
@@ -2673,7 +2691,8 @@ def test_a_direct_message_starts_the_dm_session(tmp_path):
     started = []
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
                         downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
-                        starter=lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)))
+                        starter=lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)),
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
     assert started == [(daemon.state.dir, "dm")], started
@@ -2683,7 +2702,8 @@ def test_a_fixture_daemon_with_no_starter_starts_no_session(tmp_path):
     """A daemon that names no starter reads, answers and writes its outbox, and spawns nothing."""
     mod = voiced()
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
-                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
     assert daemon.wake_operator("acme/app") is False
@@ -2700,7 +2720,8 @@ def test_a_refused_starter_keeps_the_inbox_line_and_logs_one_line(tmp_path):
     state = mod.State(str(tmp_path / "state"))
     state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
-                        log=logged.append, client=FakeClient(), starter=starter)
+                        log=logged.append, client=FakeClient(), starter=starter,
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel")) == "inbox"
     assert [row["text"] for row in lines(state.inbox_for("C0PROJ0001"))] == ["what changed?"]
@@ -2981,3 +3002,125 @@ def test_the_first_owner_dm_starts_the_dm_session(tmp_path):
     assert started == ["dm"], started
     record = Path(daemon.state.dir) / "operators" / "sessions" / "dm.json"
     assert json.loads(record.read_text())["dm"] == "D0OWNER", record.read_text()
+
+
+# --- the full session's owner comes from the hub registry, never the daemon's setting (#2966) --------------
+FULL_REPO = "acme/app"
+FULL_TEAM = "T0TEAM0001"
+FULL_CHANNEL = "C0FULLPROJ"
+
+
+def full_revision():
+    """An active revision whose one `session: full` role has its member in the project channel."""
+    committed = {
+        "version": 1,
+        "project": {"language": "en-US"},
+        "roles": [{"id": "manager", "actions": ["status"], "session": "full"}],
+        "workspaces": [{"id": FULL_TEAM, "class": "owned", "channels": [
+            {"id": FULL_CHANNEL, "name": "proj-acme-app", "mode": "listen+speak", "roles": ["manager"]}]}],
+    }
+    local = {"version": 1, "members": [
+        {"workspace": FULL_TEAM, "channel": FULL_CHANNEL, "role": "manager", "users": [OWNER]}]}
+    return committed, local
+
+
+def hub_registry(tmp_path, owners, grants=None):
+    """The hub's registry of one project, holding the owner id of each workspace."""
+    path = tmp_path / "slack-saved.json"
+    path.write_text(json.dumps({"owners": owners, "grants": list(grants or [])}))
+    return lambda entry: str(path)
+
+
+def full_daemon(tmp_path, mod, owner, owners, revision=True, registry=None, configs=None):
+    state = mod.State(str(tmp_path))
+    state.save_channels({FULL_REPO: {"id": FULL_CHANNEL}})
+    if revision:
+        committed, local = full_revision()
+        state.save_active_revision(FULL_REPO, {"repo": FULL_REPO, "sha": "a" * 40, "revision": committed,
+                                               "local": local})
+    return mod.Daemon(state=state, owner=owner, transcriber=None, downloader=None, log=lambda line: None,
+                      registry=registry or hub_registry(tmp_path, owners), configs=configs)
+
+
+def state_registries(tmp_path, by_state):
+    """A registry seam shaped like the production one: it resolves a path from the entry's state directory, so two
+    configured projects hold two different registries and a later row never answers for an earlier project."""
+    paths = {}
+    for state, owners in by_state.items():
+        path = tmp_path / f"registry-{state}.json"
+        path.write_text(json.dumps({"owners": owners, "grants": []}))
+        paths[state] = path
+
+    def seam(entry):
+        state = str((entry or {}).get("state") or "")
+        return str(paths[state]) if state in paths else ""
+
+    return seam
+
+
+def owner_event(user=OWNER, channel=FULL_CHANNEL, channel_type=None):
+    event = {"channel": channel, "user": user, "team": FULL_TEAM, "text": "status please", "ts": "1762500100.000100"}
+    if channel_type:
+        event["channel_type"] = channel_type
+    return event
+
+
+def test_the_full_session_owner_is_the_one_the_hub_registry_names(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER})
+    assert daemon.policy_decision(owner_event()).session == "full"
+
+
+def test_the_daemon_owner_setting_never_grants_the_full_session(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: "U0BOSS0001"})
+    assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_full_role_with_no_owner_in_the_registry_runs_bounded(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={})
+    assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_full_decision_in_a_direct_message_runs_bounded(tmp_path):
+    """The direct-message flag alone keeps the session bounded, even when the owner and an active revision agree."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: OWNER})
+    assert daemon.policy_decision(owner_event(channel_type="im")).session == "bounded"
+
+
+def test_a_full_decision_in_a_channel_with_no_active_revision_runs_bounded(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: OWNER}, revision=False)
+    assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_project_channels_owner_comes_from_its_own_projects_registry(tmp_path):
+    """The owner of a project channel comes from that project's registry, even when another configured project's
+    registry names a different owner for the same workspace and sits earlier in the configs list."""
+    mod = voiced()
+    seam = state_registries(tmp_path, {"acme": {FULL_TEAM: OWNER}, "other": {FULL_TEAM: "U0OTHER001"}})
+    configs = [{"repo": "other/app", "state": "other"}, {"repo": FULL_REPO, "state": "acme"}]
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=seam, configs=lambda: configs)
+    assert daemon.policy_decision(owner_event()).session == "full"
+
+
+def test_a_direct_message_reads_every_configured_projects_registry(tmp_path):
+    """A DM owns no project, so the first configured registry that names the workspace answers its owner."""
+    mod = voiced()
+    seam = state_registries(tmp_path, {"acme": {FULL_TEAM: OWNER}, "other": {"T0ELSE0001": "U0OTHER001"}})
+    configs = [{"repo": "other/app", "state": "other"}, {"repo": FULL_REPO, "state": "acme"}]
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=seam, configs=lambda: configs)
+    assert daemon.workspace_owner(FULL_TEAM, None) == OWNER
+    assert daemon.policy_decision(owner_event(channel_type="im")).session == "bounded"
+
+
+def test_a_dm_that_owns_no_project_reaches_the_baseline_policy_with_no_crash(tmp_path):
+    """The blocking regression: a DM channel the state names no project for falls through the baseline policy, whose
+    owner lookup must not raise, and the owner's DM still runs bounded."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER})
+    event = {"channel": "D0NOPROJ", "user": OWNER, "team": FULL_TEAM, "channel_type": "im",
+             "text": "hello", "ts": "1762500200.000100"}
+    assert daemon.policy_decision(event).session == "bounded"

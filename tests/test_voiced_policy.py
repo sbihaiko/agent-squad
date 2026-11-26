@@ -59,8 +59,8 @@ def channel_without_a_revision(tmp_path, mod, client):
 
 def socket_message(channel, user=OWNER, text="check the loop", ts="1762500100.000100", **extra):
     """One `message` envelope of a project channel, with the fields the policy event reads."""
-    event = {"type": "message", "channel_type": "channel", "channel": channel, "user": user, "ts": ts,
-             "client_msg_id": f"cid-{ts}", "text": text}
+    event = {"type": "message", "channel_type": "channel", "channel": channel, "user": user, "team": WORKSPACE,
+             "ts": ts, "client_msg_id": f"cid-{ts}", "text": text}
     event.update(extra)
     return {"type": "events_api", "envelope_id": f"env-{ts}", "payload": {"event": event}}
 
