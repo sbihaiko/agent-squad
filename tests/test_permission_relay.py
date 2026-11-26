@@ -90,8 +90,26 @@ def test_an_approval_allows_the_call_it_names_once(relay):
     first = relay.request(OWNER, TOOL, INPUT, CWD)
     assert relay.decide(OWNER, DM, WORKSPACE, "approve", first["hash"]) == "approved"
     assert relay.verdict(first["id"]) == "allow"
+    assert relay.verdict(first["id"]) == "deny", "a used approval allowed the same call again"
     again = relay.request(OWNER, TOOL, INPUT, CWD)
     assert relay.verdict(again["id"]) == "pending"
+
+
+def test_a_verdict_replayed_on_a_used_request_denies(relay):
+    first = relay.request(OWNER, TOOL, INPUT, CWD)
+    relay.decide(OWNER, DM, WORKSPACE, "approve", first["hash"])
+    assert relay.verdict(first["id"]) == "allow"
+    assert [relay.verdict(first["id"]) for _ in range(3)] == ["deny", "deny", "deny"]
+
+
+def test_the_relay_returns_allow_only_for_the_reading_that_consumes_the_approval(relay):
+    first = relay.request(OWNER, TOOL, INPUT, CWD)
+    relay.decide(OWNER, DM, WORKSPACE, "approve", first["hash"])
+    assert relay.verdict(first["id"]) == "allow"
+    assert relay.verdict(first["id"]) == "deny"
+    denied = relay.request(OWNER, TOOL, {"command": "rm notes.txt"}, CWD)
+    relay.decide(OWNER, DM, WORKSPACE, "deny", denied["hash"])
+    assert relay.verdict(denied["id"]) == "deny"
 
 
 def test_an_approval_does_not_allow_a_call_with_another_hash(relay):
@@ -111,6 +129,10 @@ def test_a_request_without_an_answer_is_denied_after_ten_minutes(relay, clock, t
     assert len(events(tmp_path, "timeout")) == 1
 
 
+def test_a_verdict_for_a_request_the_relay_does_not_hold_denies(relay):
+    assert relay.verdict("no-such-request") == "deny"
+
+
 def test_only_the_owner_in_the_owner_dm_of_the_workspace_approves(relay, tmp_path):
     req = relay.request(OWNER, TOOL, INPUT, CWD)
     assert relay.decide(OTHER, DM, WORKSPACE, "approve", req["hash"]) == "refused"
@@ -120,11 +142,31 @@ def test_only_the_owner_in_the_owner_dm_of_the_workspace_approves(relay, tmp_pat
     assert events(tmp_path, "approval") == []
 
 
-def test_a_sender_holds_at_most_three_open_requests(relay):
+def test_a_request_records_the_workspace_that_asked_for_it(relay):
+    relay.request(OWNER, TOOL, INPUT, CWD)
+    assert relay.unsent()[0]["workspace"] == WORKSPACE
+
+
+def test_an_approval_for_one_workspace_cannot_approve_another_workspaces_request(tmp_path, clock):
+    module = load("permrelay")
+    elsewhere = module.Relay(tmp_path, owner=OWNER, dm_channel=DM, workspace=OTHER_WORKSPACE, now=clock)
+    req = elsewhere.request(OWNER, TOOL, INPUT, CWD)
+    answering = module.Relay(tmp_path, owner=OWNER, dm_channel=DM, workspace=WORKSPACE, now=clock)
+    assert answering.decide(OWNER, DM, WORKSPACE, "approve", req["hash"]) == "refused"
+    assert elsewhere.verdict(req["id"]) == "pending"
+    assert events(tmp_path, "approval") == []
+
+
+def test_a_sender_holds_at_most_three_open_requests(relay, tmp_path):
     opened = [relay.request(OWNER, TOOL, {"command": f"step {n}"}, CWD) for n in range(3)]
     assert all(row["status"] == "pending" for row in opened)
     fourth = relay.request(OWNER, TOOL, {"command": "step 4"}, CWD)
     assert fourth["status"] == "refused"
+    refused = events(tmp_path, "refused")
+    assert len(refused) == 1, refused
+    assert refused[0]["hash"] == fourth["hash"]
+    assert refused[0]["sender"] == OWNER
+    assert refused[0]["tool"] == TOOL
     assert len(relay.unsent()) == 3
     assert relay.request(OTHER, TOOL, INPUT, CWD)["status"] == "pending"
     relay.decide(OWNER, DM, WORKSPACE, "deny", opened[0]["hash"])
