@@ -6,8 +6,10 @@ one row for each client and persona id, with the fields one declaration answers,
 the clients whose default the id is, and a drift flag when two projects of one client declare different fields.
 
 The committed row wins over a local row with the same id. Drift lives inside one client alone, because a client answers
-its own voice and tone. A persona only a local file declares reads read-only. A project no client names forms its own
-group.
+its own voice and tone. A drifted row names each copy the client's projects declare, and the owner settles it by choosing
+one copy: `settle` answers that copy's fields and the projects of that client the save writes it into, so another
+client's project is never touched (#3015). A persona only a local file declares reads read-only. A project no client
+names forms its own group.
 
 This module holds the rules. The hub route reads the documents and calls this module; the page draws what the route
 answers (ADR-0137, ADR-0177).
@@ -56,6 +58,13 @@ def declarations(seat):
     return out
 
 
+def _copy(decl, project_id, label):
+    """One declaration as the copy a drifted row draws: the fields a save would write, with the project that declares
+    them."""
+    return {"project": project_id, "label": label, "name": decl["name"], "voice": decl["voice"],
+            "tone": decl["tone"], "file": decl["file"]}
+
+
 def _same_fields(a, b):
     return (a["name"], a["voice"], a["tone"]) == (b["name"], b["voice"], b["tone"])
 
@@ -63,14 +72,19 @@ def _same_fields(a, b):
 def _merge(pairs, defaults):
     """The rows of one group: `pairs` is one `(project id, label, seat)` for each project of the group, in order. The
     first declaration of an id answers its fields; a later declaration of the same id in the same group adds its
-    project and raises the drift flag when its fields differ."""
+    project and raises the drift flag when its fields differ.
+
+    The drift flag covers every declaration of the id inside the group, including a declaration only the local file
+    holds. A row carries one copy for each project whose committed file declares the id: these are the copies a save can
+    write, so they alone are the targets a settle writes. A declaration only the local file holds is read-only and never
+    a copy."""
     rows, index = [], {}
     for project_id, label, seat in pairs:
         for decl in declarations(seat):
             row = index.get(decl["id"])
             if row is None:
                 row = {"id": decl["id"], "name": decl["name"], "voice": decl["voice"], "tone": decl["tone"],
-                       "projects": [], "default_of": list(defaults.get(decl["id"], [])),
+                       "projects": [], "copies": [], "default_of": list(defaults.get(decl["id"], [])),
                        "drift": False, "read_only": decl["committed"] is False}
                 index[decl["id"]] = row
                 rows.append(row)
@@ -78,6 +92,7 @@ def _merge(pairs, defaults):
                 row["drift"] = True
             if decl["committed"]:
                 row["read_only"] = False
+                row["copies"].append(_copy(decl, project_id, label))
             if all(p["id"] != project_id for p in row["projects"]):
                 row["projects"].append({"id": project_id, "label": label, "file": decl["file"]})
     return rows
@@ -153,6 +168,32 @@ def edit(seats, persona_id, fields, targets):
         rows.append({**row, "result": f"writes {name}"})
         writes.append({"project": tid, "committed": changed})
     return {"rows": rows, "writes": writes}
+
+
+def settle(seats, clients, persona_id, client_id, copy_project):
+    """The copy the owner chose and the projects the save writes it into: `{"fields", "targets", "err"}`.
+
+    `client_id` names the group the choice was made in and `copy_project` names the project whose declaration the owner
+    chose. The fields are that copy's name, voice and tone; the targets are one for each copy of that client, in project
+    order. A copy of another client is never a target, and a client whose map or roster names no such copy answers its
+    reason and no field. A row with no drift offers no choice of copy, so a settle of it answers its reason too: only a
+    drifted row has copies to decide between."""
+    pid, cid, copy_id = _text(persona_id).strip(), _text(client_id).strip(), _text(copy_project).strip()
+    group = next((g for g in groups(seats, clients) if _text(g["id"]) == cid), None)
+    if group is None:
+        return {"fields": None, "targets": [], "err": f"client: {cid or '(none)'} is not a client of the map"}
+    row = next((r for r in group["rows"] if r["id"] == pid), None)
+    if row is None:
+        return {"fields": None, "targets": [], "err": f"persona: {pid or '(none)'} is not declared by this client"}
+    copy = next((c for c in row["copies"] if c["project"] == copy_id), None)
+    if copy is None:
+        return {"fields": None, "targets": [],
+                "err": f"copy: {copy_id or '(none)'} is not a project of this client that declares {pid}"}
+    if not row["drift"]:
+        return {"fields": None, "targets": [],
+                "err": f"copy: {pid} carries no drift in this client, so there is no copy to choose"}
+    return {"fields": {"name": copy["name"], "voice": copy["voice"], "tone": copy["tone"]},
+            "targets": [c["project"] for c in row["copies"]], "err": None}
 
 
 def groups(seats, clients):
