@@ -387,7 +387,11 @@ def _full_members(file, committed, local, owners, grants, out):
     alone, so a row that names no declared workspace or another workspace's channel is its own named defect before the
     owner or grant check (#2966)."""
     full = {str(row.get("id")) for row in _rows(committed.get("roles")) if row.get("session") == SESSION_FULL}
-    granted = {(str(g.get("workspace")), str(g.get("user"))) for g in grants or () if isinstance(g, dict)}
+    # A grant admits a member only when its workspace and user are non-empty strings: a malformed registry row, such as
+    # one with a null user or a numeric workspace, names no grant and never matches a member by its string form.
+    granted = {(g["workspace"], g["user"]) for g in grants or ()
+               if isinstance(g, dict) and isinstance(g.get("workspace"), str) and g["workspace"]
+               and isinstance(g.get("user"), str) and g["user"]}
     owners = owners or {}
     declared = {}
     for ws in _rows(committed.get("workspaces")):

@@ -1537,10 +1537,31 @@ def slack_registry_lock_path():
     """The lock file that serializes a registry read-modify-write, beside the registry it protects (#2966)."""
     return slack_registry_path().with_name(f".{SLACK_REGISTRY}.lock")
 
+_LOCK_WARNED = False   # the one warning a host without `fcntl` prints, so a save does not warn on every write
+
+def _registry_lock(fd):
+    """Hold the registry lock on `fd`, or return `(lock module, None)`. A host with no `fcntl`, such as a Windows host,
+    writes without the lock and warns once: the registry still lands, and the cost there is a lost update at once.
+    Returns `(None, error)` when the lock module is present but the lock fails."""
+    global _LOCK_WARNED
+    try:
+        import fcntl
+    except ImportError:
+        if not _LOCK_WARNED:
+            _LOCK_WARNED = True
+            print("the registry lock needs fcntl; this host writes the registry without it", file=sys.stderr)
+        return None, None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as e:
+        return None, f"could not be locked: {e.strerror or e}"
+    return fcntl, None
+
 def _slack_registry_update(change):
     """Read, change and write the registry under one exclusive lock, so two writes at once never lose one (#2966).
-    `change` takes the document and returns the document to write. Returns an error, or None."""
-    import fcntl
+    `change` takes the document and returns the document to write. Returns an error, or None. The lock file stays
+    beside the registry: a lock is released by closing its descriptor, never by deleting the file, because a waiter
+    that opened the old file would then hold a lock nothing else reads."""
     p = slack_registry_path()
     lock = slack_registry_lock_path()
     try:
@@ -1549,14 +1570,15 @@ def _slack_registry_update(change):
     except OSError as e:
         return f"{lock.name} could not be made: {e.strerror or e}"
     try:
-        try: fcntl.flock(fd, fcntl.LOCK_EX)
-        except OSError as e:
-            return f"{lock.name} could not be locked: {e.strerror or e}"
+        module, err = _registry_lock(fd)
+        if err:
+            return f"{lock.name} {err}"
         try:
             return _slack_atomic(p, json.dumps(change(_slack_registry_data()), indent=2, sort_keys=True) + "\n")
         finally:
-            try: fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError: pass
+            if module is not None:
+                try: module.flock(fd, module.LOCK_UN)
+                except OSError: pass
     finally:
         try: os.close(fd)
         except OSError: pass

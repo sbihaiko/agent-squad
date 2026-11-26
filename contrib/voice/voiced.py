@@ -1702,9 +1702,10 @@ class Daemon:
         self.refused_channels = {}   # channel id -> refusal line, so routing skips a channel two projects claim
         self.projects = projects
         self.configs = configs     # the project list whose dev tips carry a Slack file; None leaves the revisions alone
-        # The callable that names one project's saved-sha registry, as the profile seam resolves it (#2961). None leaves
-        # the saved-sha check out of force, for a machine that names no registry; a callable puts it in force per
-        # project, and a file it cannot read lists nothing.
+        # The seam that names one project's saved-sha registry, as the profile seam resolves it (#2961): a callable that
+        # maps an entry to its path, or the path itself for a daemon wired to one registry file. None leaves the
+        # saved-sha check out of force, for a machine that names no registry; a seam puts it in force per project, and a
+        # file it cannot read lists nothing.
         self.registry = registry
         # (workspace, repo) -> (registry signature, owner). The owner of a workspace is read once and kept until a
         # registry this daemon reads changes its mtime, so the message path reads no registry twice for one decision.
@@ -1794,6 +1795,13 @@ class Daemon:
             return self.downloaders[app](url)
         return self.downloader(url)
 
+    def registry_path(self, entry):
+        """The registry file one configured entry names. The seam is a callable that maps an entry to its path, or the
+        path itself: a caller may wire the daemon to one registry file with no callable. None names no registry."""
+        if callable(self.registry):
+            return self.registry(entry) or ""
+        return str(self.registry or "")
+
     def registry_file(self, repo):
         """The hub registry that holds one project's saved shas, owner ids and grants, or '' when no registry is in force.
 
@@ -1806,7 +1814,7 @@ class Daemon:
         for row in rows:
             if str((row or {}).get("repo") or "").strip() == repo:
                 entry = row
-        return self.registry(entry) or ""
+        return self.registry_path(entry) or ""
 
     def workspace_owner(self, workspace, repo=None):
         """The owner user id the hub registry names for one Slack workspace, or None when it names none (#2966).
@@ -1815,7 +1823,8 @@ class Daemon:
         owns no project, so every configured project's registry is read and the first one that names the workspace
         answers. No other source names an owner. A seam that raises, and a registry a build cannot read, name no owner:
         a broken registry never raises into the message path. The answer is kept per workspace until a registry this
-        daemon reads changes its mtime, so one decision reads no registry twice.
+        daemon reads changes its content, so one decision reads no registry twice. The registry seam may be a callable or
+        the path itself, so a daemon wired to one registry file reads it with no callable.
         """
         workspace = str(workspace or "")
         if not workspace or self.registry is None:
@@ -1834,17 +1843,20 @@ class Daemon:
         seen, sig = set(), []
         for entry in entries:
             try:
-                path = self.registry(entry) or ""
+                path = self.registry_path(entry)
             except Exception:      # noqa: BLE001 - a registry seam that raises names no owner
                 path = ""
             if path in seen:
                 continue
             seen.add(path)
+            # The cache keys on the registry's content, not its mtime alone: a rewrite that keeps the mtime still changes
+            # the size or the inode, so a stale owner never answers. A missing file names no content at all.
             try:
-                mtime = os.stat(path).st_mtime_ns
+                st = os.stat(path)
+                content = (st.st_mtime_ns, st.st_size, st.st_ino)
             except OSError:
-                mtime = None
-            sig.append((path, mtime))
+                content = None
+            sig.append((path, content))
         signature = tuple(sig)
         key = (workspace, repo or "")
         cached = self._owner_cache.get(key)
@@ -1888,7 +1900,7 @@ class Daemon:
                 entries[repo] = entry
         out = {}
         for repo, entry in entries.items():
-            path = self.registry(entry)
+            path = self.registry_path(entry)
             if path:
                 out[repo] = listed_revisions(path)
         return out

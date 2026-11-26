@@ -44,3 +44,6 @@ The session mode lives in the committed Slack file. A change to `session` takes 
 A caller of `slackpolicy.decide` states the event keys `owner`, `active` and `dm`, and the decision reads all three: an
 event that omits `active` runs bounded, and an event that omits `dm` reads as a channel message. The daemon fills the
 three keys from the socket event and the hub registry, so no caller infers them from a default.
+
+`Daemon.policy_event` has no caller outside the daemon, and the daemon passes every argument. The removed
+`baseline_files` helper has no remaining caller either, so neither one keeps a compatibility shim.
