@@ -9,8 +9,11 @@ holds no message and no answer.
 import importlib.util
 import json
 import os
+import signal
 import stat
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +21,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = "MARKER-7f3c9a"
 FIRST_SESSION = "sess-first-0001"
+REPO = "owner/project"
 
 
 def fullturn():
@@ -157,3 +161,82 @@ def test_the_audit_row_holds_no_message_and_no_answer(stand_in):
     assert MARKER not in row
     assert "answer to" not in row
     assert result.session in row
+
+
+def script(tmp_path, body):
+    path = tmp_path / "claude-script"
+    path.write_text(f"#!{sys.executable}\nimport json, os, sys, time\n" + body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return str(path)
+
+
+def test_the_default_deadline_is_thirty_minutes():
+    assert fullturn().TURN_SECONDS == 30 * 60
+
+
+def test_the_default_spend_cap_is_five_dollars_on_every_turn(stand_in):
+    mod = fullturn()
+    turn(mod, stand_in, "hello")
+    argv = calls(stand_in)[0]["argv"]
+    assert argv[argv.index("--max-budget-usd") + 1] == "5", argv
+
+
+def test_a_turn_past_its_deadline_stops_and_names_the_deadline(tmp_path, monkeypatch):
+    stand = build_stand_in(tmp_path, monkeypatch)
+    claude = script(tmp_path, "time.sleep(30)\n")
+    started = time.monotonic()
+    result = fullturn().run_turn(claude, stand["checkout"], stand["state"], REPO, "hello", timeout=1)
+    assert time.monotonic() - started < 10
+    assert result.failed is True and result.reason == "deadline", result
+
+
+def test_a_turn_past_its_deadline_ends_its_whole_process_tree(tmp_path, monkeypatch):
+    stand = build_stand_in(tmp_path, monkeypatch)
+    pidfile = tmp_path / "child.pid"
+    claude = script(tmp_path, "import subprocess\n"
+                    "child = subprocess.Popen(['sleep', '30'], stdin=subprocess.DEVNULL,"
+                    " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                    f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+                    "time.sleep(30)\n")
+    fullturn().run_turn(claude, stand["checkout"], stand["state"], REPO, "hello", timeout=1)
+    child = int(pidfile.read_text())
+    try:
+        for _ in range(40):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"child {child} still runs after its turn ended")
+    finally:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_a_turn_that_hits_the_spend_cap_names_the_spend_cap(tmp_path, monkeypatch):
+    stand = build_stand_in(tmp_path, monkeypatch)
+    claude = script(tmp_path, "print(json.dumps({'type': 'result', 'subtype': 'error_max_budget_usd',"
+                    " 'is_error': True, 'session_id': 'sess-cap-0003'}))\n")
+    result = fullturn().run_turn(claude, stand["checkout"], stand["state"], REPO, "hello")
+    assert result.failed is True and result.reason == "spend_cap", result
+
+
+def test_turns_of_one_project_run_in_the_order_they_arrived():
+    mod = fullturn()
+    order = mod.TurnOrder()
+    tickets = [order.arrive(REPO) for _ in range(3)]
+    ran = []
+
+    def run(ticket):
+        order.wait(REPO, ticket)
+        ran.append(ticket)
+        order.leave(REPO)
+
+    threads = [threading.Thread(target=run, args=(ticket,)) for ticket in reversed(tickets)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert ran == tickets, ran

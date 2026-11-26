@@ -7,10 +7,13 @@ creates its session, and the state folder keeps the session id, so each later tu
 import fcntl
 import json
 import os
+import signal
 import subprocess
+import threading
 from typing import NamedTuple
 
-TURN_SECONDS = 900
+TURN_SECONDS = 30 * 60
+MAX_BUDGET_USD = 5
 SESSIONS_FILE = "full-sessions.json"
 LOCK_FILE = "full-sessions.lock"
 OPERATOR_OVERRIDES = ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR")
@@ -21,9 +24,36 @@ class Turn(NamedTuple):
     text: str
     exit: int | None
     failed: bool
+    reason: str | None = None
 
     def audit(self):
-        return {"session": self.session, "exit": self.exit, "failed": self.failed, "chars": len(self.text)}
+        return {"session": self.session, "exit": self.exit, "failed": self.failed, "reason": self.reason,
+                "chars": len(self.text)}
+
+
+class TurnOrder:
+    """The turns of one project run one at a time, in the order they arrived."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.next_ticket = {}
+        self.serving = {}
+
+    def arrive(self, repo):
+        with self.cond:
+            ticket = self.next_ticket.get(repo, 0)
+            self.next_ticket[repo] = ticket + 1
+            return ticket
+
+    def wait(self, repo, ticket):
+        with self.cond:
+            while self.serving.get(repo, 0) != ticket:
+                self.cond.wait()
+
+    def leave(self, repo):
+        with self.cond:
+            self.serving[repo] = self.serving.get(repo, 0) + 1
+            self.cond.notify_all()
 
 
 def owner_env(environ):
@@ -34,7 +64,7 @@ def argv(claude, session):
     command = [claude, "-p"]
     if session:
         command += ["--resume", session]
-    return command + ["--output-format", "json"]
+    return command + ["--output-format", "json", "--max-budget-usd", str(MAX_BUDGET_USD)]
 
 
 def result_row(stdout):
@@ -67,16 +97,31 @@ def remember_session(state_dir, repo, session):
         os.replace(path + ".tmp", path)
 
 
+def end_tree(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.communicate()
+
+
 def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS):
     session = saved_sessions(state_dir).get(repo)
-    try:
-        done = subprocess.run(argv(claude, session), input=message, cwd=checkout, capture_output=True, text=True,
-                              env=owner_env(os.environ if environ is None else environ), timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
+    try:   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
+        proc = subprocess.Popen(argv(claude, session), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, cwd=checkout,
+                                env=owner_env(os.environ if environ is None else environ), start_new_session=True)
+    except OSError:
         return Turn(session, "", None, True)
-    row = result_row(done.stdout)
-    failed = done.returncode != 0 or bool(row.get("is_error")) or "result" not in row
+    try:
+        stdout, _ = proc.communicate(message, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        end_tree(proc)
+        return Turn(session, "", None, True, "deadline")
+    row = result_row(stdout)
+    failed = proc.returncode != 0 or bool(row.get("is_error")) or "result" not in row
+    reason = "spend_cap" if row.get("subtype") == "error_max_budget_usd" else None
     session = row.get("session_id") or session
     if not failed and session:
         remember_session(state_dir, repo, session)
-    return Turn(session, "" if failed else str(row["result"]), done.returncode, failed)
+    return Turn(session, "" if failed else str(row["result"]), proc.returncode, failed, reason)

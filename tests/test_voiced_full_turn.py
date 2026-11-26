@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from tests.test_full_turn import FIRST_SESSION, MARKER, build_stand_in, calls
+from tests.test_full_turn import FIRST_SESSION, MARKER, build_stand_in, calls, script
 from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, lines, project, voiced
 from tests.test_voiced_active_revision import WORKSPACE, _project_channel
 from tests.test_voiced_policy import REPO, SHA, socket_message
@@ -153,3 +153,37 @@ def test_a_full_turn_in_a_listen_channel_posts_no_answer(tmp_path, stand_in):
     deliver(daemon, channel, f"hello {MARKER}")
     assert not [p for p in client.posts() if p.get("channel") == channel and MARKER in str(p.get("text"))], client.posts()
     assert [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"], lines(daemon.state.audit_path)
+
+
+CAP_CLI = """
+print(json.dumps({"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "session_id": "sess-cap-0003"}))
+"""
+
+ORDER_CLI = """
+message = sys.stdin.read()
+with open(os.environ["STUB_RECORD"], "a", encoding="utf-8") as f:
+    print(json.dumps({"argv": sys.argv[1:], "stdin": message, "cwd": os.getcwd()}), file=f)
+if message.startswith("slow"):
+    time.sleep(0.5)
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok", "session_id": "sess-order-0004"}))
+"""
+
+
+def test_a_turn_that_hits_the_spend_cap_names_the_spend_cap_in_the_thread(tmp_path, stand_in):
+    cli = script(tmp_path,CAP_CLI)
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), cli=cli)
+    deliver(daemon, channel, "hello")
+    posts = [p for p in client.posts() if p.get("channel") == channel]
+    assert len(posts) == 1, client.posts()
+    assert "spend cap" in posts[0]["text"], posts[0]
+    rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
+    assert rows and rows[-1]["reason"] == "spend_cap", rows
+
+
+def test_full_turns_of_one_project_run_in_the_order_they_arrived(tmp_path, stand_in):
+    cli = script(tmp_path,ORDER_CLI)
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), cli=cli)
+    for index, text in enumerate(["slow first", "second", "third", "fourth"]):
+        daemon.handle(socket_message(channel, user=OWNER, text=text, ts=f"1762500{100 + index}.000100"))
+    daemon.join_turns()
+    assert [call["stdin"].strip() for call in calls(stand_in)] == ["slow first", "second", "third", "fourth"]
