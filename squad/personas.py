@@ -282,18 +282,32 @@ def persona_id(name):
     return re.sub(r"[^a-z0-9]+", "-", _text(name).casefold()).strip("-")
 
 
+def _validated_persona(persona):
+    """The persona a caller names as the row the add appends: its id, name, voice and tone, stripped. A name or a voice
+    empty after stripping raises ValueError, so an add never writes an unusable row, whether the persona is new or an
+    existing one (#3013)."""
+    fields = {key: _text(_doc(persona).get(key)).strip() for key in PERSONA_FIELDS}
+    if not fields["name"]:
+        raise ValueError("persona.name: a body that names the persona's name")
+    if not fields["voice"]:
+        raise ValueError("persona.voice: a body that names the persona's voice")
+    return fields
+
+
 def with_persona(doc, persona):
     """The committed document with one persona row appended: its id, name, voice and tone as the add names them, and
     every other key keeping its place and its form. None when the document already declares the id: an id names one
-    persona, so the add refuses it instead of writing a second row."""
+    persona, so the add refuses it instead of writing a second row. A name or a voice empty after stripping raises
+    ValueError, the same rule the add applies to a new persona and to an existing one (#3013)."""
     out = copy.deepcopy(_doc(doc))
-    pid = _text(persona.get("id")).strip()
+    fields = _validated_persona(persona)
+    pid = fields["id"]
     if any(_text(row.get("id")).strip() == pid for row in _persona_rows(out)):
         return None
     rows = out.get("personas")
     if not isinstance(rows, list):
         rows = out["personas"] = []
-    rows.append({key: _text(persona.get(key)).strip() for key in PERSONA_FIELDS})
+    rows.append({key: fields[key] for key in PERSONA_FIELDS})
     return out
 
 
@@ -305,9 +319,13 @@ def add(seats, persona, targets):
     whose committed file already declares the id are each refused by name, and a refusal for a declared id names the
     project. Every other target reads "writes <name>" and carries its document, so one refused project never stops the
     others. The same plan adds a new persona and adds an existing persona to another project: the persona row the caller
-    names is the one the add writes."""
-    pid = _text(persona.get("id")).strip()
-    name = _text(persona.get("name")).strip() or pid
+    names is the one the add writes. A name or a voice empty after stripping answers its own `err` and no row (#3013)."""
+    try:
+        fields = _validated_persona(persona)
+    except ValueError as e:
+        return {"rows": [], "writes": [], "err": str(e)}
+    pid = fields["id"]
+    name = fields["name"] or pid
     by_id = {}
     for seat in seats or ():
         sid = _text(seat.get("id")).strip()
@@ -318,7 +336,7 @@ def add(seats, persona, targets):
         tid = _text(target).strip()
         seat = by_id.get(tid)
         label = (_text(seat.get("label")) or tid) if seat else tid
-        row = {"project": tid, "label": label, "file": _text(seat.get("cf")) if seat else ""}
+        row = {"project": tid, "label": label, "file": _text(seat.get("committed_path")) if seat else ""}
         if seat is None:
             rows.append({**row, "result": "refused: the project is not in the roster"})
             continue
