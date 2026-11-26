@@ -1,0 +1,7 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+ENABLE_TOOL_SEARCH = "auto:3"
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "0"
+CLAUDE_CODE_ATTRIBUTION_HEADER = "0"
