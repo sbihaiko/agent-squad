@@ -189,6 +189,10 @@ def personas_remove(body):
     targets = body.get("projects")
     if not isinstance(targets, list) or not targets:
         return {"err": "projects: a body that names at least one project"}
+    # The contract: `confirm` is the boolean true or absent. Any other value is refused here, so a preview never
+    # answers as a success for a caller that meant to confirm with 1 or the text `true`.
+    if "confirm" in body and not isinstance(body["confirm"], bool):
+        return {"err": "confirm: true or absent"}
     try:
         P = slack_policy()
     except Exception as e:
@@ -206,7 +210,9 @@ def personas_remove(body):
     holders = {}
     for target in targets:
         seat = by_id.get(_slack_text(target).strip())
-        if seat is None:
+        if seat is None or seat.get("read_defects"):
+            # A seat whose file did not read answers no holder: the rules module reports the file defect first, so the
+            # hub never asks the policy module about a document that does not read.
             continue
         holders[seat["id"]] = P.persona_holders(
             pid, seat.get("committed"), seat.get("local"),

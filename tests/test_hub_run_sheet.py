@@ -209,7 +209,8 @@ def test_the_sheet_reads_the_record_and_pauses_through_the_existing_routes(hub):
     # /api/columns: Spend & limits saves the column limits (#2432); /api/slots: its slots sub-group (#2435);
     # /api/slack/files: the Communication save and its one edit (#2694, #2696);
     # /api/personas: the Personas theme's preview and its confirmed save (#3011);
-    # /api/personas/remove: the Personas theme's persona removal, its preview and its confirmed save (#3014);
+    # /api/personas/remove is registered here alone; the dispatcher and the answer it returns are proven over loopback
+    # in tests/test_hub_personas_edit.py (#3014);
     # /api/slack/people: the members editor resolves an @name to a Slack user (#2911);
     # /api/slack/preview and /api/slack/sample: the persona editor's reply preview and voice sample (#2697);
     # /api/slack/clients: the client default's proposed writes and its save (#2827);

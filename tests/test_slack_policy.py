@@ -827,3 +827,21 @@ def test_a_holder_label_falls_back_from_the_label_to_the_name_to_the_id():
         'workspace "team" in slack.yaml',
         'channel "support" of workspace "team" in slack.yaml',
     ]
+
+
+def test_a_holder_row_with_no_label_and_no_name_names_its_id_after_a_marker():
+    """A workspace and a channel that state neither a label nor a name still name their place: the bare Slack id never
+    stands alone, so it follows the marker `unnamed`, in parentheses."""
+    committed = {"workspaces": [{"id": "T0TEAM0001", "persona": "hal",
+                                 "channels": [{"id": "C0PROJ0001", "persona": "hal"}]}]}
+    assert S.persona_holders("hal", committed, {}) == [
+        'workspace "unnamed (T0TEAM0001)" in slack.yaml',
+        'channel "unnamed (C0PROJ0001)" of workspace "unnamed (T0TEAM0001)" in slack.yaml',
+    ]
+
+
+def test_a_document_that_is_not_a_mapping_answers_no_holder():
+    """A file that does not read is no document: it answers no holder at all, so a client default never answers for a
+    broken file and the removal reports the read defect instead."""
+    assert S.persona_holders("hal", ["not", "a", "mapping"], {}, clients=[("acme", "hal")]) == []
+    assert S.persona_holders("hal", {}, "not a mapping", clients=[("acme", "hal")]) == []
