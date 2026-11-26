@@ -7,6 +7,7 @@ Slack user id, and a read that names the id the registry holds. No test calls Sl
 import fcntl
 import json
 import os
+import sys
 import threading
 
 import pytest
@@ -84,6 +85,20 @@ def test_a_read_names_the_owner_the_registry_holds(hub, state):
     out = hub.slack_owner_post({"workspace": TEAM})
     assert out["err"] is None, out
     assert out["owner"] == OWNER
+
+
+def test_a_host_without_fcntl_still_writes_and_warns_once(hub, state, monkeypatch, capsys):
+    """A host that has no `fcntl`, such as a Windows host, still writes the registry: the route locks through the
+    module when it is there, and otherwise writes without the lock and prints one warning line (#2966)."""
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    monkeypatch.setattr(hub, "_LOCK_WARNED", False, raising=False)
+    first = hub.slack_owner_post({"workspace": TEAM, "user": OWNER})
+    second = hub.slack_owner_post({"workspace": OTHER, "user": "U0OWNER002"})
+    assert first["err"] is None, first
+    assert second["err"] is None, second
+    assert registry(hub)["owners"] == {TEAM: OWNER, OTHER: "U0OWNER002"}
+    err = capsys.readouterr().err
+    assert err.count("the registry lock needs fcntl") == 1, err
 
 
 def test_a_second_owner_write_at_once_waits_for_the_registry_lock(hub, state):
