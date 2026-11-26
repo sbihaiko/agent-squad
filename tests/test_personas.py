@@ -206,12 +206,24 @@ def test_a_persona_the_committed_file_does_not_declare_answers_no_document():
 
 def test_a_removal_with_no_holder_writes_the_document_without_the_row():
     """#3014 acceptance 8: a plan of a project whose files name no such persona carries the committed document a
-    confirmed save writes, and it holds no row of that id."""
-    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K"), persona("iara", "Iara")]}),
+    confirmed save writes, and it holds no row of that id and keeps every other key."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K"), persona("iara", "Iara")],
+                               "project": {"persona": "iara"}}),
               "checkout": "/co/alpha"}]
     plan = PS.remove(seats, "hal", ["alpha"], {})
     assert plan["rows"][0]["result"] == "removes HAL9K", plan["rows"]
     assert [w["committed"]["personas"] for w in plan["writes"]] == [[persona("iara", "Iara")]], plan["writes"]
+    assert plan["writes"][0]["committed"]["project"] == {"persona": "iara"}, plan["writes"]
+
+
+def test_a_refusal_names_only_a_persona_the_target_project_declares():
+    """A project whose committed file does not declare the id is refused with the bare id, whatever another project's
+    seat declares for that id: no other project's declaration names this project's persona."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K")]}), "checkout": "/co/alpha"},
+             {**seat("beta", {"personas": [persona("iara", "Iara")]}), "checkout": "/co/beta"}]
+    plan = PS.remove(seats, "hal", ["beta"], {})
+    assert plan["rows"][0]["result"] == "refused: hal is not declared in this project's committed file", plan["rows"]
+    assert plan["writes"] == [], plan["writes"]
 
 
 def test_a_removal_with_a_holder_is_refused_and_names_each_holder():
@@ -237,6 +249,8 @@ def test_the_removal_names_each_refused_project_and_still_carries_the_other_writ
     assert rows["alpha"] == "removes HAL9K", rows
     assert rows["beta"] == "refused: the project has no worktree", rows
     assert rows["gamma"] == "refused: the file does not read: slack.yaml: not YAML", rows
-    assert rows["delta"] == "refused: HAL9K is not declared in this project's committed file", rows
+    # The name a refusal states comes from the target project alone, so delta, which declares no name for `hal`, is
+    # refused with the bare id rather than with alpha's name for it.
+    assert rows["delta"] == "refused: hal is not declared in this project's committed file", rows
     assert rows["ghost"] == "refused: the project is not in the roster", rows
     assert [w["project"] for w in plan["writes"]] == ["alpha"], plan["writes"]

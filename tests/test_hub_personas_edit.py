@@ -654,6 +654,65 @@ def test_the_write_route_answers_over_loopback(hub, monkeypatch):
 
 # ---------------------------------------------------------------- the removal: the preview and the save (#3014)
 
+def test_the_removal_route_answers_over_loopback(hub, monkeypatch):
+    """The page posts to `/api/personas/remove`, and the dispatcher reaches `personas_remove` and answers its body as
+    JSON. The route's registration alone is checked in `tests/test_hub_run_sheet.py`; this case proves the dispatch."""
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    seen = []
+
+    def fake(body):
+        seen.append(body)
+        return {"persona": body.get("persona"), "preview": True}
+
+    monkeypatch.setattr(hub, "personas_remove", fake)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = {"persona": "amber", "projects": ["alpha"]}
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/personas/remove",
+                                     data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json",
+                                              "Origin": f"http://127.0.0.1:{srv.server_address[1]}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = json.loads(r.read())
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert seen == [body], seen
+    assert got == {"persona": "amber", "preview": True}, got
+
+
+def test_a_confirm_that_is_not_a_boolean_is_refused_before_any_read(hub):
+    """The removal's contract: `confirm` is the boolean true or absent. A body that sends a number or the text `true`
+    is refused, so a caller that meant to confirm never reads a preview as a success."""
+    for wrong in (1, "true", "false"):
+        out = hub.personas_remove({"persona": "amber", "projects": ["alpha"], "confirm": wrong})
+        assert out == {"err": "confirm: true or absent"}, (wrong, out)
+
+
+def test_a_seat_whose_file_does_not_read_reports_the_defect_and_never_asks_the_holders(hub, monkeypatch):
+    """A file whose read answered a defect answers no holder: the removal reports the file defect, and the hub never
+    asks the policy module for a holder of a document it could not read."""
+    bad = {"id": "alpha", "label": "alpha", "checkout": "/co/alpha", "committed": ["not", "a", "mapping"],
+           "local": {}, "cf": "slack.yaml", "lf": "slack.local.yaml",
+           "committed_path": "/co/alpha/docs/squad/slack.yaml", "local_path": "/profiles/alpha.slack.local.yaml",
+           "read_defects": ["slack.yaml: not YAML"]}
+    monkeypatch.setattr(hub, "_slack_roster_checked", lambda cache=0.0: ([bad], None))
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: ([
+        {"id": "acme", "name": "Acme", "default_persona": {"id": "amber", "name": "Amber"},
+         "projects": ["alpha"]}], None))
+
+    def no_holder_read(*args, **kwargs):
+        raise AssertionError("the holder read ran on a document that did not read")
+
+    monkeypatch.setattr(hub.slack_policy(), "persona_holders", no_holder_read)
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    assert out["rows"][0]["result"] == "refused: the file does not read: slack.yaml: not YAML", out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
 def test_a_removal_with_no_holder_passes_the_preview_and_writes_none(hub, tmp_path, monkeypatch):
     """#3014 acceptance 8: a removal preview names each project's file, and no file changes."""
     prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT})

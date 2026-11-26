@@ -858,9 +858,13 @@ def persona_named(committed, local, name):
 
 def _place_label(row):
     """The label a holder states for one workspace or channel row, in one fallback order: its `label`, else its `name`,
-    else its `id`. A row that states both a label and a name reports its label, so the refusal text keeps one stable
-    field for each place (#3014)."""
-    return str(row.get("label") or row.get("name") or row.get("id") or "").strip()
+    else its `id` after the marker `unnamed`, in parentheses. A row that states both a label and a name reports its
+    label, so the refusal text keeps one stable field for each place, and a bare Slack id never stands alone (#3014)."""
+    label = str(row.get("label") or row.get("name") or "").strip()
+    if label:
+        return label
+    row_id = str(row.get("id") or "").strip()
+    return f"unnamed ({row_id})" if row_id else ""
 
 
 def persona_holders(persona_id, committed, local, clients=(), files=("slack.yaml", "slack.local.yaml")):
@@ -871,9 +875,12 @@ def persona_holders(persona_id, committed, local, clients=(), files=("slack.yaml
     `clients` is one `(client id, default persona id)` for each client that holds the project, so a client of another
     project never answers a holder; `files` names the committed file first and the local file second. Each file reads
     its project row before its workspaces, and a workspace before its channels. An id no place names answers no
-    holder, so a removal of it is never refused (ADR-0177)."""
+    holder, so a removal of it is never refused (ADR-0177). A file that does not read is no document: it answers no
+    holder at all, not even a client default, so the removal reports the read defect instead."""
     wanted = str(persona_id or "").strip()
     if not wanted:
+        return []
+    if not isinstance(committed, dict) or not isinstance(local, dict):
         return []
     out = []
     for client_id, default in clients or ():

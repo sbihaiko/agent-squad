@@ -187,14 +187,33 @@ def with_fields(doc, persona_id, fields):
     return None
 
 
+def _declared_persona_rows(doc):
+    """The persona rows one document holds, as they stand there: a document that is not a mapping holds none."""
+    rows = _doc(doc).get("personas")
+    return list(rows) if isinstance(rows, list) else []
+
+
+def _first_declared_name(seats, persona_id):
+    """The first name any seat of the roster declares for one persona id, or '', for the copy a refusal states."""
+    for seat in seats or ():
+        name = _declared_name(seat.get("committed"), persona_id)
+        if name:
+            return name
+    return ""
+
+
 def without(doc, persona_id):
     """The committed document with the row of one persona id removed, and every other row and key in its place. None
     when the document declares no persona with that id: a persona only the local file declares is read-only."""
-    rows = _doc(doc).get("personas")
+    rows = _declared_persona_rows(doc)
     pid = _text(persona_id).strip()
-    kept = [row for row in (rows if isinstance(rows, list) else ())
-            if not (isinstance(row, dict) and _text(row.get("id")).strip() == pid)]
-    if len(kept) == len(rows if isinstance(rows, list) else ()):
+    kept, changed = [], False
+    for row in rows:
+        if isinstance(row, dict) and _text(row.get("id")).strip() == pid:
+            changed = True   # every row of the id goes, so an id a document declares twice loses both rows
+            continue
+        kept.append(row)
+    if not changed:
         return None
     out = copy.deepcopy(_doc(doc))
     out["personas"] = copy.deepcopy(kept)
@@ -218,8 +237,6 @@ def remove(seats, persona_id, targets, holders=None):
         if sid and sid not in by_id:
             by_id[sid] = seat
     rows, writes = [], []
-    known = next((_declared_name(s.get("committed"), pid) for s in (seats or ())
-                  if _declared_name(s.get("committed"), pid)), "")
     for target in targets or ():
         tid = _text(target).strip()
         seat = by_id.get(tid)
@@ -242,7 +259,8 @@ def remove(seats, persona_id, targets, holders=None):
             rows.append({**row, "result": f"refused: held by {'; '.join(places)}"})
             continue
         changed = without(seat.get("committed"), pid)
-        name = _declared_name(seat.get("committed"), pid) or known or pid
+        # The name comes from the target project alone: another project's declaration never names this project's persona.
+        name = _declared_name(seat.get("committed"), pid) or pid
         if changed is None:
             rows.append({**row, "result": f"refused: {name} is not declared in this project's committed file"})
             continue
