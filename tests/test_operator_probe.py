@@ -133,6 +133,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["stale"] is False
@@ -520,13 +521,14 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
-    def fake_bg(work, profile, cli, proxy_url=None, service=None):
+    def fake_bg(work, profile, cli, proxy_url=None, **kwargs):
         seen["bg"] = proxy_url
 
     monkeypatch.setattr(probe, "session", fake_session)
     monkeypatch.setattr(probe, "bg_session", fake_bg)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == {"proxy_url": None, "bg": None, "poller": None, "writer": None}
@@ -650,6 +652,52 @@ def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
 def test_the_real_cli_probe_passes():
     probe = load("operator_probe")
     assert probe.main([]) == 0
+
+
+FULL_STAND_IN = """#!{python}
+import json, os, sys
+argv = sys.argv[1:]
+stdin = sys.stdin.read()
+store = os.environ["STUB_STORE"]
+if "--resume" in argv:
+    session = argv[argv.index("--resume") + 1]
+    answer = open(store, encoding="utf-8").read() if os.environ.get("STUB_REMEMBERS") else "I do not know."
+else:
+    session = "sess-probe-0001"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(stdin)
+    answer = "ok"
+print(json.dumps({{"type": "result", "is_error": False, "result": answer, "session_id": session}}))
+"""
+
+
+def full_stand_in(tmp_path, monkeypatch, remembers):
+    path = tmp_path / "claude-full-stand-in"
+    path.write_text(FULL_STAND_IN.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | 0o100)
+    monkeypatch.setenv("STUB_STORE", str(tmp_path / "said.txt"))
+    monkeypatch.setenv("STUB_REMEMBERS", "1" if remembers else "")
+    return str(path)
+
+
+def test_a_full_turn_returns_on_resume_the_word_it_was_given_on_stdin(tmp_path, monkeypatch):
+    """#2965 criteria (4) to (6) and (13): the second full turn resumes the first session and returns its stdin word."""
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
+
+    def no_sandbox(*args, **kwargs):
+        raise AssertionError("a full call ran through the sandbox wrapper")
+
+    monkeypatch.setattr(probe, "sandboxed", no_sandbox)
+    monkeypatch.setattr(probe, "cli_call", no_sandbox)
+    probe.full_turn_phase(tmp_path, cli)
+
+
+def test_a_full_turn_that_forgets_the_stdin_word_fails_the_probe(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=False)
+    with pytest.raises(probe.ProbeFailed, match="stdin"):
+        probe.full_turn_phase(tmp_path, cli)
 
 
 def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project(tmp_path):
@@ -780,6 +828,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == [tmp_path / "checkout"], seen
@@ -938,6 +987,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert roles == ["poller", "writer"]
@@ -1466,3 +1516,145 @@ def test_the_answer_phase_appends_its_question_under_an_exclusive_lock(tmp_path)
     inbox.write_text("before\n")
     probe.append_question(str(inbox), b"X\n")
     assert inbox.read_text() == "before\nX\n"
+
+
+# The tool gate (#2950): the live phases run under the gate's `--settings`, and the gate decides the calls.
+
+def test_the_gated_answer_phase_runs_past_an_ambient_hook_and_removes_it(tmp_path, monkeypatch):
+    """#2950 criterion 11: the live call runs with the gate's `--settings` and an ambient project hook that rewrites
+    every allowed Bash call; the answer line lands, the rewrite reaches no event, and the file leaves with the phase."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    seen = {}
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        seen["args"] = list(args)
+        ambient = tmp_path / ".claude" / "settings.json"
+        seen["ambient"] = ambient.read_text() if ambient.exists() else ""
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own, gate='{"hooks": {}}')
+
+    assert seen["args"][seen["args"].index("--settings") + 1] == '{"hooks": {}}', seen["args"]
+    assert "tamper.py" in seen["ambient"], seen["ambient"]
+    assert probe.GATE_TAMPER in (tmp_path / "gate" / "tamper.py").read_text()
+    assert not (tmp_path / ".claude" / "settings.json").exists(), "the phase left its ambient hook beside the cwd"
+
+
+def test_an_ambient_rewrite_that_reached_the_tool_fails_the_probe(tmp_path, monkeypatch):
+    """#2950 criterion 11: a rewrite that reached the tool means the executed command was not the judged one, so the
+    probe fails even though an answer line landed."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, events_of([("Bash", {"command": helper_command(probe)}, probe.GATE_TAMPER)])
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match=probe.GATE_TAMPER):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own, gate='{"hooks": {}}')
+
+
+def bg_roster(argv):
+    return subprocess.CompletedProcess(
+        argv, 0, '[{"sessionId": "ba6e7d2e", "name": "SQUAD-OPERATOR-probe-project", "cwd": "/w"}]', "")
+
+
+def bg_started(argv):
+    return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+
+def test_a_gated_bg_session_runs_under_the_gate_and_needs_its_audit_line(tmp_path, monkeypatch):
+    """#2950 criterion 1: the `--bg` session carries the gate's `--settings`, and the audit line of the one call the
+    gate must refuse proves the hook decided a call inside that session itself."""
+    probe = load("operator_probe")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        audit = Path(probe.denials_path(str(tmp_path / "state")))
+        audit.write_text(json.dumps({"at": "t", "tool": "Bash", "decision": "deny", "reason": "Bash runs only the helper",
+                                     "call": probe.GATE_DENIED}) + "\n")
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", gate='{"hooks": {}}')
+    started = next(argv for argv in calls if len(argv) > 1 and argv[1] == "--bg")
+    assert started[started.index("--settings") + 1] == '{"hooks": {}}', started
+    assert "Bash" in started[started.index("--tools") + 1], started
+
+
+def test_a_gated_bg_session_with_no_audit_line_is_unproven(tmp_path, monkeypatch):
+    """#2950 criterion 1: a `--bg` session whose denied call left no audit line proves no hook ran there."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "GATE_DEADLINE", 0)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    with pytest.raises(probe.ProbeFailed, match="no audit line"):
+        probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", gate='{"hooks": {}}')
+
+
+def test_a_gated_bg_session_reads_the_audit_file_the_gate_names_not_one_under_the_checkout(tmp_path, monkeypatch):
+    """#2987: the session runs in the checkout, but the gate's policy names the audit file under the probe's state
+    folder. A line in that file proves the denial; a path built from the checkout reads another, empty file."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "GATE_DEADLINE", 0.5)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    audit = probe.gate_audit(tmp_path)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        audit.parent.mkdir(parents=True, exist_ok=True)
+        audit.write_text(json.dumps({"at": "t", "tool": "Bash", "decision": "deny", "reason": "Bash runs only the helper",
+                                     "call": probe.GATE_DENIED}) + "\n")
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(checkout, "(version 1)(allow default)", "claude", gate='{"hooks": {}}', audit=audit)
+    assert not Path(probe.denials_path(str(checkout / "state"))).exists(), "the probe touched a file the gate never names"
+
+
+def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, monkeypatch):
+    """#2987: `run_probe` passes the `--bg` phase the audit file its profile grants, under the probe's state folder,
+    while the session itself runs in the checkout."""
+    probe = load("operator_probe")
+    seen = {}
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "session", lambda *a, **k: (
+        {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
+    monkeypatch.setattr(probe, "check_session", lambda *a, **k: None)
+
+    def fake_bg(work, profile, cli, proxy_url=None, **kwargs):
+        seen["work"], seen["audit"] = Path(work), kwargs.get("audit")
+
+    monkeypatch.setattr(probe, "bg_session", fake_bg)
+    monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)
+    if hasattr(probe, "full_turn_phase"):
+        monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
+    assert Path(seen["audit"]) != Path(probe.denials_path(str(seen["work"] / "state"))), seen

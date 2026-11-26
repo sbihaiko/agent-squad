@@ -106,10 +106,11 @@ def _proxies_end_with_their_test():
 def _no_model_proxy_survives():
     """A model proxy this test process started must be ended by its test; one that outlives the session is a leak (#1686)."""
     yield
-    from tests.proxystop import live_proxy_pids
+    from tests.proxystop import describe, live_proxy_pids
     leaked = live_proxy_pids(os.getpid())
     if leaked:
-        raise AssertionError(f"model proxy process(es) {', '.join(map(str, leaked))} outlived the test session (#1686)")
+        raise AssertionError(f"model proxy process(es) {', '.join(map(str, leaked))} outlived the test session (#1686):\n"
+                             f"{describe(leaked)}")
 
 
 @pytest.fixture(autouse=True)

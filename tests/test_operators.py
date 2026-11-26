@@ -189,6 +189,7 @@ def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypat
     assert "C0AAAAAA9" not in text
 
 
+@pytest.mark.heavy
 def test_the_brief_names_the_answer_helper_as_the_only_answer_path(tmp_path, monkeypatch):
     """#2949 criterion (5): every answer leaves through the one shipped helper, and the brief names no other path."""
     op = operators(tmp_path, monkeypatch)
@@ -279,6 +280,16 @@ def test_the_brief_names_the_helper_as_the_one_command_a_session_runs(tmp_path, 
         text = op.prompt_for(key, str(tmp_path / "state"), "/repo")
         assert "runs no command" not in text.lower(), text
         assert "the one command" in text.lower() and op.ANSWER in text, text
+
+
+def test_a_project_brief_writes_the_action_request_through_the_helper(tmp_path, monkeypatch):
+    """ADR-0179 (review of #2950): a project session writes the request line through the helper, and the DM session
+    never does."""
+    op = operators(tmp_path, monkeypatch)
+    project = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
+    dm = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
+    assert "--kind action-request" in project and op.ANSWER in project, project
+    assert "action-request" not in dm, dm
 
 
 def test_the_brief_arms_one_monitor_per_inbox_of_the_project(tmp_path, monkeypatch):
@@ -414,6 +425,7 @@ def test_the_working_directory_is_the_projects_own_checkout(tmp_path, monkeypatc
     assert f"--add-dir {os.path.realpath(found['acme/widget'])}" in brief(tmp_path, "acme/widget")
 
 
+@pytest.mark.heavy
 def test_the_session_loads_the_projects_claude_md(tmp_path, monkeypatch):
     """Criterion 8: no `--bare`, so the CLI discovers the checkout's CLAUDE.md, and the brief points at it."""
     op = operators(tmp_path, monkeypatch)
@@ -681,14 +693,13 @@ def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path,
     assert "outboxes/dm.jsonl" not in text, text
 
 
-def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
-    """#2939: the project brief tells the session to append one request line, and to never run a command. #2949 keeps
-    the one answer path the helper, so the brief names no outbox path and no free append."""
+def test_a_project_action_message_gets_a_read_only_answer(tmp_path, monkeypatch):
+    """#2950 with ADR-0179: the project brief orders the request through the one helper call the gate allows, never a
+    line the session writes itself, and it names no outbox path (#2939, #2949)."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
-    assert "never run a command" in text, text
-    for field in ('"kind"', '"at"', '"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
-        assert field in text, (field, text)
+    assert "only reads and answers" in text and "--kind action-request" in text and op.ANSWER in text, text
+    assert '"kind"' not in text, "the brief orders a hand-written request line the gate would deny"
     assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") not in text, "the brief names an outbox for a free append"
 
 
@@ -1357,14 +1368,14 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
 
 
 def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):
-    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It writes one
-    action request to the outbox of the line's channel, and runs no command itself (#2939)."""
+    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. The tool gate
+    allows no append and no command but the answer helper, so the brief answers an action request read-only (#2939)."""
     op = operators(tmp_path, monkeypatch)
     found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
     unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": found["acme/widget"], "channels": ["C0AAAAAA1"]}
     text = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
     assert "outboxes/dm.jsonl" not in text and "Proposal:" not in text, text
-    assert "never acts" in text and "never run a command" in text, text
+    assert "never acts" in text and "only reads and answers" in text, text
 
 
 def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeypatch):
@@ -1720,3 +1731,39 @@ def test_a_persona_defect_that_is_not_a_read_is_never_swallowed(tmp_path, monkey
 
     with pytest.raises(RuntimeError):
         op.scope_persona_id(state, "C0AAAAAA1")
+
+
+def test_the_profile_grants_the_bg_hosts_pseudo_terminal_as_a_data_write_only(tmp_path, monkeypatch):
+    """#2987: a `--bg` host opens `/dev/ptmx` and its own slave, or it exits before init. The grant names those two
+    devices with a data write only, and no other rule writes a device but `/dev/null`."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    revision(tmp_path, "acme/widget", ["C0AAAAAA1"])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    text = Path(record(tmp_path)["acme-widget"]["profile"]["path"]).read_text()
+    lines = text.splitlines()
+    assert '(allow file-write-data (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))' in lines, text
+    null = {f'(literal "{os.devnull}")', f'(literal "{os.path.realpath(os.devnull)}")'}
+    for line in lines:
+        if not line.startswith("(allow file-write"):
+            continue
+        devices = set(re.findall(r'\((?:literal|subpath|regex) #?"\^?/dev[^)]*\)', line))
+        if line.startswith("(allow file-write-data"):
+            assert devices == {'(literal "/dev/ptmx")', '(regex #"^/dev/ttys[0-9]+$")'}, line
+        else:
+            assert devices <= null, f"a wider device write: {line}"
+
+
+def test_the_cli_keeps_its_temp_folder_and_lock_files_inside_its_config_root(tmp_path, monkeypatch):
+    """#2987: the `--bg` service makes its socket folder under `TMPDIR` and its locks under `XDG_STATE_HOME`. Both sit
+    inside the operator's config root, which the profile grants, never the owner's temp folder or `~/.local/state`."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+    env = op.cli_env(state)
+    root = op.config_root(state)
+    assert env["TMPDIR"].startswith(root + os.sep), env
+    assert env["XDG_STATE_HOME"].startswith(root + os.sep), env
+    op.prepare_config(state)
+    assert os.path.isdir(env["TMPDIR"]) and os.path.isdir(env["XDG_STATE_HOME"])
