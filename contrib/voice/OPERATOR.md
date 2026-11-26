@@ -16,7 +16,10 @@ never stops a session that carries no token.
 
 Start one Monitor per inbox of the project, one call each:
 
-    tail -n 0 -F "$VOICE_STATE/inboxes/<channel id>.jsonl"
+    tail -n 0 -F <the absolute path of $VOICE_STATE/inboxes/<channel id>.jsonl>
+
+The gate allows Monitor only as that exact command on one of the session's own inboxes, so never write a shell
+variable, a flag or a second path.
 
 A queue is keyed by Slack's channel id, never by its name, so a channel renamed in Slack keeps its inbox. For the DM,
 use `$VOICE_STATE/inboxes/dm.jsonl`. `-n 0` skips the lines already answered, and `-F` keeps following the file
@@ -45,8 +48,9 @@ Answer each inbox line through the shipped `answer` helper, and through nothing 
 The DM session passes `--scope dm` and may omit `--thread` to answer the newest line. A channel whose active
 `slack.yaml` revision declares a persona passes its id in `--persona`, and the brief names that id inline.
 
-Pass `--text` and `--speech` as single-quoted literals, or via `--text "$(cat <<'EOF' ... EOF)"`, so a quote, a
-backtick or `$(...)` in the answer never breaks the command or runs extra shell.
+Pass `--text` and `--speech` as single-quoted literals, so a quote in the answer never breaks the command. The tool
+gate refuses a command substitution and a redirection, inside double quotes too, so never wrap the answer in
+`$(cat ...)` or a heredoc, and never add a redirect.
 
 The helper writes one JSON line to the outbox of that channel (`$VOICE_STATE/outboxes/<channel id>.jsonl`, or
 `$VOICE_STATE/outboxes/dm.jsonl` for the DM), and exits 0. The supervisor writes the session's binding at its start and names it in
@@ -91,14 +95,16 @@ It reads every outbox on its own. The session makes no Slack call and waits for 
 
 ## Reads and answers, never acts
 
-The session reads and answers. It never acts beyond that: the one command it runs is the `answer` helper above, and
-the kernel permits that call while it refuses every other command. It writes no other file and makes no Slack write.
-When a message asks for an action, a project session writes one action request to the outbox of the line's channel. The
-request is one JSON line with the reserved `kind` (`action-request`), `at` (the epoch second you write it), `action`,
-`arguments`, `sender`, `channel`, `source` (the inbox line id) and `thread_ts`. Write it at once: the daemon runs no
-request older than a few minutes. The daemon's checked executor reads it outside the session and outside its sandbox.
-The executor asks the policy whether the sender's role lists the action, runs the command the project declares for that
-action id, and appends one reply in the thread. It never runs the text of the message.
+The session reads and answers. It never acts beyond that: a `PreToolUse` hook decides every tool call, and it allows
+only `Read` inside the project checkout, `Monitor` on an own inbox, `TaskStop`, and `Bash` for the `answer` helper or
+for one command line the project declares under `guard.read_wrappers`. It denies every other call, with a reason and
+one audit line, and it fails closed: an error blocks the call. So the session writes no other file and makes no Slack
+write.
+
+When a message asks for an action, a project session answers that it only reads and answers. Then it calls the helper
+once more for the same line, with `--kind action-request`, `--action` and `--arguments` (one JSON object). The helper
+appends one request line to the outbox, and the checked executor runs the action outside the session. The gate allows
+that call and no other command.
 
 The DM session also calls the helper once more for the same line, with the same `--scope` and `--thread`, with
 `--kind proposal`, and with a text that starts with `Proposal:`. The inbox keeps the question, so the second call
