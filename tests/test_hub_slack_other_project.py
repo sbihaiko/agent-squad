@@ -8,6 +8,7 @@ The seams are the hub's tree over two seats, `_slack_clients_tree_for`, the stag
 theme's renderer run in node. Every id and name is a neutral placeholder.
 """
 import json
+import re
 
 import pytest
 import yaml
@@ -91,6 +92,26 @@ def test_a_staged_edit_keeps_every_project(hub, tmp_path, monkeypatch):
     tree = hub._slack_tree_docs(P, staged, LOCAL, here["committed_path"], here["local_path"], here=here["committed_path"])
     names = [n["name"] for c in tree["clients"] for n in walk(c) if n["kind"] == "project"]
     assert sorted(names) == ["alpha", "beta"], names
+
+
+def test_the_project_node_points_each_edit_at_its_own_place(hub, tmp_path):
+    """#3016 acceptance 2 and 3: the sentence of another profile's project names the Personas theme for personas and the
+    project page for roles and events, so each link names the place that edits it (SPEC 3009)."""
+    tree, _, _ = _tree(hub, tmp_path)
+    beta = _project(tree, "beta")
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps({'tree': tree})};slT={json.dumps(tree)};"
+            f"slTsel={json.dumps(beta['id'])};"
+            + "globalThis.fetch=()=>new Promise(()=>{});slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    html = json.loads(_node(body))
+    detail = html[html.index("id=sltdetail"):]
+    para = next(p for p in re.findall(r"<p class=slttext>(.*?)</p>", detail, re.S) if "personas" in p)
+    theme = re.search(r'<a [^>]*data-sp=prs[^>]*>(.*?)</a>', para)
+    assert theme, para
+    assert 'href="#set-prs"' in theme.group(0), theme.group(0)
+    assert "Personas theme" in theme.group(1), theme.group(1)
+    page = re.search(r'<a [^>]*href="/beta/#settings"[^>]*>(.*?)</a>', para)
+    assert page, para
+    assert para.index("roles and events") < para.index('href="/beta/#settings"'), para
 
 
 def test_the_page_draws_the_read_values_and_the_link(hub, tmp_path):

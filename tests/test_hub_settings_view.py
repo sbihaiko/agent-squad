@@ -67,7 +67,7 @@ def test_settings_has_a_theme_list_a_phone_select_and_one_page_save(hub):
     nav = re.search(r'<nav class=snav aria-label="Settings themes">(.*?)</nav>', view, re.S)
     assert nav, "Settings has no left theme list"
     themes = re.findall(r"data-sp=(\w+)", nav.group(1))
-    assert themes == ["lim", "sub", "mdl", "slk", "acc"], "Settings lists a theme that belongs to another screen (#2515)"
+    assert themes == ["lim", "sub", "mdl", "slk", "prs", "acc"], "Settings lists a theme that belongs to another screen (#2515)"
     sel = re.search(r"<select id=ssel[^>]*>(.*?)</select>", view, re.S)
     assert sel and re.findall(r"value=(\w+)", sel.group(1)) == themes, "the phone select does not list the same themes"
     assert view.count("id=ssave") == 1, "Settings needs exactly one page-level Save"

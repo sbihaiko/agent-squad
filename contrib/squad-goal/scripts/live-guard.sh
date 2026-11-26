@@ -68,7 +68,7 @@ hub_paths=(scripts/hub.py scripts/hub_theme_core.py scripts/hub_theme_settings_l
   scripts/hub_theme_runs.py scripts/hub_theme_stats.py scripts/hub_theme_board.py scripts/hub_theme_prs.py
   scripts/hub_theme_flow.py scripts/hub_theme_board_build.py scripts/hub_theme_promote.py scripts/hub_theme_page.py
   scripts/hub_theme_settings_subscriptions.py scripts/hub_theme_settings_models.py scripts/hub_theme_settings_board.py
-  scripts/hub_theme_settings_access.py
+  scripts/hub_theme_settings_access.py scripts/hub_theme_settings_personas.py
   scripts/hubmux.py scripts/board_columns.py scripts/board-definition.json scripts/board_history.py scripts/board_cfd.py scripts/board_flow_history.py)
 hub_changed() { # hub_changed FROM TO: the files the hub imports or pins that differ between two builds, one a line; rc 3 = cannot tell
   local p

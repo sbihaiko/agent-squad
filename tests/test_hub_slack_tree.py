@@ -148,6 +148,20 @@ def test_the_project_block_lives_in_the_pages_own_project_node(hub, tmp_path):
     assert detail.index("data-blk=settings") < detail.index("data-blk=read"), "the node's Settings come first"
 
 
+def test_the_personas_section_links_to_the_personas_theme(hub, tmp_path):
+    """#3016 acceptance 4: the project's Personas section names the Personas theme, so the owner reaches the place that
+    edits a persona once for every client from the project that declares it (SPEC 3009)."""
+    out = read(hub, tmp_path)
+    project = next(n for n in walk(out["tree"]["root"]) if n.get("kind") == "project")
+    html = render(hub, out, sel=project["id"])
+    section = re.search(r"<section class=slsec><h4>Personas\b.*?</section>", html, re.S).group(0)
+    assert "<h4>Personas " in section, section[:200]
+    link = re.search(r'<a [^>]*data-sp=prs[^>]*>(.*?)</a>', section)
+    assert link, section
+    assert 'href="#set-prs"' in link.group(0), link.group(0)
+    assert "Personas theme" in link.group(1), link.group(1)
+
+
 def test_another_projects_node_links_its_own_page(hub, tmp_path):
     """A project that is not the page's own names the page that edits its personas, roles and events (#2906)."""
     out = read(hub, tmp_path)

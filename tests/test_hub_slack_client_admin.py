@@ -347,6 +347,43 @@ def test_the_client_pane_shows_an_add_project_control_and_a_delete_client_button
     assert "Delete client" in html, html
 
 
+def test_the_client_detail_links_to_the_personas_theme(hub, tmp_path, monkeypatch):
+    """#3016 acceptance 1: the client detail opens the Personas theme in one click, so the client that uses a persona
+    reaches its voice and tone from the place that picks it (SPEC 3009)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "blue", "projects": ["alpha"]}],
+         {"alpha": FOLLOWER})
+    html = render(hub, hub.slack_overview(), sel="c0")
+    link = re.search(r'<a [^>]*data-sp=prs[^>]*>(.*?)</a>', html, re.S)
+    assert link, html[-800:]
+    assert 'href="#set-prs"' in link.group(0), link.group(0)
+    assert "Personas theme" in link.group(1), link.group(1)
+
+
+PADDED = {
+    "version": 1,
+    "project": {"language": "en-US", "persona": "blue"},
+    "personas": [{"id": " blue ", "name": " Blue ", "voice": "Kore", "tone": "Calm."},
+                 {"id": "amber", "name": "Amber", "voice": "Sulafat", "tone": "Warm."}],
+    "workspaces": [],
+}
+
+
+def test_the_default_persona_select_offers_the_personas_the_theme_lists(hub, tmp_path, monkeypatch):
+    """#3016 acceptance 5 and 6: the client's Default persona select and the Personas theme answer one set for that
+    client, id and name, so the select never offers an id the theme does not list (SPEC 3009)."""
+    wire(tmp_path, monkeypatch, hub,
+         [{"id": "one", "name": "One", "default_persona": "amber", "projects": ["alpha"]}],
+         {"alpha": PADDED})
+    html = render(hub, hub.slack_overview(), sel="c0")
+    sel = re.search(r"<select id=slclpersona[^>]*>(.*?)</select>", html, re.S).group(1)
+    picked = re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', sel)
+    theme = next(g for g in hub.personas_overview()["groups"] if g["id"] == "one")
+    answered = [(r["id"], r["name"]) for r in theme["rows"]]
+    assert picked == answered, (picked, answered)
+    assert [pid for pid, _ in picked] == ["blue", "amber"], picked
+
+
 def test_the_tree_shows_an_add_client_control_with_a_name_and_a_default_persona(hub, tmp_path, monkeypatch):
     """Acceptance 9: the tree draws a name field and a default-persona select, and the personas are the hub's."""
     wire(tmp_path, monkeypatch, hub,
