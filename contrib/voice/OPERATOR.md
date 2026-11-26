@@ -16,7 +16,7 @@ never stops a session that carries no token.
 
 Start one Monitor per inbox of the project, one call each:
 
-    tail -n 0 -F <the absolute path of the inbox>
+    tail -n 0 -F <the absolute path of $VOICE_STATE/inboxes/<channel id>.jsonl>
 
 The gate allows Monitor only as that exact command on one of the session's own inboxes, so never write a shell
 variable, a flag or a second path.
