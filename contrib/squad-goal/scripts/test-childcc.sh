@@ -755,8 +755,9 @@ rm -f "$T/st/auto/childcc-cursor" "$T/st/auto/childcc-round"; rm -f "$T"/st/revi
 run2 hlr 6430 6431; : > "$WAVE_CALLS"; touch "$WAVE_GATE_HOLD"; SG_CHILDCC_BUDGET=2 dpass hlr >/dev/null; rm -f "$WAVE_GATE_HOLD"
 [ -s "$T/cr.calls" ] && [ "$(cat "$T/st/auto/childcc-cursor" 2>/dev/null)" = "hlr a" ] && ok "a hold after a review the pass ran still spends the budget" || ko "review calls '$(cat "$T/cr.calls")', cursor '$(cat "$T/st/auto/childcc-cursor" 2>/dev/null)'"
 [ "$(/usr/bin/grep -c '^enter hlr ' "$WAVE_CALLS")" = 1 ] && ok "a lock hold after a review ends the entries too" || ko "entries: $(cat "$WAVE_CALLS")"
-# A child with no change past its base (#1406): childreview.sh exits 6. The issue is requeued once at once, with the reason,
-# never held three passes, and the head is recorded so the next pass does not review it again.
+# A child with no change past its base (#1406, #2984): childreview.sh exits 6. The issue ends one no-change fail at once
+# (wave.sh fail ... nochange, #2245), with the reason, never a requeue that a later run repeats on the same base, and the head
+# is recorded so the next pass does not review it again.
 cat > "$T/childreview.sh" <<'CR'
 #!/bin/bash
 echo "$* $(git rev-parse HEAD)" >> "$FIX_DIR/cr.calls"
@@ -766,7 +767,7 @@ CR
 export GH_NUMS="5950:Doing"; run nch 5950 n; wtree nch; echo wave/nch > "$T/st/auto/wave-nch"; echo wave/nch > "$T/st/auto/waved-nch"
 : > "$WAVE_CALLS"; : > "$T/cr.calls"; out=$(pass nch); rc=$?; pass nch >/dev/null
 [ "$(/usr/bin/grep -c '^nch 5950' "$T/cr.calls")" = 1 ] && ok "a no-change child is reviewed once" || ko "no-change reviews: $(cat "$T/cr.calls")"
-[ "$(/usr/bin/grep -c '^requeue 5950 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 5950 .*the child made no change.*the fix already exists' "$WAVE_CALLS" && ok "a no-change child is requeued once with the reason" || ko "no-change requeue: $(cat "$WAVE_CALLS")"
+[ "$(/usr/bin/grep -c '^fail 5950 nch ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^fail 5950 nch .*the child made no change.*the fix already exists.* nochange$' "$WAVE_CALLS" && ! /usr/bin/grep -q '^requeue 5950 ' "$WAVE_CALLS" && ok "a no-change child ends one no-change fail with the reason, never a requeue (#2984)" || ko "no-change fail: $(cat "$WAVE_CALLS")"
 ! /usr/bin/grep -q '^enter nch' "$WAVE_CALLS" && [ "$rc" != 3 ] && ok "a no-change child enters nothing and holds no wave" || ko "no-change: exit $rc, waves $(cat "$WAVE_CALLS")"
 
 # A child whose own gate ended unproven is a finished child all the same (ADR-0164): the work is done and the proof could not

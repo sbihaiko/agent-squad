@@ -234,6 +234,11 @@ case "$body" in *prepush*) ko "3d the request names the profile's prepush comman
 # child hands in. A child that cannot gate last says so: the wave entry gate then runs its own battery. No gate, no script.
 body=$(abody SG_FAST_GATE_CMD=mygate)
 case "$body" in *'Your last step, after your final edit and commit, is the entry gate: run "mygate"'*) ok "3e the request makes the fast gate the child's last step";; *) ko "3e the brief does not make the fast gate the last step: '$body'";; esac
+# #2984: a child that finds the bug fixed at its base ran the gate on an empty tree, reported unproven and never named
+# does-not-reproduce, so its run failed and the issue was dispatched again. The brief says a no-reproduce child commits nothing,
+# runs no gate and returns fail with the end class.
+case "$body" in *'A bug that does not reproduce at the base tip: make no commit, run no gate, return fail naming it, and set end_class to does-not-reproduce.'*) ok "3f a no-reproduce child commits nothing, runs no gate and returns the end class";; *) ko "3f the brief lets a no-reproduce child run the gate on an empty tree: '$body'";; esac
+case "$body" in *'If you made no commit, run no gate'*) ok "3f the gate step names the no-commit exception";; *) ko "3f the gate step does not name the no-commit exception";; esac
 case "$body" in *"make no edit and no commit"*) ok "3e the request forbids an edit after the gate";; *) ko "3e the request does not forbid an edit after the gate: '$body'";; esac
 case "$body" in *"cannot make it your last step"*"say so"*"own battery"*) ok "3e a child that cannot gate last says so, and the entry gate falls back to its own battery";; *) ko "3e no fallback line: '$body'";; esac
 # 3f (#1198) a red gate is fixed and the gate is re-run, as many times as it takes; the no-edit rule binds only after a

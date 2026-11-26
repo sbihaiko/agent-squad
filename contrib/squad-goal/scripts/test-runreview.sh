@@ -185,12 +185,14 @@ for r in 1 2 3; do (cd "$T/wt" && SQUAD_REVIEW_FIX=0 SQUAD_REVIEW_ROUND=$r STUB_
 [ "$(st read 'x/y#7' state)" = needs-human ] && [ "$(/bin/ls "$T/st/cq" | /usr/bin/grep -c 'reviewfreeze')" = 1 ] \
   && ok "L: a freeze after a rearm at the same head queues no second comment" || ko "L: state '$(st read 'x/y#7' state)', queue '$(/bin/ls "$T/st/cq")'"
 
-# M) #1406: a child whose head equals its base has nothing to review. childreview.sh exits 6, which is no "try again": the
-# issue is requeued once with the no-change reason, the ledger holds the head, the run exits 1 and never retries the review.
+# M) #1406, #2984: a child whose head equals its base has nothing to review. childreview.sh exits 6, which is no "try again":
+# the run ends the issue's dispatch once through `wave.sh fail ... nochange` (#2245), never a requeue that a later run repeats
+# on the same base. The ledger holds the head, the run exits 1 and never retries the review.
 reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "M: a no-change child exits 1, never try again (5)" || ko "M: exit $rc: $out"
-[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && /usr/bin/grep -q 'the child made no change past .* in run run-1: provisional: the fix for #7 already exists' "$T/wave.log" \
-  && ok "M: one requeue, with the no-change reason" || ko "M: wave.log '$(cat "$T/wave.log")'"
+[ "$(/usr/bin/grep -c '^wave.sh fail 7 run-1 ' "$T/wave.log")" = 1 ] && /usr/bin/grep -q '^wave.sh fail 7 run-1 the child made no change past .* in run run-1: provisional: the fix for #7 already exists.* nochange$' "$T/wave.log" \
+  && ok "M: one no-change fail, with the child's reason" || ko "M: wave.log '$(cat "$T/wave.log")'"
+! /usr/bin/grep -q '^wave.sh requeue' "$T/wave.log" && ok "M: a no-change child is never requeued (#2984)" || ko "M: wave.log '$(cat "$T/wave.log")'"
 mh=$($G -C "$T/wt" rev-parse HEAD)
 [ "$(lq)" = "$mh" ] && ok "M: the requeue fact holds this head" || ko "M: fact '$(lq)'"
 : > "$T/wave.log"; STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 >/dev/null 2>&1; rc=$?
@@ -204,8 +206,8 @@ reset; out=$(SG_CHILD_KIND=probe STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1
 [ -z "$(lq)" ] && ok "N: a probe leaves no ledger requeue fact" || ko "N: fact '$(lq)'"
 reset; out=$(SG_CHILD_KIND=coding STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "N: a no-change coding child still exits 1" || ko "N: coding exit $rc: $out"
-[ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$($G -C "$T/wt" rev-parse HEAD)" ] \
-  && ok "N: a coding child is requeued once, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
+[ "$(/usr/bin/grep -c '^wave.sh fail 7 run-1 .* nochange$' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$($G -C "$T/wt" rev-parse HEAD)" ] \
+  && ok "N: a coding child ends one no-change fail, with its ledger fact" || ko "N: wave.log '$(cat "$T/wave.log")' fact '$(lq)'"
 reset; out=$(STUB_VERDICT=NOCHANGE rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 1 ] && ok "N: a child of no named kind is a code child" || ko "N: unnamed kind exit $rc: $out"
 
