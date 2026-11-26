@@ -5,7 +5,8 @@ in a local Slack file, is never read as a grant.
 """
 import json
 
-from tests.test_voiced import TEAM, voiced as load_voiced
+from tests.test_voiced import TEAM
+from tests.test_voiced import voiced as load_voiced
 
 GUEST = "U0GUEST001"
 
