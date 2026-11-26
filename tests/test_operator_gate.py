@@ -392,3 +392,9 @@ def test_an_allowed_bash_call_carries_the_judged_command(tmp_path):
     assert allowed, reason
     assert shlex.split(given["command"]) == shlex.split(command), given
     assert shlex.split(given["command"])[-1] == "the owner's answer", given
+
+
+def test_the_operators_module_of_these_tests_ends_its_proxies_with_each_test():
+    """#2989: a gate test that starts a session starts a model proxy where no loopback endpoint is set (the CI runner).
+    The module these tests load records each start, so the test's teardown ends the proxy."""
+    assert operators_module().start_proxy.__name__ == "tracked"
