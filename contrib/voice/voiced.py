@@ -163,11 +163,15 @@ class ClipTooLarge(Exception):
         self.size = size
 
 
+# These sentences are literals with no message text and no credential, so the refusal path posts them as they are;
+# a turn's own text still goes through `shared_redact`.
 FULL_FAILED = "Your message did not reach the project session."
 FULL_REASONS = {"deadline": "Your message stopped at the project session deadline.",
                 "spend_cap": "Your message stopped at the project session spend cap.",
                 "stopped": "Your message stopped when you asked."}
 FULL_HELD = "The project session is open in a terminal, so this message did not run."
+FULL_HELD_UNSAVED = ("A Claude terminal is open on this machine, so this message did not run. The terminal may belong "
+                     "to any project; close it and send the message again.")
 STOP_TEXT = "!stop"
 
 
@@ -1639,10 +1643,13 @@ class Daemon:
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
                  clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None, starter=None,
-                 full_cli="claude", live_argvs=fullturn.live_claude_argvs):
+                 full_cli="claude", live_argvs=None):
         self.state = state
         self.full_cli = full_cli
-        self.live_argvs = live_argvs
+        # The daemon path reads the process table through a cached, short-bounded probe, so a burst reads it once and
+        # a hung `ps` bounds one turn, never one read per message.
+        self.live_argvs = live_argvs or fullturn.ArgvProbe()
+        self.unknown_logged = False
         self.turns = []
         self.turn_order = fullturn.TurnOrder()
         self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
@@ -2612,13 +2619,18 @@ class Daemon:
         failed turn, never a lost message (#2965 review)."""
         turn = fullturn.Turn(None, "", None, True)
         held = False
+        session = None
         try:
             self.turn_order.wait(repo, ticket)
             try:
                 checkout = self.project_checkout(repo)
                 if checkout is not None:
                     session = fullturn.saved_sessions(self.state.directory).get(repo)
-                    held = fullturn.held_by_terminal(self.live_argvs(), session)
+                    argvs = self.live_argvs()
+                    if argvs is fullturn.UNKNOWN and not self.unknown_logged:
+                        self.unknown_logged = True
+                        self.log("voiced: the process table is unreadable, so a full turn refuses until it reads")
+                    held = fullturn.held_by_terminal(argvs, session)
                     if not held:
                         turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
                                                  registry=self.live_turns, user=record.get("user"))
@@ -2633,7 +2645,7 @@ class Daemon:
         if not self.channel_accepts_answer(record.get("channel")):
             self.log(f"voiced: full turn in {record.get('channel')} kept: the channel is listen only")
             return
-        answer = (FULL_HELD if held else
+        answer = ((FULL_HELD_UNSAVED if session is None else FULL_HELD) if held else
                   FULL_REASONS.get(turn.reason, FULL_FAILED) if turn.failed else shared_redact.redact(turn.text))
         self.post_text(record.get("channel"), record.get("ts"), answer, persona=decision.persona)
 

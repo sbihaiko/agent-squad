@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 from typing import NamedTuple
 
 TURN_SECONDS = 30 * 60
@@ -111,26 +112,50 @@ def owner_env(environ):
 SESSION_FLAGS = ("--resume", "-r", "--session-id")
 PRINT_FLAGS = ("-p", "--print")
 DAEMON_FLAGS = ("--bg", "--name")   # the daemon's own operator sessions, never the owner's terminal
-UNKNOWN = None   # the process table could not be read, so the probe answers conservatively (#2969 review)
+UNKNOWN = None   # the process table could not be read, so the probe answers conservatively
+PS_TIMEOUT = 10          # the probe's own wait for a live holder to appear in the process table
+DAEMON_PS_TIMEOUT = 2    # the daemon's bound on one `ps`, so a hung table costs a turn this much and no more
+PS_CACHE_SECONDS = 2.0   # one process-table read serves a burst of messages inside this window
 
 
 def is_claude(args):
     return bool(args) and os.path.basename(args[0]) == "claude"
 
 
-def live_claude_argvs():
+def live_claude_argvs(timeout=PS_TIMEOUT):
     """The argv of each live claude process, or `None` when the process table cannot be read.
 
     A missing or hung `ps` must never raise inside a turn: an unreadable table means the daemon cannot tell whether a
-    terminal holds the session, so it answers `None` and the probe refuses (#2969 review)."""
+    terminal holds the session, so it answers `None` and the probe refuses. The probe waits `PS_TIMEOUT` for a live
+    holder; the daemon path passes the shorter `DAEMON_PS_TIMEOUT`."""
     try:
-        done = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=10)
+        done = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):   # OSError holds FileNotFoundError and the sandbox's PermissionError
         return UNKNOWN
     if getattr(done, "returncode", 0) != 0:
         return UNKNOWN
     argvs = (line.split() for line in (done.stdout or "").splitlines())
     return [args for args in argvs if is_claude(args)]
+
+
+class ArgvProbe:
+    """The daemon's process-table probe: one read serves a burst inside `PS_CACHE_SECONDS`, bounded by
+    `DAEMON_PS_TIMEOUT`, so a hung `ps` blocks a message at most that bound and never one `ps` per message."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.at = None
+        self.argvs = UNKNOWN
+
+    def __call__(self):
+        with self.lock:
+            now = self.clock()
+            if self.at is not None and now - self.at < PS_CACHE_SECONDS:
+                return self.argvs
+            self.argvs = live_claude_argvs(DAEMON_PS_TIMEOUT)
+            self.at = now
+            return self.argvs
 
 
 def names_session(args, session):
@@ -153,10 +178,11 @@ def is_daemon_session(args):
 def held_by_terminal(argvs, session):
     """Whether a live claude process may hold the session, so a full turn must refuse.
 
-    An unknown listing is held: the daemon never runs a turn blind (#2969 review). A process is found by the session
-    it names; with no saved session the probe still answers, because an interactive claude process (no print flag) is
-    a terminal that may hold the project's session. The daemon's own operator sessions (`--bg`, `--name`) are never
-    that terminal."""
+    An unknown listing is held: the daemon never runs a turn blind. A process is found by the session it names; with
+    no saved session the probe answers conservatively and machine wide, because an interactive claude process (no
+    print flag) anywhere may hold the project's session, another project's included: the listing gives no working
+    folder, so the probe cannot narrow it. The daemon's own operator sessions (`--bg`, `--name`) are never that
+    terminal."""
     if argvs is UNKNOWN:
         return True
     for args in argvs:
@@ -171,7 +197,7 @@ def held_by_terminal(argvs, session):
 
 def refused_audit(reason):
     """The audit row of a turn the daemon never ran because a terminal holds the session. It carries `refused`, so a
-    reader tells a refusal from a turn that ran and failed for another reason (#2969 review)."""
+    reader tells a refusal from a turn that ran and failed for another reason."""
     return Turn(None, "", None, True, reason, refused=True).audit()
 
 
