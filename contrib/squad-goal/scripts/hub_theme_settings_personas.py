@@ -13,15 +13,16 @@ def personas_module():
 
 
 def personas_fields():
-    """The choice a voice field offers and the limit a tone field states: the Gemini voices alone, sorted, and the policy
-    module's tone limit. The list and the limit live in the policy module, so the hub states no rule of its own
-    (ADR-0177). A policy read that fails answers no choice and no limit, and the page draws a plain field."""
+    """The choice a voice field offers and the rules a name and a tone field state: the Gemini voices alone, sorted, the
+    policy module's tone limit, and the policy module's name pattern. The list, the limit and the pattern live in the
+    policy module, so the hub states no rule of its own (ADR-0177). A policy read that fails answers no choice and no
+    rule, and the page draws a plain field."""
     try:
         P = slack_policy()
-        return sorted(P.GEMINI_VOICES), P.TONE_MAX
+        return sorted(P.GEMINI_VOICES), P.TONE_MAX, P.NAME.pattern
     except Exception as e:
         print(f"hub: the Slack rules module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
-        return [], None
+        return [], None, None
 
 
 def personas_overview(seats=None, clients=None):
@@ -32,12 +33,13 @@ def personas_overview(seats=None, clients=None):
     A roster read that fails answers its reason and no group, so a broken profile read never draws an empty roster as a
     roster with no persona. A client map that fails to read names no client, and the projects wait in their own
     groups. The answer carries the Gemini voices and the tone limit the theme's editor offers."""
-    voices, tone_max = personas_fields()
+    voices, tone_max, name_pattern = personas_fields()
+    fields = {"voices": voices, "tone_max": tone_max, "name_pattern": name_pattern}
     errs = []
     if seats is None:
         seats, roster_err = _slack_roster_checked(0.0)
         if roster_err:
-            return {"err": roster_err, "groups": [], "voices": voices, "tone_max": tone_max}
+            return {"err": roster_err, "groups": [], **fields}
     if clients is None:
         clients, map_err = _clients_map_read()
         if map_err:
@@ -47,13 +49,13 @@ def personas_overview(seats=None, clients=None):
         PS = personas_module()
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
-        return {"err": "the persona rules are unavailable", "groups": [], "voices": voices, "tone_max": tone_max}
+        return {"err": "the persona rules are unavailable", "groups": [], **fields}
     try:
         groups = PS.groups(seats, clients)
     except Exception as e:
         print(f"hub: the personas could not be merged: {type(e).__name__}: {e}", file=sys.stderr)
-        return {"err": "the personas could not be merged", "groups": [], "voices": voices, "tone_max": tone_max}
-    return {"err": "; ".join(errs) or None, "groups": groups, "voices": voices, "tone_max": tone_max}
+        return {"err": "the personas could not be merged", "groups": [], **fields}
+    return {"err": "; ".join(errs) or None, "groups": groups, **fields}
 
 
 def _pr_edited_fields(P, fields):
@@ -66,6 +68,10 @@ def _pr_edited_fields(P, fields):
             out[key] = _slack_text(fields.get(key)).strip()
     if not out:
         return None, "fields: a body that names at least one of name, voice and tone"
+    if "name" in out:
+        reason = P.name_reason(out["name"])
+        if reason:
+            return None, f"personas[].name: {reason}"
     if "voice" in out:
         voice = next((v for v in P.GEMINI_VOICES if v.casefold() == out["voice"].casefold()), None)
         if voice is None:
@@ -121,8 +127,9 @@ def personas_edit(body):
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona rules are unavailable"}
+    clients, merr = _clients_map_read()   # a rename names the client map, and a confirm writes it (#3012)
     try:
-        plan = PS.edit(seats, pid, fields, targets)
+        plan = PS.edit(seats, pid, fields, targets, clients=clients)
     except Exception as e:
         print(f"hub: the persona edit could not be planned: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona edit could not be planned"}
@@ -148,8 +155,24 @@ def personas_edit(body):
                      "diff": out.get("diff")})
         if confirm and not out.get("err"):
             saved.append({"project": row["project"], "sha": out.get("sha")})
+    map_rows = list(plan.get("map") or ())
     if confirm:
         _slack_roster_clear()   # a write changed a project's files, so the next read reads the roster fresh
+        # A rename stores the new name in each client default that holds the persona (#3012), so the client badge and
+        # tile never show the old name. The map is its own store: it writes whether or not a project file was saved,
+        # and only a refused map write leaves its row unwritten.
+        new_name = _slack_text(fields.get("name")).strip()
+        written = []
+        for row in map_rows:
+            werr = _clients_default_write(row["client"], pid, new_name)
+            written.append({**row, "result": f"refused: {werr}" if werr else
+                                             f"stored {new_name} as the default name"})
+        map_rows = written
     refused = [r for r in rows if r["result"].startswith("refused:")]
+    refused += [r for r in map_rows if r["result"].startswith("refused:")]
+    notes = list(plan.get("notes") or ())
+    if merr:
+        notes.append(f"the client map did not read: {merr}")
     # No `err` key on a success: the write routes answer 400 on a body that carries one (#3011).
-    return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused)}
+    return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused),
+            "notes": notes, "map": map_rows}
