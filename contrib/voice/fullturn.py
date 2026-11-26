@@ -107,13 +107,30 @@ def owner_env(environ):
     return {key: value for key, value in environ.items() if key not in OPERATOR_OVERRIDES}
 
 
+SESSION_FLAGS = ("--resume", "-r", "--session-id")
+
+
+def is_claude(args):
+    return bool(args) and os.path.basename(args[0]) == "claude"
+
+
 def live_claude_argvs():
     listing = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=10).stdout
-    return [line.split() for line in listing.splitlines() if "claude" in line]
+    argvs = (line.split() for line in listing.splitlines())
+    return [args for args in argvs if is_claude(args)]
+
+
+def names_session(args, session):
+    for i, token in enumerate(args):
+        if token in SESSION_FLAGS and args[i + 1:i + 2] == [session]:
+            return True
+        if any(token == f"{flag}={session}" for flag in SESSION_FLAGS):
+            return True
+    return False
 
 
 def held_by_terminal(argvs, session):
-    return bool(session) and any(session in args and any("claude" in token for token in args) for args in argvs)
+    return bool(session) and any(is_claude(args) and names_session(args, session) for args in argvs)
 
 
 def argv(claude, session):
