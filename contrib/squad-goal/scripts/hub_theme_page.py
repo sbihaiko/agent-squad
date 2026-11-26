@@ -562,10 +562,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
  #sbody .slroledet .slevr .slacts{flex-direction:column;flex-wrap:nowrap;align-items:flex-start;gap:2px}
  #sbody .slroledet .slevr .slchk{min-width:0;white-space:normal}
  #sbody .slmembdet .slevr [role=cell][data-l="User ids"]{grid-template-columns:1fr}}
-/* The persona editor (#2697): the detail draws the name, the voice with its sample, and the tone; the default row and the
-   override table name the persona a channel inherits, and the reply preview states four facts with no control. */
-#sbody .sldef{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:var(--fs-caption)}
-#sbody .sldef select{height:var(--ctl-h);padding:0 8px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption)}
+/* The project's Personas section lists the declared personas and the reply preview states four facts with no control;
+   the Personas theme edits a persona (#3036). */
 #sbody .slhs{margin:12px 0 4px;font-size:var(--fs-caption);font-weight:600;color:var(--fg)}
 #sbody .slf textarea{width:100%;min-height:64px;padding:6px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;font-size:var(--fs-caption);resize:vertical}
 #sbody .slf small{color:var(--mute);font-size:var(--fs-caption)}
@@ -580,7 +578,6 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slt2 td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:anywhere}
 #sbody .slt2 .nw{white-space:nowrap}   /* a voice, a mode, a language tag or a persona id never breaks inside the word */
 #sbody .slt2 td button{white-space:nowrap;justify-self:start;min-width:0}   /* the Personas table's Edit button stays on one line and inside its cell when the row stacks (#2841) */
-#sbody .slnw{white-space:nowrap}   /* a button label such as Edit never breaks across two lines */
 @media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
 #tab-set #prbody .prgrp{margin:0 0 16px}#tab-set #prbody .prgrp h4{margin:0 0 6px;font-size:var(--fs-body);color:var(--fg)}
@@ -593,7 +590,17 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #tab-set #prbody .pflag.err{border-color:var(--tint-err-line);background:var(--tint-err);color:var(--err)}
 #tab-set #prbody .prf{display:block;margin:0 0 8px}#tab-set #prbody .prf input[type=checkbox]{margin-right:4px}
 #tab-set #prbody .prbar{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
-@media (max-width:600px){#tab-set #prbody .ptab,#tab-set #prbody .ptab tbody,#tab-set #prbody .ptab tr{display:block}#tab-set #prbody .ptab thead{display:none}#tab-set #prbody .ptab tr{padding:6px 0;border-bottom:1px solid var(--line)}#tab-set #prbody .ptab td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#tab-set #prbody .ptab td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#tab-set #prbody .ptab .nw{white-space:normal}}   /* a phone stacks each field under its own label, so no column is clipped and no word is cut (#3010) */
+#tab-set #prbody .pract{display:flex;gap:6px;flex-wrap:wrap}#tab-set #prbody .pract button{white-space:nowrap}   /* Edit and Add to project sit on one line while the cell allows */
+#tab-set #prbody .prflags{display:block;margin-top:4px}#tab-set #prbody .prproj{display:block}#tab-set #prbody .prproj+.prproj{margin-top:4px}
+#tab-set #prbody .prproj a{color:var(--fg);white-space:nowrap}#tab-set #prbody .ptab td[data-l="Tone"]{max-width:56ch}#tab-set #prbody .ptab td[data-l="Actions"]{width:1%}#tab-set #prbody .prproj a:hover{color:var(--acc)}
+#tab-set #prbody tr.prfocus>td{background:var(--tint-acc)}   /* the row a Slack link opened */
+#tab-set #prbody .ptab tr.preditrow>td{display:table-cell;padding:10px 12px 12px;background:var(--panel);border:1px solid var(--edge);border-radius:var(--radius-md)}
+#tab-set #prbody .prf textarea{display:block;width:100%;max-width:640px;min-height:72px;margin-top:4px;padding:6px;background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-sm);font:inherit;resize:vertical}
+#tab-set #prbody .prf input:not([type=checkbox]):not([type=radio]),#tab-set #prbody .prf select{display:block;margin-top:4px;min-width:220px}
+#tab-set #prbody .prf small,#tab-set #prbody .prf .m{color:var(--mute);font-size:var(--fs-caption)}
+#tab-set #prbody fieldset.prf{border:1px solid var(--line);border-radius:var(--radius-sm);padding:6px 10px}#tab-set #prbody fieldset.prf label{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin:4px 0}#tab-set #prbody fieldset.prf .prfile{margin-left:2px}
+@media (max-width:600px){#tab-set #prbody .ptab,#tab-set #prbody .ptab tbody,#tab-set #prbody .ptab tr{display:block}#tab-set #prbody .ptab thead{display:none}#tab-set #prbody .ptab tr{padding:6px 0;border-bottom:1px solid var(--line)}#tab-set #prbody .ptab td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#tab-set #prbody .ptab td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#tab-set #prbody .ptab .nw{white-space:normal}#tab-set #prbody .ptab tbody tr.preditrow>td{display:block;padding:10px}#tab-set #prbody .ptab td[data-l="Tone"]{max-width:none}#tab-set #prbody .ptab td[data-l="Actions"]{width:auto}}   /* a phone stacks each field under its own label, so no column is clipped and no word is cut (#3010) */
+@container slpanels (max-width:760px){#tab-set #prbody .ptab,#tab-set #prbody .ptab tbody,#tab-set #prbody .ptab tr{display:block}#tab-set #prbody .ptab thead{display:none}#tab-set #prbody .ptab tr{padding:6px 0;border-bottom:1px solid var(--line)}#tab-set #prbody .ptab td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#tab-set #prbody .ptab td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#tab-set #prbody .ptab .nw{white-space:normal}#tab-set #prbody .ptab tbody tr.preditrow>td{display:block;padding:10px}#tab-set #prbody .ptab td[data-l="Tone"]{max-width:none}#tab-set #prbody .ptab td[data-l="Actions"]{width:auto}}   /* a narrow settings column stacks the rows too, as the Slack tree does under 700 px: the Tone column never shrinks to one word a line (#3036) */
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
@@ -659,6 +666,7 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #tab-set .ssel{display:none}#tab-set details.sp:not(.on){display:none}
 /* #2907: the Slack tree and its detail pane use the width a collapsed sidebar frees; every other theme keeps its cap */
 #tab-set .swrap:has(#slk.on){max-width:none}#tab-set details#slk{max-width:none}#tab-set:has(#slk.on) #sbar{max-width:none}
+#tab-set .swrap:has(#prs.on){max-width:none}#tab-set details#prs{max-width:none}#tab-set:has(#prs.on) #sbar{max-width:none}   /* #3036: the Personas table takes the same free width, so its Tone column is not squeezed */
 #sbar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 12px;margin-top:12px;max-width:1120px;background:var(--panel);border-top:1px solid var(--line);z-index:2}#sbar[hidden]{display:none}
 #sbar.dirty{background:var(--tint-warn);border-top-color:var(--tint-warn-line)}#sbar button{height:var(--ctl-h);padding:0 12px}#sbar.dirty #ssave{background:var(--warn);color:var(--on-tone)}#schg{color:var(--mute);font-size:var(--fs-caption)}#schg.err{color:var(--err);font-weight:600}#schg.ok{color:var(--ok)}
 #sdlg{background:var(--panel);color:var(--fg);border:1px solid var(--edge);border-radius:var(--radius-lg);max-width:min(720px,94vw)}#sdpre{white-space:pre-wrap;font-size:var(--fs-caption);max-height:50vh;overflow:auto}#sdlg .sact{display:flex;gap:8px}
@@ -830,12 +838,12 @@ header.top .pill{font-size:var(--fs-caption);color:var(--mute)}
 #sbtn{display:none}
 @media (min-width:601px){
 #side{position:relative;padding:0;overflow:hidden;display:flex;flex-direction:column;box-sizing:border-box;transition:width var(--motion-duration-enter) var(--motion-entry-easing)}
-#sbbody{flex:1 1 auto;min-height:0;width:100%;overflow:auto;padding:34px 12px 12px;box-sizing:border-box;transition:transform var(--motion-duration-enter) var(--motion-entry-easing)}
+#sbbody{flex:1 1 auto;min-height:0;width:100%;overflow:auto;padding:34px 12px 12px;box-sizing:border-box;transition:transform var(--motion-duration-enter) var(--motion-entry-easing),visibility 0s}
 #sbtn{display:flex;position:absolute;top:12px;right:4px;z-index:1;width:20px;height:32px;align-items:center;justify-content:center;padding:0;border:0;border-radius:0;background:none;color:var(--mute);cursor:pointer}
 #sbtn:hover{color:var(--fg)}#sbtn:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
 #sbtn svg{width:12px;height:12px}
 html.sbshut #side{width:28px;transition-timing-function:var(--motion-exit-easing)}
-html.sbshut #sbbody{transform:translateX(-100%);transition-timing-function:var(--motion-exit-easing)}
+html.sbshut #sbbody{transform:translateX(-100%);visibility:hidden;transition-timing-function:var(--motion-exit-easing);transition-delay:0s,var(--motion-duration-enter)}   /* the body of a shut bar is wider than the 28 px rail: hidden once it slid away, so no clipped text shows in the rail and no hidden link takes focus (#3036) */
 html.sbshut #sbtn svg{transform:scaleX(-1)}
 }
 /* }SIDEBAR-CSS */
@@ -1413,7 +1421,7 @@ $("#lbody").addEventListener("change",e=>{const n=e.target.dataset&&e.target.dat
 /* Settings > Communication (SPEC 2682): the theme reads the committed `slack.yaml` and the profile's `slack.local.yaml`
    and saves both over one route. The view constructs and binds; the hub validates, diffs and writes (ADR-0137,
    ADR-0177). The hub holds no token. The old per-profile settings file and its route are retired (#2701). */
-let slS=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="",slPOpen="",slPv=null,slPvMsg="";   // slS: the read view; slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696); slPOpen: the open persona detail (#2697)
+let slS=null,slD=null,slMsg="",slSavedDocs=null,slDocs=null,slOpen="",slPv=null;   // slS: the read view; slDocs: the two raw files the save hands back (#2694); slOpen: the open workspace or channel detail (#2696); slPOpen: the open persona detail (#2697)
 const SL_MODE=["listen","listen+speak"],SL_SPEAK=["draft","send"],SL_TR=["off","local","gemini"],SL_PMOD=["two_state","exponential"];
 const SL_INHERIT="inherit";
 const slA=t=>esc(t).replace(/"/g,"&quot;");
@@ -1496,57 +1504,24 @@ function slReadHtml(r){if(!r)return "";
  +(slDocs?slEditHtml():slWsReadHtml(r,join))+`</section>`;
  h+=`<section class=slsec><h4>Project events ${slTag(cf)}</h4>${slEvHtml()}</section>`;   // the one editable section (#2698)
  return h+`</div>`}
-/* The persona editor (SPEC 2682 #2697): the owner edits a persona name, voice and tone, hears a voice sample and checks
-   the reply of each channel before saving. A persona carries no language and no permission, so the editor draws neither.
-   The editor writes the two raw files the Save reads (#2694), so the hub validates, diffs and lands them on confirm. */
+/* The Slack detail references the personas and never edits one (#3036): the Personas theme edits a persona's name,
+   voice and tone once for every client, and the tree's own Persona settings choose one for the project, a workspace or a
+   channel. The section lists what the project declares, and each name opens its row in the Personas theme. */
 const slDoc=(d,k)=>((d&&d[k])||{});
 const slPersonaLists=d=>slDoc(d,"committed").personas||[];
-const slPersonaAt=(d,id)=>slPersonaLists(d).find(p=>String(p.id)===String(id))||null;
-const slPersonaIds=r=>((r&&r.personas)||[]).map(p=>String(p.id));
-const slVoiceOpts=(voices,cur)=>voices.map(v=>`<option${v===cur?" selected":""}>${slA(v)}</option>`).join("");
-const slPickOpts=(ids,cur,empty)=>`<option value=""${cur?"":" selected"}>${esc(empty)}</option>`+ids.map(i=>`<option${i===cur?" selected":""}>${slA(i)}</option>`).join("");
-const slVoiceFirst=()=>(((slR&&slR.voices)||[])[0])||"Kore";
-function slPersonaSet(d,id,f,v){const p=slPersonaAt(d,id);if(!p||!["name","voice","tone"].includes(f))return false;p[f]=v;return true}   // a field outside name, voice and tone never edits a persona
-const SL_ID=/^[A-Za-z0-9 _.\-]{1,32}$/;   // the id rule the detail hint states, so a bad name never stages a persona
-function slPersonaAdd(d,name){const k=String(name||"").trim();if(!SL_ID.test(k))return false;const c=slDoc(d,"committed"),ps=c.personas||(c.personas=[]);
- if(ps.some(p=>String(p.id)===k))return false;ps.push({id:k,name:k,voice:slVoiceFirst(),tone:""});return true}
-function slDefaultSet(d,id){const c=slDoc(d,"committed");c.project=c.project||{};if(id)c.project.persona=id;else delete c.project.persona;return true}
-function slOverrideSet(d,file,wi,ci,id){const ws=(slDoc(d,file).workspaces||[])[wi];if(!ws)return false;const row=ci==null?ws:(ws.channels||[])[ci];
- if(!row)return false;if(id)row.persona=id;else delete row.persona;return true}
-const slPersonaDetail=p=>{const id=slA(p.id);
- return `<div class=sle data-slpd="${id}">`
- +`<div class=slf><label for=slpn_${id}>Name</label><input id=slpn_${id} data-slef="name:${id}" value="${slA(p.name)}" maxlength=32 aria-label="persona name"><small>letters, digits, space, period, hyphen and underscore; up to 32 characters</small></div>`
- +`<div class=slf><label for=slpv_${id}>Voice</label><select id=slpv_${id} data-slef="voice:${id}" aria-label="persona voice">${slVoiceOpts((slR&&slR.voices)||[],p.voice)}</select><button type=button data-slsample="${id}">Sample</button><small>a Gemini TTS voice; the sample is generated once per voice and tone, then cached</small></div>`
- +`<div class=slf><label for=slpt_${id}>Tone</label><textarea id=slpt_${id} data-slef="tone:${id}" rows=3 maxlength=300 aria-label="persona tone">${esc(p.tone)}</textarea><small>guides the text and the speaking style; up to 300 characters</small></div>`
- +`</div>`};
-const slAudioCtl=()=>{const u=(typeof window!=="undefined"&&window.__slAudio)||"";   // a refused autoplay leaves a control the press can play
- return u?`<div class=slf><span class=sl>Voice sample</span><audio controls src="${slA(u)}" aria-label="persona voice sample"></audio></div>`:""};
-function slOverrideSection(d,ids){const rows=[];
- for(const[file,doc,chip] of [["committed",slDoc(d,"committed"),"slack.yaml"],["local",slDoc(d,"local"),"local"]]){(doc.workspaces||[]).forEach((ws,wi)=>{
-   const lab=String(ws.label||ws.id||file+" "+wi);
-   rows.push(`<tr><td data-l="Slack workspace">${esc(lab)} <span class=m>${chip}</span></td><td data-l="Persona"><select data-slow="${file}:${wi}" aria-label="${slA(lab)}: persona">${slPickOpts(ids,String(ws.persona||""),"inherit the default")}</select></td></tr>`);
-   (ws.channels||[]).forEach((ch,ci)=>{const n=String(ch.name||ch.id||ci);
-     rows.push(`<tr><td data-l="Channel">#${esc(n)} <span class=m>${chip}</span></td><td data-l="Persona"><select data-slcw="${file}:${wi}:${ci}" aria-label="#${slA(n)}: persona">${slPickOpts(ids,String(ch.persona||""),"inherit the default")}</select></td></tr>`)})})}
- if(!rows.length)return "";
- return `<h5 class=slhs>Persona by Slack workspace and channel</h5><table class=slt2><thead><tr><th>Workspace or channel</th><th>Persona</th></tr></thead><tbody>${rows.join("")}</tbody></table>`}
 function slPreviewSection(){const pv=slPv||(slR&&slR.previews)||[];
  return `<h5 class=slhs>Reply preview</h5>`+(pv.length?`<table class=slt2><thead><tr><th>Channel</th><th>Mark</th><th>Language</th><th>Tone</th><th>Voice</th></tr></thead><tbody>`
  +pv.map(p=>`<tr><td data-l="Channel"><span class=nw>${esc(p.channel)}</span></td><td data-l="Mark"><span class=nw>${esc(p.mark||"none")}</span></td><td data-l="Language"><span class=nw>${esc(p.language)}</span></td><td data-l="Tone">${esc(p.tone||"none")}</td><td data-l="Voice"><span class=nw>${esc(p.voice||"none")}</span></td></tr>`).join("")
  +`</tbody></table>`:`<p class=m>${esc("No channel: the agent replies nowhere.")}</p>`)}
-function slPersonaSection(r){const cf=r.files.committed,ps=r.personas||[],ids=slPersonaIds(r),lists=slPersonaLists(slDocs),use=lists.length?lists:ps;
- const cur=String((slDoc(slDocs,"committed").project||{}).persona||""),byId={};for(const p of ps)byId[String(p.id)]=p;
+function slPersonaSection(r){const cf=r.files.committed,ps=r.personas||[],lists=slPersonaLists(slDocs),use=lists.length?lists:ps,byId={};
+ for(const p of ps)byId[String(p.id)]=p;
+ const proj=(slTHere()||{}).name||"";
  const rows=use.map(p=>{const o=byId[String(p.id)]||{},used=(o.channels||[]).length?o.channels.map(esc).join(", "):"no channel";
-  return `<tr><td data-l="Persona"><span class=nw><b>${esc(p.name)}</b> <span class=m>${esc(p.id)}</span></span></td><td data-l="Voice"><span class=nw>${esc(p.voice)}</span></td><td data-l="Tone">${esc(p.tone)}</td><td data-l="Used by">${used}</td><td><button type=button class=slnw data-slpopen="${slA(p.id)}">${String(slPOpen)===String(p.id)?"Close":"Edit"}</button></td></tr>`});
- const open=slPOpen?slPersonaAt(slDocs,slPOpen):null;
- // The theme edits one persona once for every client that uses it, so the section names it (#3016).
- return `<section class=slsec><h4>Personas ${slTag(cf)}</h4><p class=sltjump><a href="#set-prs" data-sp=prs>${esc("Open the Personas theme")}</a></p>`
- +(use.length?`<table class=slt2><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Used by</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<p class=m>${esc("No persona: the project declares no identity.")}</p>`)
- +`<div class=sldef><span class=sl>Default persona</span><select data-sldefault aria-label="default persona">${slPickOpts(ids,cur,"none")}</select>${slTag(cf)}</div>`
- +(open?slPersonaDetail(open):"")
- +slAudioCtl()
- +(slPvMsg?`<div class="mx${slPvMsg.startsWith("!")?" err":""}" role=status>${esc(slPvMsg.replace(/^!/,""))}</div>`:"")
- +`<div class=slad><input id=slpnew placeholder="persona name" aria-label="persona to add" maxlength=32><button type=button data-slpadd>Add persona</button></div>`
- +slOverrideSection(slDocs,ids)+slPreviewSection()+`</section>`}
+  return `<tr><td data-l="Persona"><span class=nw><a href="#set-prs" data-sp=prs data-prfocus="${slA(p.id)}" data-prproj="${slA(proj)}" title="${slA("Edit in the Personas theme")}"><b>${esc(p.name)}</b></a> <span class=m>${esc(p.id)}</span></span></td><td data-l="Voice"><span class=nw>${esc(p.voice)}</span></td><td data-l="Used by">${used}</td></tr>`});
+ return `<section class=slsec><h4>Personas ${slTag(cf)}</h4>`
+ +`<p class=sltjump>${esc("Names, voices and tones are edited in the ")}<a href="#set-prs" data-sp=prs>${esc("Personas theme")}</a>${esc(". The Persona setting of the project, a workspace or a channel chooses one.")}</p>`
+ +(use.length?`<table class=slt2><thead><tr><th>Persona</th><th>Voice</th><th>Used by</th></tr></thead><tbody>${rows.join("")}</tbody></table>`:`<p class=m>${esc("No persona: the project declares no identity.")}</p>`)
+ +slPreviewSection()+`</section>`}
 const slReadTiles=r=>!r?[]:r.now.map(t=>setTile(t.key,t.value,t.tone));
 /* The read-only workspace rows (#2693): a theme that could not read the raw documents draws these alone. With the
    documents in hand, the editor draws the same rows and adds the controls (#2696). The two tables draw one header list:
@@ -2067,17 +2042,6 @@ const slAsk=async()=>{try{const r=await(await fetch("/api/slack/files",{method:"
 async function slPreviewAsk(){try{const r=await(await fetch("/api/slack/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})})).json();
  slPv=r&&r.previews?r.previews:null}catch(x){slPv=null}}
 const slPreviewRefresh=()=>{slPv=null;slRender();slPreviewAsk().then(()=>slRender())};
-async function slSample(id){const p=slPersonaAt(slDocs,id);if(!p)return;
- const vEl=$("#slpv_"+id),tEl=$("#slpt_"+id),voice=(vEl&&vEl.value)||p.voice,tone=(tEl&&tEl.value!==undefined?tEl.value:p.tone);
- slPvMsg="the sample is being made";slRender();
- try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice,tone})})).json();
-  if(r.err)slPvMsg="!"+r.err;
-  else{slPvMsg=r.cached?"the same voice and tone: the cached sample plays":"a new voice and tone: the sample is made once and cached now";
-   try{const a=new Audio(r.url),pr=a.play();
-    if(pr&&pr.catch)pr.catch(()=>{window.__slAudio=r.url;slPvMsg="the browser refused the sound: press Play";slRender()})   // a refused autoplay keeps the URL and shows a Play control
-   }catch(x){window.__slAudio=r.url}}}
- catch(x){slPvMsg="!the sample could not be fetched"}
- slRender()}
 /* Autosave (#2908): every edit saves by itself, so the page shows no Save, no Discard and no "not saved". An edit of the
    local file saves at once; an edit of the committed file waits two seconds after the last edit of a burst, so a burst
    lands as one commit. Leaving the node saves a pending edit at once. An edit made during a save is kept and saves after
@@ -2108,27 +2072,20 @@ async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.
 async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
  const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)
  try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm})}),d=await r.json();
- slPv=null;slPvMsg="";   // a save or a reject ends the draft's reply preview: the read view answers for the files
+ slPv=null;   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=JSON.parse(sent);if(mine())slDocs=slClone(slSavedDocs);slD=null;slMsg="saved";   // the commit is the hub's business, not the owner's (#2908)
   try{const v=await(await fetch("/api/slack/files")).json();slR=v;slSavedDocs=slClone((v&&v.docs)||slSavedDocs||{});
    if(mine()||!slDocs){slDocs=slClone(slSavedDocs);slT=(v&&v.tree)||slT}}catch(x){}}   // the read view follows the save (#2698), and the tree follows it too (#2846)
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender();slChTree()}
-$("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};   // the persona editor stages its edits in the two raw files (#2697)
+$("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};
  if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
- if(dt.slef&&slDocs){const[f,id]=dt.slef.split(":");if(slPersonaSet(slDocs,id,f,e.target.value)){slD=null;slMsg="";slPOpen=id;slPreviewRefresh()}return}
- if(dt.sldefault!==undefined&&slDocs){slDefaultSet(slDocs,e.target.value);slD=null;slMsg="";slPreviewRefresh();return}
- if(dt.slow&&slDocs){const[file,wi]=String(dt.slow).split(":");if(slOverrideSet(slDocs,file,+wi,null,e.target.value)){slD=null;slMsg="";slPreviewRefresh()}return}
- if(dt.slcw&&slDocs){const[file,wi,ci]=String(dt.slcw).split(":");if(slOverrideSet(slDocs,file,+wi,+ci,e.target.value)){slD=null;slMsg="";slPreviewRefresh()}return}
  const s=dt.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
  const k=dt.sl;if(!k)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
 $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
  if(b&&(slDocs||slSavedDocs)){const dt=b.dataset||{};
-  if(dt.slpopen!==undefined){slPOpen=String(slPOpen)===String(dt.slpopen)?"":dt.slpopen;slRender();return}
-  if(dt.slpadd!==undefined){const el=$("#slpnew"),v=el?el.value:"";if(slPersonaAdd(slDocs,v)){slPOpen=String(v).trim();slMsg="";slPreviewRefresh()}return}
-  if(dt.slsample!==undefined){slSample(dt.slsample);return}
   const o=dt.slopen;
   if(o!==undefined){slOpen=slOpen===o?"":o;slRender();return}
   if(b.dataset.sladdch){slAddChOp(...b.dataset.sladdch.split(":"));return}
@@ -2157,18 +2114,20 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
    target projects; the preview posts with no confirm and writes nothing, and the confirm is the theme's one write. The
    theme never saves by itself. */
 // PRS{
-let prS=null,prMsg="",prEd=null,prPlan=null,prPMsg="",prNew=null,prAddPlan=null,prAddMsg="";
-async function prLoad(){try{prS=await (await fetch("/api/personas")).json();prMsg=prS.err?"!"+prS.err:""}catch(e){prMsg="!load failed"}prRender()}
+let prS=null,prMsg="",prEd=null,prPlan=null,prPMsg="",prNew=null,prAddPlan=null,prAddMsg="",prFocus=null;   // prFocus: the row a Slack link opened (#3036)
+async function prLoad(){try{prS=await (await fetch("/api/personas")).json();prMsg=prS.err?"!"+prS.err:""}catch(e){prMsg="!load failed"}prRender();prReveal()}
+function prReveal(){if(!prFocus||typeof document==="undefined")return;const tr=document.querySelector("#prbody tr.prfocus");
+ if(tr&&tr.scrollIntoView)tr.scrollIntoView({block:"center"})}
 const prTxt=t=>esc(t==null?"":String(t));
 const prPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
-const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks after a dot, never inside a word
+const prFile=t=>prTxt(String(t==null?"":t).split("/").pop()).replace(/\./g,".<wbr>");   // the file name alone, as the rows name it (#3036); a long one breaks after a dot, never inside a word
 const prRows=()=>((prS||{}).groups||[]).flatMap(g=>g.rows||[]);
 /* A persona id is local to its projects, so two clients may each hold a row with one id (#3028): a button names its
    client group, and the lookup asks for that group's row. A button with no client keeps the first match by id. */
 const prRowAt=(id,client)=>{const gs=((prS||{}).groups||[]).filter(g=>client==null||String(g.id)===String(client));
  for(const g of gs){const r=(g.rows||[]).find(x=>String(x.id)===String(id));if(r)return r}return null};
 function prStartEdit(id,client){const r=prRowAt(id,client);if(!r||r.read_only)return;
- prEd={mode:"fields",id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
+ prEd={mode:"fields",client,id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
  prNew=null;prPlan=null;prPMsg="";prRender()}
 /* A drifted row offers one copy for each project that declares the id (#3015): the choice starts an edit that names the
    client and the copy, and the hub alone decides the targets, so a project of another client is never written. */
@@ -2214,8 +2173,8 @@ const prSlug=t=>String(t==null?"":String(t)).toLowerCase().replace(/[^a-z0-9]+/g
 const prAddId=()=>prNew?(prNew.id||prSlug(prNew.name)):"";
 function prStartAdd(id,client){const all=((prS||{}).projects)||[];
  if(id==null){prNew={name:"",voice:((prS||{}).voices||[])[0]||"",tone:"",projects:[]}}
- else{const r=prRowAt(id,client);if(!r)return;const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
-  prNew={id:r.id,name:r.name,voice:r.voice,tone:r.tone,committed:{name:r.name,voice:r.voice,tone:r.tone},projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
+ else{const r=prRowAt(id,client);if(!r)return;prNew={client};const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
+  prNew={client,id:r.id,name:r.name,voice:r.voice,tone:r.tone,committed:{name:r.name,voice:r.voice,tone:r.tone},projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
  prEd=null;prAddPlan=null;prAddMsg="";prRender()}
 function prStopAdd(){prNew=null;prAddPlan=null;prAddMsg="";prRender()}
 /* The add's body (#3013): a new persona posts the fields the owner typed; an existing persona posts the row's committed
@@ -2242,7 +2201,7 @@ async function prAddSample(){if(!prNew)return;
     if(p&&p.catch)p.catch(()=>{prAddMsg="the browser refused the sound: press Play"})}catch(x){}}}
  catch(x){prAddMsg="!the sample could not be fetched"}
  prRender()}
-function prAddPlanHtml(){const rows=((prAddPlan||{}).rows)||[];if(!rows)return"";
+function prAddPlanHtml(){const rows=((prAddPlan||{}).rows)||[];if(!rows.length)return"";   // no preview yet: no empty table (#3036)
  return `<table class="ptab" id=praddplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
   +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
 function prAddEditor(){const d=prNew;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
@@ -2256,7 +2215,7 @@ function prAddEditor(){const d=prNew;if(!d)return"";const voices=(prS||{}).voice
    +`<p class=prf>Tone <b>${prTxt(d.tone)}</b> <span class=m>an existing persona keeps its name, voice and tone</span></p>`
   :`<label class=prf>Name <input id="prnewname" value="${esc(d.name)}"></label>`
    +`<label class=prf>Voice <select id="prnewvoice">${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
-   +`<label class=prf>Tone <input id="prnewtone" value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`;
+   +`<label class=prf>Tone <span class=m>at most ${limit} characters</span><textarea id="prnewtone" rows=3${max==null?"":` maxlength="${max}"`}>${esc(d.tone)}</textarea></label>`;
  return `<section class=prgrp id=pradd><h4>${title}</h4>`
  +fields
  +`<fieldset class=prf><legend>Projects</legend>${all.map(p=>`<label><input type=checkbox data-praddproj="${prTxt(p.id)}"${d.projects.includes(String(p.id))?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
@@ -2272,28 +2231,41 @@ function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[
  return `<section class=prgrp id=predit><h4>Edit ${prTxt(d.name)}</h4>`
  +`<label class=prf>Name <input id=prname value="${esc(d.name)}"${pat?` pattern="${esc(pat)}" title="letters, digits, space, period, hyphen and underscore, at most 32"`:""}></label>`
  +`<label class=prf>Voice <select id=prvoice>${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
- +`<label class=prf>Tone <input id=prtone value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`
+ +`<label class=prf>Tone <span class=m>at most ${limit} characters</span><textarea id=prtone rows=3${max==null?"":` maxlength="${max}"`}>${esc(d.tone)}</textarea></label>`
  +`<fieldset class=prf><legend>Projects</legend>${(d.all||[]).map(p=>`<label><input type=checkbox data-prproj="${prTxt(p.id)}"${d.projects.includes(p.id)?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
  +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-sample>Play sample</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
  +(prPMsg?`<p class="mx" role=status>${prTxt(prPMsg.replace(/^!/,""))}</p>`:"")+prPlanHtml()+`</section>`}
+/* A row (#3036): the flags sit under the name, so no column stays empty; each project opens its node in the Slack tree;
+   a default names its client by the name the groups carry; Edit and Add to project share one line. */
+const prClientName=id=>{const g=((prS||{}).groups||[]).find(x=>String(x.id)===String(id));return g?g.name:id};
 function prRow(r,client){
  const cell=(label,body)=>`<td data-l="${label}"><span class=pv>${body}</span></td>`;   // one item for the value: a bare text node would take the label's own grid cell
  const copies=r.drift?(r.copies||[]).map(c=>`<span class=prcopy><b>${prTxt(c.name)}</b> <span class=m>${prTxt(c.voice)} · ${prTxt(c.tone)}</span> <button data-prcopy="${prTxt(c.project)}" data-prclient="${prTxt(client)}">Use this copy</button></span>`).join("<br>"):"";
- const projects=((r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;")+(copies?`<br>${copies}`:"");
- const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
- const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}" data-prclient="${prTxt(client)}">Edit</button>`;   // a local-only persona is read-only
+ const projects=((r.projects||[]).map(p=>`<span class=prproj><a href="#set-slk" data-sp=slk data-slproj="${prTxt(p.label)}" title="Open in the Slack tree">${prTxt(p.label)}</a> <span class=prfile>${prFile(p.file)}</span></span>`).join("")||"&mdash;")+(copies?`<br>${copies}`:"");
+ const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("");
+ const edit=r.read_only?"":`<button data-predit="${prTxt(r.id)}" data-prclient="${prTxt(client)}">Edit</button>`;   // a local-only persona is read-only
  const add=`<button data-praddrow="${prTxt(r.id)}" data-prclient="${prTxt(client)}">Add to project</button>`;   // the same persona reaches a project that does not declare it (#3013)
- return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
+ const name=`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`+(flags?`<span class=prflags>${flags}</span>`:"");
+ return `<tr${prFocused(r,client)?" class=prfocus":""}><td data-l="Persona"><span class=pv>${name}</span></td>`
  +cell("Voice",`<span class=nw>${prTxt(r.voice)||"&mdash;"}</span>`)+cell("Tone",prTxt(r.tone)||"&mdash;")
- +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)
- +cell("Edit",edit+" "+add)+"</tr>"}
+ +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(c=>prTxt(prClientName(c))).join(", ")||"&mdash;")
+ +`<td data-l="Actions"><span class="pv pract">${edit}${add}</span></td></tr>`}
+/* The row a Slack link names (#3036): the persona id inside the group whose row declares that project. */
+const prFocused=(r,client)=>!!prFocus&&String(r.id)===String(prFocus.id)&&(!prFocus.project||(r.projects||[]).some(p=>String(p.label)===String(prFocus.project)));
+/* The editor opens under the row it edits (#3036), so the reader never looks for it at the top of the theme. */
+const prOpenHere=(d,r,client)=>!!d&&d.id!=null&&String(d.id)===String(r.id)&&(d.client==null||String(d.client)===String(client));
+function prGroupRows(g){return g.rows.map(r=>{let h=prRow(r,g.id);
+  if(prOpenHere(prEd,r,g.id))h+=`<tr class=preditrow><td colspan=6>${prEditor()}</td></tr>`;
+  else if(prOpenHere(prNew,r,g.id))h+=`<tr class=preditrow><td colspan=6>${prAddEditor()}</td></tr>`;
+  return h}).join("")}
 function prRender(){const el=$("#prbody");if(!el)return;
  const groups=((prS||{}).groups||[]).filter(g=>(g.rows||[]).length),rows=groups.reduce((n,g)=>n+g.rows.length,0);
  const txt=rows?`${prPlural(rows,"persona")} · ${prPlural(groups.length,"client")}`:"no persona";
  for(const sel of ["#prsnav","#prssr"]){const el=$(sel);if(el)el.textContent=txt}   // the nav line and the panel's own chip read one text
  const ban=prMsg?`<p class="mx err" role=status>${prTxt(prMsg.replace(/^!/,""))}</p>`:"";
+ const fresh=prNew&&prNew.id==null;   // a new persona belongs to no row, so its editor opens above the groups
  const bar=(prEd||prNew)?"":`<div class=prbar><button data-pradd>New persona</button></div>`;   // the one door to a new persona (#3013)
- el.innerHTML=ban+bar+prEditor()+prAddEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(r=>prRow(r,g.id)).join("")}</tbody></table></section>`).join("")
+ el.innerHTML=ban+bar+(fresh?prAddEditor():"")+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th aria-label="Actions"></th></tr></thead><tbody>${prGroupRows(g)}</tbody></table></section>`).join("")
   :`<p class=m>${prTxt("No persona: no roster project declares one.")}</p>`)}
 // }PRS
 /* The Personas editor's own events (#3011): a field stages its value and posts nothing, so no edit of the theme writes
@@ -2339,23 +2311,31 @@ const setDirty=()=>[["mdl",mdlDirty()],["sub",subDirty()]].filter(x=>x[1]).map(x
 /* The Save bar is always visible (#1278): a read-only theme reads "nothing to save here" with both buttons disabled,
    never a bar that disappears and leaves the reader guessing whether anything was lost. Spend & limits hides the two
    buttons there, because it writes each field on its own and a button would name a write that already happened (#2433). */
-function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme),solo=sTheme==="lim"||sTheme==="slk";bar.hidden=false;
+function setBar(){const bar=$("#sbar");if(!bar)return;const d=setDirty(),ro=RO||!SET_SAVE.includes(sTheme),solo=sTheme==="lim"||sTheme==="slk"||sTheme==="prs";bar.hidden=false;
  const sb=sTheme==="slk"&&!RO&&typeof slBarState==="function"?slBarState():null;   // Slack saves each edit by itself (#2908)
  $("#sundo").hidden=!(sb&&sb.undo);$("#sretry").hidden=!(sb&&sb.retry);$("#schg").classList.toggle("err",!!(sb&&sb.err));
  bar.classList.toggle("dirty",d.length>0&&!ro&&!solo);
  $("#ssave").hidden=solo;$("#sdisc").hidden=solo;
  $("#ssave").disabled=ro||!d.length;$("#sdisc").disabled=ro||!d.length;
- $("#schg").textContent=RO?RO_WHY:sb?sb.text:sTheme==="slk"?"Slack: each edit saves by itself":solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
+ $("#schg").textContent=RO?RO_WHY:sb?sb.text:sTheme==="slk"?"Slack: each edit saves by itself":sTheme==="prs"?"Personas: each edit saves on its Confirm, after its preview":solo?"Spend & limits: each field saves as you set it":!SET_SAVE.includes(sTheme)?"nothing to save here":d.length?"Unsaved: "+d.map(k=>STH[k]).join(", "):`${STH[sTheme]}: no change`}
 function setTheme(sp){if(!STH[sp])sp=SET_FIRST;sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
  document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar();
  if(sp==="lim"){limTickStart();kanTickStart()}else{limTickStop();kanTickStop()}   // the age tickers run only while the loaded theme is on screen (#2433)
- if(sp==="prs")prLoad()}
-$(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
+ if(sp==="prs"||!prS)prLoad()}   // the nav line names the personas before the theme is opened (#3036)
+$(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b){prFocus=null;setTheme(b.dataset.sp)}});   // the theme list opens a theme with no row named
 $("#ssel").addEventListener("change",e=>setTheme(e.target.value));
 document.addEventListener("click",e=>{const a=e.target.closest&&e.target.closest("a[data-sp]");if(!a)return;
- e.preventDefault();setTab("set");setTheme(a.dataset.sp)});   // #1278: a theme named inside another theme opens that theme
+ e.preventDefault();const dt=a.dataset||{};
+ if(dt.sp==="prs")prFocus=dt.prfocus?{id:dt.prfocus,project:dt.prproj||""}:null;   // a persona name opens its own row (#3036)
+ if(dt.sp==="slk"&&dt.slproj!==undefined)slTGoProject(dt.slproj);   // a project of a persona opens its node in the Slack tree (#3036)
+ setTab("set");setTheme(dt.sp)});   // #1278: a theme named inside another theme opens that theme
+/* The Slack tree node of a project, by the name the Personas theme shows (#3036). A name the tree does not hold keeps
+   the current selection. */
+function slTGoProject(name){const walk=n=>!n?null:n.kind==="project"&&String(n.name)===String(name)?n:((n.children||[]).map(walk).find(Boolean)||null);
+ for(const r of slTRoots()){const hit=walk(r);if(hit){if(hit.id!==slTsel){slTFlush();slConfirm=null}slTsel=hit.id;slTF=hit.id;slTshow=slTNarrow();
+  for(const x of slTPath(hit.id))slTopen[x.id]=true;slRender();return true}}return false}
 const setAskOne=async(url,body,theme,file)=>{try{const r=await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,confirm:false})})).json();
  return r.err?{file,lines:["! "+themeLine(theme,r.err)]}:{file,lines:(r.diff||[]).map(l=>themeLine(theme,l))}}catch(x){return{file,lines:["! "+theme+" · the diff could not be read"]}}};
 /* The Save dialog groups its lines by the file they would touch (#1278), each group headed by the path the server named. */

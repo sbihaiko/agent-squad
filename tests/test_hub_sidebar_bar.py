@@ -236,3 +236,11 @@ def test_the_bar_body_scrolls_inside_the_bar(page):
     assert "flex:1 1 auto" in body and "min-height:0" in body, body
     assert "overflow:auto" in body, body
     assert "height:100%" not in body, "a percentage height on the body resolves against an auto-height bar and never scrolls"
+
+
+def test_a_shut_bar_hides_its_body_so_no_clipped_text_shows_in_the_rail():
+    """#3036: the body of a shut bar is wider than its 28 px rail; it slides away and is hidden, so no clipped word
+    shows in the rail and no hidden link takes the focus."""
+    page = (Path(__file__).resolve().parent.parent / "contrib/squad-goal/scripts/hub_theme_page.py").read_text()
+    rule = re.search(r"html\.sbshut #sbbody\{([^}]*)\}", page)
+    assert rule and "visibility:hidden" in rule.group(1), rule and rule.group(1)

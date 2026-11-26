@@ -525,13 +525,10 @@ def test_the_now_tiles_can_fill_one_row_at_a_desktop_width(hub):
     assert m and int(m.group(1)) <= 140, rule and rule.group(1)
 
 
-def test_the_persona_edit_button_stays_on_one_line(hub, tmp_path):
-    """#2841: the Personas table's Edit button never breaks its label across two lines."""
+def test_the_personas_section_holds_no_edit_button(hub, tmp_path):
+    """#3036: the Personas theme edits a persona, so the project's Personas section draws no Edit button."""
     out = read(hub, tmp_path); html = render(hub, out, sel=next(n for n in walk(out["tree"]["root"]) if n.get("here"))["id"])
-    btn = re.search(r"<button[^>]*data-slpopen[^>]*>", html)
-    assert btn and "slnw" in btn.group(0), btn and btn.group(0)
-    assert re.search(r"#sbody \.slnw\{[^}]*white-space:nowrap", hub.PAGE), "the one-line rule"
-
+    assert "data-slpopen" not in html, html
 
 def test_a_workspace_tile_names_its_class_a_file_tile_and_the_detail_carries_class_and_id(hub, tmp_path):
     """The Class tile keeps the class value, a File tile names the file the workspace row lives in, and the detail sub

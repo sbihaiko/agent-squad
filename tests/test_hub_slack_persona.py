@@ -453,51 +453,39 @@ def _slices(page):
     return "\n".join([stub, esc, sett, sl])
 
 
-def render(hub, out, open_id=""):
+def render(hub, out):
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
             "slDocs=slClone((slR&&slR.docs)||{});slSavedDocs=slClone(slDocs);"
-            f"slPOpen={json.dumps(open_id)};slT=slR.tree;slTsel=(slTHere()||{{}}).id||slTsel;slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+            "slT=slR.tree;slTsel=(slTHere()||{}).id||slTsel;slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     return json.loads(_node(body))
 
 
-def detail(html, pid):
-    """The open persona's detail alone: it ends where the Add persona row begins."""
-    i = html.index(f'data-slpd="{pid}"')
-    j = html.find("<div class=slad>", i)
-    return html[i:j if j >= 0 else len(html)]
+def personas_block(html):
+    """The project's Personas section alone: it ends where the reply preview begins."""
+    i = html.index("<h4>Personas")
+    return html[i:html.index(">Reply preview<", i)]
 
 
-def test_the_persona_editor_edits_name_voice_and_tone_and_carries_no_language_or_permission(hub, tmp_path):
-    """Criteria (1) and (2): the detail holds a name field, a voice select and a tone field, and it holds no language
-    field and no permission field. The persona carries no language and no permission, so the editor draws none."""
+def test_the_slack_detail_lists_the_personas_and_edits_none(hub, tmp_path):
+    """#3036: the Personas theme edits a persona's name, voice and tone once for every client, so the project's Slack
+    detail lists the declared personas by name, voice and channels, and draws no editor, no tone, no sample, no Add
+    persona row and no second persona select beside the tree's own Persona settings."""
     out = overview(hub, tmp_path)
-    d = detail(render(hub, out, open_id="iara"), "iara")
-    for field in ("name:iara", "voice:iara", "tone:iara"):
-        assert f'data-slef="{field}"' in d, (field, d)
-    assert 'data-slsample="iara"' in d, d
-    assert "language" not in d.lower() and "permission" not in d.lower(), d
-    for tag in ("pt-BR", "en-US", "es-ES"):
-        assert tag not in d, (tag, d)
+    block = personas_block(render(hub, out))
+    assert "HAL9K" in block and "Iara" in block and "Sulafat" in block, block
+    for gone in ("data-slef", "data-slsample", "data-slpadd", "Add persona", "data-sldefault", "data-slow=",
+                 "data-slcw=", "<th>Tone</th>", "<textarea", "<select", "<audio", "Calm and direct.", "Warm and patient."):
+        assert gone not in block, (gone, block)
 
 
-def test_the_voice_select_offers_only_the_gemini_voices(hub, tmp_path):
-    """Criterion (1): the select draws the hub's list and nothing else."""
+def test_each_persona_name_opens_its_row_in_the_personas_theme(hub, tmp_path):
+    """#3036: a persona name is a link to the Personas theme that names the persona and this project, so the theme
+    opens on that row."""
     out = overview(hub, tmp_path)
-    d = detail(render(hub, out, open_id="iara"), "iara")
-    select = re.search(r'data-slef="voice:iara"[^>]*>(.*?)</select>', d, re.S).group(1)
-    options = re.findall(r"<option[^>]*>(.*?)</option>", select)
-    assert options == out["voices"], options
-    assert "Sulafat" in options
-
-
-def test_the_editor_sets_the_default_persona_and_an_override_per_workspace_and_channel(hub, tmp_path):
-    """Criterion (3): one select sets the project's default persona, and one select sets the persona of each Slack
-    workspace and of each channel."""
-    out = overview(hub, tmp_path)
-    html = render(hub, out)
-    assert "data-sldefault" in html, html
-    assert len(re.findall(r"data-slow=", html)) == 2, "one override select per Slack workspace"
-    assert len(re.findall(r"data-slcw=", html)) == 3, "one override select per channel"
+    block = personas_block(render(hub, out))
+    links = re.findall(r'<a href="#set-prs" data-sp=prs data-prfocus="([^"]+)" data-prproj="([^"]*)"', block)
+    assert {pid for pid, _ in links} == {"hal", "iara"}, links
+    assert all(proj for _, proj in links), "each link names the project it came from"
 
 
 def test_the_preview_shows_the_mark_language_tone_and_voice_of_each_channel(hub, tmp_path):
@@ -510,55 +498,3 @@ def test_the_preview_shows_the_mark_language_tone_and_voice_of_each_channel(hub,
     for fact in ("pt-BR", "Calm and direct.", "Kore", "Warm and patient.", "Sulafat"):
         assert fact in block, (fact, block)
     assert "<select" not in block and "<input" not in block, block
-
-
-def test_a_refused_autoplay_leaves_a_visible_play_control(hub, tmp_path):
-    """Criterion (5): a browser that refuses to play the sample keeps its URL, and the page draws a control bound to it,
-    so the owner hears the sample on a press instead of losing it."""
-    out = overview(hub, tmp_path)
-    audio = "data:audio/wav;base64,QUJD"
-    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};"
-            "slDocs=slClone((slR&&slR.docs)||{});slSavedDocs=slClone(slDocs);"
-            f"slPOpen='iara';globalThis.window={{__slAudio:{json.dumps(audio)}}};"
-            "slT=slR.tree;slTsel=(slTHere()||{}).id||slTsel;slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
-    html = json.loads(_node(body))
-    assert "<audio" in html and "controls" in html, html
-    assert audio in html, "the control points at the kept URL"
-
-
-def test_an_edit_sets_the_draft_document_and_marks_the_theme_dirty(hub):
-    """Criterion (1): the editor writes the two raw files the Save reads (#2694), so the change is staged and the Save
-    shows its diff. A field outside name, voice and tone is refused."""
-    body = (_slices(hub.PAGE) + f"\nslR={json.dumps({'voices': ['Kore', 'Puck']})};"
-            "slS={connection:'connected',people:[]};slDraft=slClone(slS);"
-            "slDocs={committed:{version:1,project:{},personas:[{id:'iara',name:'Iara',voice:'Sulafat',tone:'Warm.'}]},local:{}};"
-            "slSavedDocs=slClone(slDocs);"
-            "const ok=slPersonaSet(slDocs,'iara','voice','Puck');"
-            "const bad=slPersonaSet(slDocs,'iara','language','pt-BR');"
-            "const added=slPersonaAdd(slDocs,'Nova');"
-            "console.log(JSON.stringify({ok,bad,added,voice:slDocs.committed.personas[0].voice,"
-            "ids:slDocs.committed.personas.map(p=>p.id),dirty:slDirty()}))")
-    got = json.loads(_node(body))
-    assert got == {"ok": True, "bad": False, "added": True, "voice": "Puck", "ids": ["iara", "Nova"], "dirty": True}, got
-
-
-def test_an_added_persona_takes_a_gemini_voice(hub):
-    """Criterion (1): a new persona is born with a voice of the hub's list, so the file it stages is valid."""
-    body = (_slices(hub.PAGE) + f"\nslR={json.dumps({'voices': ['Kore', 'Puck']})};"
-            "slDocs={committed:{version:1,project:{},personas:[]},local:{}};"
-            "const ok=slPersonaAdd(slDocs,'Nova');"
-            "console.log(JSON.stringify({ok,p:slDocs.committed.personas[0]}))")
-    got = json.loads(_node(body))
-    assert got["ok"] is True and got["p"]["voice"] in ("Kore", "Puck"), got
-
-
-def test_an_added_persona_id_follows_the_declared_name_rule(hub):
-    """Criterion (1): a name outside the declared id rule stages no persona, so the save never reports it late."""
-    body = (_slices(hub.PAGE) + f"\nslR={json.dumps({'voices': ['Kore', 'Puck']})};"
-            "slDocs={committed:{version:1,project:{},personas:[]},local:{}};"
-            "const bad=slPersonaAdd(slDocs,'my/persona#1');"
-            "const long=slPersonaAdd(slDocs,'x'.repeat(33));"
-            "const ok=slPersonaAdd(slDocs,'Nova 2');"
-            "console.log(JSON.stringify({bad,long,ok,ids:slDocs.committed.personas.map(p=>p.id)}))")
-    got = json.loads(_node(body))
-    assert got == {"bad": False, "long": False, "ok": True, "ids": ["Nova 2"]}, got
