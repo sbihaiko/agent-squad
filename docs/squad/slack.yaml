@@ -10,7 +10,7 @@ apps:
 personas:
 - id: hal
   name: HAL9K
-  voice: Charon
+  voice: Alnilam
   tone: Calmo e direto. Comeca pelo resultado, frases curtas, sem floreio.
 events:
 - id: stg_release
