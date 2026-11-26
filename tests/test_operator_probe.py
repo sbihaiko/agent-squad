@@ -602,6 +602,23 @@ def test_the_probe_proves_the_shared_service_is_out_of_reach(tmp_path, monkeypat
 
 
 @pytest.mark.sandbox_bound
+def test_the_shared_service_denial_probes_a_socket_that_exists(tmp_path, monkeypatch):
+    """#2979: the kernel answers a missing path with "no such file", never a denial, so the probe binds the file it probes
+    under the shared root and removes it after."""
+    probe = load("operator_probe")
+    inner, seen = scripted(probe), {}
+
+    def spy(profile, cli, args, cwd, timeout, extra_env=None):
+        seen["existed"] = os.path.exists(args[-1])
+        return inner(profile, cli, args, cwd, timeout, extra_env)
+
+    monkeypatch.setattr(probe, "sandboxed", spy)
+    shared = probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+    assert seen["existed"], f"the probe named a path that does not exist: {shared}"
+    assert not os.path.exists(shared), "the probe left its own socket under the shared root"
+
+
+@pytest.mark.sandbox_bound
 def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
     """The real profile, the real kernel: the owner's shared service root is outside, the project's own root is inside."""
     probe = load("operator_probe")
