@@ -1606,3 +1606,55 @@ def test_a_gated_bg_session_with_no_audit_line_is_unproven(tmp_path, monkeypatch
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     with pytest.raises(probe.ProbeFailed, match="no audit line"):
         probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", gate='{"hooks": {}}')
+
+
+def test_a_gated_bg_session_reads_the_audit_file_the_gate_names_not_one_under_the_checkout(tmp_path, monkeypatch):
+    """#2987: the session runs in the checkout, but the gate's policy names the audit file under the probe's state
+    folder. A line in that file proves the denial; a path built from the checkout reads another, empty file."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "GATE_DEADLINE", 0.5)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    audit = probe.gate_audit(tmp_path)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        audit.parent.mkdir(parents=True, exist_ok=True)
+        audit.write_text(json.dumps({"at": "t", "tool": "Bash", "decision": "deny", "reason": "Bash runs only the helper",
+                                     "call": probe.GATE_DENIED}) + "\n")
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(checkout, "(version 1)(allow default)", "claude", gate='{"hooks": {}}', audit=audit)
+    assert not Path(probe.denials_path(str(checkout / "state"))).exists(), "the probe touched a file the gate never names"
+
+
+def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, monkeypatch):
+    """#2987: `run_probe` passes the `--bg` phase the audit file its profile grants, under the probe's state folder,
+    while the session itself runs in the checkout."""
+    probe = load("operator_probe")
+    seen = {}
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8016")
+    monkeypatch.setattr(probe, "denials", lambda *a, **k: (False, False, False))
+    monkeypatch.setattr(probe, "config_denials", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(probe, "prepare_config", lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(probe, "check_denials", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "session", lambda *a, **k: (
+        {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
+    monkeypatch.setattr(probe, "check_session", lambda *a, **k: None)
+
+    def fake_bg(work, profile, cli, proxy_url=None, **kwargs):
+        seen["work"], seen["audit"] = Path(work), kwargs.get("audit")
+
+    monkeypatch.setattr(probe, "bg_session", fake_bg)
+    monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)
+    if hasattr(probe, "full_turn_phase"):
+        monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)
+    probe.run_probe(tmp_path, "/bin/true")
+    assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
+    assert Path(seen["audit"]) != Path(probe.denials_path(str(seen["work"] / "state"))), seen

@@ -1731,3 +1731,39 @@ def test_a_persona_defect_that_is_not_a_read_is_never_swallowed(tmp_path, monkey
 
     with pytest.raises(RuntimeError):
         op.scope_persona_id(state, "C0AAAAAA1")
+
+
+def test_the_profile_grants_the_bg_hosts_pseudo_terminal_as_a_data_write_only(tmp_path, monkeypatch):
+    """#2987: a `--bg` host opens `/dev/ptmx` and its own slave, or it exits before init. The grant names those two
+    devices with a data write only, and no other rule writes a device but `/dev/null`."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    revision(tmp_path, "acme/widget", ["C0AAAAAA1"])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="acme/widget") == 0
+    text = Path(record(tmp_path)["acme-widget"]["profile"]["path"]).read_text()
+    lines = text.splitlines()
+    assert '(allow file-write-data (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))' in lines, text
+    null = {f'(literal "{os.devnull}")', f'(literal "{os.path.realpath(os.devnull)}")'}
+    for line in lines:
+        if not line.startswith("(allow file-write"):
+            continue
+        devices = set(re.findall(r'\((?:literal|subpath|regex) #?"\^?/dev[^)]*\)', line))
+        if line.startswith("(allow file-write-data"):
+            assert devices == {'(literal "/dev/ptmx")', '(regex #"^/dev/ttys[0-9]+$")'}, line
+        else:
+            assert devices <= null, f"a wider device write: {line}"
+
+
+def test_the_cli_keeps_its_temp_folder_and_lock_files_inside_its_config_root(tmp_path, monkeypatch):
+    """#2987: the `--bg` service makes its socket folder under `TMPDIR` and its locks under `XDG_STATE_HOME`. Both sit
+    inside the operator's config root, which the profile grants, never the owner's temp folder or `~/.local/state`."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+    env = op.cli_env(state)
+    root = op.config_root(state)
+    assert env["TMPDIR"].startswith(root + os.sep), env
+    assert env["XDG_STATE_HOME"].startswith(root + os.sep), env
+    op.prepare_config(state)
+    assert os.path.isdir(env["TMPDIR"]) and os.path.isdir(env["XDG_STATE_HOME"])
