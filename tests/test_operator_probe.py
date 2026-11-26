@@ -1687,3 +1687,14 @@ def test_the_probe_gate_ends_a_denied_call_inside_its_audit_wait(tmp_path):
     other.mkdir()
     doc = json.loads(probe.gate_documents(tmp_path, checkout, other)[0].read_text())
     assert 0 < float(doc["relay"]["timeout"]) < probe.GATE_DEADLINE, doc["relay"]
+
+
+def test_a_turns_request_wait_skips_another_senders_open_requests(tmp_path):
+    """#2994: the sender-cap check leaves three open requests of its own sender in the relay. The next turn waits for
+    its own request, so a cap request queued first never answers for the turn."""
+    probe = load("operator_probe")
+    permrelay = load("permrelay")
+    relay = permrelay.Relay(tmp_path, owner="probe-owner", dm_channel="probe-dm", workspace="probe-workspace")
+    relay.request("probe-cap-sender", "Bash", {"command": "touch cap-0.txt"}, "/probe")
+    own = relay.request("probe-owner", "Bash", {"command": "touch denied.txt"}, str(tmp_path / "checkout"))
+    assert probe.wait_for_request(relay, 2.0, sender="probe-owner")["hash"] == own["hash"]
