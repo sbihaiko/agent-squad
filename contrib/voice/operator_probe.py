@@ -23,6 +23,10 @@ itself, so those three refusals never depend on what the machine holds, and it t
 holds. A read of the session's own checkout must still pass — its own `.env` and `*.slack.local.yaml` included, since
 a project keeps them there — or a profile that refuses every read would pass.
 
+The fixed answer path (#2949): one live session, under that same profile, is asked to answer one pending inbox line
+through the shipped `answer` helper. The helper's one outbox line must thread under that question, and no other
+channel's outbox may take a line.
+
 Background service (#2768): the probe then starts one `--bg` session through the same wrapper and profile, under the
 name a live project session carries (`SQUAD-OPERATOR-<key>`, #2925). The CLI must reach the service it already runs, or
 start one, print the new session's id, and list that id under that name; the probe stops the session. A service the
@@ -45,6 +49,7 @@ usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
 """
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -61,7 +66,7 @@ sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
 import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
-from operators import SECRET_DIRS, TOOLS, marked_name, profile_text  # noqa: E402
+from operators import SECRET_DIRS, TOOLS, daemon_root, marked_name, profile_text, service_env, service_root  # noqa: E402
 
 from squad import slackwriter  # noqa: E402
 
@@ -85,6 +90,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 NETWORK_HOST = "93.184.216.34"          # a literal address: the rule is a port rule, never a name-resolution result
 NETWORK_DENIED = 443                    # a foreign host on the port the model call uses: refused by the kernel
 CONNECT = "import socket, sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 2)"
+SERVICE_CONNECT = "import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])"
 UNTRUSTED = "not trusted"               # the CLI's own words for a folder it never trusted: the probe names the folder
 
 # The guest sessions (#2716). The stand-in connector's server is named `slack`, the hooks' default server.
@@ -102,6 +108,10 @@ BG_PROMPT = "Reply with the single word ok. Use no tool."
 BG_DEADLINE = 120.0                    # seconds, the one `claude --bg` call
 BG_LIST = ("agents", "--json")         # the CLI reads the live roster: a listed id proves the service is reachable
 PROBE_THREAD = "1700000000.000100"
+# The fixed answer path (#2949): a live session answers one pending inbox line through the shipped helper alone.
+HELPER = VOICE / "answer.py"
+ANSWER_TEXT = "probe answer"
+ANSWER_QUESTION = "probe question"
 PROBE_DRAFT = slackwriter.Draft(slackwriter.DRAFT_WORD, PROBE_CHANNEL, PROBE_THREAD,
                                 slackwriter.compose("Probe", "probe reply"), "Probe")
 # Per role: the calls its hook must refuse, as (what it is, tool, arguments, a fragment of the hook's reason).
@@ -330,6 +340,37 @@ def denied(done):
     return done.returncode != 0 and DENIED in (done.stderr or "")
 
 
+def service_denial(work, profile, service=None):
+    """Prove that the profile reaches one project's own background service and no other (#2943, #2979).
+
+    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. The
+    kernel answers a path that does not exist with "no such file", never a denial, and the CLI writes its socket in a run
+    directory under the shared root, so the probe binds a socket of its own there and proves the denial against that file.
+    It removes the socket after the probe. A connect inside the project's own root is allowed, so there the kernel's "no
+    such file" is the answer the probe expects. Returns the shared path tried."""
+    root = daemon_root()
+    holder = os.path.join(root, f"probe-{os.getpid()}")
+    os.makedirs(holder, exist_ok=True)
+    shared = os.path.join(holder, "control.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(shared)
+        server.listen(1)
+        done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ""))
+    finally:
+        server.close()
+        shutil.rmtree(holder, ignore_errors=True)
+    if service:
+        own = os.path.join(str(service), "control.sock")
+        got = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, own], work, DENIAL_DEADLINE)
+        if DENIED in (got.stderr or ""):
+            raise ProbeFailed(f"the profile refuses the project's own service {own}: a --bg session cannot start there")
+    return shared
+
+
 def model_endpoint(env=None):
     """The host, the port and whether it is loopback, for the endpoint the CLI sends its model calls to.
 
@@ -353,10 +394,10 @@ def session(work, profile, cli, proxy_url=None):
     return init, result
 
 
-def cli_call(work, profile, cli, args, proxy_url=None):
+def cli_call(work, profile, cli, args, proxy_url=None, extra_env=None):
     """One bounded CLI call through the wrapper; return its init event, its result event and every event."""
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
-    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env()})
+    done = sandboxed(profile, cli, args, work, DEADLINE, {**proxy_env, **config_env(), **(extra_env or {})})
     events = []
     for line in done.stdout.splitlines():
         try:
@@ -370,6 +411,152 @@ def cli_call(work, profile, cli, args, proxy_url=None):
         raise ProbeFailed(f"the CLI call ended with no init or result event (exit {done.returncode}): "
                           f"{reason[-1] if reason else 'no output'}")
     return init, result, events
+
+
+def answer_prompt(command):
+    """The prompt that asks the live session to make its one write through the shipped answer helper (#2949)."""
+    return ("Use the Bash tool to run exactly this command once, with no change to any argument, and then reply with "
+            "the single word done:\n" + shlex.join(command))
+
+
+def write_binding(work, channels=PROBE_CHANNELS):
+    """The binding file a session start writes (#2949): its state folder and the channels of its project alone. The
+    helper reads it under the same profile the live session runs under, so the folder and the file exist before the
+    profile is built and never sit outside the scaffolding the profile covers."""
+    folder = work / "answer"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "binding.json"
+    path.write_text(json.dumps({"key": PROBE_KEY, "state": str(work / "state"), "channels": list(channels)}))
+    return path
+
+
+def profile_for(work, ports):
+    """The profile one live session runs under, built after its answer binding exists (#2949).
+
+    The binding folder and file are written first, so the profile is built over a folder the session already owns; then
+    `project_shape` writes the queues and returns the shape and the profile."""
+    write_binding(work)
+    return project_shape(work, ports)
+
+
+def lines_in(text):
+    """Every JSON line one text holds, in order; the denials' plain control lines are skipped."""
+    out = []
+    for raw in str(text or "").splitlines():
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            out.append(record)
+    return out
+
+
+def answer_lines(path):
+    """Every JSON line one outbox holds, in order; the denials' plain control lines are skipped."""
+    return lines_in(Path(path).read_text())
+
+
+def check_answer_call(calls, expected):
+    """The live session's one command is the shipped helper (#2949): exactly one Bash call, and its command parses to
+    exactly `expected` argv. A substring match would pass a command that only carries the helper's words, so the whole
+    argv is compared. The Bash tool_result must report success, so a helper that refused its line proves nothing."""
+    bash = [call for call in calls if call.get("name") == "Bash"]
+    if len(bash) != 1:
+        raise ProbeFailed(f"the live session made {len(bash)} Bash calls, not exactly one running the helper")
+    command = str((bash[0].get("input") or {}).get("command") or "")
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        raise ProbeFailed(f"the live session's one command does not parse: {command!r}") from None
+    if argv != [str(part) for part in expected]:
+        raise ProbeFailed(f"the live session's one command does not run the helper exactly: {command!r}")
+    if bash[0].get("error"):
+        raise ProbeFailed(f"the helper call exited non-zero: {(bash[0].get('result') or '').strip() or 'no reason'}")
+    return command
+
+
+def append_question(inbox, appended):
+    """Append the phase's one synthetic question under the same exclusive flock `restore_inbox` takes, then fsync it, so
+    no second appender of this inbox ever meets a torn synthetic line and the helper reads it whole (#2949 Blocking 3)."""
+    with open(inbox, "ab") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.write(appended)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def exercise_answer(outboxes, inbox, run, scope=PROBE_CHANNELS[0]):
+    """The answer phase's shape, with the model call passed in as `run` (#2949).
+
+    Append one pending question under an exclusive lock, run `run` (the live session in production, the shipped helper
+    itself in a test), then check that the answer threads under the question in the first outbox and that no other
+    outbox gained a line, and restore the inbox whatever happens. `bg_session` and `guest_sessions` reuse this state
+    folder, so the phase deletes exactly the bytes it appended; when a real line reached the inbox during the phase,
+    the file no longer ends at the appended question, so the phase fails and leaves every line in place."""
+    held = {str(outbox): Path(outbox).read_text() for outbox in outboxes}
+    inbox = Path(inbox)
+    inbox_before = inbox.stat().st_size if inbox.exists() else 0
+    question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
+                "text": ANSWER_QUESTION, "language": "en-US"}
+    appended = (json.dumps(question) + "\n").encode("utf-8")
+    append_question(inbox, appended)
+    try:
+        run()
+        for path, before in held.items():
+            if not Path(path).read_text().startswith(before):
+                raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
+        answers = answer_lines(outboxes[0])
+        if not any(a.get("thread_ts") == PROBE_THREAD and a.get("text") == ANSWER_TEXT for a in answers):
+            raise ProbeFailed(f"the live session did not answer through the helper: {outboxes[0]} holds {answers!r}")
+        # The other channel is compared against its own earlier content, never against empty: an earlier phase's JSON
+        # line is no answer of this session, and a line this session added is one (#2949).
+        other = str(outboxes[1])
+        fresh = len(answer_lines(other)) - len(lines_in(held[other]))
+        if fresh:
+            raise ProbeFailed(f"the live session answered outside the question's channel: {other} gained {fresh} line(s)")
+        return answers
+    finally:
+        restore_inbox(inbox, inbox_before, appended)
+
+
+def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
+    """Prove a live session answers through the shipped helper (#2949).
+
+    One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
+    and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
+    outbox line must thread under the question, and no other channel's outbox may take a line. `exercise_answer` holds
+    the append, the checks and the restore; this function supplies the one live-session call as their `run`."""
+    scope = PROBE_CHANNELS[0]
+    binding = write_binding(work)
+    command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
+    args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
+            "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
+            "--model", MODEL]
+
+    def run():
+        _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+        check_answer_call(tool_calls(events), command)
+
+    return exercise_answer(outboxes, own_inboxes[0], run, scope=scope)
+
+
+def restore_inbox(inbox, before, appended):
+    """Delete exactly the bytes the answer phase appended (#2949 review). Under an exclusive lock, the file must still
+    end at that question: a line the daemon appended meanwhile moves the end, so the phase fails and leaves the file
+    whole rather than deleting a real message."""
+    with open(inbox, "r+b") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - len(appended)))
+        tail = f.read()
+        if size != before + len(appended) or tail != appended:
+            raise ProbeFailed(f"a line was appended to the inbox {inbox} during the answer phase, so the phase left "
+                              "it in place instead of truncating a real message")
+        f.truncate(before)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def check_session(init, result):
@@ -391,12 +578,14 @@ def bg_id(stdout):
     return None
 
 
-def bg_listed(cli, sid, work, name):
+def bg_listed(cli, sid, work, name, service=None):
     """True when the CLI lists the session id under `name` in its live roster: the background service answered, and the
     session carries the operator token in its name (#2925). A session whose cwd is a project checkout is told apart
-    from a person's own session by that name alone."""
+    from a person's own session by that name alone. Every call carries the project's own service root (#2943): measured
+    with `PREFIX` set, the roster read still lists every session of the machine, so the root never narrows this read."""
+    env = {**os.environ, **config_env(), **(service_env(service) if service else {})}
     done = subprocess.run([cli, *BG_LIST], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
-                          env={**os.environ, **config_env()})
+                          env=env)
     try:
         rows = json.loads(done.stdout or "[]")
     except ValueError:
@@ -423,23 +612,27 @@ def bg_failure(done, work):
     return message
 
 
-def bg_session(work, profile, cli, proxy_url=None, name=None):
+def bg_session(work, profile, cli, proxy_url=None, name=None, service=None):
     """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
     session id, and lists that id under the marked name (#2925). A service the profile refuses, or a name the roster
-    does not report, fails here, as it does in the supervisor."""
+    does not report, fails here, as it does in the supervisor. A service root keeps that service under the project's
+    own root (#2943), the way the supervisor starts it."""
     name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
+    if service:
+        proxy_env.update(service_env(service))
     done = sandboxed(profile, cli, ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"], work,
                      BG_DEADLINE, {**proxy_env, **config_env()})
     sid = bg_id(done.stdout)
     if done.returncode != 0 or sid is None:
         raise ProbeFailed(bg_failure(done, work))
     try:
-        if not bg_listed(cli, sid, work, name):
+        if not bg_listed(cli, sid, work, name, service):
             raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
     finally:
-        subprocess.run([cli, "stop", sid], cwd=work, capture_output=True, text=True, timeout=DEADLINE, check=False,
-                       env={**os.environ, **config_env()})
+        stop_env = {**os.environ, **config_env(), **(service_env(service) if service else {})}
+        subprocess.run([cli, "stop", sid], cwd=work, env=stop_env, capture_output=True, text=True, timeout=DEADLINE,
+                       check=False)
 
 
 def expected_control(role):
@@ -489,7 +682,7 @@ def tool_calls(events):
         for block in content if isinstance(content, list) else ():
             if block.get("type") == "tool_use":
                 call = {"id": block.get("id"), "name": block.get("name"), "input": block.get("input") or {},
-                        "result": None}
+                        "result": None, "error": False}
                 by_id[call["id"]] = call
                 calls.append(call)
             elif block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
@@ -497,6 +690,7 @@ def tool_calls(events):
                 if isinstance(body, list):
                     body = "\n".join(str(part.get("text", "")) for part in body if isinstance(part, dict))
                 by_id[block["tool_use_id"]]["result"] = str(body or "")
+                by_id[block["tool_use_id"]]["error"] = bool(block.get("is_error"))
     return calls
 
 
@@ -564,52 +758,62 @@ def guest_sessions(work, profile, cli, proxy_url=None):
 
 def project_shape(work, ports):
     """The folders one live project session owns: its checkout, one outbox per channel, one inbox per channel, another
-    project's inbox it must never read, another project's checkout it must never read (#2951), and a folder outside every
-    grant for the write denial (#2925). `ports` names the loopback ports the model route uses."""
+    project's inbox it must never read, another project's checkout it must never read (#2951), a folder outside every
+    grant for the write denial (#2925), and the project's own background service root (#2943). `ports` names the
+    loopback ports the model route uses. The service root comes from `operators.service_root`, the one a live `start()`
+    grants this project under the same state, so the probe proves the supervisor's shape and not a copy of it."""
     checkout = work / "checkout"
     other_checkout = work / "other-checkout"
     outboxes = [work / "state" / "outboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     own_inboxes = [work / "state" / "inboxes" / f"{channel}.jsonl" for channel in PROBE_CHANNELS]
     other_inbox = work / "state" / "inboxes" / "proj-other.jsonl"
     leak = work / "elsewhere" / "leak.txt"
-    for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent):
+    service = Path(service_root(str(work / "state"), PROBE_KEY))
+    for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent, service):
         folder.mkdir(parents=True, exist_ok=True)
     leak.unlink(missing_ok=True)   # the folder is fixed (#2775): a marker of an earlier run never reads as a landed write
     for outbox in outboxes:
         outbox.write_text("")
     for inbox in own_inboxes:
-        inbox.write_text(OWN_SENTINEL + "\n")
+        # A valid JSON line, so the answer helper's inbox read never meets a corrupt line here and the read control
+        # still finds the sentinel's text in the output (#2949).
+        inbox.write_text(json.dumps({"id": "probe-own", "text": OWN_SENTINEL}) + "\n")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
                            checkout=str(checkout), others=[str(other_checkout)], ports=ports,
-                           config=str(config_root()))
-    return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile
+                           config=str(config_root()), service=str(service))
+    return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
 def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = profile_for(work, [port])
         prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, port, other_checkout=other_checkout, **controls))
         config_denials(checkout, profile)
+        service_denial(checkout, profile, service)
         init, result = session(checkout, profile, cli)
         check_session(init, result)
-        bg_session(checkout, profile, cli)
+        answer_phase(work, profile, cli, outboxes, own_inboxes)
+        bg_session(checkout, profile, cli, service=service)
         guest_sessions(work, profile, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
-        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = project_shape(work, [proxy.port])
+        checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = profile_for(
+            work, [proxy.port])
         prepare_config([work, checkout])   # the CLI's own config home, and the trust `--bg` needs (#2963)
         controls = {"outboxes": outboxes, "own_inboxes": own_inboxes}
         check_denials(*denials(checkout, profile, leak, other_inbox, proxy.port, other_checkout=other_checkout,
                                **controls))
         config_denials(checkout, profile)
+        service_denial(checkout, profile, service)
         check_proxy_refuses(proxy)
         init, result = session(checkout, profile, cli, proxy.url)
         check_session(init, result)
-        bg_session(checkout, profile, cli, proxy.url)
+        answer_phase(work, profile, cli, outboxes, own_inboxes, proxy.url)
+        bg_session(checkout, profile, cli, proxy.url, service=service)
         guest_sessions(work, profile, cli, proxy.url)
     return len(proxy.refusals)
 
@@ -634,8 +838,11 @@ def main(argv=None):
     print(f"operator-probe: pass: denials held (write, read, foreign host on port {NETWORK_DENIED} refused, the model "
           f"route's loopback port open and every other loopback port refused; each own outbox took a write and each own "
           f"inbox gave its line; .env, the Slack local file, another project's checkout and each credential folder the "
-          f"home holds refused, the own checkout read); {route}; session tools {TOOLS}, "
-          f"dontAsk, cap ${SPEND}; a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
+          f"home holds refused, the own checkout read; the shared background service refused and the project's own "
+          f"service in reach); {route}; session tools {TOOLS}, "
+          f"dontAsk, cap ${SPEND}; a live session answered one pending inbox line through the shipped helper "
+          f"({HELPER.name}) and no other channel's outbox took a line; "
+          f"a --bg session started and was listed as {marked_name(PROBE_KEY)}; "
           f"guest poller denial held (write tool); "
           f"guest writer denials held (send tool, other channel, other thread) and the decided text reached the "
           f"stand-in connector")

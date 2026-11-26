@@ -32,6 +32,9 @@ on:
 # The full-suite shard jobs install `.[dev,sdk]`: the adapter refuses a hosted session start when its interpreter cannot
 # import claude_agent_sdk, and the supervisor that used to wrap it is retired (#2492). The runner can carry the sdk, so
 # the case runs there and is not deselected (#1538).
+# The live operator probe (contrib/voice/operator_probe.py, tests/test_operator_probe.py) is a manual gate: it needs the
+# real `claude` CLI and sandbox-exec, so its heavy case is deselected here (ADR-0139). CI still proves the probe's
+# answer path against the real helper with no model, through the same module (#2949).
 # The heavy tests run inside the full-suite shard jobs. No job runs a Python x mode x shard matrix: a matrix over one job
 # split a commit into legs that waited behind each other for runners (#149), and a check no runner picks up answers
 # nothing. A complete-tier job that takes over fifteen minutes on a real run is split by test path into sibling jobs, each

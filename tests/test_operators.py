@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from tests.proxystop import track_starts
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +24,7 @@ VOICE = ROOT / "contrib" / "voice"
 
 FAKE = """#!/bin/sh
 printf -- '---CALL---\\n%s\\n' "$*" >> "$FAKE_LOG"
+printf '%s|%s|%s\\n' "${TERMUX_VERSION-unset}" "${PREFIX-unset}" "$(printf '%s' "$*" | tr '\\n' ' ')" >> "$FAKE_ENV_LOG"
 case "$1 $2" in
   "agents --json")
     if [ -s "$FAKE_STOPPED" ]; then
@@ -56,6 +59,7 @@ def operators(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.log"))
+    monkeypatch.setenv("FAKE_ENV_LOG", str(tmp_path / "env.log"))
     monkeypatch.setenv("FAKE_SCENARIO", str(tmp_path / "scenario.json"))
     monkeypatch.setenv("FAKE_STOPPED", str(tmp_path / "stopped-ids"))
     monkeypatch.setenv("FAKE_FAIL_STOP", str(tmp_path / "fail-stop"))
@@ -71,6 +75,7 @@ def operators(tmp_path, monkeypatch):
     module.LOCK_WAIT = 0.2        # a contended lock stands aside at once, so a case never spends the 1 s line on it
     (tmp_path / "repo").mkdir(exist_ok=True)       # the DM session's own checkout: the agent-squad repository
     (tmp_path / "state").mkdir(exist_ok=True)      # the state folder the daemon keeps its record and queues under
+    pinned_dm_record(tmp_path / "state", "D0AAAAAA1")   # the daemon pinned the owner's DM channel
     return module
 
 
@@ -135,6 +140,15 @@ def started(tmp_path):
     return [c for c in calls(tmp_path) if c.startswith("--bg")]
 
 
+def envs(tmp_path):
+    """Each CLI call the fake got, with the two variables that must name the project's own service: (termux, prefix,
+    argv)."""
+    path = tmp_path / "env.log"
+    if not path.exists():
+        return []
+    return [tuple(line.split("|", 2)) for line in path.read_text().splitlines() if line.count("|") >= 2]
+
+
 def record(tmp_path):
     path = tmp_path / "state" / "operators.json"
     return json.loads(path.read_text()) if path.exists() else {}
@@ -159,7 +173,8 @@ def test_one_session_serves_every_channel_of_a_project(tmp_path, monkeypatch):
 
 
 def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypatch):
-    """Criterion 10: the brief names one outbox per channel of the project, and no other outbox."""
+    """Criterion 10: the brief sends each answer through the helper with the inbox line's own channel, and it names no
+    outbox path for a free append (#2949)."""
     op = operators(tmp_path, monkeypatch)
     hub(tmp_path, monkeypatch, op, ["acme/widget"])
     registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
@@ -167,9 +182,103 @@ def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypat
     scenario(tmp_path, [])
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     text = brief(tmp_path, "acme/widget")
-    state = str(tmp_path / "state")
-    assert f"{state}/outboxes/C0AAAAAA1.jsonl" in text and f"{state}/outboxes/C0AAAAAA2.jsonl" in text, text
+    assert op.ANSWER in text and "--scope" in text, text
+    for scope in ("C0AAAAAA1", "C0AAAAAA2"):        # one helper line per channel, each with its own scope
+        assert f"{op.ANSWER} --scope {scope}" in text, text
+    assert "outboxes/" not in text, "the brief names an outbox path for a free append"
     assert "C0AAAAAA9" not in text
+
+
+def test_the_brief_names_the_answer_helper_as_the_only_answer_path(tmp_path, monkeypatch):
+    """#2949 criterion (5): every answer leaves through the one shipped helper, and the brief names no other path."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    text = brief(tmp_path, "acme/widget")
+    state = str(tmp_path / "state")
+    assert f"{op.ANSWER} --scope" in text, text
+    for flag in ("--thread", "--text", "--speech"):
+        assert flag in text, text
+    assert "appending ONE JSON line to the outbox" not in text, text
+    assert f"{state}/outboxes/C0AAAAAA1.jsonl" not in text, "the brief names an outbox for a free append"
+
+
+def test_a_start_binds_the_session_to_its_project_for_the_answer_helper(tmp_path, monkeypatch):
+    """#2949: the supervisor writes the binding and names it in the session's env, so the helper answers only the
+    channels of this project and nothing else."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen.update(env or {})
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    (tmp_path / "repo").mkdir(exist_ok=True)
+    state = str(tmp_path / "state")
+    (tmp_path / "state").mkdir(exist_ok=True)
+    op.start({"key": "acme-widget", "repo": "acme/widget", "checkout": str(tmp_path / "repo"),
+              "channels": ["C0AAAAAA1", "C0AAAAAA2"]}, state, str(tmp_path / "repo"))
+    path = seen["VOICE_ANSWER_BINDING"]
+    binding = json.loads(Path(path).read_text())
+    assert binding["channels"] == ["C0AAAAAA1", "C0AAAAAA2"], binding
+    assert binding["state"] == state, binding
+
+
+def test_a_dm_start_binds_the_session_to_the_one_dm_channel(tmp_path, monkeypatch):
+    """#2949 criterion (2): the DM session's binding names the pinned DM channel, so a dm inbox line that names another
+    channel cannot carry that channel into the dm outbox."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen.update(env or {})
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True)
+    (tmp_path / "repo").mkdir(exist_ok=True)
+    pinned_dm_record(state, "D0AAAAAA1")           # the supervisor's own record, never an inbox line
+    line = {"id": "dm:1", "ts": "1762500000.000100", "user": "UPROBE0001", "channel": "D0ZZZZZZ", "text": "hi"}
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps(line) + "\n")
+    op.start("dm", str(state), str(tmp_path / "repo"))
+    binding = json.loads(Path(seen["VOICE_ANSWER_BINDING"]).read_text())
+    assert binding["channels"] == ["dm"], binding
+    assert binding["dm"] == "D0AAAAAA1", binding
+
+
+def pinned_dm_record(state, channel):
+    """The supervisor's pinned DM record at `<state>/operators/sessions/dm.json` (#2949): the one channel the daemon
+    may post a DM answer to."""
+    folder = state / "operators" / "sessions"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "dm.json").write_text(json.dumps({"dm": channel}))
+
+
+def test_a_dm_binding_refuses_with_no_pinned_record(tmp_path, monkeypatch):
+    """Blocking 2 (#2949): the binding path never takes an inbox line's channel as the DM channel; with no pinned
+    record it refuses to bind a DM, and the refusal names the missing record."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "inboxes").mkdir(parents=True)
+    (state / "operators" / "sessions" / "dm.json").unlink()    # no pinned record was written yet
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0AAAAAA1"}) + "\n")
+
+    with pytest.raises(op.Refused, match="pinned DM channel"):
+        op.binding(str(state), {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": []})
+
+
+def test_the_brief_names_the_helper_as_the_one_command_a_session_runs(tmp_path, monkeypatch):
+    """#2949 criterion (5): the read-only limit and the one answer path agree, so a session that follows the brief
+    runs the helper and no other command."""
+    op = operators(tmp_path, monkeypatch)
+    for key in ("C0AAAAAA1", "dm"):
+        text = op.prompt_for(key, str(tmp_path / "state"), "/repo")
+        assert "runs no command" not in text.lower(), text
+        assert "the one command" in text.lower() and op.ANSWER in text, text
 
 
 def test_the_brief_arms_one_monitor_per_inbox_of_the_project(tmp_path, monkeypatch):
@@ -563,21 +672,24 @@ def test_a_started_session_refuses_the_checkout_of_another_project(tmp_path, mon
 
 
 def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path, monkeypatch):
-    """Criterion 13: the brief answers an action request with the read-only limit and one proposal line to the owner."""
+    """Criterion 13: the brief answers an action request with the read-only limit and one proposal line to the owner,
+    and the proposal leaves through the helper like every other answer (#2949)."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
     assert "never acts" in text and "only reads" in text, text
-    assert "Proposal:" in text and "outboxes/dm.jsonl" in text, text
+    assert "Proposal:" in text and op.ANSWER in text, text
+    assert "outboxes/dm.jsonl" not in text, text
 
 
 def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
-    """#2939: the project brief tells the session to append one request line, and to never run a command."""
+    """#2939: the project brief tells the session to append one request line, and to never run a command. #2949 keeps
+    the one answer path the helper, so the brief names no outbox path and no free append."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
     assert "never run a command" in text, text
     for field in ('"kind"', '"at"', '"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
         assert field in text, (field, text)
-    assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") in text
+    assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") not in text, "the brief names an outbox for a free append"
 
 
 def test_the_dm_session_keeps_its_own_scope_and_the_agent_squad_repository(tmp_path, monkeypatch):
@@ -594,7 +706,7 @@ def test_the_dm_session_keeps_its_own_scope_and_the_agent_squad_repository(tmp_p
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo"), only="dm") == 0
     text = brief(tmp_path, "direct messages")
     state = str(tmp_path / "state")
-    assert f"tail -n 0 -F {state}/inboxes/dm.jsonl" in text and f"{state}/outboxes/dm.jsonl" in text, text
+    assert f"tail -n 0 -F {state}/inboxes/dm.jsonl" in text and op.ANSWER in text, text
     assert f"cwd={os.path.realpath(tmp_path / 'repo')}" in (tmp_path / "wrap.log").read_text()
     entry = record(tmp_path)["dm"]
     assert entry["name"] == "SQUAD-OPERATOR-dm" and entry["checkout"] == os.path.realpath(tmp_path / "repo")
@@ -611,6 +723,21 @@ def test_a_session_is_marked_by_its_name_never_by_its_working_directory(tmp_path
     assert not [c for c in calls(tmp_path) if c.startswith("stop")], "an unmarked session was stopped"
     assert op.carried("SQUAD-OPERATOR-acme-widget") == "acme-widget"
     assert op.carried("a person's own session") is None and op.carried("") is None
+
+
+def test_a_pass_with_no_pinned_dm_record_keeps_its_projects(tmp_path, monkeypatch, capsys):
+    """Blocking 2 (#2949): a DM start refuses to bind with no pinned record, and that refusal never takes the pass
+    down: the project still starts, and one log line names the missing record."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    scenario(tmp_path, [])
+    (tmp_path / "state" / "operators" / "sessions" / "dm.json").unlink()    # the owner's DM was never pinned
+
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+
+    assert list(record(tmp_path)) == ["acme-widget"], record(tmp_path)
+    assert "pinned DM channel" in capsys.readouterr().err
 
 
 def test_the_record_is_written_after_each_start(tmp_path, monkeypatch):
@@ -741,6 +868,8 @@ WRAP = """#!/bin/sh
   printf 'profile=%s\\n' "$SQUAD_SIGNAL_PROFILE"
   printf 'proxy=%s\\n' "${HTTPS_PROXY-unset}"
   printf 'sandboxed=%s\\n' "${CLAUDE_CODE_SANDBOXED-unset}"
+  printf 'prefix=%s\\n' "${PREFIX-unset}"
+  printf 'termux=%s\\n' "${TERMUX_VERSION-unset}"
   printf 'argv1=%s\\n' "$1"
 } >> "$FAKE_WRAP_LOG"
 exec "$SQUAD_CLAUDE_CLI" "$@"
@@ -790,6 +919,106 @@ def test_the_session_tells_the_cli_it_already_runs_under_a_sandbox(tmp_path, mon
     op = wrapped(tmp_path, monkeypatch)
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
     assert "sandboxed=1" in wrap_log(tmp_path)
+
+
+def test_the_profile_reaches_only_the_projects_own_service(tmp_path, monkeypatch):
+    """#2943: a session reaches the CLI background service of its own project. The owner's shared root, which serves
+    every unsandboxed session, stays outside the profile."""
+    op = operators(tmp_path, monkeypatch)
+    service = os.path.realpath(tmp_path / "state" / "operators" / "services" / "acme-widget")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           config=str(tmp_path / "config"), service=service)
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(subpath "{service}")' in write, write
+    assert f'(allow network-outbound (remote unix-socket (subpath "{service}")))' in text.splitlines(), text
+    assert op.daemon_root() not in text, "the owner's shared service is outside the profile (#2943)"
+
+
+def test_a_started_session_gets_its_own_service_root(tmp_path, monkeypatch):
+    """#2943: the start moves the CLI's background service under the project's own root and records that root, so the
+    profile the session runs under grants that root and no other."""
+    op = wrapped(tmp_path, monkeypatch)
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    state = os.path.realpath(tmp_path / "state")
+    entry = record(tmp_path)["dm"]
+    service = os.path.join(state, "operators", "services", "dm")
+    assert entry["service"] == service, entry
+    log = wrap_log(tmp_path)
+    assert f"prefix={service}" in log and "termux=1" in log, log
+    profile = Path(entry["profile"]["path"]).read_text()
+    assert f'(subpath "{service}")' in profile, profile
+    assert op.daemon_root() not in profile, profile
+
+
+def test_a_stop_reaches_the_projects_own_service(tmp_path, monkeypatch):
+    """#2943: the stop carries the project's own service root, the one its session started under. The roster read is
+    the CLI's own and names no root, as the real CLI lists every session whatever root it is given (measured)."""
+    op = operators(tmp_path, monkeypatch)
+    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    revision(tmp_path, "acme/widget", ["C0AAAAAA1"])
+    scenario(tmp_path, [])
+    state = str(tmp_path / "state")
+    assert op.run_pass(state, str(tmp_path / "repo"), only="acme/widget") == 0
+    service = os.path.realpath(os.path.join(state, "operators", "services", "acme-widget"))
+    held = record(tmp_path)["acme-widget"]
+    assert held["service"] == service, held
+    scenario(tmp_path, [session(found["acme/widget"], "acme-widget", held["id"], started=1000),
+                        session(found["acme/widget"], "acme-widget", "bbbb0002-0000-0000-0000-000000000002",
+                                started=2000)])
+    assert op.run_pass(state, str(tmp_path / "repo")) == 0
+    stops = [row for row in envs(tmp_path) if row[2].startswith("stop")]
+    assert stops, envs(tmp_path)
+    assert all(row[0] == "1" and row[1] == service for row in stops), stops
+    listings = [row for row in envs(tmp_path) if row[2].startswith("agents")]
+    assert listings and all(row[0] == "unset" and row[1] == "unset" for row in listings), listings
+
+
+def test_a_stop_falls_back_to_the_cli_own_service_for_a_session_an_older_build_started(tmp_path, monkeypatch):
+    """#2943: a session an older build started lives under the owner's shared service. The stop names the project's own
+    root first, and falls back to the CLI's own service, so the restart still reaches that session."""
+    op = operators(tmp_path, monkeypatch)
+    seen = []
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        seen.append(env)
+        if env is not None:
+            raise op.Refused("stop exited 1: No session matching 'aaaaaaaa'")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    op.stop("aaaaaaaa", service=str(tmp_path / "service"))
+    assert len(seen) == 2, seen
+    assert seen[0]["PREFIX"] == str(tmp_path / "service") and seen[0]["TERMUX_VERSION"] == "1"
+    assert seen[1] is None
+
+
+def test_a_stop_that_fails_under_the_projects_own_service_is_never_retried_on_the_shared_one(tmp_path, monkeypatch):
+    """#2943: only a session its own service never held may fall back. Any other refusal is the real answer, and a
+    retry against the shared service could stop a foreign session whose id collides, or hide the failure."""
+    op = operators(tmp_path, monkeypatch)
+    seen = []
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        seen.append(env)
+        raise op.Refused("stop exited 1: the service is not running")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    with pytest.raises(op.Refused):
+        op.stop("aaaaaaaa", service=str(tmp_path / "service"))
+    assert len(seen) == 1, seen
+
+
+def test_a_stop_that_both_services_refuse_is_named(tmp_path, monkeypatch):
+    """A stop no service confirms raises Refused, so the pass keeps ownership and retries later."""
+    op = operators(tmp_path, monkeypatch)
+
+    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
+        raise op.Refused("stop exited 1: No session matching 'aaaaaaaa'")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    with pytest.raises(op.Refused):
+        op.stop("aaaaaaaa", service=str(tmp_path / "service"))
 
 
 def test_a_loopback_endpoint_starts_its_session_with_no_proxy(tmp_path, monkeypatch):
@@ -878,7 +1107,7 @@ def test_the_brief_tells_the_session_to_name_the_channel_persona_on_its_answers(
 
     text = op.prompt_for("C0PROJ0001", str(state), "/repo")
 
-    assert '"persona":"hal"' in text, text
+    assert "--persona hal" in text, text
 
 
 def test_the_dm_brief_keeps_its_language_when_no_revision_names_a_persona(tmp_path, monkeypatch):
@@ -1162,7 +1391,8 @@ def test_the_profile_refuses_the_owner_global_config_file_and_grants_the_cli_its
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     assert f'(subpath "{root}")' in write, write
-    assert f'(literal "{home}/.claude.json")' not in text, "the session may write the owner's global config file"
+    assert f'(literal "{home}/.claude.json")' not in write, "no grant may let the session write the owner's global config file"
+    assert f'(deny file-write* (literal "{home}/.claude.json"))' in text, "the owner's global config file is refused by name"
 
 
 def test_the_operator_config_root_reads_the_owner_keychain_by_its_default_name(tmp_path, monkeypatch):
@@ -1187,6 +1417,7 @@ def test_a_started_session_keeps_its_state_in_the_operator_config_root(tmp_path,
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8016")
     (tmp_path / "home").mkdir()
+    pinned_dm_record(tmp_path / "state", "D0AAAAAA1")
     op.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
     root = op.config_root(str(tmp_path / "state"))
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == root, seen["env"]
@@ -1268,9 +1499,191 @@ def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_pat
     def fake_call(argv, cwd=None, timeout=None, env=None):
         tried.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
         if env is not None:
-            raise op.Refused("no such session")
+            raise op.Refused("stop exited 1: No session matching 'abababab'")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(op, "call", fake_call)
     op.stop("abababab", str(tmp_path / "state"))
     assert tried == [op.config_root(str(tmp_path / "state")), None], tried
+
+
+def test_a_corrupt_dm_line_is_skipped_with_one_log_line(tmp_path, monkeypatch, capsys):
+    """#2949 criterion (2): `dm_channel` reads the inbox tail and reports one line for a corrupt line it skips, so a
+    broken queue stays visible instead of silently dropping the DM channel."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "operators" / "sessions" / "dm.json").unlink()     # a state with no pinned record yet
+    (state / "inboxes").mkdir(parents=True, exist_ok=True)
+    (state / "inboxes" / "dm.jsonl").write_text('{"channel": "D0AAAAAA1"}\nnot json\n')
+
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+    err = capsys.readouterr().err
+    assert "dm.jsonl" in err and "corrupt" in err, err
+    assert err.count("operators: skipped") == 1, err
+
+
+def test_a_contradicting_dm_line_never_changes_the_pinned_channel(tmp_path, monkeypatch):
+    """Debt 2 (#2949): the supervisor's own record pins the DM channel, so a newer inbox line that names another
+    channel never moves the session's binding. `dm_channel` reads the record first and logs the fallback it took."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "operators" / "sessions" / "dm.json").write_text(json.dumps({"dm": "D0AAAAAA1"}))
+    (state / "inboxes").mkdir(parents=True)
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0ZZZZZZ"}) + "\n")
+
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+
+def test_dm_channel_pinned_reads_no_inbox_line(tmp_path, monkeypatch):
+    """Debt 2 and 6 (#2949): with no pinned record, a caller that needs an authoritative channel gets no answer, never
+    the channel of an inbox line that anything may have written."""
+    op = operators(tmp_path, monkeypatch)
+    state = tmp_path / "state"
+    (state / "operators" / "sessions" / "dm.json").unlink()     # a state with no pinned record yet
+    (state / "inboxes").mkdir(parents=True)
+    (state / "inboxes" / "dm.jsonl").write_text(json.dumps({"channel": "D0AAAAAA1"}) + "\n")
+
+    assert op.dm_channel(str(state), pinned=True) == ""
+    assert op.dm_channel(str(state)) == "D0AAAAAA1"
+
+
+# The brief's helper line, per unit (#2949 review): the DM answers `dm`, a project answers the line's channel, and a
+# channel persona's id rides inline. The DM binding always names the dm scope, so the helper's own binding check passes.
+
+def persona_revision(tmp_path, repo, channel, persona_id):
+    """One project's active Slack revision, naming a persona on one of its channels (#2935)."""
+    state = tmp_path / "state"
+    (state / "slack").mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(repo.encode()).hexdigest()[:16]
+    doc = {"workspaces": [{"id": "T0TEAM0001", "channels": [{"id": channel, "name": "proj", "persona": persona_id}]}],
+           "personas": [{"id": persona_id, "name": "HAL9K", "voice": "Charon", "tone": "calm"}]}
+    (state / "slack" / f"{digest}.json").write_text(json.dumps({"repo": repo, "sha": "a" * 40, "revision": doc}))
+
+
+def answer_module():
+    """The shipped helper module, loaded from the tree under test."""
+    spec = importlib.util.spec_from_file_location("answer", VOICE / "answer.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_dm_answer_line_names_the_dm_scope(tmp_path, monkeypatch):
+    """The DM session's helper call answers its own scope, never a placeholder channel it does not have."""
+    op = operators(tmp_path, monkeypatch)
+    line = op.answer_lines(str(tmp_path / "state"),
+                           {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": ["dm"]})
+
+    assert f"{op.ANSWER} --scope dm" in line, line
+    assert "the inbox line's channel" not in line, line
+
+
+def test_the_answer_line_names_the_channel_persona_inline(tmp_path, monkeypatch):
+    """A channel with a persona answers under it, so the brief's one helper line names the id (#2935)."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    persona_revision(tmp_path, "acme/widget", "C0AAAAAA1", "hal")
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    line = op.answer_lines(str(tmp_path / "state"), unit)
+
+    assert "--persona hal" in line, line
+
+
+def test_the_answer_line_names_no_persona_for_a_channel_that_declares_none(tmp_path, monkeypatch):
+    """A channel with no persona passes no `--persona`, so the daemon keeps the channel's own."""
+    op = operators(tmp_path, monkeypatch)
+    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    assert "--persona" not in op.answer_lines(str(tmp_path / "state"), unit)
+
+
+def test_the_answer_line_quotes_the_text_as_a_single_quoted_literal(tmp_path, monkeypatch):
+    """Debt 3 (#2949): the answer text is an unescaped shell template, so a quote, a backtick or `$(...)` in an answer
+    breaks the command the session runs. The line quotes it as a literal instead."""
+    op = operators(tmp_path, monkeypatch)
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    line = op.answer_lines(str(tmp_path / "state"), unit)
+
+    assert "--text '<the answer>'" in line, line
+    assert '--text "<the answer>"' not in line, line
+    assert "--thread '<the inbox line" in line, line
+
+
+def test_the_brief_names_the_quoting_rule_for_the_answer_text(tmp_path, monkeypatch):
+    """Debt 3 (#2949): the brief tells the session to pass the answer as a quoted literal, so an owner message with a
+    quote never becomes extra shell."""
+    op = operators(tmp_path, monkeypatch)
+    unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": "/repo", "channels": ["C0AAAAAA1"]}
+
+    brief = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
+
+    assert "single-quoted literal" in brief, brief
+
+
+def test_a_dm_binding_names_the_dm_scope_and_the_helper_accepts_it(tmp_path, monkeypatch):
+    """The DM unit's channels may be empty; the binding still names `dm`, and the helper's own read accepts it, so a DM
+    answer never exits 2 on a malformed binding."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+    pinned_dm_record(Path(state), "D0AAAAAA1")
+
+    path = op.binding(state, {"key": "dm", "repo": "/repo", "checkout": "/repo", "channels": []})
+
+    data = json.loads(Path(path).read_text())
+    assert data["channels"] == ["dm"], data
+    got = answer_module().read_binding({"VOICE_ANSWER_BINDING": path})
+    assert got["channels"] == ["dm"], got
+    assert op.outbox_path(state, "dm") == os.path.join(state, "outboxes", "dm.jsonl")
+
+
+# The pinned-DM record path (#2949 review, Debt 2): one helper names `<state>/operators/sessions/dm.json`, and the
+# supervisor, the reader and the refusal all use it.
+
+def test_the_pinned_dm_record_path_is_one_helper(tmp_path, monkeypatch):
+    """Debt 2 (#2949): `dm_record_path` is the one name of the pinned record, and the refusal that names a missing
+    record names that very file."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "fresh")
+    assert op.dm_record_path(state) == os.path.join(state, "operators", "sessions", "dm.json")
+
+    unit = {"key": "dm", "repo": "", "checkout": str(tmp_path), "channels": []}
+    with pytest.raises(op.Refused) as caught:
+        op.binding(state, unit)
+    assert op.dm_record_path(state) in str(caught.value), str(caught.value)
+
+
+# The persona read (#2949 review, Debt 3): a read or parse error keeps no persona and names the state and the scope;
+# any other error is a real defect and is never swallowed.
+
+def test_a_broken_slack_revision_names_the_state_and_scope(tmp_path, monkeypatch, capsys):
+    """Debt 3 (#2949): a persona read that fails on a parse error returns no persona and prints one stderr line that
+    names the state and the scope, as `dm_channel` names a skipped corrupt line."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+
+    def broken(state_dir, scope):
+        raise ValueError("bad revision")
+
+    monkeypatch.setattr(op.voiced, "scope_identity", broken)
+
+    assert op.scope_persona_id(state, "C0AAAAAA1") == ""
+    err = capsys.readouterr().err
+    assert "C0AAAAAA1" in err and state in err, err
+
+
+def test_a_persona_defect_that_is_not_a_read_is_never_swallowed(tmp_path, monkeypatch):
+    """Debt 3 (#2949): only a read or a parse error keeps the default; a defect of another kind propagates."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+
+    def broken(state_dir, scope):
+        raise RuntimeError("a defect")
+
+    monkeypatch.setattr(op.voiced, "scope_identity", broken)
+
+    with pytest.raises(RuntimeError):
+        op.scope_persona_id(state, "C0AAAAAA1")

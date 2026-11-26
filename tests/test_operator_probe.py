@@ -4,6 +4,7 @@ bound. A fake CLI never stands in for the permission boundary, so the denial cas
 import importlib.util
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -43,6 +44,9 @@ def test_a_session_starts_with_its_tool_set_restricted(tmp_path, monkeypatch):
 
     monkeypatch.setattr(operators, "call", fake_call)
     (tmp_path / "repo").mkdir()      # a session runs in a checkout that exists; a missing one refuses the start
+    pinned = tmp_path / "state" / "operators" / "sessions"
+    pinned.mkdir(parents=True)
+    (pinned / "dm.json").write_text(json.dumps({"dm": "D0AAAAAA1"}))   # a DM start binds the pinned record alone
     operators.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
     argv = argvs[0]
     assert argv[argv.index("--tools") + 1] == operators.TOOLS
@@ -128,6 +132,8 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
         {"tools": probe.TOOLS.split(","), "permissionMode": "dontAsk"}, {"subtype": "success", "is_error": False}))
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["stale"] is False
 
@@ -154,22 +160,23 @@ def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(monkeypatch
     assert "*:443" not in text
 
 
-def test_the_profile_grants_the_cli_background_service_its_runtime():
-    """#2768: `claude --bg` reaches or starts the background service, so the profile grants the service's own runtime:
-    the `/dev/null` device of an ignored stdio, the run dir under /tmp/cc-daemon-<uid> and that dir's unix socket."""
+def test_the_profile_grants_the_cli_background_service_its_own_runtime():
+    """#2768, #2943: `claude --bg` reaches or starts the background service under the project's own root, so the
+    profile grants that root: the `/dev/null` device of an ignored stdio, the root's write and its unix socket. The
+    owner's shared root, which serves every unsandboxed session, stays outside the profile."""
     operators = load("operators")
+    service = os.path.realpath("/work/state/operators/services/probe-project")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config", service=service)
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     # The unmonkeypatched device: the kernel opens the resolved spelling of `/dev/null`, so the grant must name it, the
-    # way `daemon_root()` names the resolved `/tmp`. A host where `/dev/null` resolves to itself keeps the one literal.
+    # way the service root names the resolved path. A host where `/dev/null` resolves to itself keeps the one literal.
     resolved_null = os.path.realpath("/dev/null")
     assert f'(literal "{resolved_null}")' in write, write
     assert f'(literal "{os.path.realpath(os.devnull)}")' in write
-    assert f'(subpath "{operators.daemon_root()}")' in write
-    # `/tmp` is a link on macOS and a plain folder on Linux, so the expected path is the resolved one (#2773).
-    assert operators.daemon_root() == os.path.realpath(f"/tmp/cc-daemon-{os.getuid()}")
-    assert f'(allow network-outbound (remote unix-socket (subpath "{operators.daemon_root()}")))' in text.splitlines()
+    assert f'(subpath "{service}")' in write
+    assert f'(allow network-outbound (remote unix-socket (subpath "{service}")))' in text.splitlines(), text
+    assert operators.daemon_root() not in text, "the owner's shared service is outside the profile (#2943)"
 
 
 def test_the_profile_writes_the_resolved_device_path(tmp_path, monkeypatch):
@@ -255,6 +262,29 @@ def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     with pytest.raises(probe.ProbeFailed, match="does not list it"):
         probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
+
+
+def test_a_bg_session_starts_in_the_projects_own_service(tmp_path, monkeypatch):
+    """#2943: the `--bg` call and the roster read and stop that follow it carry the project's own service root, so the
+    probe exercises the service the supervisor starts, never the owner's shared one."""
+    probe = load("operator_probe")
+    service = str(tmp_path / "service")
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append((argv, kwargs.get("env") or {}))
+        if argv[0] == "claude" and argv[1] == "agents":
+            return subprocess.CompletedProcess(
+                argv, 0, '[{"sessionId": "ba6e7d2e", "name": "SQUAD-OPERATOR-probe-project"}]', "")
+        if argv[0] == "claude" and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", service=service)
+    assert seen
+    for argv, env in seen:
+        assert env.get("TERMUX_VERSION") == "1" and env.get("PREFIX") == service, (argv, env)
 
 
 def test_an_untrusted_workspace_names_the_one_folder_to_trust(tmp_path, monkeypatch):
@@ -490,12 +520,14 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
-    def fake_bg(work, profile, cli, proxy_url=None):
+    def fake_bg(work, profile, cli, proxy_url=None, service=None):
         seen["bg"] = proxy_url
 
     monkeypatch.setattr(probe, "session", fake_session)
     monkeypatch.setattr(probe, "bg_session", fake_bg)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == {"proxy_url": None, "bg": None, "poller": None, "writer": None}
 
@@ -538,20 +570,22 @@ def test_one_command_repeats_the_probe(tmp_path):
     assert "no claude CLI on the path" in done.stderr
 
 
-def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_daemon():
-    """#2768 keeps every write grant a literal or a named subpath: the outbox file, the Claude home, the CLI's own config
-    root (#2963), `/dev/null`, and the CLI's own daemon runtime. No grant names a whole root, and the owner's global
-    config file is granted to no one."""
+def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_service():
+    """#2768, #2963, #2943 keeps every write grant a literal or a named subpath: the outbox file, the Claude home, the
+    CLI's own config root, `/dev/null` and the project's own service root. No grant names a whole root, the owner's global
+    config file is granted to no one, and the owner's shared service root is a write root for no session."""
     operators = load("operators")
+    service = os.path.realpath("/work/state/operators/services/probe-project")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config", service=service)
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     for root in ("/dev", "/tmp", "/private/tmp", "/private/var/folders"):
         assert f'(literal "{root}")' not in write and f'(subpath "{root}")' not in write
     assert write.count("(subpath") == 3, write
     assert '(subpath "/work/config")' in write, write
+    assert f'(subpath "{service}")' in write
     assert ".claude.json" not in write, "the owner's global config file is granted to no one"
-    assert f'(subpath "{operators.daemon_root()}")' in write
+    assert f'(subpath "{operators.daemon_root()}")' not in write, "the shared service root is never a write root"
 
 
 @pytest.mark.sandbox_bound
@@ -571,6 +605,44 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     assert "Operation not permitted" in done.stderr
 
 
+def test_the_probe_proves_the_shared_service_is_out_of_reach(tmp_path, monkeypatch):
+    """#2943: a connect to the owner's shared background service, which sits outside the profile, is refused."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
+    assert probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+    monkeypatch.setattr(probe, "sandboxed", scripted(probe, service_open=True))
+    with pytest.raises(probe.ProbeFailed, match="shared service"):
+        probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+
+
+@pytest.mark.sandbox_bound
+def test_the_shared_service_denial_probes_a_socket_that_exists(tmp_path, monkeypatch):
+    """#2979: the kernel answers a missing path with "no such file", never a denial, so the probe binds the file it probes
+    under the shared root and removes it after."""
+    probe = load("operator_probe")
+    inner, seen = scripted(probe), []
+
+    def spy(profile, cli, args, cwd, timeout, extra_env=None):
+        seen.append((args[-1], os.path.exists(args[-1])))
+        return inner(profile, cli, args, cwd, timeout, extra_env)
+
+    monkeypatch.setattr(probe, "sandboxed", spy)
+    shared = probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+    assert seen[0] == (shared, True), f"the probe named a path that does not exist: {seen[0]}"
+    assert not os.path.exists(shared), "the probe left its own socket under the shared root"
+
+
+@pytest.mark.sandbox_bound
+def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
+    """The real profile, the real kernel: the owner's shared service root is outside, the project's own root is inside."""
+    probe = load("operator_probe")
+    service = tmp_path / "service"
+    profile = load("operators").profile_text(str(tmp_path / "out.jsonl"), str(tmp_path / "in"),
+                                             str(tmp_path / "in" / "dm.jsonl"), config=str(tmp_path / "config"),
+                                             service=str(service))
+    assert probe.service_denial(tmp_path, profile, str(service))
+
+
 @pytest.mark.claude_bound
 @pytest.mark.heavy     # a live `claude -p` call takes seconds: over the 1 s line, so the fast battery deselects it (ADR-0139)
 def test_the_real_cli_probe_passes():
@@ -582,7 +654,8 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     """#2925 criteria 9 to 11: the probe's profile is the live project shape, one outbox and one inbox per channel, and
     another project's inbox and checkout stay refused (#2951)."""
     probe = load("operator_probe")
-    checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = probe.project_shape(tmp_path, [8016])
+    checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = probe.project_shape(
+        tmp_path, [8016])
     write = next(line for line in profile.splitlines() if line.startswith("(allow file-write*"))
     read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*")
                 and f'(literal "{own_inboxes[0]}")' in line)
@@ -590,7 +663,7 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
         assert f'(literal "{outbox}")' in write, write
     for inbox in own_inboxes:
         assert f'(literal "{inbox}")' in read, read
-        assert inbox.read_text().strip() == probe.OWN_SENTINEL
+        assert probe.OWN_SENTINEL in inbox.read_text()
     assert other_inbox.read_text().strip() == probe.SENTINEL
     assert f'(deny file-read* (subpath "{other_inbox.parent}"))' in profile, profile
     assert f'(deny file-read* (subpath "{other_checkout}"))' in profile, profile
@@ -598,7 +671,18 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     assert checkout.is_dir() and other_checkout.is_dir() and not leak.exists()
 
 
-def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1):
+def test_the_probe_builds_its_service_root_the_way_the_supervisor_does(tmp_path):
+    """#2943: the probe's service root comes from `operators.service_root`, the one a live `start()` grants, so a change
+    to that layout moves the probe with it instead of leaving it green on a shape no start produces."""
+    probe = load("operator_probe")
+    operators = load("operators")
+    _, _, _, _, _, _, service, profile = probe.project_shape(tmp_path, [8016])
+    expected = operators.service_root(str(tmp_path / "state"), probe.PROBE_KEY)
+    assert os.path.realpath(service) == expected, (service, expected)
+    assert f'(subpath "{expected}")' in profile, profile
+
+
+def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1, service_open=False):
     """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
     case says otherwise. `port` is the one loopback port the model route uses; every other port is refused (#2951)."""
     inbox_line = probe.OWN_SENTINEL if inbox_line is None else inbox_line
@@ -625,6 +709,12 @@ def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False,
                     return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             if probe.NETWORK_HOST in args:
+                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+            if getattr(probe, "SERVICE_CONNECT", None) in args:
+                # The shared root is outside the profile; the project's own root is inside it, and the kernel there
+                # answers "no such file" because the probe starts no socket.
+                if service_open or probe.daemon_root() not in args[-1]:
+                    return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(f"unexpected denial call: {args}")
@@ -687,6 +777,8 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "session", fake_session)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == [tmp_path / "checkout"], seen
 
@@ -843,6 +935,8 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
 
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
+    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert roles == ["poller", "writer"]
 
@@ -996,3 +1090,377 @@ def test_the_real_profile_refuses_the_owners_claude_files(tmp_path, monkeypatch)
     home = os.path.realpath(os.path.expanduser("~"))
     tried = probe.config_denials(tmp_path, profile, home=home)
     assert tried, "this machine holds no owner Claude file to try"
+
+
+# #2949: the fixed answer path. One live session answers one pending inbox line through the shipped helper, and no
+# other channel's outbox takes a line.
+
+def answer_folders(tmp_path, probe):
+    """The queues one answer phase works over: one inbox and one outbox per channel of the probe's project."""
+    outboxes = [tmp_path / "state" / "outboxes" / f"{c}.jsonl" for c in probe.PROBE_CHANNELS]
+    own = [tmp_path / "state" / "inboxes" / f"{c}.jsonl" for c in probe.PROBE_CHANNELS]
+    for path in outboxes + own:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    return outboxes, own
+
+
+def test_the_answer_prompt_names_the_shipped_helper():
+    """#2949 criterion (6): the live prompt runs the helper exactly, with the scope, the thread and the text."""
+    probe = load("operator_probe")
+    command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0],
+               "--thread", probe.PROBE_THREAD, "--text", probe.ANSWER_TEXT]
+    text = probe.answer_prompt(command)
+    assert str(probe.HELPER) in text and "--scope C0PROBE01" in text, text
+    assert "Bash tool" in text and "no change to any argument" in text, text
+
+
+def helper_command(probe):
+    """The one command the live session is asked to run."""
+    return f'{sys.executable} {probe.HELPER} --scope {probe.PROBE_CHANNELS[0]} --thread {probe.PROBE_THREAD} --text "{probe.ANSWER_TEXT}"'
+
+
+def answer_event(probe, command=None):
+    """The stream-json events of a session whose one Bash call runs the shipped helper."""
+    return events_of([("Bash", {"command": command or helper_command(probe)}, "answer: wrote one line to the outbox")])
+
+
+def test_the_answer_phase_proves_a_live_session_answered_through_the_helper(tmp_path, monkeypatch):
+    """#2949 criterion (6): the live session's one Bash call runs the shipped helper, and its line is the one answer."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    seen = {}
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        seen["env"] = extra_env
+        seen["question"] = own[0].read_text()
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    binding = json.loads(Path(seen["env"]["VOICE_ANSWER_BINDING"]).read_text())
+    assert binding["channels"] == list(probe.PROBE_CHANNELS), binding
+    assert probe.PROBE_THREAD in seen["question"], seen["question"]
+
+
+def test_a_session_that_writes_the_line_without_the_helper_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): a line the session appends itself, with no helper call, proves nothing."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, []
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="Bash"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_a_session_whose_own_command_writes_the_outbox_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): the one Bash call must run the helper, never append to the outbox by hand."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe, f'echo "{probe.ANSWER_TEXT}" >> "{outboxes[0]}"')
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="does not run the helper"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_a_session_that_runs_two_bash_calls_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): one answer is one helper call, so a second Bash call is unproven."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    events = answer_event(probe) + answer_event(probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, events
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="2 Bash calls"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_phase_keeps_the_denial_control_lines(tmp_path, monkeypatch):
+    """#2949 criterion (6): the answer phase never erases a line an earlier phase's verdict rests on."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    for outbox in outboxes:
+        outbox.write_text("answered\n")          # each denial phase's own control line
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert outboxes[0].read_text().startswith("answered\n")
+    assert outboxes[1].read_text() == "answered\n"
+
+
+def test_a_live_session_that_answers_no_pending_line_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): a session that writes nothing leaves the probe unproven, never passed."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="did not answer through the helper"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_an_answer_in_another_channels_outbox_fails_the_probe(tmp_path, monkeypatch):
+    """#2949 criterion (6): a line outside the question's channel is a refusal the probe names."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        for outbox in outboxes:
+            with open(outbox, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="outside the question's channel"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_binding_is_written_before_the_profile_is_built(tmp_path, monkeypatch):
+    """#2949 criterion (6): the live session's answer binding exists before the profile it runs under is built, so the
+    helper's own read never meets a file the probe created outside the profile's own scaffolding."""
+    probe = load("operator_probe")
+    seen = {}
+    real = probe.project_shape
+
+    def spy(work, ports):
+        seen["binding"] = (Path(work) / "answer" / "binding.json").is_file()
+        return real(work, ports)
+
+    monkeypatch.setattr(probe, "project_shape", spy)
+    _, _, _, _, _, _, _, profile = probe.profile_for(tmp_path, [8016])
+
+    assert seen["binding"] is True, "the answer binding was written after the profile was built"
+    binding = json.loads((tmp_path / "answer" / "binding.json").read_text())
+    assert binding["channels"] == list(probe.PROBE_CHANNELS), binding
+    assert binding["state"] == str(tmp_path / "state"), binding
+    assert profile.startswith("(version 1)")
+
+
+# The answer phase's own proof (#2949 review): the one Bash call is exactly the helper's argv and exits 0, and an
+# earlier phase's JSON line in another outbox never reads as this session's stray answer.
+
+def expected_helper_argv(probe):
+    return [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+            "--text", probe.ANSWER_TEXT]
+
+
+def test_the_answer_call_must_be_exactly_the_helper_argv():
+    """A command that carries the helper's substrings plus another command proves nothing: the argv is parsed and
+    compared whole."""
+    probe = load("operator_probe")
+    command = f'{helper_command(probe)} ; rm -rf "/tmp/leak"'
+    calls = probe.tool_calls(events_of([("Bash", {"command": command}, "answer: wrote one line")]))
+
+    with pytest.raises(probe.ProbeFailed, match="exactly"):
+        probe.check_answer_call(calls, expected_helper_argv(probe))
+
+
+def test_the_answer_call_must_run_the_helper_with_its_exact_arguments():
+    """The exact argv passes; one changed argument is refused."""
+    probe = load("operator_probe")
+    good = probe.tool_calls(events_of([("Bash", {"command": helper_command(probe)}, "answer: wrote one line")]))
+    assert probe.check_answer_call(good, expected_helper_argv(probe))
+
+    changed = f'{helper_command(probe).replace(probe.PROBE_THREAD, "1.1")}'
+    calls = probe.tool_calls(events_of([("Bash", {"command": changed}, "answer: wrote one line")]))
+    with pytest.raises(probe.ProbeFailed, match="exactly"):
+        probe.check_answer_call(calls, expected_helper_argv(probe))
+
+
+def test_a_helper_call_that_exits_nonzero_fails_the_probe():
+    """The Bash tool_result carries the call's own failure, so a helper that refused its line proves nothing."""
+    probe = load("operator_probe")
+    events = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_0", "name": "Bash", "input": {"command": helper_command(probe)}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_0", "is_error": True,
+             "content": [{"type": "text", "text": "answer: refused: no pending inbox line"}]}]}},
+    ]
+    with pytest.raises(probe.ProbeFailed, match="exit"):
+        probe.check_answer_call(probe.tool_calls(events), expected_helper_argv(probe))
+
+
+def test_an_earlier_json_line_in_another_outbox_does_not_fail_the_phase(tmp_path, monkeypatch):
+    """The phase compares each other outbox against its own earlier content, so a JSON control line an earlier phase
+    wrote is no answer of this session."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    outboxes[1].write_text(json.dumps({"control": "denial phase"}) + "\n")
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+
+def test_the_answer_phase_leaves_the_inbox_as_it_found_it(tmp_path, monkeypatch):
+    """Blocking 1 (#2949): `bg_session` and `guest_sessions` reuse this state folder, so the synthetic question the
+    phase appends must be gone when the phase returns: a later phase reads the queue it created, never this one."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    own[0].write_text(json.dumps({"id": "c:x", "ts": "1.0", "channel": probe.PROBE_CHANNELS[0], "text": "earlier"}) + "\n")
+    before = own[0].read_bytes()
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert own[0].read_bytes() == before
+
+
+def test_the_answer_phase_restores_the_inbox_when_the_phase_fails(tmp_path, monkeypatch):
+    """Blocking 1 (#2949): a failed phase restores the inbox too, so the phase after it never reads a stray question."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    before = own[0].read_bytes()
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        return {}, {}, []
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="Bash"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert own[0].read_bytes() == before
+
+
+def test_a_line_the_daemon_appends_during_the_phase_is_never_truncated(tmp_path, monkeypatch):
+    """Debt 2 (#2949): the phase deletes only the bytes it appended. When the daemon appends a real line during the
+    probe, the inbox no longer ends at the phase's own question, so the phase fails and leaves that line in place."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    real = json.dumps({"id": "c:real", "ts": "9.0", "channel": probe.PROBE_CHANNELS[0], "text": "a real message"})
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(own[0], "a", encoding="utf-8") as f:
+            f.write(real + "\n")          # the daemon's own line, appended while the session answered
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match="appended to the inbox"):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert real in own[0].read_text(), "the phase deleted a line the daemon wrote"
+
+
+def test_the_operator_note_names_the_proposal_prefix_and_its_kind_token():
+    """Debt 3 and Debt 5 (#2949): the DM proposal's second call passes `--kind proposal` and its text starts with
+    `Proposal:`, so the operator note must name both the prefix and the token."""
+    probe = load("operator_probe")
+    note = Path(probe.__file__).with_name("OPERATOR.md").read_text()
+
+    assert "Proposal:" in note and "--kind proposal" in note, note
+
+
+def test_the_answer_phase_drives_the_real_helper_end_to_end(tmp_path, monkeypatch):
+    """Debt 4 (#2949): `cli_call` is stubbed here, so this case proves the shipped helper under the phase's own
+    binding (no model); it does not prove that the live session's Bash tool ran the helper. Only the live phase does."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+               "--text", probe.ANSWER_TEXT]
+    seen = {}
+
+    def stub_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        seen["binding"] = json.loads(Path(extra_env["VOICE_ANSWER_BINDING"]).read_text())
+        done = subprocess.run(command, capture_output=True, text=True, timeout=30,
+                              env={**os.environ, **extra_env}, check=False)
+        assert done.returncode == 0, done.stderr
+        text = done.stdout.strip() or "answer: wrote one line"
+        return {}, {}, events_of([("Bash", {"command": shlex.join(command)}, text)])
+
+    monkeypatch.setattr(probe, "cli_call", stub_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own)
+
+    assert seen["binding"]["channels"] == list(probe.PROBE_CHANNELS), seen["binding"]
+    got = [json.loads(raw) for raw in outboxes[0].read_text().splitlines() if raw.strip()]
+    assert got == [{"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}], got
+
+
+def test_a_quoted_answer_renders_a_prompt_that_parses_back_to_its_argv():
+    """Debt 3 (#2949): the probe asks the session to run the helper as one shell line, so an answer with a quote, a
+    backtick or `$(...)` must survive the prompt unchanged."""
+    probe = load("operator_probe")
+    command = [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+               "--text", "It's a \"quote\", a `tick` and $(rm -rf /)"]
+
+    text = probe.answer_prompt(command)
+
+    assert shlex.split(text.splitlines()[-1]) == command, text
+
+
+# The answer phase without a model (#2949 review, Debt 4): the probe's question-append, outbox check and inbox restore
+# run against the real shipped helper, so pytest proves the shape the live probe only proves with a model.
+
+def test_the_answer_phase_runs_the_real_helper_without_a_model(tmp_path):
+    """Debt 4 (#2949): `exercise_answer` appends its question under a lock, runs the real `answer` helper as the
+    subprocess the session would run, and checks the one threaded outbox line, then restores the inbox — all with no
+    model and no live session."""
+    probe = load("operator_probe")
+    checkout, outboxes, own_inboxes, *_ = probe.project_shape(tmp_path, [8000])
+    binding = probe.write_binding(tmp_path)
+    inbox_before = own_inboxes[0].read_text()
+
+    def run():
+        result = subprocess.run(
+            [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+             "--text", probe.ANSWER_TEXT],
+            env={**os.environ, "VOICE_ANSWER_BINDING": str(binding)}, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+
+    answers = probe.exercise_answer(outboxes, own_inboxes[0], run)
+
+    got = [json.loads(raw) for raw in outboxes[0].read_text().splitlines() if raw.strip()]
+    assert got == [{"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}], got
+    assert answers == got
+    assert outboxes[1].read_text() == "", "the other channel's outbox took a line"
+    assert own_inboxes[0].read_text() == inbox_before, "the phase left its question in the inbox"
+
+
+def test_the_answer_phase_appends_its_question_under_an_exclusive_lock(tmp_path):
+    """Blocking 3 (#2949): the synthetic question is appended through one helper that takes the same exclusive flock
+    `restore_inbox` takes, never a bare unlocked `open(..., 'ab')`, so a concurrent appender never meets a torn line."""
+    import inspect
+    probe = load("operator_probe")
+    body = inspect.getsource(probe.append_question)
+    assert "flock" in body and "LOCK_EX" in body, body
+    phase = inspect.getsource(probe.exercise_answer)
+    assert "append_question(" in phase and "open(inbox" not in phase, phase
+
+    inbox = tmp_path / "inbox.jsonl"
+    inbox.write_text("before\n")
+    probe.append_question(str(inbox), b"X\n")
+    assert inbox.read_text() == "before\nX\n"
