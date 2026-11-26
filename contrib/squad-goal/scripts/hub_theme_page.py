@@ -1662,15 +1662,20 @@ const slTRefused=n=>{const bad=(n.proposal||[]).filter(r=>r.action==="refused");
 const slTClient=n=>{if(n.kind!=="client"||n.own)return "";   // the page of one unnamed project draws no client map chrome (#2922)
  const opts=n.persona_options||[],cur=n.default_persona||"";
  const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
+ // The default language (#3035): a select over the languages the policy module accepts, beside the default persona.
+ const langs=n.language_options||[],lcur=n.default_language||"";
+ const lsel=`<select id=slcllanguage aria-label="${slA("Default language")}">${langs.map(o=>`<option value="${slA(o.value)}"${o.value===lcur?" selected":""}>${esc(o.label)}</option>`).join("")}</select>`;
  // The Add project control lists the hub's free projects by name, and Delete client asks the hub's one question (#2922).
  const free=n.client?(n.add_projects||[]):[];   // a node the map does not name has no map to change (#2922)
  const add=!n.client?"":(free.length
   ?`<div class="slad sltadd"><select id=slclproject aria-label="${slA("Project to add")}">${free.map(p=>`<option value="${slA(p.id)}">${esc(p.name)}</option>`).join("")}</select><button type=button data-slcaddproj="${slA(n.id)}">${esc("Add project")}</button></div>`
   :`<p class=m>${esc("No project waits to be added.")}</p>`);
- const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div>`+add+`</div>`;
+ const follow=(n.children||[]).map(p=>`<label class=slchk><input type=checkbox data-slfollang="${slA(p.project||"")}"${p.follows_language?" checked":""} aria-label="${slA("Follow the client language")}"> ${esc(p.name)}</label>`).join("");
+ const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div>`+follow+add+`</div>`;
  const del=n.ask?`<div class=sltacts><button type=button class=sltdanger data-slcask="${slA(n.id)}">${esc("Delete client")}</button></div>`:"";
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
+ +`<div class=sltrow><span class=sl>${esc("Default language")}</span><span class=sc>${lsel}</span></div>`
  +`<p class=sltjump><a href="#set-prs" data-sp=prs>${esc("Open the Personas theme")}</a></p>`   // the theme edits the personas of every client (#3016)
  +slTRefused(n)+projects+del};
 /* The project's one control (#2922): Remove from client. The question it shows is the hub's, and it names the project
@@ -1829,6 +1834,23 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
   if(confirm){n.default_persona=pid;slMsg=o.partial?"saved in part · a project was not written":"saved"}   // the refused projects are named in the pane (#2908)
   slRender()})
  .catch(()=>fail("the client default could not be saved: the hub did not answer"))}
+/* The client default language (#3035): a change saves by itself, with no proposed-writes table. The answer's rows carry
+   only the projects a write could not reach, so the pane names them. The route binds one change to its own client. */
+function slLangPick(id,lang){const n=slTNode(id);if(!n)return;
+ slSaving=true;slMsg="";slBarSync();
+ const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slLangPick(id,lang);slRender()};
+ fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({client:n.client||"",language:String(lang||""),confirm:true})})
+ .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client language could not be saved");return}
+  slSaving=false;slRetryFn=null;if(o.rows)n.proposal=o.rows;
+  n.default_language=String(o.language||lang||"");slMsg=o.partial?"saved in part · a project was not written":"saved"
+  slRender()})
+ .catch(()=>fail("the client language could not be saved: the hub did not answer"))}
+/* The language Follow toggle of one project (#3035): off makes an exception, and on removes it and writes the client
+   default language to that project. The route answers the write. */
+function slFollowLang(pid,follows){const n=slTNode(slTsel);if(!n)return;
+ slMapPost({op:"follow_language",client:n.client||"",project:String(pid||""),follows:!!follows,confirm:true},slTsel)}
 /* The client map's own changes (#2922): add a project, remove a project, add a client, delete a client. Every change is
    one confirmed POST to the client route, and the hub writes the map and answers; the view then reads the tree again,
    so what it draws is the hub's answer. The list, the targets and the question are the hub's (ADR-0137, ADR-0177). */
@@ -2138,6 +2160,8 @@ async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender();slChTree()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};
+ if(e.target.id==="slcllanguage"){slLangPick(slTsel,e.target.value);return}   // the client default language saves by itself (#3035)
+ if(dt.slfollang!==undefined){slFollowLang(dt.slfollang,!!e.target.checked);return}   // one project's language follow toggle (#3035)
  if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");
   if(dt.slproj){slPoField(dt.slproj,s.slice(i+1),e.target,s.slice(0,i));return}   // one field of another project's node, bound to that project (#3033, #3034)
   slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)

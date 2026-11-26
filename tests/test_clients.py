@@ -74,7 +74,8 @@ def test_a_new_client_is_added_with_no_project_and_its_default_persona():
     assert two["default_persona"] == {"id": "blue", "name": "Blue"}, two
     assert CL.with_client(after, "two", "Other") == after, "a client id the map holds is never made twice"
     fresh = CL.with_client({}, "one", "One")
-    assert CL.normalize(fresh) == [{"id": "one", "name": "One", "default_persona": None, "projects": []}], fresh
+    assert CL.normalize(fresh) == [{"id": "one", "name": "One", "default_persona": None, "default_language": None,
+                                   "projects": []}], fresh
 
 
 def test_a_deleted_client_leaves_the_map_and_its_projects_become_free():
@@ -94,3 +95,45 @@ def test_a_new_client_id_is_a_slug_of_the_name_and_never_a_taken_one():
     assert CL.new_client_id(one, "One") == "one-2", "a taken slug takes the next free number"
     assert CL.new_client_id(one, "Ação") == "acao", "an accented name becomes ASCII"
     assert CL.new_client_id(one, "  ") == "client", "a name with no word still makes an id"
+
+
+def test_a_language_follow_flag_is_stored_apart_from_the_persona_flag():
+    """#3035: the map holds `follows_language` for each project, default true. A change of one flag never changes the
+    other: a hand-edited map that names only `follows_language` still follows the persona default."""
+    doc = {"clients": [{"id": "one", "name": "One", "default_language": "pt-BR",
+                        "projects": [{"id": "alpha"}, {"id": "beta", "follows": False, "follows_language": False},
+                                     {"id": "gamma", "follows_language": False}]}]}
+    one = CL.normalize(doc)[0]
+    assert one["default_language"] == "pt-BR", one
+    assert [(p["id"], p["follows"], p["follows_language"]) for p in one["projects"]] == \
+           [("alpha", True, True), ("beta", False, False), ("gamma", True, False)], one
+    after = CL.with_follow_language(doc, "one", "alpha", False)
+    one = CL.normalize(after)[0]
+    assert one["projects"][0]["follows_language"] is False and one["projects"][0]["follows"] is True, after
+    after = CL.with_follow_language(doc, "one", "beta", True)
+    one = CL.normalize(after)[0]
+    assert one["projects"][1]["follows_language"] is True and one["projects"][1]["follows"] is False, after
+
+
+def test_a_client_default_language_is_written_and_kept_apart_from_the_persona():
+    """#3035: a change of the default language writes `default_language` alone, and the default persona stands."""
+    doc = {"version": 1, "clients": [{"id": "one", "name": "One",
+                                      "default_persona": {"id": "blue", "name": "Blue"}, "projects": ["alpha"]}]}
+    after = CL.with_default_language(doc, "one", "es-ES")
+    one = CL.normalize(after)[0]
+    assert one["default_language"] == "es-ES", after
+    assert one["default_persona"] == {"id": "blue", "name": "Blue"}, "the default persona changed"
+    assert after["clients"][0]["projects"] == ["alpha"], "a project row changed"
+    assert CL.with_default_language(doc, "nope", "es-ES") == doc, "a client the map does not name is never made"
+
+
+def test_a_direct_edit_unfollows_the_language_of_the_project_that_client_holds():
+    """#3035: a direct edit of a following project's language turns its `follows_language` off, and leaves the persona
+    flag as it stands."""
+    doc = {"clients": [{"id": "one", "name": "One", "projects": [{"id": "alpha", "follows": False}, "beta"]},
+                       {"id": "two", "name": "Two", "projects": ["gamma"]}]}
+    after = CL.with_language_unfollow(doc, "alpha")
+    one = CL.normalize(after)[0]
+    assert one["projects"][0]["follows_language"] is False and one["projects"][0]["follows"] is False, after
+    assert CL.normalize(after)[1]["projects"][0]["follows_language"] is True, "another project's flag changed"
+    assert CL.with_language_unfollow(doc, "ghost") == doc, "a project no client names changes nothing"
