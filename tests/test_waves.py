@@ -60,6 +60,7 @@ def lands(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_passing_write_child_is_landed_in_the_target_and_recorded(tmp_path):
     repo = sibling_repo(tmp_path)
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, target=repo)
@@ -71,6 +72,7 @@ async def test_a_passing_write_child_is_landed_in_the_target_and_recorded(tmp_pa
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_childs_land_event_names_the_tip_before_the_merge(tmp_path):
     """The janitor tells a landing that moved the target from one that did not by the land event's `before` and `head`
     (ADR-0145 rule 12). The landing check that follows the merge replaced the merge's result, so the event lost `before`,
@@ -100,6 +102,7 @@ async def test_two_write_children_land_in_request_order_and_the_final_gate_sees_
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_conflicting_second_writer_fails_with_merge_conflict_and_the_first_stays_landed(tmp_path):
     repo = sibling_repo(tmp_path)
     script = {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": writer("same.txt", "one\n"),
@@ -114,6 +117,7 @@ async def test_a_conflicting_second_writer_fails_with_merge_conflict_and_the_fir
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undone(tmp_path):
     """The land of issue 06 turned issue 13's held-out command red,
     and the final gate was the first thing to notice, fifteen lands later. The child that broke it passed its own.
@@ -150,6 +154,7 @@ async def test_a_landing_that_leaves_every_command_where_it_was_stays_landed(tmp
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_read_only_child_and_a_failed_child_are_not_landed(tmp_path):
     repo = sibling_repo(tmp_path)
     bad = writer("bad.txt", diff=None)
@@ -196,6 +201,7 @@ async def test_zero_spawns_without_the_stop_word_still_fail_no_dispatch(tmp_path
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_stop_word_is_ignored_when_the_router_also_asks_for_children(tmp_path):
     repo = sibling_repo(tmp_path)
     eng = make(tmp_path, {"router": [routed(req(), done=True), routed(done=True)], "route.router.1": writer("a.txt")},
@@ -205,6 +211,7 @@ async def test_the_stop_word_is_ignored_when_the_router_also_asks_for_children(t
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_resume_does_not_land_a_child_again(tmp_path):
     repo = sibling_repo(tmp_path / "a")
     eng = make(tmp_path / "a", {"router": routed(req()), "route.router.1": writer("a.txt")}, target=repo)
@@ -237,6 +244,7 @@ async def test_the_ledger_shows_a_conflict_and_keeps_the_conflict_text_out_of_th
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_dispatch_child_outcome_carries_its_model_effort_and_tokens_when_known(tmp_path):
     known = {**writer("a.txt"), "usage": {"tokens_in": 1200, "tokens_out": 340}}
     unknown = writer("b.txt")
@@ -349,6 +357,7 @@ async def test_a_task_loop_that_names_no_task_still_terminates(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_ledger_tells_the_router_when_a_landed_childs_own_held_out_command_is_red(tmp_path):
     """Run 20261004-004606: issue 04 landed with 6 of its 27 held-out tests red, the router saw only "landed", and the
     run ended with no wave left to repair it. The landing stays (the repair builds on it); the ledger carries the verdict."""
@@ -363,6 +372,7 @@ async def test_the_ledger_tells_the_router_when_a_landed_childs_own_held_out_com
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_final_gate_runs_a_childs_commands_in_that_childs_worktree(tmp_path):
     """#862: a child's held-out command reads its own tree ("git log -1"). The final gate ran it in the target, whose
     head is the landing merge, so a correct child failed `ac-verify` and its wave landed nothing."""
@@ -384,6 +394,7 @@ async def test_the_final_gate_runs_a_childs_commands_in_that_childs_worktree(tmp
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_fails_the_run(tmp_path):
     """#862 negative: only a git-history command reads its child's tree. A plain command that passes in the child's tree and
     fails once a sibling's file is merged is caught as a regression at the sibling's landing, so the run must not complete.
@@ -549,6 +560,7 @@ def rebase_target(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_fix_run_whose_child_rebased_lands_its_branch(tmp_path):
     """#2561: a fix run's child rebased the work branch onto a newer base. The engine merged it into the old tip, the merge
     conflicted, and a delivered fix round ended `failed merge_conflict`. A fix run replaces its target with the child's branch."""
@@ -564,6 +576,7 @@ async def test_a_fix_run_whose_child_rebased_lands_its_branch(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_fix_run_with_two_children_keeps_both_landings(tmp_path):
     """#2561: the second child of a fix run is cut before the first one landed, so the target's tip is no ancestor of its
     branch. The target moved since the cut, so the second land merges and the first child's work stays."""
@@ -577,6 +590,7 @@ async def test_a_fix_run_with_two_children_keeps_both_landings(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_run_that_is_no_fix_run_still_fails_a_rebased_child_with_merge_conflict(tmp_path):
     """#2561: only a fix run replaces its target; any other run keeps the merge, and a conflict fails the land."""
     repo = rebase_target(tmp_path)
