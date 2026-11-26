@@ -361,26 +361,50 @@ def test_a_terminal_that_holds_the_session_refuses_the_turn_and_names_the_reason
 
 
 def test_a_terminal_holding_the_session_before_any_saved_id_refuses_the_first_turn(tmp_path, stand_in):
-    """#2969 review: a live interactive claude refuses the turn even before the state folder saves a session."""
+    """A live interactive claude refuses the turn even before the state folder saves a session."""
     mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"))
     daemon.live_argvs = lambda: [["claude"]]
     deliver(daemon, channel, "first")
     assert calls(stand_in) == [], calls(stand_in)
     posts = [p for p in client.posts() if p.get("channel") == channel]
-    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD_UNSAVED, client.posts()
     rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
     assert rows[-1]["refused"] is True and rows[-1]["reason"] == "terminal-holds-session", rows
 
 
 def test_an_unknown_process_listing_refuses_the_turn(tmp_path, stand_in):
-    """#2969 review Blocking: an unreadable process table refuses the turn, never runs it blind."""
+    """An unreadable process table refuses the turn, so it never runs blind."""
     mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), live=lambda: None)
     deliver(daemon, channel, "hello")
     assert calls(stand_in) == [], calls(stand_in)
     posts = [p for p in client.posts() if p.get("channel") == channel]
-    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD_UNSAVED, client.posts()
     rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
     assert rows[-1]["refused"] is True, rows
+
+
+def test_a_refusal_before_any_saved_session_names_the_machine_wide_check(tmp_path, stand_in):
+    """With no saved session the check is machine wide, so the refusal says a terminal may belong to another project,
+    and a reader never takes a refusal for its own project's session."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"))
+    daemon.live_argvs = lambda: [["claude"]]
+    deliver(daemon, channel, "first")
+    posts = [p for p in client.posts() if p.get("channel") == channel]
+    assert len(posts) == 1, client.posts()
+    assert posts[0]["text"] == mod.FULL_HELD_UNSAVED, posts[0]
+    assert mod.FULL_HELD_UNSAVED != mod.FULL_HELD
+    assert "any project" in mod.FULL_HELD_UNSAVED
+
+
+def test_an_unreadable_process_table_is_logged_once(tmp_path, stand_in):
+    """A burst of refused turns writes one log line for the unreadable process table, never one line per message."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), live=lambda: None)
+    logged = []
+    daemon.log = logged.append
+    deliver(daemon, channel, "one", ts="1762500100.000100")
+    deliver(daemon, channel, "two", ts="1762500101.000100")
+    unreadable = [line for line in logged if "unreadable" in line]
+    assert len(unreadable) == 1, logged
 
 
 def test_a_turn_runs_once_the_terminal_closes(tmp_path, stand_in):

@@ -3,7 +3,8 @@
 
 Two phases, one command. Each call that starts a bounded session runs through contrib/squad-goal/scripts/claude-sandboxed.sh
 with the profile this probe writes; a full turn runs outside it and proves its resume and its stdin (ADR-0180), and
-the tail of that phase holds the session with a real `claude --resume` process and proves the refusal lifts (#2969). The profile is the one a live project session runs under: it writes the outbox of each channel of one
+the tail of that phase holds the session with a real interactive `claude --resume` terminal and proves the refusal
+lifts (#2969). The profile is the one a live project session runs under: it writes the outbox of each channel of one
 project, reads the inbox of each of them, and nothing else of the inbox folder. The denials come first: a write outside
 those outboxes, a read of another project's inbox, a read of a secret or another project's checkout (#2951) and a foreign
 host on port 443 must each fail, while a write into each own outbox and a read of each own inbox must pass. Then one
@@ -60,6 +61,7 @@ import argparse
 import fcntl
 import json
 import os
+import pty
 import secrets
 import shlex
 import shutil
@@ -912,17 +914,49 @@ def project_shape(work, ports):
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
-def hold_session(cli, checkout, session, listing=None):
-    """Start one real `claude --resume <session>` process and wait until the live listing names the session (#2969).
+def start_holder(cli, checkout, session):
+    """Start one real interactive `claude --resume <session>` on a pseudo-terminal and answer it with its master fd.
 
-    The process makes a real CLI call on the same session, so a turn beside it would split the conversation. It ends
+    An interactive CLI needs a terminal: a plain pipe ends it at once, so the probe would prove nothing. The pty makes
+    the process a real terminal on the session, never the daemon's own `-p` path. `end_holder` closes it."""
+    master, slave = pty.openpty()
+    env = fullturn.owner_env(os.environ)
+    env.setdefault("TERM", "xterm-256color")
+    try:
+        holder = subprocess.Popen([cli, "--resume", session], stdin=slave, stdout=slave, stderr=slave,
+                                  cwd=str(checkout), env=env, start_new_session=True)
+    finally:
+        os.close(slave)
+    return holder, master
+
+
+def end_holder(holder, master):
+    fullturn.end_tree(holder)
+    os.close(master)
+
+
+def prove_terminal(argvs, session):
+    """Raise unless the listing names the session on an interactive terminal, the class `held_by_terminal` treats as
+    one: an argv with no print flag and no daemon flag, so the refusal the probe proves is a terminal's, never the
+    daemon's own turn (#2969 AC4)."""
+    for args in argvs or []:
+        if not fullturn.is_claude(args) or not fullturn.names_session(args, session):
+            continue
+        if fullturn.runs_print(args) or fullturn.is_daemon_session(args):
+            raise ProbeFailed("the process table names the session in a print or daemon process, never a terminal")
+        return
+    raise ProbeFailed("the process table names no live terminal on the session")
+
+
+def hold_session(cli, checkout, session, listing=None):
+    """Start one real interactive `claude --resume <session>` process and wait until the live listing names it (#2969).
+
+    The process holds a real terminal on the same session, so a turn beside it would split the conversation. It ends
     before this returns, and the turn that follows proves the refusal lifts once it is gone. `listing` is the probe's
-    one seam for the process table, so a stand-in CLI proves the phase without a live `ps`."""
+    one seam for the process table, so a stand-in CLI proves the phase without a live `ps`; the live probe passes no
+    seam, so the real `fullturn.live_claude_argvs` parses a real `ps`."""
     listing = listing or fullturn.live_claude_argvs
-    holder = subprocess.Popen([cli, "--resume", session, "-p", PROMPT, "--output-format", "json",
-                               "--max-budget-usd", "1"],
-                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              cwd=str(checkout), env=fullturn.owner_env(os.environ), start_new_session=True)
+    holder, master = start_holder(cli, checkout, session)
     try:
         deadline = time.monotonic() + HOLD_DEADLINE
         while time.monotonic() < deadline:
@@ -930,18 +964,20 @@ def hold_session(cli, checkout, session, listing=None):
             if argvs is fullturn.UNKNOWN:
                 raise ProbeFailed("the process table is unreadable, so the live holder is unproven")
             if fullturn.held_by_terminal(argvs, session):
+                prove_terminal(argvs, session)
                 return
             if holder.poll() is not None:
                 raise ProbeFailed("the live claude process ended before the process table listed it")
             time.sleep(0.1)
         raise ProbeFailed("the live claude process never appeared in the process table")
     finally:
-        fullturn.end_tree(holder)
+        end_holder(holder, master)
 
 
 def full_turn_phase(work, cli, listing=None):
     """Two full turns outside the sandbox: the first keeps a word given on stdin, and the resumed second returns it.
-    A third runs after a real `claude --resume` process holds the session, which proves the refusal and its lift."""
+    A third runs after a real interactive `claude --resume` terminal holds the session, which proves the refusal and
+    its lift. The live probe passes no `listing`, so the real process table parses a real `ps`."""
     listing = listing or fullturn.live_claude_argvs
     word = secrets.token_hex(6)
     checkout = work / "full-checkout"
@@ -1033,7 +1069,8 @@ def main(argv=None):
           f"({HELPER.name}) and no other channel's outbox took a line, under the tool gate and an ambient hook whose "
           f"rewrite reached no tool; "
           f"a full turn outside the sandbox resumed its session and returned the word it took on stdin, a real "
-          f"claude --resume process held that session in the process table and a turn ran after it closed; "
+          f"interactive claude --resume terminal held that session in the process table and a turn ran after it "
+          f"closed; "
           f"a --bg session started and was listed as {marked_name(PROBE_KEY)}, and the gate refused its one command "
           f"with one audit line; "
           f"guest poller denial held (write tool); "

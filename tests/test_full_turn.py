@@ -167,8 +167,8 @@ def test_the_audit_row_holds_no_message_and_no_answer(stand_in):
 
 
 def test_a_refused_turn_has_its_own_audit_shape():
-    """#2969 review Debt: a refusal carries an explicit flag, so a reader never takes it for a turn that ran and
-    failed for another reason."""
+    """A refusal carries an explicit flag, so a reader never takes it for a turn that ran and failed for another
+    reason."""
     mod = fullturn()
     row = mod.refused_audit("terminal-holds-session")
     assert row["refused"] is True and row["failed"] is True, row
@@ -305,7 +305,7 @@ def test_a_claude_process_on_another_session_does_not_hold_this_one():
 
 
 def test_an_open_terminal_holds_the_session_before_any_saved_id():
-    """#2969 review: a session held by a terminal is detected even before the state folder saves one. An interactive
+    """A session held by a terminal is detected even before the state folder saves one. An interactive
     claude process, one with no print flag, may hold the project's session."""
     mod = fullturn()
     assert mod.held_by_terminal([["claude", "--resume", FIRST_SESSION]], None) is True
@@ -327,7 +327,7 @@ def test_the_daemons_own_operator_session_holds_no_session_with_no_saved_id():
 
 
 def test_an_unreadable_process_table_refuses_conservatively():
-    """#2969 review: when the listing is unknown, the probe answers True so the turn is refused, never run blind."""
+    """When the listing is unknown, the probe answers True, so the turn is refused and never runs blind."""
     mod = fullturn()
     assert mod.held_by_terminal(None, None) is True
     assert mod.held_by_terminal(None, FIRST_SESSION) is True
@@ -353,7 +353,7 @@ def test_the_live_listing_drops_a_process_whose_executable_is_not_claude(monkeyp
                                    PermissionError("Operation not permitted")],
                          ids=["missing", "timeout", "denied"])
 def test_the_live_listing_is_unknown_when_ps_cannot_finish(monkeypatch, error):
-    """#2969 review Blocking: a missing or hung `ps` returns the unknown marker, never a raise inside the turn."""
+    """A missing or hung `ps` returns the unknown marker, so the listing never raises inside a turn."""
     mod = fullturn()
 
     def refuse(*args, **kwargs):
@@ -388,3 +388,33 @@ def test_a_session_id_that_is_only_a_prefix_of_the_saved_one_is_not_held():
 def test_a_claude_process_that_names_the_session_in_another_flag_does_not_hold_it():
     mod = fullturn()
     assert mod.held_by_terminal([["claude", "--name", FIRST_SESSION]], FIRST_SESSION) is False
+
+
+def test_the_daemon_probe_reads_the_process_table_once_per_cache_window(monkeypatch):
+    """A burst of messages reads the process table once per window, so the daemon never spawns `ps` per message and a
+    hung `ps` costs the turn one bound, not one per message."""
+    mod = fullturn()
+    reads = []
+
+    def listing(*args, **kwargs):
+        reads.append(1)
+        return []
+
+    monkeypatch.setattr(mod, "live_claude_argvs", listing)
+    clock = iter([0.0, 0.5, 3.0])
+    probe = mod.ArgvProbe(clock=lambda: next(clock))
+    probe()
+    probe()
+    probe()
+    assert len(reads) == 2, reads
+
+
+def test_the_daemon_probe_bounds_ps_shorter_than_the_probe_waits_for_a_holder(monkeypatch):
+    """The daemon path refuses after a short bound, never the probe's longer wait for a live holder."""
+    mod = fullturn()
+    seen = []
+    table = types.SimpleNamespace(stdout="", returncode=0)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: seen.append(k.get("timeout")) or table)
+    mod.ArgvProbe()()
+    assert seen == [mod.DAEMON_PS_TIMEOUT], seen
+    assert mod.DAEMON_PS_TIMEOUT < mod.PS_TIMEOUT

@@ -705,16 +705,68 @@ def test_a_full_turn_returns_on_resume_the_word_it_was_given_on_stdin(tmp_path, 
     probe.full_turn_phase(tmp_path, cli, listing=holder_listing("sess-probe-0001"))
 
 
+HOLDER_STAND_IN = """#!{python}
+import json, os, sys, time
+with open(os.environ["HOLDER_ARGV"], "w", encoding="utf-8") as f:
+    json.dump([os.path.realpath(sys.argv[0])] + sys.argv[1:], f)
+time.sleep(30)
+"""
+
+
+def holder_stand_in(tmp_path, monkeypatch):
+    """A stand-in CLI whose file name is exactly `claude`, so the process table's parse takes it for the CLI. It
+    records the argv it started with and stays alive, as an interactive terminal does."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    path = folder / "claude"
+    path.write_text(HOLDER_STAND_IN.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | 0o100)
+    record = tmp_path / "holder-argv.json"
+    monkeypatch.setenv("HOLDER_ARGV", str(record))
+    return str(path), record
+
+
+def recorded_listing(record):
+    """The process table's seam for a test: it answers the argv the holder recorded, once the holder has written it."""
+    def listing():
+        try:
+            return [json.loads(record.read_text(encoding="utf-8"))]
+        except (OSError, ValueError):
+            return []
+    return listing
+
+
+def test_the_probe_holds_the_session_with_an_interactive_terminal(tmp_path, monkeypatch):
+    """AC4: the holder the probe proves the refusal with is an interactive `claude --resume` terminal, never the
+    daemon's own `-p` path, so the refusal it proves is the one a terminal causes."""
+    probe = load("operator_probe")
+    cli, record = holder_stand_in(tmp_path, monkeypatch)
+    probe.hold_session(cli, tmp_path, "sess-probe-0001", listing=recorded_listing(record))
+    argv = json.loads(record.read_text(encoding="utf-8"))
+    assert "-p" not in argv and "--print" not in argv, argv
+    assert argv[1:] == ["--resume", "sess-probe-0001"], argv
+
+
+def test_the_probe_fails_when_the_listed_holder_is_not_a_terminal(tmp_path, monkeypatch):
+    """A listed holder that carries the print flag is the daemon's own path, so it proves no terminal refusal."""
+    probe = load("operator_probe")
+    cli, _record = holder_stand_in(tmp_path, monkeypatch)
+    with pytest.raises(probe.ProbeFailed, match="terminal"):
+        probe.hold_session(cli, tmp_path, "sess-probe-0001",
+                           listing=lambda: [["claude", "--resume", "sess-probe-0001", "-p"]])
+
+
 def test_a_full_turn_phase_fails_when_the_process_table_never_names_the_session(tmp_path, monkeypatch):
     """#2969 AC4: the probe fails unless the live listing shows the holder, so a refusal it never saw proves nothing."""
     probe = load("operator_probe")
     cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
+    monkeypatch.setattr(probe, "HOLD_DEADLINE", 0.5)   # the holder stays alive, so the deadline decides, not an exit
     with pytest.raises(probe.ProbeFailed, match="process table"):
         probe.full_turn_phase(tmp_path, cli, listing=lambda: [])
 
 
 def test_a_full_turn_phase_is_unproven_when_the_process_table_is_unreadable(tmp_path, monkeypatch):
-    """#2969 review: an unreadable listing is unproven, never a silent pass."""
+    """An unreadable listing is unproven, so the phase never passes on it silently."""
     probe = load("operator_probe")
     cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
     with pytest.raises(probe.ProbeFailed, match="unreadable"):
