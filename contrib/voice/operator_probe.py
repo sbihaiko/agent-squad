@@ -986,7 +986,7 @@ def permission_phase(work, cli):
     shutil.rmtree(state, ignore_errors=True)
     checkout.mkdir(parents=True, exist_ok=True)
     state.mkdir(parents=True, exist_ok=True)
-    approved = permission_turn(cli, checkout, state, "approved.txt", True, relay_timeout=DEADLINE)
+    permission_turn(cli, checkout, state, "approved.txt", True, relay_timeout=DEADLINE)
     if not (checkout / "approved.txt").exists():
         raise ProbeFailed("an approved call did not run")
     if not [row for row in audit_rows(state) if row.get("event") == "approval"]:

@@ -2664,7 +2664,7 @@ class Daemon:
                     turn = self.run_relayed_turn(record, checkout, repo)
             finally:
                 self.turn_order.leave(repo)
-        except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
+        except Exception as x:      # noqa: BLE001 - the worker thread has no caller: a raise here would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
