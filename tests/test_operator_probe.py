@@ -645,6 +645,8 @@ def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
 
 @pytest.mark.claude_bound
 @pytest.mark.heavy     # a live `claude -p` call takes seconds: over the 1 s line, so the fast battery deselects it (ADR-0139)
+@pytest.mark.slow(reason="the probe makes one live model call per phase in sequence: the tool set, the answer helper, "
+                         "a --bg session and two guest sessions; their sum passes 20 s once every phase runs (#2982)")
 def test_the_real_cli_probe_passes():
     probe = load("operator_probe")
     assert probe.main([]) == 0

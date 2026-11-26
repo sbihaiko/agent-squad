@@ -90,6 +90,7 @@ CLAUDE_LOADED_DIRS = ("skills", "agents", "commands", "hooks", "plugins", "outpu
 CONFIG_LINKS = CLAUDE_LOADED_FILES + CLAUDE_LOADED_DIRS + ("projects",)
 CONFIG_HOME = "CLAUDE_CONFIG_DIR"                     # the CLI's config home: its global config file and its daemon
 CONFIG_KEYCHAIN = "CLAUDE_SECURESTORAGE_CONFIG_DIR"   # empty: the default keychain service name, the owner's login
+TEMP_HOME = "CLAUDE_CODE_TMPDIR"                      # the CLI's temp root: its per-session folders and its cwd files
 # #2951: a hook defect in an operator session must not open a secret or another project's checkout. The owner's
 # credential folders, a project's `.env` and its profile-local Slack file are refused, and only the session's own
 # checkout stays readable. The model route is the one loopback port the profile opens.
@@ -700,8 +701,17 @@ def config_root(state):
 def cli_env(state):
     """The environment every operator CLI call runs under (#2963). `CLAUDE_CONFIG_DIR` moves the config home to the
     operator's root. An empty `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the default keychain service name, so the login
-    stays the owner's keychain entry at the same path and no credential moves (measured on CLI 2.1.332)."""
-    return {CONFIG_HOME: config_root(state), CONFIG_KEYCHAIN: ""}
+    stays the owner's keychain entry at the same path and no credential moves (measured on CLI 2.1.332).
+
+    `CLAUDE_CODE_TMPDIR` moves the CLI's temp root inside that config root (#2982). The CLI writes a per-session folder
+    and, after each Bash call, a cwd file under its temp root. The default root is `/tmp`, which the profile refuses
+    and other sessions share, so every Bash call of an operator session failed with "operation not permitted"."""
+    return {CONFIG_HOME: config_root(state), CONFIG_KEYCHAIN: "", TEMP_HOME: temp_root(state)}
+
+
+def temp_root(state):
+    """The operator CLI's own temp root, inside its config root, which the profile grants (#2982)."""
+    return os.path.join(config_root(state), "tmp")
 
 
 def prepare_config(state):
@@ -710,6 +720,7 @@ def prepare_config(state):
     linked: it belongs to the session's own root."""
     cfg = config_root(state)
     os.makedirs(cfg, exist_ok=True)
+    os.makedirs(temp_root(state), exist_ok=True)   # the CLI's temp root must exist before its first Bash call (#2982)
     owner = os.path.join(os.path.expanduser("~"), ".claude")
     for name in CONFIG_LINKS:
         source = os.path.join(owner, name)
