@@ -301,6 +301,22 @@ def test_the_session_holder_reads_the_process_table_and_no_session_names_no_hold
     assert mod.session_holder("", lister=lambda: rows) is None
 
 
+def test_a_holder_whose_session_id_sits_past_the_piped_width_is_still_found(tmp_path, monkeypatch):
+    """Criterion (1) on Linux: a piped `ps` cuts each command line at 80 columns unless it is asked for full width,
+    so the reading must ask for it or the session id past that column names no holder."""
+    line = f"4321 /usr/local/bin/claude --note {'n' * 90} -p --resume sess-long-0001 --verbose"
+    ps = tmp_path / "ps"
+    ps.write_text(f"""#!{sys.executable}
+import sys
+line = {line!r}
+wide = any("w" in arg for arg in sys.argv[1:] if arg.startswith("-") and not arg.startswith("--"))
+print(line if wide else line[:80])
+""")
+    ps.chmod(ps.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    assert fullturn().session_holder("sess-long-0001") == 4321
+
+
 def test_a_turn_is_refused_while_a_live_process_holds_the_session(stand_in):
     """Criterion (2): with a live holder, `run_turn` starts no CLI and names the refusal."""
     mod = fullturn()

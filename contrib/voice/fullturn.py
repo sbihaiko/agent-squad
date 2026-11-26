@@ -122,12 +122,12 @@ def argv(claude, session, relay=None, extra=()):
 def process_rows(lister=None):
     """Every `(pid, argv)` the machine lists now, or none when the table cannot be read.
 
-    `ps -axo pid=,command=` reads the same table on macOS and on Linux, and a caller may pass its own `lister` for a
-    test. An unreadable table names no holder: no evidence reaches a refusal, so the turn runs (ADR-0155)."""
+    `ps -axww -o pid=,command=` reads the same table on macOS and on Linux at full width, since a piped Linux `ps` cuts
+    each command line at 80 columns. A caller may pass its own `lister` for a test. An unreadable table names no holder: no evidence reaches a refusal, so the turn runs (ADR-0155)."""
     if lister is not None:
         return lister()
     try:
-        done = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
+        done = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True,
                               timeout=PS_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError):
         return []
