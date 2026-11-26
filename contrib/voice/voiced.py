@@ -166,6 +166,7 @@ class ClipTooLarge(Exception):
 FULL_FAILED = "Your message did not reach the project session."
 FULL_REASONS = {"deadline": "Your message stopped at the project session deadline.",
                 "spend_cap": "Your message stopped at the project session spend cap."}
+FULL_HELD = "The project session is open in a terminal, so this message did not run."
 
 
 def one_sentence(text):
@@ -1624,9 +1625,10 @@ class Daemon:
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
                  clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None, starter=None,
-                 full_cli="claude"):
+                 full_cli="claude", live_argvs=fullturn.live_claude_argvs):
         self.state = state
         self.full_cli = full_cli
+        self.live_argvs = live_argvs
         self.turns = []
         self.turn_order = fullturn.TurnOrder()
         self.full_guard = threading.Lock()
@@ -2574,23 +2576,28 @@ class Daemon:
         Every turn ends with one audit line and, where the channel takes answers, one post: a turn that raises is a
         failed turn, never a lost message (#2965 review)."""
         turn = fullturn.Turn(None, "", None, True)
+        held = False
         try:
             self.turn_order.wait(repo, ticket)
             try:
                 checkout = self.project_checkout(repo)
                 if checkout is not None:
-                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+                    session = fullturn.saved_sessions(self.state.directory).get(repo)
+                    held = fullturn.held_by_terminal(self.live_argvs(), session)
+                    if not held:
+                        turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
             finally:
                 self.turn_order.leave(repo)
         except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
-                                 **turn.audit()})
+                                 **{**turn.audit(), "reason": "terminal-holds-session" if held else turn.reason}})
         if not self.channel_accepts_answer(record.get("channel")):
             self.log(f"voiced: full turn in {record.get('channel')} kept: the channel is listen only")
             return
-        answer = FULL_REASONS.get(turn.reason, FULL_FAILED) if turn.failed else shared_redact.redact(turn.text)
+        answer = (FULL_HELD if held else
+                  FULL_REASONS.get(turn.reason, FULL_FAILED) if turn.failed else shared_redact.redact(turn.text))
         self.post_text(record.get("channel"), record.get("ts"), answer, persona=decision.persona)
 
     def policy_decision(self, event):
