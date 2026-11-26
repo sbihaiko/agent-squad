@@ -883,6 +883,13 @@ def service_of(state, key, record):
     return (record.get(key) or {}).get("service") or service_root(state, key)
 
 
+def service_held(held):
+    """The service root one record's session runs under: the root the record names, else the owner's shared root,
+    where the build that wrote no service started it (#2942). This build always names the project's own root, so a
+    record with no service is one the base build wrote."""
+    return held.get("service") or daemon_root()
+
+
 def root(state):
     """The folder the operator record keeps its profiles and refusals under."""
     return os.path.join(state, "operators")
@@ -892,9 +899,10 @@ def plan(state, units, sessions, record, stopped, now=None, ensure=False):
     """What one pass must do, as (starts, adopts, stops, clears, restarts), each a list of unit keys except `stops`
     and `restarts`, whose entries also name the session.
 
-    `sessions` is the live listing; `record` maps a project key to {"id", "pid", "name", "started", "missing", "adopt"}
-    plus a `stop` entry {"tries", "next"} while a stop is pending; `stopped` names the projects the owner stopped on
-    purpose. A `restarts` entry is (unit, session, why): the session is listed but took no turn (#2923).
+    `sessions` is the live listing; `record` maps a project key to {"id", "pid", "name", "started", "missing", "adopt",
+    "service"}, the last one naming the service root the session's process runs under, plus a `stop` entry
+    {"tries", "next"} while a stop is pending; `stopped` names the projects the owner stopped on purpose. A
+    `restarts` entry is (unit, session, why): the session is listed but took no turn (#2923).
     """
     now = time.time() if now is None else now
     live = {short_id(s["id"]): s for s in sessions}
@@ -937,13 +945,14 @@ def plan(state, units, sessions, record, stopped, now=None, ensure=False):
             why = stalled(state, unit, only, now)  # a listed session that took no turn is dead, not alive (#2923)
             if why:
                 restarts.append((unit, only, why))
-            record[key] = {**held, "missing": 0, "adopt": 0}
+            record[key] = {**held, "missing": 0, "adopt": 0, "service": service_held(held)}
             continue
         adopt = int(held.get("adopt") or 0) + 1
         record[key] = {**held, "adopt": adopt}
         if adopt >= ADOPT_PASSES:
             adopts.append((key, only))
             kept = {k: held[k] for k in ("profile", "proxy", "checkout", "channels", "name", "service") if k in held}
+            kept["service"] = service_held(held)
             record[key] = {**kept, "id": only["id"], "pid": only["pid"], "started": only["started"], "missing": 0,
                            "adopt": 0}
     for key in sorted(set(record) - set(wanted)):  # a project the registry dropped loses its session

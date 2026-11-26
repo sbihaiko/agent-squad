@@ -50,6 +50,7 @@ usage: operator_probe.py
 Exit 0: every denial held and the session started with the tool set. Exit 1: a denial did not hold, or the CLI failed.
 """
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -77,6 +78,7 @@ MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
+ACCEPT_DEADLINE = 5.0                  # seconds, the positive control's listener waits for the connect it proves
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
 OWN_READABLE = "PROBE-OWN-CHECKOUT-LINE"  # one line in the session's own checkout: the read denials must not swallow it
@@ -347,9 +349,14 @@ def config_denials(work, profile, cli, proxy_url=None, home=None):
 
 
 def file_stamp(path):
-    """One file's write time and size, or None when it does not exist: what a start must leave untouched (#2942)."""
+    """One file's content digest, write time and size, or None when it does not exist: what a start must leave
+    untouched (#2942). The digest is read too, because a rewrite that keeps the size at the same nanosecond still
+    changes the file's content."""
     path = Path(path)
-    return (path.stat().st_mtime_ns, path.stat().st_size) if path.is_file() else None
+    if not path.is_file():
+        return None
+    data = path.read_bytes()
+    return (hashlib.sha256(data).hexdigest(), path.stat().st_mtime_ns, path.stat().st_size)
 
 
 def denied(done):
@@ -361,19 +368,37 @@ def service_denial(work, profile, service):
     """Prove that the profile reaches one project's own background service and no other (#2943).
 
     A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. A
-    connect inside the project's own root is allowed, so there the kernel's "no such file" is the answer the probe
-    expects. Both paths name the socket by `operators.CONTROL_SOCKET`, the CLI's one name for it. The project's root is
-    required: without the positive control, a profile that refuses every service would pass. Returns the shared path
-    tried."""
+    connect inside the project's own root must land on that service, so the probe binds a real listener there and fails
+    unless the listener accepts the connect: a call the kernel merely lets run proves nothing. Both paths name the
+    socket by `operators.CONTROL_SOCKET`, the CLI's one name for it. The project's root is required: without the
+    positive control, a profile that refuses every service would pass. Returns the shared path tried."""
     shared = os.path.join(daemon_root(), operators.CONTROL_SOCKET)
     done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
     if not denied(done):
         raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
                           + (f": {done.stderr.strip()}" if done.returncode else ""))
     own = os.path.join(str(service), operators.CONTROL_SOCKET)
-    got = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, own], work, DENIAL_DEADLINE)
-    if DENIED in (got.stderr or ""):
-        raise ProbeFailed(f"the profile refuses the project's own service {own}: a --bg session cannot start there")
+    os.makedirs(str(service), exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(own)
+        listener.listen(1)
+        listener.settimeout(ACCEPT_DEADLINE)
+        got = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, own], work, DENIAL_DEADLINE)
+        if DENIED in (got.stderr or ""):
+            raise ProbeFailed(f"the profile refuses the project's own service {own}: a --bg session cannot start there")
+        try:
+            reached, _ = listener.accept()
+        except OSError:
+            raise ProbeFailed(f"the call never reached the project's own service {own}: a connect the kernel lets run "
+                              f"proves nothing unless the service it names accepts it") from None
+        reached.close()
+    finally:
+        listener.close()
+        try:
+            os.unlink(own)
+        except OSError:
+            pass
     return shared
 
 
