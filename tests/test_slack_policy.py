@@ -652,6 +652,14 @@ def test_a_full_decision_in_the_owner_project_channel_runs_the_full_session():
     assert decision.session == S.SESSION_FULL
 
 
+def test_a_legacy_owner_event_with_no_active_flag_runs_bounded():
+    """A caller that names no active flag proves no live revision, so the owner's session stays bounded."""
+    committed, local = full_files()
+    event = owner_event()
+    del event["active"]
+    assert S.decide(committed, local, event, NOW).session == S.SESSION_BOUNDED
+
+
 def test_a_full_decision_in_a_direct_message_runs_bounded():
     committed, local = full_files()
     assert S.decide(committed, local, owner_event(dm=True), NOW).session == S.SESSION_BOUNDED
