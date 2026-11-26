@@ -177,4 +177,5 @@ def test_extra_arguments_come_before_the_output_format(tmp_path):
     settings = tmp_path / "settings.json"
     command = fullturn.argv("claude", None, extra=("--settings", str(settings)))
     assert command[command.index("--settings") + 1] == str(settings)
-    assert command[-2:] == ["--output-format", "json"]
+    assert command.index("--settings") < command.index("--output-format")
+    assert command[command.index("--output-format") + 1] == "json"
