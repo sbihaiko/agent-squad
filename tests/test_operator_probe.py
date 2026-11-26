@@ -134,6 +134,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -530,6 +531,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -831,6 +833,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -991,6 +994,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -1659,7 +1663,101 @@ def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, mon
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)
     if hasattr(probe, "full_turn_phase"):
         monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)
+        monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
         monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
     assert Path(seen["audit"]) != Path(probe.denials_path(str(seen["work"] / "state"))), seen
+
+
+def test_the_probe_profile_grants_the_relay_folder_its_gate_policy_names(tmp_path, monkeypatch):
+    """#2994: a denied call of the gated `--bg` session goes to the permission relay (#2972), so the hook writes in the
+    relay folder its policy names. The probe's profile grants that one folder, and the folder exists before the
+    session starts, the way the supervisor prepares it."""
+    probe = load("operator_probe")
+    shape = probe.project_shape(tmp_path, [8016])
+    checkout, other_checkout, profile = shape[0], shape[5], shape[-1]
+    doc = json.loads(probe.gate_documents(tmp_path, checkout, other_checkout)[0].read_text())
+    relay = doc["relay"]["state"]
+    assert Path(relay).is_dir(), relay
+    assert f'(subpath "{os.path.realpath(relay)}")' in profile, "the profile grants no write on the relay folder"
+
+
+def test_the_probe_gate_ends_a_denied_call_inside_its_audit_wait(tmp_path):
+    """#2994: no owner answers the probe's relay, so its denied call ends by the relay's timeout. That timeout fits
+    inside the wait for the audit line, never the production wait of ten minutes."""
+    probe = load("operator_probe")
+    checkout, other = tmp_path / "checkout", tmp_path / "other"
+    checkout.mkdir()
+    other.mkdir()
+    doc = json.loads(probe.gate_documents(tmp_path, checkout, other)[0].read_text())
+    assert 0 < float(doc["relay"]["timeout"]) < probe.GATE_DEADLINE, doc["relay"]
+
+
+def test_a_turns_request_wait_skips_another_senders_open_requests(tmp_path):
+    """#2994: the sender-cap check leaves three open requests of its own sender in the relay. The next turn waits for
+    its own request, so a cap request queued first never answers for the turn."""
+    probe = load("operator_probe")
+    permrelay = load("permrelay")
+    relay = permrelay.Relay(tmp_path, owner="probe-owner", dm_channel="probe-dm", workspace="probe-workspace")
+    relay.request("probe-cap-sender", "Bash", {"command": "touch cap-0.txt"}, "/probe")
+    own = relay.request("probe-owner", "Bash", {"command": "touch denied.txt"}, str(tmp_path / "checkout"))
+    assert probe.wait_for_request(relay, 2.0, sender="probe-owner")["hash"] == own["hash"]
+
+
+HOLDER_STAND_IN = """#!{python}
+import json, sys
+argv = sys.argv[1:]
+if "--verbose" in argv:
+    sys.stdin.read()          # the live holder: it reads stdin until the probe ends it
+    sys.exit(1)
+stdin = sys.stdin.read()
+session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-holder-0001"
+print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
+"""
+
+EXEC_STAND_IN = """#!{python}
+import json, os, sys
+argv = sys.argv[1:]
+if "--verbose" in argv:
+    # a live process whose argv names neither the CLI nor the session: it is listed and never matches the holder
+    os.execv(sys.executable, [sys.executable, "-c", "import time; time.sleep(60)"])
+stdin = sys.stdin.read()
+session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-holder-0002"
+print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
+"""
+
+
+def holder_stand_in(tmp_path, body=HOLDER_STAND_IN, name="claude-holder-stand-in"):
+    path = tmp_path / name
+    path.write_text(body.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | 0o100)
+    return str(path)
+
+
+@pytest.mark.process_bound
+@pytest.mark.heavy
+def test_a_turn_is_refused_while_a_live_cli_holds_the_session(tmp_path):
+    """Criterion (4): the probe proves the refusal through the real process table, and the turn runs after the
+    holder ends."""
+    probe = load("operator_probe")
+    probe.holder_phase(tmp_path, holder_stand_in(tmp_path))
+
+
+@pytest.mark.process_bound
+def test_a_live_process_that_never_holds_the_session_fails_the_probe(tmp_path):
+    probe = load("operator_probe")
+    with pytest.raises(probe.ProbeFailed, match="never appeared in the process table"):
+        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXEC_STAND_IN, "claude-exec-stand-in"), wait=1.0)
+
+
+def test_the_holder_wait_ends_at_once_when_the_reading_agrees():
+    probe = load("operator_probe")
+    assert probe.wait_for_holder("sess", present=True, wait=5.0, holder=lambda session: 4321) is True
+    assert probe.wait_for_holder("sess", present=False, wait=5.0, holder=lambda session: None) is True
+
+
+def test_the_holder_wait_gives_up_at_its_deadline():
+    probe = load("operator_probe")
+    assert probe.wait_for_holder("sess", present=False, wait=0.2, holder=lambda session: 4321) is False
+    assert probe.wait_for_holder("sess", present=True, wait=0.2, holder=lambda session: None) is False

@@ -16,6 +16,8 @@ TURN_SECONDS = 30 * 60
 MAX_BUDGET_USD = 5
 SESSIONS_FILE = "full-sessions.json"
 LOCK_FILE = "full-sessions.lock"
+SESSION_FLAGS = ("--resume", "--session-id", "-r")   # the CLI options that name the session a process opens
+PS_TIMEOUT_SECONDS = 10
 OPERATOR_OVERRIDES = ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR")
 
 
@@ -117,6 +119,67 @@ def argv(claude, session, relay=None, extra=()):
     return command + list(extra) + ["--output-format", "json", "--max-budget-usd", str(MAX_BUDGET_USD)]
 
 
+def process_rows(lister=None):
+    """Every `(pid, argv)` the machine lists now, or none when the table cannot be read.
+
+    `ps -axo pid=,command=` reads the same table on macOS and on Linux, and a caller may pass its own `lister` for a
+    test. An unreadable table names no holder: no evidence reaches a refusal, so the turn runs (ADR-0155)."""
+    if lister is not None:
+        return lister()
+    try:
+        done = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                              timeout=PS_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if done.returncode != 0:
+        return []
+    rows = []
+    for line in done.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if pid.isdigit():
+            rows.append((int(pid), command.split()))
+    return rows
+
+
+def names_session(argv, session):
+    """True when one command line resumes or names `session`: `--resume <id>`, `--resume=<id>` and the same for the
+    other session options."""
+    for index, arg in enumerate(argv):
+        for flag in SESSION_FLAGS:
+            if arg == flag and index + 1 < len(argv) and argv[index + 1] == session:
+                return True
+            if arg == f"{flag}={session}":
+                return True
+    return False
+
+
+def is_claude(argv):
+    """True when the first two arguments of a command line name the CLI by path or by program name.
+
+    The native binary ends in `claude`, a versioned install sits under a `claude` folder, and a script install runs
+    through an interpreter ahead of a path that names the CLI, so the first two tokens cover every shape."""
+    for token in argv[:2]:
+        if any(part.startswith("claude") for part in os.path.normpath(token).split(os.sep)):
+            return True
+    return False
+
+
+def holder_of(rows, session):
+    """The pid of the live CLI that holds `session`, or None: the one writer that would split the conversation."""
+    if not session:
+        return None
+    for pid, argv in rows:
+        if is_claude(argv) and names_session(argv, session):
+            return pid
+    return None
+
+
+def session_holder(session, lister=None):
+    """The process that holds the project's `session` now, or None. The daemon reads this before a turn, so two
+    writers never split one conversation (#2969)."""
+    return holder_of(process_rows(lister), session)
+
+
 def result_row(stdout):
     for line in reversed((stdout or "").splitlines()):
         try:
@@ -172,12 +235,16 @@ def end_tree(proc):
 
 
 def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS, registry=None,
-             user=None, relay=None, extra=()):
+             user=None, relay=None, extra=(), holder=None):
     """Run one turn and answer its outcome. A `registry` holds the turn while its process runs, so a `!stop` from
     another thread ends it, and the turn reports itself stopped rather than failed by its own end (#2968). `user` is
     the requester who started the turn, so the registry ends it for that identity alone (#2968 review). `relay` names
-    the permission relay's MCP config and prompt tool, so each permission request reaches the owner's DM (SPEC 2964)."""
+    the permission relay's MCP config and prompt tool, so each permission request reaches the owner's DM (SPEC 2964).
+    `holder` answers the pid that holds the session now, or None, and a live holder refuses the turn before the CLI
+    starts, so two writers never split one conversation (#2969)."""
     session = saved_sessions(state_dir).get(repo)
+    if session and (holder or session_holder)(session):
+        return Turn(session, "", None, True, "session_held")
     try:   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
         proc = subprocess.Popen(argv(claude, session, relay, extra), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, cwd=checkout,

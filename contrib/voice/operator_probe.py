@@ -87,6 +87,7 @@ from operators import (  # noqa: E402
     gate_settings,
     marked_name,
     profile_text,
+    relay_path,
     service_env,
     service_root,
 )
@@ -100,6 +101,8 @@ MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 FULL_REPO = "probe/full-turn"          # the project name a full turn keeps its session under
+HOLDER_REPO = "probe/holder-turn"      # the project name the session-hold phase keeps its session under
+HOLDER_WAIT = 30.0                     # seconds the live holder's way into the process table and out of it
 PERMISSION_REPO = "probe/permission-turn"
 PERMISSION_OWNER = "probe-owner"
 PERMISSION_DM = "probe-dm"
@@ -136,6 +139,7 @@ PROBE_CHANNEL = "CPROBE01"
 GATE_TAMPER = "PROBE-AMBIENT-TAMPER-WON"
 GATE_DENIED = "echo PROBE-GATE-DENIED"   # one command the gate refuses in the `--bg` session, so its audit line proves it
 GATE_DEADLINE = 30.0                     # seconds the probe waits for the `--bg` session's audit line
+GATE_RELAY_WAIT = 5.0                    # seconds the probe's relay waits for an owner that never answers (#2994)
 # The background-service phase (#2768): a `--bg` session runs under the same profile, so a service the sandbox refuses
 # fails the probe rather than a live operator.
 BG_PROMPT = "Reply with the single word ok. Use no tool."
@@ -492,6 +496,9 @@ def gate_documents(work, checkout, other_checkout):
     calls the same two writers, so the document and the settings it hands the CLI are the ones a live start hands it."""
     unit = {"key": PROBE_KEY, "repo": "", "checkout": str(checkout), "channels": list(PROBE_CHANNELS)}
     doc = gate_policy(str(work / "state"), unit, str(checkout), [str(other_checkout)])
+    # No owner answers the probe's relay, so a denied call ends by the relay's timeout: a probe-sized wait, inside the
+    # wait for the audit line, never the production ten minutes (#2994).
+    doc["relay"]["timeout"] = GATE_RELAY_WAIT
     folder = work / "gate"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "policy.json"
@@ -898,8 +905,9 @@ def project_shape(work, ports):
     leak = work / "elsewhere" / "leak.txt"
     service = Path(service_root(str(work / "state"), PROBE_KEY))
     audit = Path(denials_path(str(work / "state")))
+    relay = Path(relay_path(str(work / "state")))   # the hook writes a denied call's request here (#2972, #2994)
     for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent, service,
-                   audit.parent):
+                   audit.parent, relay):
         folder.mkdir(parents=True, exist_ok=True)
     # The gate appends to one file, so the folder and the file exist before the session starts: a mkdir inside the
     # session is a write the profile refuses, and an append to the file is the one write it allows (#2950).
@@ -914,7 +922,7 @@ def project_shape(work, ports):
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
                            checkout=str(checkout), others=[str(other_checkout)], ports=ports,
-                           config=str(config_root()), service=str(service), audit=str(audit))
+                           config=str(config_root()), service=str(service), audit=str(audit), relay=str(relay))
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
@@ -938,18 +946,64 @@ def full_turn_phase(work, cli):
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
 
 
-def wait_for_request(relay, deadline):
-    """The first open request of the relay, posted or not, whose request audit line exists.
+def wait_for_holder(session, present, wait, holder=None):
+    """Wait until the process table lists the session's holder, or no longer lists it, and answer whether it did.
+
+    `holder` answers the pid that holds the session now, so a test reads its own rows. None reads the real table."""
+    reading = holder or fullturn.session_holder
+    stop = time.monotonic() + wait
+    while (reading(session) is not None) != present:
+        if time.monotonic() > stop:
+            return False
+        time.sleep(0.2)
+    return True
+
+
+def holder_phase(work, cli, wait=HOLDER_WAIT):
+    """A turn is refused while a live CLI process holds the session, and runs once that holder ends (#2969).
+
+    The holder is the CLI itself: `claude -p --resume <session> --verbose` with an open stdin waits for its prompt,
+    exactly as a terminal does, and `--verbose` tells it from a turn. The probe reads the real process table, so the
+    refusal comes from the same reading the daemon uses."""
+    checkout = work / "holder-checkout"
+    state = work / "holder-state"
+    shutil.rmtree(state, ignore_errors=True)
+    checkout.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    first = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+    if first.failed or not first.session:
+        raise ProbeFailed(f"the session-hold phase's first turn did not answer (exit {first.exit})")
+    holder = subprocess.Popen([cli, "-p", "--resume", first.session, "--verbose"], cwd=str(checkout),
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              text=True, start_new_session=True)
+    try:
+        if not wait_for_holder(first.session, present=True, wait=wait):
+            raise ProbeFailed("the live CLI holder never appeared in the process table as the session's holder")
+        refused = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+        if not refused.failed or refused.reason != "session_held":
+            raise ProbeFailed("a turn ran while a live CLI held its session")
+    finally:
+        fullturn.end_tree(holder)
+    if not wait_for_holder(first.session, present=False, wait=wait):
+        raise ProbeFailed("the live CLI holder was still listed after it ended")
+    after = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+    if after.failed or after.session != first.session:
+        raise ProbeFailed(f"the turn after the holder closed did not run (exit {after.exit})")
+
+
+def wait_for_request(relay, deadline, sender=PERMISSION_OWNER):
+    """The first open request of `sender` in the relay, posted or not, whose request audit line exists.
 
     The poll reads both `unsent()` and the open rows, so a request an earlier pass already marked sent is still found
-    (#2970 review)."""
+    (#2970 review). The sender filter keeps the sender-cap check's open requests out of the next turn's wait (#2994)."""
     stop = time.monotonic() + deadline
     while time.monotonic() < stop:
-        queued = relay.unsent()
+        queued = [row for row in relay.unsent() if row.get("sender") == sender]
         if queued:
             return queued[0]
         named = {row.get("hash") for row in audit_rows_in(relay.directory) if row.get("event") == "request"}
-        posted = [row for row in relay.open_requests() if row.get("sent") and row["hash"] in named]
+        posted = [row for row in relay.open_requests()
+                  if row.get("sent") and row["hash"] in named and row.get("sender") == sender]
         if posted:
             return posted[0]
         time.sleep(0.5)
@@ -1058,6 +1112,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli)
         full_turn_phase(work, cli)
+        holder_phase(work, cli)
         permission_phase(work, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
@@ -1077,6 +1132,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli, proxy.url)
     full_turn_phase(work, cli)
+    holder_phase(work, cli)
     permission_phase(work, cli)
     return len(proxy.refusals)
 
@@ -1107,6 +1163,7 @@ def main(argv=None):
           f"({HELPER.name}) and no other channel's outbox took a line, under the tool gate and an ambient hook whose "
           f"rewrite reached no tool; "
           f"a full turn outside the sandbox resumed its session and returned the word it took on stdin; "
+          f"a live CLI process holding the session refused the turn and the turn ran after it ended; "
           f"a --bg session started and was listed as {marked_name(PROBE_KEY)}, and the gate refused its one command "
           f"with one audit line; "
           f"guest poller denial held (write tool); "

@@ -275,3 +275,49 @@ def test_turns_of_one_project_run_in_the_order_they_arrived():
     for thread in threads:
         thread.join(10)
     assert ran == tickets, ran
+
+
+def test_a_live_claude_process_resuming_the_session_is_its_holder():
+    """Criterion (1): the holder is a live `claude` whose arguments resume or name the project's session id."""
+    rows = [(10, ["/usr/local/bin/claude", "--resume", "sess-held"]),
+            (11, ["/usr/local/bin/node", "/opt/claude-code/cli.js", "--resume", "sess-held"]),
+            (12, ["/usr/local/bin/claude", "--resume", "sess-other"]),
+            (13, ["/usr/local/bin/claude", "-p"])]
+    assert fullturn().holder_of(rows, "sess-held") == 10
+
+
+def test_a_session_argument_of_another_program_is_no_holder():
+    """Only the CLI writes a conversation: another program that carries the same words holds no session."""
+    rows = [(20, ["/usr/bin/git", "--resume", "sess-held"]), (21, ["/bin/ps"])]
+    assert fullturn().holder_of(rows, "sess-held") is None
+
+
+def test_the_session_holder_reads_the_process_table_and_no_session_names_no_holder():
+    """Criterion (1): `session_holder` finds the holder through the machine's process table; an empty session names
+    no holder."""
+    mod = fullturn()
+    rows = [(os.getpid(), ["/usr/local/bin/claude", "--resume", "sess-x"])]
+    assert mod.session_holder("sess-x", lister=lambda: rows) == os.getpid()
+    assert mod.session_holder("", lister=lambda: rows) is None
+
+
+def test_a_turn_is_refused_while_a_live_process_holds_the_session(stand_in):
+    """Criterion (2): with a live holder, `run_turn` starts no CLI and names the refusal."""
+    mod = fullturn()
+    turn(mod, stand_in, "first")
+    asked = []
+    later = mod.run_turn(stand_in["claude"], stand_in["checkout"], stand_in["state"], REPO, "second",
+                         holder=lambda session: asked.append(session) or 4321)
+    assert asked == [FIRST_SESSION], asked
+    assert later.failed is True and later.reason == "session_held", later
+    assert len(calls(stand_in)) == 1, calls(stand_in)
+
+
+def test_a_turn_runs_once_the_holder_is_gone(stand_in):
+    """Criterion (3): with no holder, the turn runs and resumes the session."""
+    mod = fullturn()
+    turn(mod, stand_in, "first")
+    later = mod.run_turn(stand_in["claude"], stand_in["checkout"], stand_in["state"], REPO, "second",
+                         holder=lambda session: None)
+    assert later.failed is False and later.session == FIRST_SESSION, later
+    assert len(calls(stand_in)) == 2, calls(stand_in)
