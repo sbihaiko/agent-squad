@@ -2506,6 +2506,25 @@ def gated(mod, idle):
     g = Gate(idle=idle); g.done = False; return g
 
 
+class PagePoll(threading.Thread):
+    """An open page, kept apart from the wait that observes the reads: it touches the gate every 20 ms until it is ended.
+    One touch then a wait makes the idle window the whole proof, and a runner that delays one tick past that bare window
+    parks the reader and reddens a case that holds (#2013). A page in the product reads again every few seconds, and this
+    thread reads the same way, so the first touch is still the read that wakes a parked reader."""
+    def __init__(self, gate):
+        super().__init__(daemon=True, name="page-poll")
+        self.gate = gate
+        self.stop = False
+    def run(self):
+        while not self.stop:
+            self.gate.touch()
+            time.sleep(0.02)
+    def end(self):
+        self.stop = True
+        if self.ident is not None:
+            self.join(2)
+
+
 def drive(fn):
     try:
         fn()
@@ -2530,18 +2549,21 @@ def test_a_background_read_does_no_work_while_no_page_reads_the_profile(hub, mon
     monkeypatch.setattr(mod, "LOAD_SAMPLE_SECS", 0.02)
     gate = gated(mod, 0.15)
     monkeypatch.setattr(mod, "READ_GATE", gate)
+    page = PagePoll(gate)
     t = threading.Thread(target=drive, args=(mod.load_sampler,), daemon=True)
     t.start()
     try:
         time.sleep(0.3)
         assert ticks == [], f"{len(ticks)} reads with no page reading the profile"
-        gate.touch()
-        wait(lambda: len(ticks) >= 2)
+        page.start()
+        wait(lambda: len(ticks) >= 2)                        # a page read makes the sampler read at once
+        page.end()
         time.sleep(0.4)                                      # the page stops reading: the idle window passes
         parked = len(ticks)
         time.sleep(0.2)
         assert len(ticks) == parked, "the load sampler went on reading after the page stopped"
     finally:
+        page.end()
         gate.done = True; gate.touch(); t.join(2)
     assert not t.is_alive()
 
@@ -2579,19 +2601,22 @@ def test_a_short_read_resumes_beside_a_long_one_after_an_idle_gap(hub, monkeypat
     monkeypatch.setattr(mod, "HISTORY_EVERY", 600)
     gate = gated(mod, 0.15)
     monkeypatch.setattr(mod, "READ_GATE", gate)
+    page = PagePoll(gate)
     a = threading.Thread(target=drive, args=(mod.load_sampler,), daemon=True)
     b = threading.Thread(target=drive, args=(mod.refresh_history,), daemon=True)
     a.start(); b.start()
     try:
-        gate.touch()
+        page.start()
         wait(lambda: len(ticks) >= 2 and passes)             # both read while a page reads
+        page.end()
         time.sleep(0.4)                                      # the page goes away
         parked = len(ticks)
         time.sleep(0.2)
         assert len(ticks) == parked, "the short read went on with no page"
-        gate.touch()
-        wait(lambda: len(ticks) > parked + 1 and len(passes) >= 2)   # and both come back on the next read
+        page = PagePoll(gate); page.start()                  # the page comes back after the idle gap
+        wait(lambda: len(ticks) > parked + 1 and len(passes) >= 2)   # and both read again on the next read
     finally:
+        page.end()
         gate.done = True; gate.touch(); a.join(2); b.join(2)
     assert not a.is_alive() and not b.is_alive()
 
@@ -2671,18 +2696,21 @@ def test_the_push_stream_subject_does_no_work_while_no_page_reads_the_profile(hu
     monkeypatch.setattr(threading, "excepthook", lambda _: None)   # the stop below ends the thread by an exception
     gate = gated(mod, 0.15)
     monkeypatch.setattr(mod, "READ_GATE", gate)
+    page = PagePoll(gate)
     t = mod._ticker("probe")
     try:
         wait(lambda: t.is_alive())
         time.sleep(0.2)
         assert reads == [], f"{len(reads)} reads with no page reading the profile"
-        gate.touch()
+        page.start()
         wait(lambda: len(reads) >= 2)                        # a page read puts the subject back to work at once
+        page.end()
         time.sleep(0.4)                                      # the page stops reading: the idle window passes
         parked = len(reads)
         time.sleep(0.2)
         assert len(reads) == parked, "the subject went on reading after the page stopped"
     finally:
+        page.end()
         gate.done = True; gate.touch(); Versions.stop = True
         wait(lambda: not t.is_alive(), 2)
     assert not t.is_alive()

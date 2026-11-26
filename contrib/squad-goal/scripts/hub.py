@@ -53,6 +53,7 @@ _THEMES = (
     "hub_theme_settings_models",
     "hub_theme_settings_board",
     "hub_theme_settings_access",
+    "hub_theme_settings_personas",
 )
 
 def _load_theme(name):
@@ -246,6 +247,7 @@ class H(BaseHTTPRequestHandler):
             ww = re.search(r"[?&]ww=(\d{1,9})\b", self.path)
             body, ct = json.dumps(profiler_served(a, q[1] if q else None, sw[1] if sw else None, ww[1] if ww else None)).encode(), "application/json"
         elif self.path.split("?", 1)[0] == "/api/access": body, ct = json.dumps(access_view(a)).encode(), "application/json"   # Settings > Access (#1285)
+        elif self.path.split("?", 1)[0] == "/api/personas": body, ct = json.dumps(personas_overview()).encode(), "application/json"   # Settings > Personas (#3010)
         elif self.path.split("?", 1)[0] in ("/mobile", "/mobile/"): body, ct = mobile_html(), "text/html; charset=utf-8"
         elif self.path.split("?", 1)[0] == "/mobile/sw.js": body, ct = mobile_sw(), "text/javascript; charset=utf-8"
         elif (asset := MOBILE_ASSETS.get(self.path.split("?", 1)[0])): body, ct = asset

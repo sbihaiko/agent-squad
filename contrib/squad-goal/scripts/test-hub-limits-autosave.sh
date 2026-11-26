@@ -9,7 +9,7 @@
 # column moves with the clock, and the one check mark shows only on the field the last write saved.
 # The theme's own sources are sliced out of the hub by marker and run in node with a stub DOM: no browser, no server.
 # When node is not on PATH the run says so and exits non-zero, so a missing tool never reads as a pass. usage: bash test-hub-limits-autosave.sh [path/to/hub.py]
-# mirrors: hub.py hub_theme_core.py hub_theme_settings_limits.py hub_theme_settings_communication.py hub_theme_now.py hub_theme_settings_loop.py hub_theme_profiler.py hub_theme_trip.py hub_theme_runs.py hub_theme_stats.py hub_theme_board.py hub_theme_prs.py hub_theme_flow.py hub_theme_board_build.py hub_theme_promote.py hub_theme_page.py hub_theme_settings_subscriptions.py hub_theme_settings_models.py hub_theme_settings_board.py hub_theme_settings_access.py
+# mirrors: hub.py hub_theme_core.py hub_theme_settings_limits.py hub_theme_settings_communication.py hub_theme_now.py hub_theme_settings_loop.py hub_theme_profiler.py hub_theme_trip.py hub_theme_runs.py hub_theme_stats.py hub_theme_board.py hub_theme_prs.py hub_theme_flow.py hub_theme_board_build.py hub_theme_promote.py hub_theme_page.py hub_theme_settings_subscriptions.py hub_theme_settings_models.py hub_theme_settings_board.py hub_theme_settings_access.py hub_theme_settings_personas.py
 d=$(cd "$(dirname "$0")" && pwd); hub=${1:-$d/hub.py}
 if ! command -v node >/dev/null 2>&1; then echo "node not on PATH: the limits save rules are not proved here"; exit 1; fi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0

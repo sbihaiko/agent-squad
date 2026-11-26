@@ -19,7 +19,7 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HUB_PY = os.path.join(ROOT, "contrib", "squad-goal", "scripts", "hub.py")
-THEMES = ["lim", "sub", "mdl", "slk", "acc"]   # the Board theme left for Spend & limits (#2432); the Loop theme left for the Loop tab (#2515)
+THEMES = ["lim", "sub", "mdl", "slk", "prs", "acc"]   # the Board theme left for Spend & limits (#2432); the Loop theme left for the Loop tab (#2515); Personas sits beside Slack (#3010)
 
 
 @pytest.fixture(scope="module")
@@ -312,7 +312,7 @@ def test_the_themes_keep_one_order_in_the_nav_the_phone_select_and_the_panels(hu
     assert re.findall(r"value=(\w+)", sel) == THEMES, "the phone select does not follow the nav order"
     assert re.findall(r"<details id=(\w+) class=sp", view) == THEMES, "the panels do not follow the nav order"
     assert [t.replace("&amp;", "&") for t in re.findall(r"<button data-sp=\w+>(.*?)<small", nav)] == \
-           ["Spend & limits", "Subscriptions", "Models & chains", "Slack", "Access"]
+           ["Spend & limits", "Subscriptions", "Models & chains", "Slack", "Personas", "Access"]
 
 
 def test_each_nav_line_equals_its_theme_summary_chip_and_one_writer_sets_both(hub):

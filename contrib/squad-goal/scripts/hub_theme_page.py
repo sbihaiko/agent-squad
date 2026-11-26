@@ -583,6 +583,15 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #sbody .slnw{white-space:nowrap}   /* a button label such as Edit never breaks across two lines */
 @media (max-width:1100px){#sbody .slt2,#sbody .slt2 tbody,#sbody .slt2 tr{display:block}#sbody .slt2 thead{display:none}#sbody .slt2 tr{padding:4px 0;border-bottom:1px solid var(--line)}#sbody .slt2 td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#sbody .slt2 td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#sbody .slt2 .nw{white-space:normal}}   /* a panel too narrow for the table stacks each cell under its own label, so no column is clipped */
 @media (max-width:600px){.slc{grid-template-columns:1fr}.slc.slh{display:none}.slc [data-l]:not(.swc)::before{content:attr(data-l) ": ";color:var(--mute)}.slc .swt{min-height:44px}}
+#tab-set #prbody .prgrp{margin:0 0 16px}#tab-set #prbody .prgrp h4{margin:0 0 6px;font-size:var(--fs-body);color:var(--fg)}
+#tab-set #prbody .ptab{width:100%;border-collapse:collapse;font-size:var(--fs-caption)}
+#tab-set #prbody .ptab th{text-align:left;color:var(--mute);font-weight:600;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
+#tab-set #prbody .ptab td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);color:var(--fg);vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:none}   /* a long file name breaks between words alone, so no word is cut and no letter is hyphenated */
+#tab-set #prbody .ptab .nw{white-space:nowrap}#tab-set #prbody .ptab .pv{min-width:0}
+#tab-set #prbody .prfile{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-weight:400}   /* the file reads as a chip, as the Slack theme draws it, so the reader tells a name from the file it lives in */
+#tab-set #prbody .pflag{display:inline-block;margin:0 4px 2px 0;padding:0 7px;border-radius:var(--radius-lg);border:1px solid var(--line);color:var(--mute);font-size:var(--fs-caption);font-weight:600}
+#tab-set #prbody .pflag.err{border-color:var(--tint-err-line);background:var(--tint-err);color:var(--err)}
+@media (max-width:600px){#tab-set #prbody .ptab,#tab-set #prbody .ptab tbody,#tab-set #prbody .ptab tr{display:block}#tab-set #prbody .ptab thead{display:none}#tab-set #prbody .ptab tr{padding:6px 0;border-bottom:1px solid var(--line)}#tab-set #prbody .ptab td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#tab-set #prbody .ptab td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#tab-set #prbody .ptab .nw{white-space:normal}}   /* a phone stacks each field under its own label, so no column is clipped and no word is cut (#3010) */
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
    screen the 300 px sidebar and the board column are what a reader has to scroll sideways to reach. */
@@ -858,12 +867,13 @@ html.sbshut #sbtn svg{transform:scaleX(-1)}
 <dialog id=ldg aria-label="Stop the loop"><form method=dialog id=ldgb></form></dialog>
 <section id=tab-set class=pane aria-label=Settings><h2>Settings</h2>
 <p class=ro id=ro hidden></p>
-<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Slack<small id=slknav>not connected</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
-<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Slack</option><option value=acc>Access</option></select></label>
+<div class=swrap><nav class=snav aria-label="Settings themes"><button data-sp=lim>Spend &amp; limits<small id=limnav></small></button><button data-sp=sub>Subscriptions<small id=subnav>no plan chosen</small></button><button data-sp=mdl>Models &amp; chains<small id=mdlnav>no models</small></button><button data-sp=slk>Slack<small id=slknav>not connected</small></button><button data-sp=prs>Personas<small id=prsnav>&#8212;</small></button><button data-sp=acc>Access<small id=accnav>&#8212;</small></button></nav>
+<div class=spanels><label class=ssel>Theme <select id=ssel aria-label="Settings theme"><option value=lim>Spend &amp; limits</option><option value=sub>Subscriptions</option><option value=mdl>Models &amp; chains</option><option value=slk>Slack</option><option value=prs>Personas</option><option value=acc>Access</option></select></label>
 <details id=lim class=sp data-sp=lim open><summary>Spend &amp; limits<span class=sr id=limsr></span></summary><div class=sb id=lbody></div></details>
 <details id=sub class=sp data-sp=sub><summary>Subscriptions<span class=sr id=subsr>no plan chosen</span></summary><div class=sb><div id=subnow></div><div id=subs></div></div></details>
 <details id=mdl class=sp data-sp=mdl><summary>Models &amp; chains<span class=sr id=mdlsr>no models</span></summary><div class=sb id=mbody></div></details>
 <details id=slk class=sp data-sp=slk><summary>Slack<span class=sr id=slksr>not connected</span></summary><div class=sb id=sbody></div></details>
+<details id=prs class=sp data-sp=prs><summary>Personas<span class=sr id=prssr>&#8212;</span></summary><div class=sb id=prbody></div></details>
 <details id=acc class=sp data-sp=acc><summary>Access<span class=sr id=accsr>&#8212;</span></summary><div class=sb><div id=accb></div><div class=sdev><h4>This device</h4><a id=mobile-link href="#">mobile view</a><p class=note>The phone check runs <code>/agent-squad:start-mobile</code> on this machine.</p></div><script>document.getElementById("mobile-link").href=location.pathname.replace(/\/?$/,"/")+"mobile";document.getElementById("mobile-link").onclick=()=>localStorage.removeItem("squad-view")</script></div></details>
 </div></div>
 <div class=sbar id=sbar><button id=ssave>Save…</button><button id=sdisc>Discard changes</button><span id=schg>No change</span><button id=sundo hidden>Undo</button><button id=sretry hidden>Retry</button></div>
@@ -2136,10 +2146,34 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
  else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
  });
+/* Settings > Personas (SPEC 3009, #3010): the personas of every roster project, grouped by client and merged by id
+   inside a client. The view constructs, binds and delegates: the hub merges the rows and answers them at /api/personas,
+   and the view holds no rule (ADR-0137). Nothing here is editable. */
+// PRS{
+let prS=null,prMsg="";
+async function prLoad(){try{prS=await (await fetch("/api/personas")).json();prMsg=prS.err?"!"+prS.err:""}catch(e){prMsg="!load failed"}prRender()}
+const prTxt=t=>esc(t==null?"":String(t));
+const prPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
+function prRow(r){
+ const cell=(label,body)=>`<td data-l="${label}"><span class=pv>${body}</span></td>`;   // one item for the value: a bare text node would take the label's own grid cell
+ const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks after a dot, never inside a word
+ const projects=(r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;";
+ const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
+ return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
+ +cell("Voice",`<span class=nw>${prTxt(r.voice)||"&mdash;"}</span>`)+cell("Tone",prTxt(r.tone)||"&mdash;")
+ +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)+"</tr>"}
+function prRender(){const el=$("#prbody");if(!el)return;
+ const groups=((prS||{}).groups||[]).filter(g=>(g.rows||[]).length),rows=groups.reduce((n,g)=>n+g.rows.length,0);
+ const txt=rows?`${prPlural(rows,"persona")} · ${prPlural(groups.length,"client")}`:"no persona";
+ for(const sel of ["#prsnav","#prssr"]){const el=$(sel);if(el)el.textContent=txt}   // the nav line and the panel's own chip read one text
+ const ban=prMsg?`<p class="mx err" role=status>${prTxt(prMsg.replace(/^!/,""))}</p>`:"";
+ el.innerHTML=ban+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th></tr></thead><tbody>${g.rows.map(prRow).join("")}</tbody></table></section>`).join("")
+  :`<p class=m>${prTxt("No persona: no roster project declares one.")}</p>`)}
+// }PRS
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
    writes each field on its own and keeps no button (#2433). Access has no Save: the bar says so. */
-const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Slack",acc:"Access"};
+const STH={lim:"Spend & limits",sub:"Subscriptions",mdl:"Models & chains",slk:"Slack",prs:"Personas",acc:"Access"};
 const SET_FIRST="lim";   // the first theme left: a saved Loop link and a stored Loop theme open it (#2515)
 const SET_SAVE=["mdl","slk","sub"];   // the themes the one Save writes; Access and Spend & limits stage no file here
 let sTheme=STH[ls.sth]?ls.sth:SET_FIRST,sPend=null;   // a removed theme opens the first one left (#2515)
@@ -2161,7 +2195,8 @@ function setTheme(sp){if(!STH[sp])sp=SET_FIRST;sTheme=sp;ls.sth=sp;save();
  document.querySelectorAll("#tab-set details.sp").forEach(e=>{const on=e.dataset.sp===sp;e.classList.toggle("on",on);
   if(on&&!e.open)e.open=true;else if(!on&&e.open)e.open=false});   // one theme shows at a time (#1278)
  document.querySelectorAll(".snav button").forEach(b=>b.classList.toggle("on",b.dataset.sp===sp));$("#ssel").value=sp;setBar();
- if(sp==="lim"){limTickStart();kanTickStart()}else{limTickStop();kanTickStop()}}   // the age tickers run only while the loaded theme is on screen (#2433)
+ if(sp==="lim"){limTickStart();kanTickStart()}else{limTickStop();kanTickStop()}   // the age tickers run only while the loaded theme is on screen (#2433)
+ if(sp==="prs")prLoad()}
 $(".snav").addEventListener("click",e=>{const b=e.target.closest("button[data-sp]");if(b)setTheme(b.dataset.sp)});
 $("#ssel").addEventListener("change",e=>setTheme(e.target.value));
 document.addEventListener("click",e=>{const a=e.target.closest&&e.target.closest("a[data-sp]");if(!a)return;
@@ -2942,7 +2977,7 @@ setInterval(pollIfVisible(squadChartTick),5000);
 // Last ended: the runs that ended today, read from the hub (#889)
 async function endedPoll(){try{const rows=await (await fetch("/api/ended")).json();ENDED=rows;drawMain();rows.slice(0,5).map(r=>`<div class=r data-rid="${esc(r.id)}" tabindex=0 role=button><div><span class="b ${r.state}">${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b><div class=m>${usd(r.spend)} \u00b7 last write ${age(r.age)} ago</div></div></div>`).join("")||"<div class=m>no run ended today</div>"}catch(e){}}
 endedPoll();setInterval(pollIfVisible(endedPoll),30000);
-const themeHash=(location.hash.match(/^#set-(lim|sub|mdl|slk|acc)$/)||[])[1]||(location.hash==="#set-lop"?SET_FIRST:null);if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286); an old Loop link opens the first theme left (#2515)
+const themeHash=(location.hash.match(/^#set-(lim|sub|mdl|slk|prs|acc)$/)||[])[1]||(location.hash==="#set-lop"?SET_FIRST:null);if(themeHash)sTheme=themeHash;   // the phone's Settings link names the theme (#1286); an old Loop link opens the first theme left (#2515)
 setTab(tabFromLocation()||(TABS[ls.tab]?ls.tab:"board"));   // the phone menu links here with #set (#913); a hash picks its tab (#1274)
 // The open page follows the hub build that served it (#1114)
 const SERVED_BUILD=__BUILD__;let hubNote=null;
