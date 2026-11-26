@@ -76,5 +76,25 @@ echo "$o" | /usr/bin/grep -q "5 dashboards of this loop over the ceiling of 3" &
 pass 3 "" >/dev/null
 died "$pw1" && ok "E: the oldest worktree run's dashboard goes down to the ceiling" || ko "E: pid $pw1 (worktree run) survived"
 alive "$p_live" && ok "E: the live run's dashboard survives" || ko "E: the live run's dashboard was killed"
+# (F) #3004: rule B, the one-hour bound. A run whose verdict is over an hour old left active-runs.txt at 300 s, so the per-run
+# pass never read it at 3600 s; the bound reads every dashboard of this loop instead, under the ceiling and with it turned off.
+for n in old young open; do mkdir -p "$T/co/runs/run-$n"; printf 'CHILD — GitHub issue(s) 710 (bug)\n' > "$T/co/runs/run-$n/request.txt"; done
+printf '{"event": "verdict", "verdict": "pass", "reasons": []}\n' > "$T/co/runs/run-old/record.jsonl"; touch -t 202001010000 "$T/co/runs/run-old/record.jsonl"
+printf '{"event": "verdict", "verdict": "pass", "reasons": []}\n' > "$T/co/runs/run-young/record.jsonl"; touch -t "$(date -v-10M +%Y%m%d%H%M)" "$T/co/runs/run-young/record.jsonl"
+printf '{"event": "run_start", "run_id": "run-open", "ts": 1}\n' > "$T/co/runs/run-open/record.jsonl"; touch -t 202001010000 "$T/co/runs/run-open/record.jsonl"
+mkdir -p "$T/elsewhere/runs/run-x"; printf '{"event": "verdict", "verdict": "pass", "reasons": []}\n' > "$T/elsewhere/runs/run-x/record.jsonl"; touch -t 202001010000 "$T/elsewhere/runs/run-x/record.jsonl"
+po=$(dash "$T/co/runs/run-old"); py=$(dash "$T/co/runs/run-young"); pn=$(dash "$T/co/runs/run-open"); px=$(dash "$T/elsewhere/runs/run-x")
+sleep 0.3
+for cap in 99 0; do
+  pass "$cap" "" >/dev/null
+  [ "$cap" = 99 ] && { died "$po" && ok "F: a finished run's dashboard past one hour is killed under the ceiling" || ko "F: pid $po (run-old) survived"; }
+  alive "$py" && ok "F($cap): a verdict ten minutes old keeps its dashboard" || ko "F($cap): the young run's dashboard was killed"
+  alive "$pn" && ok "F($cap): a run with no verdict keeps its dashboard" || ko "F($cap): the open run's dashboard was killed"
+  alive "$px" && ok "F($cap): a dashboard outside this checkout is not this pass's" || ko "F($cap): a foreign dashboard was killed"
+done
+/usr/bin/grep -qE "kill pid=$po .*dashboard of finished run run-old" "$T/st/cycle.log" && ok "F: the log names the finished run" || ko "F: no kill line for $po: $(tail -3 "$T/st/cycle.log")"
+po2=$(dash "$T/co/runs/run-old"); sleep 0.3; pass 0 "" >/dev/null
+died "$po2" && ok "F: the bound holds with the ceiling turned off" || ko "F: pid $po2 survived with JANITOR_DASHBOARD_MAX=0"
+kill "$py" "$pn" "$px" 2>/dev/null
 kill "$p_live" "$p_fin" "$pw1" "$pw2" "$pw3" 2>/dev/null
 rm -rf "$T"; exit $fail
