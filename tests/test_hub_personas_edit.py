@@ -161,6 +161,21 @@ def test_a_voice_outside_the_gemini_list_is_refused(hub):
     assert "is not a Gemini voice" in out["err"], out
 
 
+def test_a_name_outside_the_policy_pattern_is_refused_with_the_policy_message(hub):
+    """#3012 acceptance 1: the route refuses a name the policy module's pattern refuses, and states the policy's own
+    message, before any project is read."""
+    P = hub.slack_policy()
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Blue!"}, "projects": ["alpha"]})
+    assert out.get("err") == f"personas[].name: {P.name_reason('Blue!')}", out
+
+
+def test_the_read_answers_the_policy_name_pattern(hub):
+    """#3012 acceptance 1: the read answers the pattern the name field states, from the policy module alone."""
+    P = hub.slack_policy()
+    got = hub.personas_overview([], [])
+    assert got["name_pattern"] == P.NAME.pattern, got.get("name_pattern")
+
+
 def test_the_preview_names_each_project_file_and_writes_none(hub, tmp_path, monkeypatch):
     """#3011 acceptance 4 and 5: the preview names each project's file the save would write, and no file changes and no
     worktree appears."""
@@ -201,19 +216,22 @@ def test_a_confirmed_save_writes_each_project_from_its_own_tree_with_one_commit_
 @pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_written(hub, tmp_path, monkeypatch):
     """#3011 acceptance 8 and 9: the preview names the project whose file a save would not validate, and a confirmed save
-    refuses it by name and still writes every other target."""
-    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT}, git=True)
+    refuses it by name and still writes every other target. A name outside the pattern is refused earlier, by the
+    route itself (#3012 acceptance 1), so this file breaks another rule: a voice the policy does not know."""
     monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
-    # A name the policy refuses makes the built document fail validation in that project alone.
-    preview = hub.personas_edit({"persona": "blue", "fields": {"name": "Blue!"}, "projects": ["alpha"]})
-    assert preview["rows"][0]["result"].startswith("refused: slack.yaml: personas[0].name:"), preview["rows"]
-    out = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."}, "projects": ["alpha", "ghost"],
-                             "confirm": True})
+    broken = {**PROJECT, "personas": [{"id": "blue", "name": "Blue", "voice": "Nova", "tone": "Calm."},
+                                      PROJECT["personas"][1]]}
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": broken, "beta": PROJECT}, git=True)
+    preview = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."}, "projects": ["alpha"]})
+    assert preview["rows"][0]["result"].startswith("refused: slack.yaml: personas[0].voice:"), preview["rows"]
+    out = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."},
+                             "projects": ["alpha", "beta", "ghost"], "confirm": True})
     rows = {r["project"]: r["result"] for r in out["rows"]}
     assert rows["ghost"] == "refused: the project is not in the roster", rows
-    assert rows["alpha"].startswith("wrote and pushed commit "), rows
+    assert rows["beta"].startswith("wrote and pushed commit "), rows
+    assert rows["alpha"].startswith("refused: slack.yaml: personas[0].voice:"), rows
     assert out["partial"], out
-    assert [s["project"] for s in out["saved"]] == ["alpha"], out["saved"]
+    assert [s["project"] for s in out["saved"]] == ["beta"], out["saved"]
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
@@ -277,6 +295,17 @@ def test_the_editor_offers_only_the_gemini_voices_and_states_the_tone_limit(hub)
     assert re.search(r"<option selected>Kore</option>", html), html
     assert "at most 300 characters" in html, html
     assert 'data-prproj="alpha"' in html and 'data-prproj="beta"' in html, html
+
+
+def test_the_editor_puts_the_policy_name_pattern_on_the_name_field(hub):
+    """#3012 acceptance 1: the name field states the pattern the read answers, so the browser refuses a name the policy
+    refuses before the edit reaches the hub."""
+    pat = "^[A-Za-z0-9 _.\\-]{1,32}$"
+    edit = {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm.", "projects": ["alpha"], "all": []}
+    tail = (f"prS={json.dumps({'voices': [], 'tone_max': 300, 'name_pattern': pat})};"
+            f"prEd={json.dumps(edit)};console.log(prEditor())")
+    html = _node(_src(hub, tail))
+    assert re.search(rf'<input id=prname[^>]* pattern="{re.escape(pat)}"', html), html
 
 
 def test_the_preview_body_names_no_confirm_and_the_confirm_body_confirms(hub):
