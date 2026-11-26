@@ -127,8 +127,9 @@ def personas_edit(body):
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona rules are unavailable"}
+    clients, merr = _clients_map_read()   # a rename names the client map, and a confirm writes it (#3012)
     try:
-        plan = PS.edit(seats, pid, fields, targets)
+        plan = PS.edit(seats, pid, fields, targets, clients=clients)
     except Exception as e:
         print(f"hub: the persona edit could not be planned: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona edit could not be planned"}
@@ -157,5 +158,9 @@ def personas_edit(body):
     if confirm:
         _slack_roster_clear()   # a write changed a project's files, so the next read reads the roster fresh
     refused = [r for r in rows if r["result"].startswith("refused:")]
+    notes = list(plan.get("notes") or ())
+    if merr:
+        notes.append(f"the client map did not read: {merr}")
     # No `err` key on a success: the write routes answer 400 on a body that carries one (#3011).
-    return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused)}
+    return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused),
+            "notes": notes, "map": list(plan.get("map") or ())}
