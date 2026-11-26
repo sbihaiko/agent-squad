@@ -257,6 +257,39 @@ def test_a_confirmed_save_writes_each_project_from_its_own_tree_with_one_commit_
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
+def test_a_confirmed_rename_writes_each_project_and_the_client_default_stored_name(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 5 to 8: a confirmed rename lands the new name in each target project and stores it in each
+    client default that holds the persona, the client badge and tile read it, and no client name enters a committed
+    file."""
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT}, git=True)
+    other = {"id": "other", "name": "Other Co", "default_persona": {"id": "amber", "name": "Amber"}, "projects": []}
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT, other]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"},
+                             "projects": ["alpha", "beta"], "confirm": True})
+    assert out.get("err") is None, out
+    assert {r["project"]: r["result"].startswith("wrote and pushed commit ") for r in out["rows"]} == \
+           {"alpha": True, "beta": True}, out["rows"]
+    for slug, (_co, _c, origin) in made.items():
+        landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                                capture_output=True, text=True, check=True, timeout=60).stdout
+        doc = yaml.safe_load(landed)
+        assert doc["personas"][0]["name"] == "Azure", (slug, doc)
+        assert "Atlas Corp" not in landed, f"{slug}: a client name entered the committed file"
+    stored = {c["id"]: c for c in yaml.safe_load((prof / "clients.local.yaml").read_text())["clients"]}
+    assert stored["atlas"]["default_persona"] == {"id": "blue", "name": "Azure"}, stored["atlas"]
+    assert stored["other"]["default_persona"] == {"id": "amber", "name": "Amber"}, stored["other"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp",
+                           "result": "stored Azure as the default name"}], out["map"]
+    # The client badge and tile read the stored name, so they show the new one after the save.
+    seats, _err = hub._slack_roster_checked(0.0)
+    tree = hub._slack_clients_tree_for(hub.slack_policy(), seats)
+    node = next(n for n in tree["clients"] if n.get("client") == "atlas")
+    assert node["badges"][0]["text"] == "Azure", node["badges"]
+    assert next(t for t in node["now"] if t["key"] == "Default persona")["value"] == "Azure", node["now"]
+
+
+@pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_written(hub, tmp_path, monkeypatch):
     """#3011 acceptance 8 and 9: the preview names the project whose file a save would not validate, and a confirmed save
     refuses it by name and still writes every other target. A name outside the pattern is refused earlier, by the
