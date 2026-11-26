@@ -2212,10 +2212,13 @@ const prAddId=()=>prNew?(prNew.id||prSlug(prNew.name)):"";
 function prStartAdd(id){const all=((prS||{}).projects)||[];
  if(id==null){prNew={name:"",voice:((prS||{}).voices||[])[0]||"",tone:"",projects:[]}}
  else{const r=prRowAt(id);if(!r)return;const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
-  prNew={id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
+  prNew={id:r.id,name:r.name,voice:r.voice,tone:r.tone,committed:{name:r.name,voice:r.voice,tone:r.tone},projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
  prEd=null;prAddPlan=null;prAddMsg="";prRender()}
 function prStopAdd(){prNew=null;prAddPlan=null;prAddMsg="";prRender()}
-function prAddBody(confirm){return JSON.stringify({op:"add",persona:{id:prAddId(),name:prNew.name,voice:prNew.voice,tone:prNew.tone},
+/* The add's body (#3013): a new persona posts the fields the owner typed; an existing persona posts the row's committed
+   name, voice and tone verbatim, so the target project agrees with the source and no edit reaches the add. */
+function prAddBody(confirm){const f=prNew.id&&prNew.committed?prNew.committed:{name:prNew.name,voice:prNew.voice,tone:prNew.tone};
+ return JSON.stringify({op:"add",persona:{id:prAddId(),name:f.name,voice:f.voice,tone:f.tone},
  projects:prNew.projects,confirm:!!confirm})}
 async function prAddPost(confirm){if(!prNew)return;
  prAddMsg=confirm?"saving":"reading the preview";prAddPlan=null;prRender();
@@ -2225,6 +2228,8 @@ async function prAddPost(confirm){if(!prNew)return;
   else{prAddPlan=d;prAddMsg=d.partial?"the preview names each refused project":"the preview writes nothing"}
  }catch(e){prAddMsg="!the add could not be posted"}
  prRender()}
+/* Play sample (#3013): the sample route takes a voice and a tone alone (#2697), caches one WAV per normalized pair, and
+   answers it again from that cache, so the add's name and projects never reach it: the pair is the whole request. */
 async function prAddSample(){if(!prNew)return;
  prAddMsg="the sample is being made";prRender();
  try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice:prNew.voice,tone:prNew.tone})})).json();
@@ -2240,10 +2245,17 @@ function prAddPlanHtml(){const rows=((prAddPlan||{}).rows)||[];if(!rows)return""
 function prAddEditor(){const d=prNew;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
  const limit=max==null?"the policy's":prTxt(max),all=((prS||{}).projects)||[];
  const title=d.id?`Add ${prTxt(d.name)} to another project`:"New persona";
+ // An existing persona keeps the fields its source project declares: the add copies them verbatim and draws no editable
+ // field, so no edit can make the target disagree with the source (#3013).
+ const fields=d.id
+  ?`<p class=prf>Name <b>${esc(d.name)}</b></p>`
+   +`<p class=prf>Voice <b>${prTxt(d.voice)}</b></p>`
+   +`<p class=prf>Tone <b>${prTxt(d.tone)}</b> <span class=m>an existing persona keeps its name, voice and tone</span></p>`
+  :`<label class=prf>Name <input id="prnewname" value="${esc(d.name)}"></label>`
+   +`<label class=prf>Voice <select id="prnewvoice">${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
+   +`<label class=prf>Tone <input id="prnewtone" value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`;
  return `<section class=prgrp id=pradd><h4>${title}</h4>`
- +`<label class=prf>Name <input id="prnewname" value="${esc(d.name)}"></label>`
- +`<label class=prf>Voice <select id="prnewvoice">${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
- +`<label class=prf>Tone <input id="prnewtone" value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`
+ +fields
  +`<fieldset class=prf><legend>Projects</legend>${all.map(p=>`<label><input type=checkbox data-praddproj="${prTxt(p.id)}"${d.projects.includes(String(p.id))?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
  +`<div class=prbar><button data-pradd-preview>Preview</button> <button data-pradd-sample>Play sample</button> <button data-pradd-confirm>Confirm</button> <button data-pradd-cancel>Cancel</button></div>`
  +(prAddMsg?`<p class="mx" role=status>${prTxt(prAddMsg.replace(/^!/,""))}</p>`:"")+prAddPlanHtml()+`</section>`}

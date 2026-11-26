@@ -293,12 +293,30 @@ def _pr_add_fields(P, raw, PS):
     return out, None
 
 
+def _pr_add_persona(P, PS, raw, seats):
+    """(persona, error): the persona an add names. An id the overview draws takes that merged row's name, voice and
+    tone, so an existing persona reaches another project with its own fields and no policy check on them: a legacy
+    voice, or a tone the policy no longer allows, still lands, because the source project already carries it (#3013). A
+    brand-new persona is validated through `_pr_add_fields`, so its name, voice and tone meet the policy before any
+    project is read."""
+    pid = _slack_text(raw.get("id")).strip()
+    if pid:
+        clients, _merr = _clients_map_read()
+        for group in PS.groups(seats, clients):
+            for row in group["rows"]:
+                if _slack_text(row["id"]) == pid:
+                    return {"id": pid, "name": _slack_text(row["name"]),
+                            "voice": _slack_text(row["voice"]), "tone": _slack_text(row["tone"])}, None
+    return _pr_add_fields(P, raw, PS)
+
+
 def personas_add(body):
     """POST /api/personas with `op: add`: one new persona row, or one existing persona, written into each target
     project's committed file (#3013). Without `confirm` it is the preview: the hub builds each project's document
     through the rules module and calls that project's save path with no confirm, so the answer names each file and the
     diff, and writes nothing. On confirm each project is written, committed and landed from its own worktree, and one
-    refused project never stops the others."""
+    refused project never stops the others. An existing persona keeps its own name, voice and tone, taken from the row
+    the overview draws, so an add never changes the source project (#3013)."""
     if not isinstance(body, dict):
         return {"err": "bad request"}
     raw = body.get("persona")
@@ -316,17 +334,20 @@ def personas_add(body):
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona rules are unavailable"}
-    persona, ferr = _pr_add_fields(P, raw, PS)
-    if ferr:
-        return {"err": ferr}
     seats, rerr = _slack_roster_checked(0.0)   # a save always reads the roster fresh, never a cached one
     if rerr:
         return {"err": rerr}
+    seats = [_pr_newest_committed(seat) for seat in seats]   # the same rows the overview draws (#3013)
+    persona, ferr = _pr_add_persona(P, PS, raw, seats)
+    if ferr:
+        return {"err": ferr}
     try:
         plan = PS.add(seats, persona, targets)
     except Exception as e:
         print(f"hub: the persona add could not be planned: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona add could not be planned"}
+    if plan.get("err"):   # the rules reject an empty name or voice before any write (#3013)
+        return {"err": plan["err"]}
     confirm = body.get("confirm") is True
     rows, saved = _pr_apply(seats, plan, confirm, persona["name"])
     if confirm:
