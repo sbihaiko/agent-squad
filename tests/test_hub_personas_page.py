@@ -91,7 +91,7 @@ def test_a_row_stacks_each_field_under_its_own_label_on_a_narrow_screen(hub):
     esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
     src = "\n".join([esc, _block(hub.PAGE), f"console.log(JSON.stringify(prRow({json.dumps(ROW)})))"])
     html = json.loads(_node(src))
-    for label in ("Persona", "Voice", "Tone", "Projects", "Default of", "Flags"):
+    for label in ("Persona", "Voice", "Tone", "Projects", "Default of", "Actions"):
         assert f'data-l="{label}"' in html, (label, html)
     page = hub.PAGE
     narrow = re.search(r"@media \(max-width:600px\)\{[^}]*#prbody[^}]*\}", page)
@@ -150,3 +150,44 @@ def test_edit_and_add_open_the_row_of_the_client_whose_table_holds_the_button(hu
     got = json.loads(_node(body))
     assert got["ed"] == {"voice": "Charon", "projects": ["squad"]}, got
     assert got["add"] == ["zesty", "other"], got
+
+
+def _render(hub, answer, setup=""):
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
+    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
+    body = "\n".join([stub, esc, _block(hub.PAGE), f"prS={json.dumps(answer)};{setup}prRender();console.log(JSON.stringify($('#prbody').innerHTML))"])
+    return json.loads(_node(body))
+
+
+GROUPS = {"err": None, "voices": ["Kore", "Puck"], "tone_max": 300, "projects": [], "groups": [
+    {"id": "acme", "name": "Acme Corp", "rows": [ROW, {**ROW, "id": "iara", "name": "Iara", "drift": False,
+                                                       "projects": [{"id": "beta", "label": "beta", "file": "/home/x/beta/docs/squad/slack.yaml"}]}]}]}
+
+
+def test_the_editor_opens_under_the_row_it_edits(hub):
+    """#3036: Edit draws its editor in the row after the persona it edits, never at the top of the theme."""
+    html = _render(hub, GROUPS, "prStartEdit('iara','acme');")
+    iara = html.index("<b>Iara</b>")
+    editor = html.index('id=predit')
+    hal = html.index("<b>HAL9K</b>")
+    assert hal < iara < editor, (hal, iara, editor)
+    assert '<tr class=preditrow><td colspan=6>' in html, html
+    assert '<textarea id=prtone' in html, "the tone is a text area, so a long tone is read whole"
+
+
+def test_a_row_names_its_default_client_and_links_its_projects_to_the_slack_tree(hub):
+    """#3036: Default of names the client as the groups name it, each project opens its Slack tree node, and a file
+    reads by its name alone. A row with no flag draws no empty Flags column."""
+    html = _render(hub, GROUPS)
+    assert "Acme Corp" in html.split("</h4>", 1)[1], "the default names the client, not its id"
+    assert '<a href="#set-slk" data-sp=slk data-slproj="alpha"' in html, html
+    assert "/home/x" not in html and "slack.<wbr>yaml" in html, html
+    assert "<th>Flags</th>" not in html and "&mdash;</span></td><td data-l=\"Actions\"" not in html, html
+
+
+def test_a_slack_link_marks_the_row_it_names(hub):
+    """#3036: a persona name in the Slack detail opens the theme on the row of that persona whose projects hold the
+    project the link came from."""
+    html = _render(hub, GROUPS, "prFocus={id:'iara',project:'beta'};")
+    marked = [m.start() for m in re.finditer(r"<tr class=prfocus>", html)]
+    assert len(marked) == 1 and html.index("<b>Iara</b>") > marked[0], html
