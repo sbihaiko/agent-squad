@@ -28,8 +28,14 @@ a channel, and every append to an outbox takes an exclusive flock while every in
 writers that take the lock never interleave a line. An inbox read takes only the file's bounded tail, so the helper
 never loads a whole queue.
 
+A project session that is asked to act makes one more call under the same line, with `--kind action-request`, `--action`
+and `--arguments` (a JSON object). The helper appends the request line the checked executor reads (ADR-0179). The request
+names the line's sender and id, so the executor checks the sender against that line. The DM session writes no request.
+
 usage: answer.py --scope <channel id|dm> [--thread <the inbox line's ts>] --text "<the answer>"
                  [--speech "<a 10 to 30 second summary>"] [--persona <id>] [--kind answer|proposal]
+       answer.py --scope <channel id> --thread <the inbox line's ts> --kind action-request --action <id>
+                 [--arguments '<one JSON object>']
 The DM may omit `--thread`, and then answers the newest pending line of its inbox.
 Exit 0: the answer's one outbox line is present, and a retry writes no second one. Exit 2: the call is refused, and
 nothing was written. Exit 1: the write failed.
@@ -52,7 +58,7 @@ for path in (HERE, ROOT):
 import operators  # noqa: E402  the one naming rule of an inbox and an outbox
 from operators import dm_channel  # noqa: E402  the supervisor's pinned DM record, never an inbox line's own channel
 
-from squad import slackpolicy  # noqa: E402  the one rule that binds an answer to an inbox line (ADR-0177)
+from squad import slackactions, slackpolicy  # noqa: E402  the request line's shape (ADR-0179), the answer rule (ADR-0177)
 
 BINDING_ENV = "VOICE_ANSWER_BINDING"
 DM = operators.DM
@@ -135,14 +141,13 @@ def pending_line(inbox, thread):
     return slackpolicy.pending_line(inbox, thread)
 
 
-def answer(binding, scope, thread, text, speech=None, persona=None, kind="answer"):
-    """Write one outbox line for a pending inbox line of `scope`, a channel of the session's project.
+def pending(binding, scope, thread):
+    """The outbox path, the pending inbox line and the line's channel for one call on `scope`, or a refusal.
 
     A second call for an already answered thread is legal: the inbox keeps the question, so the same pending line answers
-    again, and the DM's proposal rides beside its own answer. A scope outside the project is refused, and so is a
-    thread the channel's inbox never held: an answer may not land in
-    another channel or under a stale thread. The inbox line itself must name a channel of the session's project: a
-    project line names its own channel, and a DM line names the one DM channel of the binding, since the daemon posts to
+    again. A scope outside the project is refused, and so is a thread the channel's inbox never held: an answer may not
+    land in another channel or under a stale thread. The inbox line itself must name a channel of the session's project:
+    a project line names its own channel, and a DM line names the one DM channel of the binding, since the daemon posts to
     the channel the outbox line carries. The outbox is resolved under the session's state folder, so a tampered binding
     never writes outside it."""
     scope = str(scope or "")
@@ -176,30 +181,24 @@ def answer(binding, scope, thread, text, speech=None, persona=None, kind="answer
             raise Refused(f"the DM line names channel {line_channel!r}, not this session's own DM channel {own!r}")
     elif line_channel != scope:
         raise Refused(f"the line in {scope} names channel {line_channel!r}, outside this session's project")
-    record = {"thread_ts": str(question.get("ts")), "text": str(text)}
-    if speech:
-        record["speech"] = str(speech)
-    if persona:
-        record["persona"] = str(persona)
-    if kind != "answer":
-        record["kind"] = str(kind)      # a proposal and an answer with the same text stay two lines (#2949)
-    if scope == DM:
-        record["channel"] = line_channel
+    return outbox, question, line_channel
+
+
+def write_line(outbox, record, same):
+    """Append one line to an outbox, or return the held line that `same` matches, so a retry writes nothing.
+
+    One exclusive flock bounds every append to this outbox, so two sessions of one state folder never interleave a line:
+    a writer that a crash left mid-line holds no lock, and the next append starts on a fresh line."""
     os.makedirs(os.path.dirname(outbox), exist_ok=True)
     with open(outbox, "a+b") as f:
-        # One exclusive flock bounds every append to this outbox, so two sessions of one state folder never interleave
-        # a line: a writer that a crash left mid-line holds no lock, and the next append starts on a fresh line.
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         for raw in operators.tail_lines(outbox):     # a bounded tail, never the whole outbox
             try:
                 held = json.loads(raw)
             except ValueError:
                 continue
-            # A retry carries the same caller `kind`, so a proposal and an answer with identical text never collapse.
-            if (isinstance(held, dict) and str(held.get("thread_ts")) == record["thread_ts"]
-                    and str(held.get("text")) == record["text"]
-                    and str(held.get("kind") or "answer") == kind):
-                return held                          # a retry of this answer: the line is already there
+            if isinstance(held, dict) and same(held):
+                return held
         f.seek(0, os.SEEK_END)
         lead = ""
         if f.tell():
@@ -212,28 +211,90 @@ def answer(binding, scope, thread, text, speech=None, persona=None, kind="answer
     return record
 
 
+def answer(binding, scope, thread, text, speech=None, persona=None, kind="answer"):
+    """Write one outbox line that answers the pending inbox line of `scope`.
+
+    The DM's proposal rides beside its own answer: a retry carries the same `kind`, so a proposal and an answer with
+    identical text never collapse into one line (#2949)."""
+    outbox, question, line_channel = pending(binding, scope, thread)
+    record = {"thread_ts": str(question.get("ts")), "text": str(text)}
+    if speech:
+        record["speech"] = str(speech)
+    if persona:
+        record["persona"] = str(persona)
+    if kind != "answer":
+        record["kind"] = str(kind)
+    if scope == DM:
+        record["channel"] = line_channel
+    return write_line(outbox, record, lambda held: (
+        str(held.get("thread_ts")) == record["thread_ts"] and str(held.get("text")) == record["text"]
+        and str(held.get("kind") or "answer") == kind))
+
+
+def request(binding, scope, thread, action, arguments):
+    """Write one action request for the pending inbox line of `scope`: the line the daemon's checked executor reads.
+
+    The request names the line's sender and id, so the executor checks the sender against that line. The DM session
+    proposes and never writes a request (#2949, ADR-0179)."""
+    if str(scope or "") == DM:
+        raise Refused("the DM session proposes and writes no action request")
+    outbox, question, line_channel = pending(binding, scope, thread)
+    if not str(action or "").strip():
+        raise Refused("an action request names no --action")
+    sender, source = str(question.get("user") or ""), str(question.get("id") or "")
+    if not sender or not source:
+        raise Refused(f"the pending line in {scope} names no sender or no id, so no request can name it")
+    record = slackactions.request_record(action, line_channel, sender, source, arguments)
+    return write_line(outbox, record, lambda held: slackactions.is_request(held) and (
+        held.get("source"), held.get("action"), held.get("arguments")) == (source, record["action"], record["arguments"]))
+
+
+def arguments_of(raw):
+    """The action's arguments: one JSON object, or none when the call names none."""
+    if raw is None:
+        return {}
+    try:
+        got = json.loads(raw)
+    except ValueError:
+        raise Refused(f"--arguments is not one JSON object: {raw!r}") from None
+    if not isinstance(got, dict):
+        raise Refused(f"--arguments is not one JSON object: {raw!r}")
+    return got
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Answer one pending inbox line of this session's project.")
     ap.add_argument("--scope", required=True, help="the inbox line's channel id, or dm")
     ap.add_argument("--thread", default=None, help="the inbox line's ts; the DM may omit it")
-    ap.add_argument("--text", required=True, help="the answer Slack shows")
+    ap.add_argument("--text", default=None, help="the answer Slack shows")
     ap.add_argument("--speech", default=None, help="a 10 to 30 second spoken summary")
     ap.add_argument("--persona", default=None, help="the channel persona id the answer posts under")
-    ap.add_argument("--kind", choices=("answer", "proposal"), default="answer",
-                    help="answer (default) or the DM's proposal second call; the retry dedup keys on it")
+    ap.add_argument("--kind", choices=("answer", "proposal", slackactions.KIND), default="answer",
+                    help="answer (default), the DM's proposal second call, or the project's action request")
+    ap.add_argument("--action", default=None, help="the action id an action request names")
+    ap.add_argument("--arguments", default=None, help="the action's arguments as one JSON object")
     args = ap.parse_args(argv)
-    if not args.text.strip():
-        print("answer: refused: the answer text is empty", file=sys.stderr)
-        return 2
     try:
-        record = answer(read_binding(), args.scope, args.thread, args.text, args.speech, args.persona, args.kind)
+        if args.kind == slackactions.KIND:
+            if args.text is not None or args.speech or args.persona:
+                raise Refused("an action request takes no --text, --speech or --persona")
+            record = request(read_binding(), args.scope, args.thread, args.action, arguments_of(args.arguments))
+        else:
+            if args.action is not None or args.arguments is not None:
+                raise Refused("--action and --arguments name an action request, not an answer")
+            if not (args.text or "").strip():
+                raise Refused("the answer text is empty")
+            record = answer(read_binding(), args.scope, args.thread, args.text, args.speech, args.persona, args.kind)
     except Refused as e:
         print(f"answer: refused: {e}", file=sys.stderr)
         return 2
     except OSError as e:
         print(f"answer: the write failed: {e.strerror or e}", file=sys.stderr)
         return 1
-    print(f"answer: wrote one line to the {args.scope} outbox under thread {record['thread_ts']}")
+    if args.kind == slackactions.KIND:
+        print(f"answer: wrote one action request for {record['action']} to the {args.scope} outbox")
+    else:
+        print(f"answer: wrote one line to the {args.scope} outbox under thread {record['thread_ts']}")
     return 0
 
 

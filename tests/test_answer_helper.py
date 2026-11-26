@@ -440,6 +440,52 @@ def start(binding, *args):
                             stderr=subprocess.PIPE, text=True, env={**os.environ, **bound(binding)})
 
 
+def test_a_project_session_writes_one_action_request_for_its_pending_line(tmp_path):
+    """ADR-0179 criterion 1 (review of #2950): the helper writes the request line the gate allows, with the sender and
+    the source of the pending inbox line, so the checked executor receives it."""
+    binding, state = queued(tmp_path)
+    asked(state)
+
+    done = run_cli(binding, "--scope", CHANNEL, "--thread", QUESTION, "--kind", "action-request",
+                   "--action", "status", "--arguments", "{}")
+
+    assert done.returncode == 0, done.stderr
+    [line] = outbox(state)
+    assert line["kind"] == "action-request"
+    assert line["action"] == "status"
+    assert line["arguments"] == {}
+    assert line["sender"] == "UPROBE0001"
+    assert line["channel"] == CHANNEL
+    assert line["source"] == f"{CHANNEL}:{QUESTION}"
+    assert line["at"] > 0
+
+
+def test_a_retried_action_request_lands_one_line(tmp_path):
+    binding, state = queued(tmp_path)
+    asked(state)
+    call = ("--scope", CHANNEL, "--thread", QUESTION, "--kind", "action-request", "--action", "status",
+            "--arguments", "{}")
+
+    assert run_cli(binding, *call).returncode == 0
+    assert run_cli(binding, *call).returncode == 0
+
+    assert [line["action"] for line in outbox(state)] == ["status"]
+
+
+def test_the_dm_session_writes_no_action_request(tmp_path):
+    """The DM session proposes, and its proposal is the owner's to start, so the helper refuses a request from it."""
+    binding, state = queued(tmp_path, channels=("dm",), dm="D0AAAAAA1")
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001",
+                            "channel": "D0AAAAAA1", "text": "restart the hub"}) + "\n")
+
+    done = run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--kind", "action-request", "--action", "status")
+
+    assert done.returncode == 2, done.stderr
+    assert "proposes" in done.stderr, done.stderr
+    assert outbox(state, "dm") == []
+
+
 def test_the_outbox_append_waits_for_an_exclusive_lock(tmp_path):
     """Two writers of one state folder never interleave a line: the helper's append takes an exclusive flock, so it
     stands still while another holder keeps it, and lands once the holder lets go."""

@@ -189,6 +189,7 @@ def test_each_answer_goes_to_the_outbox_of_its_channels_line(tmp_path, monkeypat
     assert "C0AAAAAA9" not in text
 
 
+@pytest.mark.heavy
 def test_the_brief_names_the_answer_helper_as_the_only_answer_path(tmp_path, monkeypatch):
     """#2949 criterion (5): every answer leaves through the one shipped helper, and the brief names no other path."""
     op = operators(tmp_path, monkeypatch)
@@ -279,6 +280,16 @@ def test_the_brief_names_the_helper_as_the_one_command_a_session_runs(tmp_path, 
         text = op.prompt_for(key, str(tmp_path / "state"), "/repo")
         assert "runs no command" not in text.lower(), text
         assert "the one command" in text.lower() and op.ANSWER in text, text
+
+
+def test_a_project_brief_writes_the_action_request_through_the_helper(tmp_path, monkeypatch):
+    """ADR-0179 (review of #2950): a project session writes the request line through the helper, and the DM session
+    never does."""
+    op = operators(tmp_path, monkeypatch)
+    project = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
+    dm = op.prompt_for("dm", str(tmp_path / "state"), "/repo")
+    assert "--kind action-request" in project and op.ANSWER in project, project
+    assert "action-request" not in dm, dm
 
 
 def test_the_brief_arms_one_monitor_per_inbox_of_the_project(tmp_path, monkeypatch):
@@ -414,6 +425,7 @@ def test_the_working_directory_is_the_projects_own_checkout(tmp_path, monkeypatc
     assert f"--add-dir {os.path.realpath(found['acme/widget'])}" in brief(tmp_path, "acme/widget")
 
 
+@pytest.mark.heavy
 def test_the_session_loads_the_projects_claude_md(tmp_path, monkeypatch):
     """Criterion 8: no `--bare`, so the CLI discovers the checkout's CLAUDE.md, and the brief points at it."""
     op = operators(tmp_path, monkeypatch)
@@ -682,12 +694,12 @@ def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path,
 
 
 def test_a_project_action_message_gets_a_read_only_answer(tmp_path, monkeypatch):
-    """#2950: the tool gate allows no file write and no command but the answer helper and the declared read wrappers,
-    so the project brief orders no request append the gate would deny, and it names no outbox path (#2939, #2949)."""
+    """#2950 with ADR-0179: the project brief orders the request through the one helper call the gate allows, never a
+    line the session writes itself, and it names no outbox path (#2939, #2949)."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
-    assert "only reads and answers" in text and "runs no action" in text, text
-    assert '"kind"' not in text, "the brief still orders a request line the gate denies"
+    assert "only reads and answers" in text and "--kind action-request" in text and op.ANSWER in text, text
+    assert '"kind"' not in text, "the brief orders a hand-written request line the gate would deny"
     assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") not in text, "the brief names an outbox for a free append"
 
 

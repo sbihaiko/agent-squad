@@ -198,6 +198,7 @@ def test_read_denies_the_secret_list(tmp_path, monkeypatch):
     tree_ = tree(tmp_path)
     checkout = Path(tree_["checkout"])
     paths = [checkout / ".env", checkout / ".env.local", checkout / "docs.slack.local.yaml",
+             checkout / "slack.local.yaml",
              home / ".ssh" / "id_rsa", home / ".config" / "gh" / "hosts.yml", home / ".aws" / "credentials"]
     for path in paths:
         allowed, reason, _ = call(run(tmp_path, tree_, read_event(path)))
@@ -219,6 +220,23 @@ def test_bash_allows_the_answer_helper_and_no_other_command(tmp_path):
         allowed, reason, _ = call(run(tmp_path, tree_, bash_event(command)))
         assert not allowed, f"Bash allowed {command!r}"
         assert "helper" in reason or "Bash" in reason, reason
+
+
+def test_bash_allows_the_action_request_call_of_the_answer_helper(tmp_path):
+    """ADR-0179 (review of #2950): the request line reaches the outbox through the one allowed helper call."""
+    tree_ = tree(tmp_path)
+    request = (f"python3 {ANSWER} --scope {INBOX} --thread '100.000100' --kind action-request --action status "
+               "--arguments '{}'")
+    allowed, reason, given = call(run(tmp_path, tree_, bash_event(request)))
+    assert allowed, reason
+    assert shlex.split(given["command"]) == shlex.split(request), given
+
+
+def test_bash_denies_a_helper_flag_it_does_not_name(tmp_path):
+    tree_ = tree(tmp_path)
+    command = f"python3 {ANSWER} --scope {INBOX} --thread '100.000100' --kind action-request --action status --file x"
+    allowed, reason, _ = call(run(tmp_path, tree_, bash_event(command)))
+    assert not allowed, reason
 
 
 def test_bash_allows_a_declared_read_wrapper(tmp_path):
