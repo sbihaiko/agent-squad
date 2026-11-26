@@ -25,10 +25,11 @@ class Turn(NamedTuple):
     exit: int | None
     failed: bool
     reason: str | None = None
+    refused: bool = False
 
     def audit(self):
         return {"session": self.session, "exit": self.exit, "failed": self.failed, "reason": self.reason,
-                "chars": len(self.text)}
+                "refused": self.refused, "chars": len(self.text)}
 
 
 class TurnOrder:
@@ -61,6 +62,9 @@ def owner_env(environ):
 
 
 SESSION_FLAGS = ("--resume", "-r", "--session-id")
+PRINT_FLAGS = ("-p", "--print")
+DAEMON_FLAGS = ("--bg", "--name")   # the daemon's own operator sessions, never the owner's terminal
+UNKNOWN = None   # the process table could not be read, so the probe answers conservatively (#2969 review)
 
 
 def is_claude(args):
@@ -68,8 +72,17 @@ def is_claude(args):
 
 
 def live_claude_argvs():
-    listing = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=10).stdout
-    argvs = (line.split() for line in listing.splitlines())
+    """The argv of each live claude process, or `None` when the process table cannot be read.
+
+    A missing or hung `ps` must never raise inside a turn: an unreadable table means the daemon cannot tell whether a
+    terminal holds the session, so it answers `None` and the probe refuses (#2969 review)."""
+    try:
+        done = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):   # OSError holds FileNotFoundError and the sandbox's PermissionError
+        return UNKNOWN
+    if getattr(done, "returncode", 0) != 0:
+        return UNKNOWN
+    argvs = (line.split() for line in (done.stdout or "").splitlines())
     return [args for args in argvs if is_claude(args)]
 
 
@@ -82,8 +95,37 @@ def names_session(args, session):
     return False
 
 
+def runs_print(args):
+    return any(token in PRINT_FLAGS for token in args)
+
+
+def is_daemon_session(args):
+    return any(token in DAEMON_FLAGS or token.startswith("--name=") for token in args)
+
+
 def held_by_terminal(argvs, session):
-    return bool(session) and any(is_claude(args) and names_session(args, session) for args in argvs)
+    """Whether a live claude process may hold the session, so a full turn must refuse.
+
+    An unknown listing is held: the daemon never runs a turn blind (#2969 review). A process is found by the session
+    it names; with no saved session the probe still answers, because an interactive claude process (no print flag) is
+    a terminal that may hold the project's session. The daemon's own operator sessions (`--bg`, `--name`) are never
+    that terminal."""
+    if argvs is UNKNOWN:
+        return True
+    for args in argvs:
+        if not is_claude(args):
+            continue
+        if session and names_session(args, session):
+            return True
+        if not session and not runs_print(args) and not is_daemon_session(args):
+            return True
+    return False
+
+
+def refused_audit(reason):
+    """The audit row of a turn the daemon never ran because a terminal holds the session. It carries `refused`, so a
+    reader tells a refusal from a turn that ran and failed for another reason (#2969 review)."""
+    return Turn(None, "", None, True, reason, refused=True).audit()
 
 
 def argv(claude, session):

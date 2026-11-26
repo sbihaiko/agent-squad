@@ -2,7 +2,8 @@
 """Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619, #1656, #2925).
 
 Two phases, one command. Each call that starts a bounded session runs through contrib/squad-goal/scripts/claude-sandboxed.sh
-with the profile this probe writes; a full turn runs outside it and proves its resume and its stdin (ADR-0180). The profile is the one a live project session runs under: it writes the outbox of each channel of one
+with the profile this probe writes; a full turn runs outside it and proves its resume and its stdin (ADR-0180), and
+the tail of that phase holds the session with a real `claude --resume` process and proves the refusal lifts (#2969). The profile is the one a live project session runs under: it writes the outbox of each channel of one
 project, reads the inbox of each of them, and nothing else of the inbox folder. The denials come first: a write outside
 those outboxes, a read of another project's inbox, a read of a secret or another project's checkout (#2951) and a foreign
 host on port 443 must each fail, while a write into each own outbox and a read of each own inbox must pass. Then one
@@ -98,6 +99,7 @@ MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 FULL_REPO = "probe/full-turn"          # the project name a full turn keeps its session under
+HOLD_DEADLINE = 60.0                   # seconds, a live `claude --resume` process must appear in the process table
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
@@ -910,8 +912,37 @@ def project_shape(work, ports):
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
-def full_turn_phase(work, cli):
-    """Two full turns outside the sandbox: the first keeps a word given on stdin, and the resumed second returns it."""
+def hold_session(cli, checkout, session, listing=None):
+    """Start one real `claude --resume <session>` process and wait until the live listing names the session (#2969).
+
+    The process makes a real CLI call on the same session, so a turn beside it would split the conversation. It ends
+    before this returns, and the turn that follows proves the refusal lifts once it is gone. `listing` is the probe's
+    one seam for the process table, so a stand-in CLI proves the phase without a live `ps`."""
+    listing = listing or fullturn.live_claude_argvs
+    holder = subprocess.Popen([cli, "--resume", session, "-p", PROMPT, "--output-format", "json",
+                               "--max-budget-usd", "1"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              cwd=str(checkout), env=fullturn.owner_env(os.environ), start_new_session=True)
+    try:
+        deadline = time.monotonic() + HOLD_DEADLINE
+        while time.monotonic() < deadline:
+            argvs = listing()
+            if argvs is fullturn.UNKNOWN:
+                raise ProbeFailed("the process table is unreadable, so the live holder is unproven")
+            if fullturn.held_by_terminal(argvs, session):
+                return
+            if holder.poll() is not None:
+                raise ProbeFailed("the live claude process ended before the process table listed it")
+            time.sleep(0.1)
+        raise ProbeFailed("the live claude process never appeared in the process table")
+    finally:
+        fullturn.end_tree(holder)
+
+
+def full_turn_phase(work, cli, listing=None):
+    """Two full turns outside the sandbox: the first keeps a word given on stdin, and the resumed second returns it.
+    A third runs after a real `claude --resume` process holds the session, which proves the refusal and its lift."""
+    listing = listing or fullturn.live_claude_argvs
     word = secrets.token_hex(6)
     checkout = work / "full-checkout"
     state = work / "full-state"
@@ -928,6 +959,15 @@ def full_turn_phase(work, cli):
         raise ProbeFailed(f"the resumed full turn did not answer on the same session (exit {second.exit})")
     if word not in second.text:
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
+    hold_session(cli, checkout, second.session, listing)
+    closed = listing()
+    if closed is fullturn.UNKNOWN:
+        raise ProbeFailed("the process table is unreadable, so the closed holder is unproven")
+    if fullturn.held_by_terminal(closed, second.session):
+        raise ProbeFailed("the process table still names the session after the holder ended")
+    third = fullturn.run_turn(cli, str(checkout), str(state), FULL_REPO, PROMPT, timeout=DEADLINE)
+    if third.failed or third.session != first.session:
+        raise ProbeFailed("a full turn did not run after the terminal closed")
 
 
 def run_probe(work, cli):
@@ -992,7 +1032,8 @@ def main(argv=None):
           f"dontAsk, cap ${SPEND}; a live session answered one pending inbox line through the shipped helper "
           f"({HELPER.name}) and no other channel's outbox took a line, under the tool gate and an ambient hook whose "
           f"rewrite reached no tool; "
-          f"a full turn outside the sandbox resumed its session and returned the word it took on stdin; "
+          f"a full turn outside the sandbox resumed its session and returned the word it took on stdin, a real "
+          f"claude --resume process held that session in the process table and a turn ran after it closed; "
           f"a --bg session started and was listed as {marked_name(PROBE_KEY)}, and the gate refused its one command "
           f"with one audit line; "
           f"guest poller denial held (write tool); "
