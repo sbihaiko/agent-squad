@@ -131,6 +131,31 @@ def _declared_name(doc, persona_id):
     return ""
 
 
+def _seat_name(seat, persona_id):
+    """The name one roster seat declares for a persona id, from its committed file or, failing that, its local file, or
+    '' when the seat declares none. The name a seat declares answers even when the persona is only local: a preview must
+    state the name the channel shows today, whichever file holds it."""
+    pid = _text(persona_id).strip()
+    for decl in declarations(seat):
+        if decl["id"] == pid:
+            return decl["name"] if decl["name"] != pid else ""
+    return ""
+
+
+def old_name(seats, clients, persona_id):
+    """The name a persona reads today, which a rename preview states as the address and the mark it leaves: the first
+    roster seat that declares it, then the name a client default stores for it, and the id alone when neither answers."""
+    pid = _text(persona_id).strip()
+    for seat in seats or ():
+        name = _seat_name(seat, pid)
+        if name:
+            return name
+    for default in default_names(clients, pid):
+        if default["name"] != pid:
+            return default["name"]
+    return pid
+
+
 def with_fields(doc, persona_id, fields):
     """The committed document with one persona's name, voice and tone set to the fields the edit names. A field the edit
     does not name keeps its value, and every other key keeps its place and its form. None when the document declares no
@@ -155,7 +180,9 @@ def edit(seats, persona_id, fields, targets, clients=None):
     whose committed file does not declare the id are each refused by name. Every other target reads "writes <name>" and
     carries its document, so one refused project never stops the others.
 
-    A rename adds the sentences the preview states: the address and the authorship mark change. When `clients` names a
+    A rename adds the sentences the preview states: the address and the authorship mark change. The old name they leave
+    reads from the roster seat that declares it, committed file first, then its local file, then from the name a client
+    default stores, so a target set the hub cannot read never states the persona id as its name. When `clients` names a
     client default that holds the persona, the plan also names the client map and carries one map row for each default
     whose stored name changes (issue #3012)."""
     pid = _text(persona_id).strip()
@@ -167,9 +194,9 @@ def edit(seats, persona_id, fields, targets, clients=None):
             order.append(sid)
     rows, writes = [], []
     # The name a refusing row states comes from any project that declares the id, so a project that does not declare
-    # it still names the persona the edit was about.
-    known = next((_declared_name(s.get("committed"), pid) for s in (seats or ())
-                  if _declared_name(s.get("committed"), pid)), "")
+    # it still names the persona the edit was about. The old name a rename leaves needs no readable target at all: a
+    # target set the hub cannot read must never make the preview state the persona id in place of its real name.
+    known = old_name(seats, clients, pid)
     for target in targets or ():
         tid = _text(target).strip()
         seat = by_id.get(tid)
@@ -194,8 +221,8 @@ def edit(seats, persona_id, fields, targets, clients=None):
         writes.append({"project": tid, "committed": changed})
     notes, map_rows = [], []
     new_name = _text(fields.get("name")).strip()
-    if "name" in fields and new_name and new_name != (known or pid):
-        notes = rename_notes(known or pid, new_name)
+    if "name" in fields and new_name and new_name != known:
+        notes = rename_notes(known, new_name)
         held = default_names(clients, pid)
         if held:
             notes.append(f"the client map stores {new_name} as the default name of "

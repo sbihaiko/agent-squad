@@ -159,13 +159,11 @@ def personas_edit(body):
     if confirm:
         _slack_roster_clear()   # a write changed a project's files, so the next read reads the roster fresh
         # A rename stores the new name in each client default that holds the persona (#3012), so the client badge and
-        # tile never show the old name. The map waits for one saved project: it never names a name no project holds.
+        # tile never show the old name. The map is its own store: it writes whether or not a project file was saved,
+        # and only a refused map write leaves its row unwritten.
         new_name = _slack_text(fields.get("name")).strip()
         written = []
         for row in map_rows:
-            if not saved:
-                written.append({**row, "result": "not written: no project was saved"})
-                continue
             werr = _clients_default_write(row["client"], pid, new_name)
             written.append({**row, "result": f"refused: {werr}" if werr else
                                              f"stored {new_name} as the default name"})

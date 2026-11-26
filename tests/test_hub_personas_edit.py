@@ -121,6 +121,21 @@ def test_a_rename_names_the_client_map_of_each_default_that_holds_the_persona():
     assert plan["map"] == [], plan["map"]
 
 
+def test_a_rename_preview_reads_the_old_name_from_the_roster_not_from_a_written_target():
+    """A target set the hub can read nothing from must not make the preview state the persona id as the persona's old
+    name: the roster seat's own local declaration, or the name a client default stores, answers the real name."""
+    local_only = seat("alpha", {"personas": [{"id": "amber", "name": "Amber"}]},
+                      local={"personas": [{"id": "blue", "name": "Blue"}]})
+    plan = PS.edit([local_only], "blue", {"name": "Azure"}, ["ghost"], clients=[])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*"], plan["notes"]
+    # No seat declares the persona at all: the client default's stored name still answers it.
+    plan = PS.edit([seat("alpha", {})], "blue", {"name": "Azure"}, ["alpha"], clients=[CLIENT])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*",
+                             "the client map stores Azure as the default name of Atlas Corp"], plan["notes"]
+
+
 # ---------------------------------------------------------------- the route: the fields, the preview and the save
 
 def git_repo(tmp_path, name, doc):
@@ -289,6 +304,28 @@ def test_a_confirmed_rename_writes_each_project_and_the_client_default_stored_na
     assert next(t for t in node["now"] if t["key"] == "Default persona")["value"] == "Azure", node["now"]
 
 
+def test_a_confirmed_rename_stores_the_client_default_even_when_no_project_is_saved(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 6 and 7: the client default's stored name changes on confirm even when every project target is
+    refused, so the badge and the tile never keep the old name after the owner confirmed the rename."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"}, "projects": ["ghost"],
+                             "confirm": True})
+    assert out.get("err") is None, out
+    assert out["saved"] == [], out["saved"]
+    assert {r["project"]: r["result"] for r in out["rows"]} == \
+           {"ghost": "refused: the project is not in the roster"}, out["rows"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp",
+                           "result": "stored Azure as the default name"}], out["map"]
+    stored = yaml.safe_load((prof / "clients.local.yaml").read_text())["clients"][0]
+    assert stored["default_persona"] == {"id": "blue", "name": "Azure"}, stored
+    seats, _err = hub._slack_roster_checked(0.0)
+    tree = hub._slack_clients_tree_for(hub.slack_policy(), seats)
+    node = next(n for n in tree["clients"] if n.get("client") == "atlas")
+    assert node["badges"][0]["text"] == "Azure", node["badges"]
+    assert next(t for t in node["now"] if t["key"] == "Default persona")["value"] == "Azure", node["now"]
+
+
 @pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_written(hub, tmp_path, monkeypatch):
     """#3011 acceptance 8 and 9: the preview names the project whose file a save would not validate, and a confirmed save
@@ -408,6 +445,16 @@ def test_the_preview_draws_the_rename_notes_and_the_client_map_rows(hub):
     assert "the @Blue address becomes @Azure" in html, html
     assert "the authorship mark becomes *Azure&#39;s Msg*" in html or "the authorship mark becomes *Azure's Msg*" in html, html
     assert "Atlas Corp" in html and "writes Azure" in html, html
+
+
+def test_the_preview_survives_a_plan_whose_notes_and_map_are_not_rows(hub):
+    """A plan from an older hub, whose `notes` or `map` carries no list, still draws the project rows instead of
+    throwing, so the preview never goes blank on an answer of another shape."""
+    plan = {"rows": [{"project": "alpha", "file": "slack.yaml", "result": "writes Azure"}],
+            "notes": "old", "map": {"client": "atlas"}}
+    tail = f"prPlan={json.dumps(plan)};console.log(prPlanHtml())"
+    html = _node(_src(hub, tail))
+    assert "writes Azure" in html, html
 
 
 def test_the_sample_button_plays_the_chosen_voice_through_the_sample_route(hub):
