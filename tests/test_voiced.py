@@ -3173,3 +3173,38 @@ def test_an_unreadable_registry_answers_bounded(tmp_path):
     daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=lambda entry: str(path))
     assert daemon.policy_decision(dm_event()).session == "bounded"
     assert daemon.workspace_owner(FULL_TEAM, None) is None
+
+
+def test_a_string_registry_seam_resolves_the_workspace_owner(tmp_path):
+    """The registry seam may be the registry path itself, not a callable: a daemon wired to one registry file resolves
+    the owner from it, so the owner's full role still runs the full session (ADR-0180)."""
+    mod = voiced()
+    path = tmp_path / "hub-registry.json"
+    path.write_text(json.dumps({"owners": {FULL_TEAM: OWNER}, "grants": []}))
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=str(path))
+    assert daemon.workspace_owner(FULL_TEAM, None) == OWNER
+    assert daemon.policy_decision(owner_event()).session == "full"
+
+
+def test_the_owner_resolves_with_a_seam_that_answers_repo_entries(tmp_path):
+    """A registry seam answers a configured project's own registry for its repo entry, not only the bare entry: the owner
+    lookup reads that answer and names the owner, so the project channel still runs the full session (ADR-0180)."""
+    mod = voiced()
+    path = tmp_path / "hub-registry.json"
+    path.write_text(json.dumps({"owners": {FULL_TEAM: OWNER}, "grants": []}))
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=lambda entry: str(path))
+    assert daemon.workspace_owner(FULL_TEAM, FULL_REPO) == OWNER
+
+
+def test_the_owner_cache_sees_a_rewrite_that_keeps_the_registry_mtime(tmp_path):
+    """The cache keys on the registry's content, not its mtime alone: a rewrite that keeps the mtime and changes the
+    file size answers the new owner, so a stale owner never admits a full session (ADR-0180)."""
+    mod = voiced()
+    path = tmp_path / "hub-registry.json"
+    path.write_text(json.dumps({"owners": {FULL_TEAM: "U0OWNER"}}))
+    stamp = os.stat(path).st_mtime_ns
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=lambda entry: str(path))
+    assert daemon.workspace_owner(FULL_TEAM, None) == "U0OWNER"
+    path.write_text(json.dumps({"owners": {FULL_TEAM: "U0OWNER0002"}}))
+    os.utime(path, ns=(stamp, stamp))
+    assert daemon.workspace_owner(FULL_TEAM, None) == "U0OWNER0002"

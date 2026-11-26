@@ -640,6 +640,26 @@ def test_a_grant_in_another_workspace_does_not_pass_a_full_role_member():
     assert keys(defects) == ["members[0].users[0]"], defects
 
 
+def test_a_grant_whose_user_is_not_a_string_grants_nothing():
+    """A grant admits a member only when its workspace and user are non-empty strings. A malformed entry, such as a
+    registry row with a null user, names no grant, so the full role still refuses a member the owner map omits."""
+    committed, local = full_files()
+    local["members"][0]["users"] = ["None"]
+    defects = S.validate(committed, local, owners={}, grants=[{"workspace": "T0TEAM0001", "user": None}])
+    assert any(d.key == "members[0].users[0]" and "owner of workspace" in d.reason for d in defects), defects
+
+
+def test_a_grant_whose_workspace_is_not_a_string_grants_nothing():
+    """The workspace side of a grant is a string too: a numeric workspace never matches a member row, even when its
+    string form equals the member's workspace id."""
+    committed, local = full_files()
+    committed["workspaces"][0]["id"] = "5"
+    local["members"][0]["workspace"] = "5"
+    local["members"][0]["users"] = ["None"]
+    defects = S.validate(committed, local, owners={}, grants=[{"workspace": 5, "user": "None"}])
+    assert any(d.key == "members[0].users[0]" and "owner of workspace" in d.reason for d in defects), defects
+
+
 def test_a_bounded_role_member_needs_neither_the_owner_nor_a_grant():
     """A `session: bounded` role member in a declared workspace with no owner and no grant is no defect: the owner and
     grant check belongs to the full session alone (ADR-0180)."""
