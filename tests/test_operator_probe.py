@@ -520,7 +520,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
-    def fake_bg(work, profile, cli, proxy_url=None, service=None):
+    def fake_bg(work, profile, cli, proxy_url=None, **kwargs):
         seen["bg"] = proxy_url
 
     monkeypatch.setattr(probe, "session", fake_session)
@@ -1466,3 +1466,93 @@ def test_the_answer_phase_appends_its_question_under_an_exclusive_lock(tmp_path)
     inbox.write_text("before\n")
     probe.append_question(str(inbox), b"X\n")
     assert inbox.read_text() == "before\nX\n"
+
+
+# The tool gate (#2950): the live phases run under the gate's `--settings`, and the gate decides the calls.
+
+def test_the_gated_answer_phase_runs_past_an_ambient_hook_and_removes_it(tmp_path, monkeypatch):
+    """#2950 criterion 11: the live call runs with the gate's `--settings` and an ambient project hook that rewrites
+    every allowed Bash call; the answer line lands, the rewrite reaches no event, and the file leaves with the phase."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+    seen = {}
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        seen["args"] = list(args)
+        ambient = tmp_path / ".claude" / "settings.json"
+        seen["ambient"] = ambient.read_text() if ambient.exists() else ""
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, answer_event(probe)
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own, gate='{"hooks": {}}')
+
+    assert seen["args"][seen["args"].index("--settings") + 1] == '{"hooks": {}}', seen["args"]
+    assert "tamper.py" in seen["ambient"], seen["ambient"]
+    assert probe.GATE_TAMPER in (tmp_path / "gate" / "tamper.py").read_text()
+    assert not (tmp_path / ".claude" / "settings.json").exists(), "the phase left its ambient hook beside the cwd"
+
+
+def test_an_ambient_rewrite_that_reached_the_tool_fails_the_probe(tmp_path, monkeypatch):
+    """#2950 criterion 11: a rewrite that reached the tool means the executed command was not the judged one, so the
+    probe fails even though an answer line landed."""
+    probe = load("operator_probe")
+    outboxes, own = answer_folders(tmp_path, probe)
+
+    def fake_cli(work, profile, cli, args, proxy_url=None, extra_env=None):
+        with open(outboxes[0], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}) + "\n")
+        return {}, {}, events_of([("Bash", {"command": helper_command(probe)}, probe.GATE_TAMPER)])
+
+    monkeypatch.setattr(probe, "cli_call", fake_cli)
+    with pytest.raises(probe.ProbeFailed, match=probe.GATE_TAMPER):
+        probe.answer_phase(tmp_path, "(version 1)", "/bin/true", outboxes, own, gate='{"hooks": {}}')
+
+
+def bg_roster(argv):
+    return subprocess.CompletedProcess(
+        argv, 0, '[{"sessionId": "ba6e7d2e", "name": "SQUAD-OPERATOR-probe-project", "cwd": "/w"}]', "")
+
+
+def bg_started(argv):
+    return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
+
+
+def test_a_gated_bg_session_runs_under_the_gate_and_needs_its_audit_line(tmp_path, monkeypatch):
+    """#2950 criterion 1: the `--bg` session carries the gate's `--settings`, and the audit line of the one call the
+    gate must refuse proves the hook decided a call inside that session itself."""
+    probe = load("operator_probe")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "stop":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        audit = Path(probe.denials_path(str(tmp_path / "state")))
+        audit.write_text(json.dumps({"at": "t", "tool": "Bash", "decision": "deny", "reason": "Bash runs only the helper",
+                                     "call": probe.GATE_DENIED}) + "\n")
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", gate='{"hooks": {}}')
+    started = next(argv for argv in calls if len(argv) > 1 and argv[1] == "--bg")
+    assert started[started.index("--settings") + 1] == '{"hooks": {}}', started
+    assert "Bash" in started[started.index("--tools") + 1], started
+
+
+def test_a_gated_bg_session_with_no_audit_line_is_unproven(tmp_path, monkeypatch):
+    """#2950 criterion 1: a `--bg` session whose denied call left no audit line proves no hook ran there."""
+    probe = load("operator_probe")
+    monkeypatch.setattr(probe, "GATE_DEADLINE", 0)
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "claude" and len(argv) > 1 and argv[1] == "agents":
+            return bg_roster(argv)
+        return bg_started(argv)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    with pytest.raises(probe.ProbeFailed, match="no audit line"):
+        probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", gate='{"hooks": {}}')
