@@ -917,6 +917,11 @@ def guard_for(state, repo):
     return slackpolicy.guard(revision if isinstance(revision, dict) else {})
 
 
+def guard_digest(state, repo):
+    """The sha256 of one project's guard block: a change of it restarts the project's session (#2952)."""
+    return hashlib.sha256(json.dumps(guard_for(state, repo), sort_keys=True).encode()).hexdigest()
+
+
 def gate_policy(state, unit, repo, others=()):
     """The document one session's tool gate reads: its checkout, its own inboxes, the project's declared read wrappers,
     the shipped answer helper, every other project checkout, and the audit file (#2950).
@@ -1027,6 +1032,7 @@ def start(unit, state, repo, others=()):
         retire_proxy({"proxy": proxy})
         raise
     entry = {"name": marked_name(key), "checkout": checkout, "channels": list(unit["channels"]), "service": service,
+             "guard": guard_digest(state, unit.get("repo") or ""),
              "profile": {"path": profile_path, "sha256": hashlib.sha256(profile.encode()).hexdigest()},
              "gate": {"path": gate_path, "sha256": hashlib.sha256(json.dumps(gate_doc, sort_keys=True).encode()).hexdigest()}}
     env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "https_proxy")}
@@ -1129,15 +1135,18 @@ def plan(state, units, sessions, record, stopped, now=None, ensure=False):
         only = mine[0]
         if short_id(held.get("id")) == short_id(only["id"]):
             why = stalled(state, unit, only, now)  # a listed session that took no turn is dead, not alive (#2923)
+            digest = guard_digest(state, unit.get("repo") or "")
+            if why is None and held.get("guard") not in (None, digest):
+                why = "its guard block changed"
             if why:
                 restarts.append((unit, only, why))
-            record[key] = {**held, "missing": 0, "adopt": 0}
+            record[key] = {**held, "missing": 0, "adopt": 0, "guard": held.get("guard", digest)}
             continue
         adopt = int(held.get("adopt") or 0) + 1
         record[key] = {**held, "adopt": adopt}
         if adopt >= ADOPT_PASSES:
             adopts.append((key, only))
-            kept = {k: held[k] for k in ("profile", "proxy", "checkout", "channels", "name", "service") if k in held}
+            kept = {k: held[k] for k in ("profile", "proxy", "checkout", "channels", "name", "service", "guard") if k in held}
             record[key] = {**kept, "id": only["id"], "pid": only["pid"], "started": only["started"], "missing": 0,
                            "adopt": 0}
     for key in sorted(set(record) - set(wanted)):  # a project the registry dropped loses its session
