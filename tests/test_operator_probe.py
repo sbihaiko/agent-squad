@@ -612,9 +612,27 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     assert "Operation not permitted" in done.stderr
 
 
-def test_the_probe_proves_the_shared_service_is_out_of_reach(short_root, monkeypatch):
+@pytest.fixture
+def probe():
+    """One probe module per test: `load` builds a fresh module on each call, so a test and its fixture must patch the
+    same instance for the patch to reach the call under test."""
+    return load("operator_probe")
+
+
+@pytest.fixture
+def shared_root(probe, monkeypatch):
+    """A stand-in for the owner's shared service root: no unit test writes into the real `/tmp/cc-daemon-<uid>`, and
+    the probe reads the root through `daemon_root`, so one patch reaches every call it makes. It sits in `/tmp` as the
+    CLI's own root does: the probe keeps an instance folder and a socket under it, and an AF_UNIX name over 103 bytes
+    is refused, which pytest's `tmp_path` already exceeds."""
+    path = Path(tempfile.mkdtemp(prefix="cc-daemon-probe-", dir="/tmp"))
+    monkeypatch.setattr(probe, "daemon_root", lambda: str(path))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def test_the_probe_proves_the_shared_service_is_out_of_reach(short_root, probe, shared_root, monkeypatch):
     """#2943: a connect to the owner's shared background service, which sits outside the profile, is refused."""
-    probe = load("operator_probe")
     monkeypatch.setattr(probe, "sandboxed", scripted(probe))
     assert probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
     monkeypatch.setattr(probe, "sandboxed", scripted(probe, service_open=True))
@@ -622,11 +640,41 @@ def test_the_probe_proves_the_shared_service_is_out_of_reach(short_root, monkeyp
         probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
 
 
+def test_the_shared_service_denial_targets_a_live_socket_inside_the_shared_root(short_root, probe, shared_root,
+                                                                               monkeypatch):
+    """#2942: the CLI keeps one control socket per daemon instance, in a folder under its shared root, so a connect to
+    `<root>/control.sock` fails as ENOENT; a missing file proves no denial. The probe stands in for the shared service:
+    it binds a real listener inside that root and reaches it once on its own before the sandboxed call, so only the
+    kernel's own refusal can stop the sandboxed connect. The stand-in is removed after the call."""
+    seen = []
+
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        target = args[-1]
+        seen.append((target, os.path.exists(target)))
+        if target.startswith(str(shared_root)):
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        sock = socket.socket(socket.AF_UNIX)
+        sock.connect(target)
+        sock.close()
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
+    service = str(short_root / "service")
+    shared = probe.service_denial(short_root, "(version 1)(allow default)", service)
+    target, live = seen[0]
+    assert live, f"the shared-service denial ran on a path that is not a live socket: {target}"
+    assert target == shared
+    assert os.path.dirname(os.path.dirname(shared)) == str(shared_root), shared
+    assert os.path.basename(shared) == probe.operators.CONTROL_SOCKET, shared
+    assert seen[1:] == [(os.path.join(service, probe.operators.CONTROL_SOCKET), True)], seen
+    assert not os.path.exists(os.path.dirname(shared)), "the stand-in for the shared service is removed"
+
+
 @pytest.mark.heavy     # the wait for the listener that never accepts: over the 1 s line, so the fast battery leaves it out
-def test_the_service_denial_fails_when_the_call_never_reaches_the_projects_socket(short_root, monkeypatch):
+def test_the_service_denial_fails_when_the_call_never_reaches_the_projects_socket(short_root, probe, shared_root,
+                                                                                 monkeypatch):
     """#2943: a call the kernel lets run but that never reaches the project's own socket proves only that the path sits
     inside the grant. The positive control binds a real listener and waits for it to accept the connect."""
-    probe = load("operator_probe")
 
     def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
         if probe.daemon_root() in args[-1]:
@@ -638,10 +686,9 @@ def test_the_service_denial_fails_when_the_call_never_reaches_the_projects_socke
         probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
 
 
-def test_the_control_socket_name_is_one_constant_beside_the_service_env(short_root, monkeypatch):
+def test_the_control_socket_name_is_one_constant_beside_the_service_env(short_root, probe, shared_root, monkeypatch):
     """#2943: the probe derives the CLI's control socket from one constant, so the name the shared root refuses and
     the name the project's own root reaches can never drift apart."""
-    probe = load("operator_probe")
     ops = probe.operators
     assert ops.CONTROL_SOCKET == "control.sock"
     monkeypatch.setattr(ops, "CONTROL_SOCKET", "probe-control.sock")
@@ -649,7 +696,7 @@ def test_the_control_socket_name_is_one_constant_beside_the_service_env(short_ro
 
     def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
         seen.append(args[-1])
-        if args[-1].startswith(os.path.join(ops.daemon_root(), "")):
+        if args[-1].startswith(os.path.join(probe.daemon_root(), "")):
             return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
         sock = socket.socket(socket.AF_UNIX)
         sock.connect(args[-1])
@@ -659,7 +706,8 @@ def test_the_control_socket_name_is_one_constant_beside_the_service_env(short_ro
     monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
     service = str(short_root / "service")
     shared = probe.service_denial(short_root, "(version 1)(allow default)", service)
-    assert shared == os.path.join(ops.daemon_root(), "probe-control.sock"), shared
+    assert os.path.dirname(os.path.dirname(shared)) == str(shared_root), shared
+    assert os.path.basename(shared) == "probe-control.sock", shared
     assert seen == [shared, os.path.join(service, "probe-control.sock")], seen
 
 
