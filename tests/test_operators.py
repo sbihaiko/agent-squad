@@ -1425,6 +1425,39 @@ def test_a_started_session_keeps_its_state_in_the_operator_config_root(tmp_path,
     assert os.path.isdir(root), "the root is prepared before the CLI starts"
 
 
+def test_the_cli_temp_folder_sits_inside_the_granted_config_root(tmp_path, monkeypatch):
+    """The CLI writes its per-session temp folder and a cwd file after each Bash call under its temp root (#2982). The
+    default root is `/tmp`, which the profile refuses, so every Bash call failed. The env names a root inside the
+    operator's config root, which the profile grants, and never a folder that other sessions share."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+    root = op.config_root(state)
+    temp = op.cli_env(state)["CLAUDE_CODE_TMPDIR"]
+    assert os.path.commonpath([temp, root]) == root, temp
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(subpath "{root}")' in write, write
+
+
+def test_a_started_session_runs_with_its_temp_root_prepared(tmp_path, monkeypatch):
+    """The start prepares the temp root before the CLI starts, so the first Bash call finds it (#2982)."""
+    op = operators(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_call(argv, cwd=None, timeout=None, env=None):
+        seen["env"] = env
+        return subprocess.CompletedProcess(argv, 0, "aaaaaaaa-0000-0000-0000-000000000001\n", "")
+
+    monkeypatch.setattr(op, "call", fake_call)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:8016")
+    (tmp_path / "home").mkdir()
+    pinned_dm_record(tmp_path / "state", "D0AAAAAA1")
+    op.start("dm", str(tmp_path / "state"), str(tmp_path / "repo"))
+    temp = seen["env"]["CLAUDE_CODE_TMPDIR"]
+    assert os.path.isdir(temp), "the temp root is prepared before the CLI starts"
+
+
 def test_the_operator_root_links_the_owner_user_files_a_session_loads(tmp_path, monkeypatch):
     """The session still loads the owner's user settings, memory, skills and transcripts: the root links each of them,
     and the global config file stays the session's own."""
