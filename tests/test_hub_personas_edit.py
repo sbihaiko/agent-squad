@@ -198,6 +198,7 @@ def test_a_confirmed_save_writes_each_project_from_its_own_tree_with_one_commit_
         assert count == "2", f"{slug}: one commit above the seed: {count}"
 
 
+@pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_written(hub, tmp_path, monkeypatch):
     """#3011 acceptance 8 and 9: the preview names the project whose file a save would not validate, and a confirmed save
     refuses it by name and still writes every other target."""
@@ -215,6 +216,7 @@ def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_wr
     assert [s["project"] for s in out["saved"]] == ["alpha"], out["saved"]
 
 
+@pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_commit_written_but_not_pushed_is_named_with_that_result(hub, tmp_path, monkeypatch):
     """#3011 acceptance 10: the save of a project whose commit was written and whose push failed states the commit and
     the failed push, never a plain success and never a silent loss."""
