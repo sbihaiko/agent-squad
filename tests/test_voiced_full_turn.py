@@ -33,7 +33,7 @@ def role(session=None):
     return row
 
 
-def full_revision(tmp_path, mod, channel, row):
+def full_revision(tmp_path, mod, channel, row, mode="listen+speak"):
     committed = {
         "version": 1,
         "project": {"language": "en-US"},
@@ -41,7 +41,7 @@ def full_revision(tmp_path, mod, channel, row):
         "roles": [row],
         "workspaces": [{
             "id": WORKSPACE, "label": "team", "class": "owned", "app": "hal9k",
-            "channels": [{"id": channel, "name": "proj-zesty", "mode": "listen+speak", "language": "pt-BR",
+            "channels": [{"id": channel, "name": "proj-zesty", "mode": mode, "language": "pt-BR",
                           "persona": "zesty", "roles": [row["id"]]}],
         }],
     }
@@ -51,18 +51,20 @@ def full_revision(tmp_path, mod, channel, row):
 
 
 def daemon_for(tmp_path, mod, checkout, client, cli):
+    """The production shape (#2965 review): `projects` lists repository names (`hub_repos`), and `configs` lists the
+    rows that carry each checkout (`hub_projects`)."""
     return mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
                       downloader=lambda url: b"", log=lambda line: None, client=client,
-                      projects=lambda: [project(checkout)], full_cli=cli)
+                      projects=lambda: [REPO], configs=lambda: [project(checkout)], full_cli=cli)
 
 
-def setup(tmp_path, stand, row):
+def setup(tmp_path, stand, row, mode="listen+speak", cli=None):
     mod = voiced()
     client = FakeClient()
     channel = _project_channel(tmp_path, mod, client)
-    full_revision(tmp_path, mod, channel, row)
+    full_revision(tmp_path, mod, channel, row, mode)
     checkout = stand["checkout"]
-    return mod, client, channel, daemon_for(tmp_path, mod, checkout, client, stand["claude"])
+    return mod, client, channel, daemon_for(tmp_path, mod, checkout, client, cli or stand["claude"])
 
 
 def deliver(daemon, channel, text, ts="1762500100.000100", user=OWNER):
@@ -133,3 +135,21 @@ def test_an_owner_on_a_role_with_no_full_session_keeps_the_bounded_path(tmp_path
     outcome = deliver(daemon, channel, "check the loop")
     assert outcome == "inbox", outcome
     assert calls(stand_in) == []
+
+
+def test_a_cli_that_cannot_start_posts_one_sentence_and_writes_its_audit_line(tmp_path, stand_in):
+    """A missing CLI raises OSError, not a timeout (#2965 review): the turn still audits and posts the failure sentence."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), cli=str(tmp_path / "no-such-claude"))
+    deliver(daemon, channel, "hello")
+    posts = [p for p in client.posts() if p.get("channel") == channel]
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_FAILED, client.posts()
+    rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
+    assert len(rows) == 1 and rows[0]["failed"] is True, rows
+
+
+def test_a_full_turn_in_a_listen_channel_posts_no_answer(tmp_path, stand_in):
+    """A channel the revision names `listen` keeps every answer (#2965 review), a full turn's too; the turn still audits."""
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"), mode="listen")
+    deliver(daemon, channel, f"hello {MARKER}")
+    assert not [p for p in client.posts() if p.get("channel") == channel and MARKER in str(p.get("text"))], client.posts()
+    assert [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"], lines(daemon.state.audit_path)
