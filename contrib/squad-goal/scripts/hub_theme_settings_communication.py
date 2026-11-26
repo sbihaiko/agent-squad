@@ -1229,7 +1229,8 @@ def slack_decide(query, committed=None, local=None):
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
-    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
+    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf,
+                                                   owners=_slack_owner_map(), grants=_slack_grants()))
     refused_keys = _slack_refused_keys(P, defects)
     ws_id, ch_id = str(query.get("workspace") or ""), str(query.get("channel") or "")
     groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
@@ -1532,17 +1533,66 @@ def _slack_registry_data():
     except (OSError, ValueError): data = {}
     return data if isinstance(data, dict) else {}
 
+def slack_registry_lock_path():
+    """The lock file that serializes a registry read-modify-write, beside the registry it protects (#2966)."""
+    return slack_registry_path().with_name(f".{SLACK_REGISTRY}.lock")
+
+_LOCK_WARNED = False   # the one warning a host without `fcntl` prints, so a save does not warn on every write
+
+def _registry_lock(fd):
+    """Hold the registry lock on `fd`, or return `(lock module, None)`. A host with no `fcntl`, such as a Windows host,
+    writes without the lock and warns once: the registry still lands, and the cost there is a lost update at once.
+    Returns `(None, error)` when the lock module is present but the lock fails."""
+    global _LOCK_WARNED
+    try:
+        import fcntl
+    except ImportError:
+        if not _LOCK_WARNED:
+            _LOCK_WARNED = True
+            print("the registry lock needs fcntl; this host writes the registry without it", file=sys.stderr)
+        return None, None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as e:
+        return None, f"could not be locked: {e.strerror or e}"
+    return fcntl, None
+
+def _slack_registry_update(change):
+    """Read, change and write the registry under one exclusive lock, so two writes at once never lose one (#2966).
+    `change` takes the document and returns the document to write. Returns an error, or None. The lock file stays
+    beside the registry: a lock is released by closing its descriptor, never by deleting the file, because a waiter
+    that opened the old file would then hold a lock nothing else reads."""
+    p = slack_registry_path()
+    lock = slack_registry_lock_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as e:
+        return f"{lock.name} could not be made: {e.strerror or e}"
+    try:
+        module, err = _registry_lock(fd)
+        if err:
+            return f"{lock.name} {err}"
+        try:
+            return _slack_atomic(p, json.dumps(change(_slack_registry_data()), indent=2, sort_keys=True) + "\n")
+        finally:
+            if module is not None:
+                try: module.flock(fd, module.LOCK_UN)
+                except OSError: pass
+    finally:
+        try: os.close(fd)
+        except OSError: pass
+
 def _slack_record(path, sha, committed=True):
     """Record a save in the local registry, keyed by the file it saved: the landed sha of a committed save, or the last
     landed sha of a save that changed only the local file. Returns an error, or None."""
-    p = slack_registry_path()
-    data = _slack_registry_data()
-    if sha is None:
+    def change(data):
         last = data.get(str(path)) if isinstance(data.get(str(path)), dict) else {}
-        sha = last.get("sha")
-    data[str(path)] = {"sha": sha, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                       "committed": bool(committed)}
-    return _slack_atomic(p, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        data[str(path)] = {"sha": sha if sha is not None else last.get("sha"),
+                           "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                           "committed": bool(committed)}
+        return data
+    return _slack_registry_update(change)
 
 def _slack_base(paths):
     """The files a preview read, each with its size and time, so the page can tell that a file changed after its
@@ -1583,7 +1633,8 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
         try: doc = yaml.safe_load(other.read_text())
         except (OSError, yaml.YAMLError): continue
         if isinstance(doc, dict): others.append((other.name, doc))
-    try: defects = P.validate(committed=new_c, local=new_l, others=others, local_name=pathlib.Path(local).name)
+    try: defects = P.validate(committed=new_c, local=new_l, others=others, local_name=pathlib.Path(local).name,
+                              owners=_slack_owner_map(), grants=_slack_grants())
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     if defects: return {"err": str(defects[0]), "defects": [str(d) for d in defects]}
@@ -2525,6 +2576,49 @@ def slack_channels_post(body):
     gone = [{"id": i, "text": SLACK_NOT_LISTED} for i in sorted(named) if i and i not in listed]
     return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named],
             "unreachable": gone}
+
+def _slack_owner_map():
+    """The owner user id of each workspace, as the registry holds it: `{}` when the registry names none (#2966)."""
+    owners = _slack_registry_data().get("owners")
+    return {str(ws): str(user) for ws, user in owners.items() if user} if isinstance(owners, dict) else {}
+
+def _slack_grants():
+    """The `{workspace, user}` grants the registry holds, or `[]` when it holds none (#2966)."""
+    grants = _slack_registry_data().get("grants")
+    return [g for g in grants if isinstance(g, dict)] if isinstance(grants, list) else []
+
+def slack_owner_post(body):
+    """POST /api/slack/owner: the owner user id of one workspace, in the hub registry (#2966, ADR-0180).
+
+    `{workspace, user}` writes the id, so one workspace holds one owner. `{workspace}` alone reads the id the registry
+    holds. A value that is not a Slack user id is refused before any write, so the registry never holds a name the
+    policy cannot match against a member."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    ws = _slack_text(body.get("workspace")).strip()
+    owners = _slack_owner_map()
+    if not ws: return {"err": "a workspace id is needed", "owners": owners}
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "owners": owners}
+    if not P.WORKSPACE_ID.match(ws):
+        return {"err": f"workspace {ws!r} is not a Slack workspace id (T... or E...)", "owners": owners}
+    if "user" not in body: return {"err": None, "owner": owners.get(ws), "owners": owners}
+    user = _slack_text(body.get("user")).strip()
+    if not P.USER_ID.match(user):
+        return {"err": f"user {user!r} is not a Slack user id (U... or W...)", "owners": owners}
+    written = {}
+
+    def change(data):
+        kept = data.get("owners") if isinstance(data.get("owners"), dict) else {}
+        kept = {str(space): str(member) for space, member in kept.items() if member}
+        kept[ws] = user
+        data["owners"] = kept
+        written.clear(); written.update(kept)
+        return data
+
+    err = _slack_registry_update(change)
+    if err: return {"err": err, "owners": _slack_owner_map()}
+    return {"err": None, "owner": user, "owners": written}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and
