@@ -2612,16 +2612,23 @@ class Daemon:
                 return row["checkout"]
         return None
 
-    def permission_relay(self, workspace):
+    def permission_relay(self, workspace, timeout=None):
         """The relay of every full turn in this state folder, answered only by the owner in the pinned DM (SPEC 2964)."""
         directory = os.path.join(self.state.directory, "permission")
         os.makedirs(directory, exist_ok=True)
-        return permrelay.Relay(directory, owner=self.owner, dm_channel=self.state.dm_channel(), workspace=workspace)
+        return permrelay.Relay(directory, owner=self.owner, dm_channel=self.state.dm_channel(), workspace=workspace,
+                               timeout=permrelay.TIMEOUT_SECONDS if timeout is None else timeout)
 
     def post_permission_requests(self, relay):
-        """Post each open request of the relay to its DM once: the literal tool call and its working folder."""
+        """Post each open request of the relay to its DM once: the literal tool call and its working folder.
+
+        A request with no client or no pinned DM reaches no owner, so it is denied at once with its reason, never held
+        open until a later turn (#2970 review)."""
         for row in relay.unsent():
             if self.client is None or not row["channel"]:
+                reason = "no client" if self.client is None else "no DM channel"
+                relay.abandon(row["id"], reason)
+                self.log(f"voiced: permission request denied: {reason}")
                 continue
             self.client.api("chat.postMessage", {"channel": row["channel"], "text": row["text"]}, post=True)
             relay.mark_sent(row["id"])
@@ -2781,9 +2788,12 @@ class Daemon:
         answer = permrelay.parse_answer(event.get("text"))
         if answer and self.owner and str(event.get("user") or "") == str(self.owner) \
                 and event.get("channel") == self.state.dm_channel():
-            self.state.remember_message(mid)
-            self.permission_relay(workspace).decide(event.get("user"), event.get("channel"), workspace, *answer)
-            return "permission"
+            outcome = self.permission_relay(workspace).decide(event.get("user"), event.get("channel"), workspace,
+                                                            *answer)
+            if outcome in ("approved", "denied"):
+                self.state.remember_message(mid)
+                return "permission"
+            # A line that names no open request of this workspace is a message like any other: it reaches the inbox.
         target = self.inbox_path_of(event)
         decision = self.policy_decision(event)
         record = {

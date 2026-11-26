@@ -939,11 +939,19 @@ def full_turn_phase(work, cli):
 
 
 def wait_for_request(relay, deadline):
+    """The first open request of the relay, posted or not, whose request audit line exists.
+
+    The poll reads both `unsent()` and the open rows, so a request an earlier pass already marked sent is still found
+    (#2970 review)."""
     stop = time.monotonic() + deadline
     while time.monotonic() < stop:
-        rows = relay.unsent()
-        if rows:
-            return rows[0]
+        queued = relay.unsent()
+        if queued:
+            return queued[0]
+        named = {row.get("hash") for row in audit_rows_in(relay.directory) if row.get("event") == "request"}
+        posted = [row for row in relay.open_requests() if row.get("sent") and row["hash"] in named]
+        if posted:
+            return posted[0]
         time.sleep(0.5)
     raise ProbeFailed("no permission request reached the relay")
 
@@ -975,7 +983,26 @@ def permission_turn(cli, checkout, state, name, answer, relay_timeout):
         raise ProbeFailed("the full turn did not end after the permission was answered")
     if turn["value"].failed:
         raise ProbeFailed(f"the full turn with a permission request failed (exit {turn['value'].exit})")
-    return relay
+    return relay, request
+
+
+def permission_cap(relay):
+    """The fourth open request of one sender is refused, with its audit line.
+
+    One turn never opens past one request, because its permission prompt blocks the next call, so the cap is proven at
+    the relay the turn uses (#2970 review)."""
+    sender = "probe-cap-sender"
+    for n in range(permrelay.MAX_OPEN_PER_SENDER):
+        row = relay.request(sender, "Bash", {"command": f"touch cap-{n}.txt"}, "/probe")
+        if row["status"] != "pending":
+            raise ProbeFailed("the relay refused an open request under the sender cap")
+    fourth = relay.request(sender, "Bash", {"command": "touch cap-4.txt"}, "/probe")
+    if fourth["status"] != "refused":
+        raise ProbeFailed("the fourth open request of one sender was not refused")
+    refused = [row for row in audit_rows_in(relay.directory)
+               if row.get("event") == "refused" and row.get("hash") == fourth["hash"] and row.get("sender") == sender]
+    if not refused:
+        raise ProbeFailed("the refused request wrote no audit line")
 
 
 def permission_phase(work, cli):
@@ -986,20 +1013,30 @@ def permission_phase(work, cli):
     shutil.rmtree(state, ignore_errors=True)
     checkout.mkdir(parents=True, exist_ok=True)
     state.mkdir(parents=True, exist_ok=True)
-    permission_turn(cli, checkout, state, "approved.txt", True, relay_timeout=DEADLINE)
+    relay, approved = permission_turn(cli, checkout, state, "approved.txt", True, relay_timeout=DEADLINE)
     if not (checkout / "approved.txt").exists():
         raise ProbeFailed("an approved call did not run")
-    if not [row for row in audit_rows(state) if row.get("event") == "approval"]:
+    if not [row for row in audit_rows(state)
+            if row.get("event") == "approval" and row.get("hash") == approved["hash"]]:
         raise ProbeFailed("the approval wrote no audit line")
-    permission_turn(cli, checkout, state, "denied.txt", False, relay_timeout=PERMISSION_TIMEOUT)
+    permission_cap(relay)
+    _, denied = permission_turn(cli, checkout, state, "denied.txt", False, relay_timeout=PERMISSION_TIMEOUT)
     if (checkout / "denied.txt").exists():
         raise ProbeFailed("a call nobody approved ran")
-    if not [row for row in audit_rows(state) if row.get("event") == "timeout"]:
-        raise ProbeFailed("the timeout wrote no audit line")
+    if not [row for row in audit_rows(state)
+            if row.get("event") == "timeout" and row.get("hash") == denied["hash"]]:
+        raise ProbeFailed("the timeout of the unanswered request wrote no audit line")
+    if [row for row in audit_rows(state)
+            if row.get("event") == "timeout" and row.get("hash") == approved["hash"]]:
+        raise ProbeFailed("the approved request timed out")
 
 
 def audit_rows(state):
-    path = state / "permission" / permrelay.AUDIT_FILE
+    return audit_rows_in(Path(state) / "permission")
+
+
+def audit_rows_in(directory):
+    path = Path(directory) / permrelay.AUDIT_FILE
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

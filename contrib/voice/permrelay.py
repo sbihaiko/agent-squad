@@ -111,6 +111,7 @@ class Relay:
             rid = uuid.uuid4().hex
             rows[rid] = {"hash": digest, "sender": sender, "tool": tool_name, "status": "open",
                          "created": self.now(), "sent": False, "channel": self.dm_channel,
+                         "workspace": self.workspace,
                          "text": describe(tool_name, tool_input, cwd, digest)}
             self._save(rows)
             self._audit("request", id=rid, hash=digest, sender=sender, tool=tool_name)
@@ -130,15 +131,45 @@ class Relay:
                 rows[rid]["sent"] = True
                 self._save(rows)
 
+    def abandon(self, rid, reason):
+        """Deny a request the daemon cannot post: no DM reaches the owner, so no answer can ever arrive."""
+        with self._locked():
+            rows = self._load()
+            row = rows.get(rid)
+            if not row or row["status"] != "open":
+                return False
+            row["status"] = "denied"
+            self._save(rows)
+            self._audit("undeliverable", id=rid, hash=row["hash"], sender=row["sender"], tool=row["tool"],
+                        reason=reason)
+        return True
+
+    def open_requests(self):
+        """Every open request of the relay, posted or not, so a reader never misses one an earlier turn marked sent."""
+        with self._locked():
+            rows = self._load()
+            if self._settle(rows):
+                self._save(rows)
+        return [dict(row, id=rid) for rid, row in rows.items() if row["status"] == "open"]
+
     def decide(self, user, channel, workspace, verb, digest):
-        if user != self.owner or channel != self.dm_channel or workspace != self.workspace or verb not in ("approve", "deny"):
+        """The owner's answer to one request: `approved`, `denied`, `none` or `refused`.
+
+        The workspace the answer names must be the workspace that asked for the request: one state folder holds the
+        requests of every full turn, so the row carries its own workspace (#2970 review)."""
+        if user != self.owner or channel != self.dm_channel or verb not in ("approve", "deny"):
             self._audit("refused_answer", hash=digest)
             return "refused"
         with self._locked():
             rows = self._load()
             self._settle(rows)
-            open_rows = [(row["created"], rid) for rid, row in rows.items()
-                         if row["status"] == "open" and row["hash"] == digest]
+            named = [(row["created"], rid) for rid, row in rows.items()
+                     if row["status"] == "open" and row["hash"] == digest]
+            open_rows = [(created, rid) for created, rid in named if rows[rid].get("workspace") == workspace]
+            if named and not open_rows:
+                self._save(rows)
+                self._audit("refused_answer", hash=digest)
+                return "refused"
             if not open_rows:
                 self._save(rows)
                 return "none"
@@ -152,19 +183,24 @@ class Relay:
         return "approved" if approved else "denied"
 
     def verdict(self, rid):
+        """The answer the waiting call gets: `pending`, `allow` or `deny`.
+
+        An approval is one shot: the reading that consumes it allows the call, and every later reading of the same
+        request denies. A `used`, `denied`, `timeout` or missing request denies."""
         with self._locked():
             rows = self._load()
             changed = self._settle(rows)
             row = rows.get(rid)
             status = row["status"] if row else "denied"
-            if status == "approved":
+            was_approved = status == "approved"
+            if was_approved:
                 row["status"] = "used"
                 changed = True
             if changed:
                 self._save(rows)
         if status == "open":
             return "pending"
-        return "allow" if status in ("approved", "used") else "deny"
+        return "allow" if was_approved else "deny"
 
 
 def mcp_config(python, script, state, owner, dm, workspace, folder, timeout=None):
