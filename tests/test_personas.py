@@ -97,6 +97,24 @@ def test_a_drifted_row_names_each_copy_with_its_project():
     ], row
 
 
+def test_a_drift_names_a_local_only_copy_that_differs_from_the_committed_one():
+    """A drift covers every declaration of one client, so a committed copy and a local-only copy of one id with
+    different fields still raise the flag; the copies a save can write stay the committed ones alone."""
+    seats = [seat("alpha", {"personas": [persona("hal", "HAL9K", "Kore", "Calm.")]}),
+             seat("beta", {}, {"personas": [persona("hal", "HAL", "Sulafat", "Warm.")]})]
+    row = PS.groups(seats, one_client(["alpha", "beta"]))[0]["rows"][0]
+    assert row["drift"] is True, row
+    assert [c["project"] for c in row["copies"]] == ["alpha"], row
+
+
+def test_a_settle_of_a_row_with_no_drift_names_its_reason():
+    """A settle exists for a drifted row alone: projects that declare the same fields never offer a choice, so a body
+    that names a copy answers a reason and no target."""
+    seats = [seat(pid, {"personas": [persona("hal", "HAL9K")]}) for pid in ("alpha", "beta", "gamma")]
+    got = PS.settle(seats, one_client(["alpha", "beta", "gamma"]), "hal", "acme", "alpha")
+    assert got["fields"] is None and got["targets"] == [] and got["err"], got
+
+
 def test_a_settle_names_the_chosen_copy_and_only_that_client_s_projects():
     """#3015 acceptance 2, 3 and 6: the choice answers the chosen copy's fields and the projects of that client that
     declare the id; a project of another client that declares the same id is never a target."""

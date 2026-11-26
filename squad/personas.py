@@ -65,14 +65,19 @@ def _copy(decl, project_id, label):
             "tone": decl["tone"], "file": decl["file"]}
 
 
+def _same_fields(a, b):
+    return (a["name"], a["voice"], a["tone"]) == (b["name"], b["voice"], b["tone"])
+
+
 def _merge(pairs, defaults):
     """The rows of one group: `pairs` is one `(project id, label, seat)` for each project of the group, in order. The
     first declaration of an id answers its fields; a later declaration of the same id in the same group adds its
-    project.
+    project and raises the drift flag when its fields differ.
 
-    A row carries one copy for each project whose committed file declares the id: these are the copies a save can write,
-    so they alone raise the drift flag when their fields differ, and they alone are the targets a settle writes. A
-    declaration only the local file holds is read-only and never a copy, so a drift always has a save that clears it."""
+    The drift flag covers every declaration of the id inside the group, including a declaration only the local file
+    holds. A row carries one copy for each project whose committed file declares the id: these are the copies a save can
+    write, so they alone are the targets a settle writes. A declaration only the local file holds is read-only and never
+    a copy."""
     rows, index = [], {}
     for project_id, label, seat in pairs:
         for decl in declarations(seat):
@@ -83,14 +88,11 @@ def _merge(pairs, defaults):
                        "drift": False, "read_only": decl["committed"] is False}
                 index[decl["id"]] = row
                 rows.append(row)
+            elif not _same_fields(row, decl):
+                row["drift"] = True
             if decl["committed"]:
                 row["read_only"] = False
-                copy = _copy(decl, project_id, label)
-                first = row["copies"][0] if row["copies"] else None
-                if first is not None and (first["name"], first["voice"], first["tone"]) != \
-                        (copy["name"], copy["voice"], copy["tone"]):
-                    row["drift"] = True
-                row["copies"].append(copy)
+                row["copies"].append(_copy(decl, project_id, label))
             if all(p["id"] != project_id for p in row["projects"]):
                 row["projects"].append({"id": project_id, "label": label, "file": decl["file"]})
     return rows
@@ -174,7 +176,8 @@ def settle(seats, clients, persona_id, client_id, copy_project):
     `client_id` names the group the choice was made in and `copy_project` names the project whose declaration the owner
     chose. The fields are that copy's name, voice and tone; the targets are one for each copy of that client, in project
     order. A copy of another client is never a target, and a client whose map or roster names no such copy answers its
-    reason and no field."""
+    reason and no field. A row with no drift offers no choice of copy, so a settle of it answers its reason too: only a
+    drifted row has copies to decide between."""
     pid, cid, copy_id = _text(persona_id).strip(), _text(client_id).strip(), _text(copy_project).strip()
     group = next((g for g in groups(seats, clients) if _text(g["id"]) == cid), None)
     if group is None:
@@ -186,6 +189,9 @@ def settle(seats, clients, persona_id, client_id, copy_project):
     if copy is None:
         return {"fields": None, "targets": [],
                 "err": f"copy: {copy_id or '(none)'} is not a project of this client that declares {pid}"}
+    if not row["drift"]:
+        return {"fields": None, "targets": [],
+                "err": f"copy: {pid} carries no drift in this client, so there is no copy to choose"}
     return {"fields": {"name": copy["name"], "voice": copy["voice"], "tone": copy["tone"]},
             "targets": [c["project"] for c in row["copies"]], "err": None}
 
