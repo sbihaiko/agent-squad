@@ -9,8 +9,9 @@
 # verdict. The run tries again within the gate's deadline, and holds the child when the deadline runs out; 1 CHANGES or
 # BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the issue's
 # `requeue` fact holds the reviewed head (ADR-0149), so childcc never requeues it a second time. The run holds the child.
-# 6 "no change" (#1406): the child's head equals its base, so there is nothing to review; the issue is requeued once with the
-# child's reason (no review retry, no model call), and the run exits 1. A probe child (SG_CHILD_KIND=probe, #1574) has a report
+# 6 "no change" (#1406): the child's head equals its base, so there is nothing to review; the issue ends one no-change fail
+# with the child's reason (`wave.sh fail ... nochange`, #2245, #2984), never a requeue that a later run repeats on the same
+# base (no review retry, no model call), and the run exits 1. A probe child (SG_CHILD_KIND=probe, #1574) has a report
 # or an issue comment for its deliverable and no tree change by design: it exits 7 (NOCHANGE_PROBE) first, with no requeue and no
 # ledger `requeue` fact, and the run records `review_nochange` as a pass. A code child never takes that path.
 # 4 "fix" (#570): the run offers a fix round (SQUAD_REVIEW_FIX=1: it holds the grant of the child's next entry) and the review
@@ -42,7 +43,7 @@ out=$(bash "$here/childreview.sh" "$run" "$iss" 2>&1); rc=$?
 printf '%s\n' "$out" >&2
 md="$SG_STATE/review-$key.md"
 # #1406: exit 6 is a child with no change past its base. Its review input is empty and never changes, so it is no "try again":
-# the issue is requeued once at this head with the child's own reason, and the run exits 1 (no review slot or model spent).
+# the issue ends one no-change fail at this head with the child's own reason, and the run exits 1 (no review slot or model spent).
 if [ "$rc" = $NOCHANGE ] && [ "${SG_CHILD_KIND:-}" = probe ]; then
   echo "RUNREVIEW $run $child: a probe child made no change by design, nothing to review or requeue (#$iss)" >&2
   exit $NOCHANGE_PROBE
@@ -53,7 +54,9 @@ if [ "$rc" = $NOCHANGE ]; then
   if [ "$(SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeued "$SG_REPO#$iss" "$run" 2>/dev/null)" = "$head" ]; then
     echo "RUNREVIEW $run $child: ${head:0:9} was already requeued, no change to review (#$iss)" >&2
   else
-    SG_REQUEUE_RUN=$run bash "$here/wave.sh" requeue "$iss" "the child made no change past ${rb9:-its base} in run $run: $why" >&2
+    # #2984: a requeue let the next run take the same base and end the same way, three times. A run that changed no file ends
+    # the issue's dispatch once, as the janitor's no-change landing does (#2245): wave.sh marks it for the owner with the reason.
+    bash "$here/wave.sh" fail "$iss" "$run" "the child made no change past ${rb9:-its base} in run $run: $why" nochange >&2
     SG_STATE="$SG_STATE" SG_REPO="$SG_REPO" python3 "$here/issue_ledger.py" requeue "$SG_REPO#$iss" "$run" "$head" >/dev/null 2>&1   # ADR-0149
   fi
   exit 1

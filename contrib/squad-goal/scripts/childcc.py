@@ -193,11 +193,12 @@ def reviewed(rd, child, n, wt, rv):
     out = (e.stdout + e.stderr).strip()
     REVIEWED_NOW.add(f"{rd.name} {child}")
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
-    if e.returncode == 6:   # #1406: no change past its base, so nothing to review: the issue is requeued at once with the child's reason, never three hold passes
+    if e.returncode == 6:   # #1406: no change past its base, so nothing to review: the issue ends one no-change fail with the child's reason, never three hold passes
         k = review_paths(wt)[0].name[len("review-"):-len(".md")]
         try: why = (pathlib.Path(st) / f"reason-{k}").read_text().strip().splitlines()[0]
         except (OSError, IndexError): why = "the child made no change"
-        subprocess.run(["bash", wave, "requeue", str(n), f"the child made no change past its base in run {rd.name}: {why}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})
+        # #2984: one no-change fail (#2245), never a requeue that the next run repeats on the same base
+        subprocess.run(["bash", wave, "fail", str(n), rd.name, f"the child made no change past its base in run {rd.name}: {why}", "nochange"], capture_output=True)
         record_requeue(rd.name, n, head)   # the head the child was requeued on, so the pass waits for a new one (ADR-0149)
         return "nochange"
     if e.returncode != 0: rv.unlink(missing_ok=True)
@@ -350,7 +351,7 @@ def enter(rd, child, n, d, approved=False, own=False):
     held = render_hold(rd, child, n, wt, fx)   # an after image with no render: no entry, one fix round (#2833); a run-owned child too, since its run never renders
     if held is not None: return held
     rvd = False if approved else reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
-    if rvd == "nochange": return False, f"CHILD NO CHANGE #{n} ({rd.name} {child}): nothing to review past its base; the issue is requeued", True
+    if rvd == "nochange": return False, f"CHILD NO CHANGE #{n} ({rd.name} {child}): nothing to review past its base; the issue ends one no-change fail", True
     if not approved and not rvd: return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
