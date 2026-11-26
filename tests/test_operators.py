@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -688,6 +689,54 @@ def test_an_adopted_project_keeps_the_profile_and_proxy_it_ran_under(tmp_path, m
     assert entry["id"] == live["sessionId"] and entry["profile"] == profile and entry["proxy"] == proxy
 
 
+def test_an_adopted_session_keeps_the_shared_service_its_process_runs_under(tmp_path, monkeypatch):
+    """#2942: a record the base build wrote names no service, and its process runs under the owner's shared root. The
+    adopt write names that root, so a stop reaches the live service, never the project's new and empty one."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, [])
+    live = session(tmp_path / "repo", "dm", "dddddddd-0000-0000-0000-000000000001")
+    scenario(tmp_path, [live])
+    held = {"id": "eeeeeeee-0000-0000-0000-00000000000a", "pid": 1, "started": 100}
+    (tmp_path / "state" / "operators.json").write_text(json.dumps({"dm": held}))
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert not (record(tmp_path).get("dm") or {}).get("service"), "the first pass adopted the session"
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    entry = record(tmp_path)["dm"]
+    assert entry["id"] == live["sessionId"], entry
+    assert entry["service"] == op.daemon_root(), entry
+    assert op.service_of(str(tmp_path / "state"), "dm", record(tmp_path)) == op.daemon_root()
+
+
+def test_a_record_that_matches_its_live_session_names_the_shared_root_it_runs_under(tmp_path, monkeypatch):
+    """#2942: a base-build record whose id matches its live session is never adopted, so the same pass names the
+    owner's shared root on the record it keeps, and a later stop reaches the live service."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, [])
+    live = session(tmp_path / "repo", "dm", "dddddddd-0000-0000-0000-000000000001")
+    scenario(tmp_path, [live])
+    held = {"id": live["sessionId"], "pid": live["pid"], "started": 100}
+    (tmp_path / "state" / "operators.json").write_text(json.dumps({"dm": held}))
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    entry = record(tmp_path)["dm"]
+    assert entry["id"] == live["sessionId"], entry
+    assert entry["service"] == op.daemon_root(), entry
+
+
+def test_an_adopted_session_of_this_build_keeps_the_service_its_record_names(tmp_path, monkeypatch):
+    """#2943: a record this build wrote names the project's own service, and adoption keeps that root, so the stop
+    never leaves the project's own service for the owner's shared one."""
+    op = operators(tmp_path, monkeypatch)
+    hub(tmp_path, monkeypatch, op, [])
+    live = session(tmp_path / "repo", "dm", "dddddddd-0000-0000-0000-000000000001")
+    scenario(tmp_path, [live])
+    service = op.service_root(str(tmp_path / "state"), "dm")
+    held = {"id": "eeeeeeee-0000-0000-0000-00000000000a", "pid": 1, "started": 100, "service": service}
+    (tmp_path / "state" / "operators.json").write_text(json.dumps({"dm": held}))
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
+    assert record(tmp_path)["dm"]["service"] == service, record(tmp_path)["dm"]
+
+
 def test_a_failed_stop_keeps_ownership_and_backs_off(tmp_path, monkeypatch):
     """Ownership is dropped only after the stop is confirmed absent; a failed stop keeps it and backs off."""
     op = operators(tmp_path, monkeypatch)
@@ -950,6 +999,28 @@ def test_the_shared_service_retry_runs_with_the_owner_environment(tmp_path, monk
     op.stop("aaaaaaaa", str(tmp_path / "state"), str(tmp_path / "service"))
     assert len(seen) == 2, seen
     assert seen[1] == owner, seen[1]
+
+
+@pytest.mark.heavy     # a live CLI call: over the 1 s line, so the fast battery deselects it
+@pytest.mark.claude_bound
+def test_the_real_cli_names_the_session_a_private_service_does_not_hold(tmp_path):
+    """#2943: `stop()` falls back to the owner's shared service only on the CLI's own "no such session" words. This
+    pins that wording against the real CLI under a private service root: a wording change turns every base-build
+    session into one no stop reaches, so the change shows up here."""
+    cli = shutil.which("claude")
+    if cli is None:
+        pytest.skip("no claude CLI on this machine")
+    spec = importlib.util.spec_from_file_location("operators_real_cli", VOICE / "operators.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.CLI = cli
+    state = tmp_path / "state"
+    state.mkdir()
+    service = tmp_path / "service"
+    service.mkdir()
+    with pytest.raises(module.Refused) as caught:
+        module.stop("f0f0f0f0", str(state), str(service))
+    assert module.NO_SUCH_SESSION in str(caught.value), str(caught.value)
 
 
 def test_a_stop_that_both_services_refuse_is_named(tmp_path, monkeypatch):

@@ -28,6 +28,15 @@ def load(name):
     return module
 
 
+@pytest.fixture
+def short_root():
+    """A short temp root for an AF_UNIX socket name: the kernel refuses a name over 103 bytes, and pytest's own
+    `tmp_path` is longer than that on macOS."""
+    path = Path(tempfile.mkdtemp(prefix="op-probe-"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def test_the_operator_tool_set_is_read_monitor_taskstop_bash():
     operators = load("operators")
     assert operators.TOOLS.split(",") == ["Read", "Monitor", "TaskStop", "Bash"]
@@ -603,17 +612,33 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     assert "Operation not permitted" in done.stderr
 
 
-def test_the_probe_proves_the_shared_service_is_out_of_reach(tmp_path, monkeypatch):
+def test_the_probe_proves_the_shared_service_is_out_of_reach(short_root, monkeypatch):
     """#2943: a connect to the owner's shared background service, which sits outside the profile, is refused."""
     probe = load("operator_probe")
     monkeypatch.setattr(probe, "sandboxed", scripted(probe))
-    assert probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+    assert probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
     monkeypatch.setattr(probe, "sandboxed", scripted(probe, service_open=True))
     with pytest.raises(probe.ProbeFailed, match="shared service"):
-        probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
+        probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
 
 
-def test_the_control_socket_name_is_one_constant_beside_the_service_env(tmp_path, monkeypatch):
+@pytest.mark.heavy     # the wait for the listener that never accepts: over the 1 s line, so the fast battery leaves it out
+def test_the_service_denial_fails_when_the_call_never_reaches_the_projects_socket(short_root, monkeypatch):
+    """#2943: a call the kernel lets run but that never reaches the project's own socket proves only that the path sits
+    inside the grant. The positive control binds a real listener and waits for it to accept the connect."""
+    probe = load("operator_probe")
+
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        if probe.daemon_root() in args[-1]:
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
+    with pytest.raises(probe.ProbeFailed, match="never reached"):
+        probe.service_denial(short_root, "(version 1)(allow default)", str(short_root / "service"))
+
+
+def test_the_control_socket_name_is_one_constant_beside_the_service_env(short_root, monkeypatch):
     """#2943: the probe derives the CLI's control socket from one constant, so the name the shared root refuses and
     the name the project's own root reaches can never drift apart."""
     probe = load("operator_probe")
@@ -626,11 +651,14 @@ def test_the_control_socket_name_is_one_constant_beside_the_service_env(tmp_path
         seen.append(args[-1])
         if args[-1].startswith(os.path.join(ops.daemon_root(), "")):
             return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
-        return subprocess.CompletedProcess(args, 1, "", "No such file or directory\n")
+        sock = socket.socket(socket.AF_UNIX)
+        sock.connect(args[-1])
+        sock.close()
+        return subprocess.CompletedProcess(args, 0, "", "")
 
     monkeypatch.setattr(probe, "sandboxed", run_sandboxed)
-    service = str(tmp_path / "service")
-    shared = probe.service_denial(tmp_path, "(version 1)(allow default)", service)
+    service = str(short_root / "service")
+    shared = probe.service_denial(short_root, "(version 1)(allow default)", service)
     assert shared == os.path.join(ops.daemon_root(), "probe-control.sock"), shared
     assert seen == [shared, os.path.join(service, "probe-control.sock")], seen
 
@@ -668,10 +696,11 @@ def test_the_probe_roster_read_carries_no_service_root(tmp_path, monkeypatch):
 
 
 @pytest.mark.sandbox_bound
-def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
-    """The real profile, the real kernel: the owner's shared service root is outside, the project's own root is inside."""
+def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path, short_root):
+    """The real profile, the real kernel: the owner's shared service root is outside, the project's own root is inside,
+    and the profile's own listener there accepts the connect."""
     probe = load("operator_probe")
-    service = tmp_path / "service"
+    service = short_root / "service"
     profile = load("operators").profile_text(str(tmp_path / "out.jsonl"), str(tmp_path / "in"),
                                              str(tmp_path / "in" / "dm.jsonl"),
                                              config=str(tmp_path / "config"), service=str(service))
@@ -746,9 +775,14 @@ def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False,
             if probe.NETWORK_HOST in args:
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             if getattr(probe, "SERVICE_CONNECT", None) in args:
-                # The shared root is outside the profile; the project's own root is inside it, and the kernel there
-                # answers "no such file" because the probe starts no socket.
-                if service_open or probe.daemon_root() not in args[-1]:
+                # The shared root is outside the profile; the project's own root is inside it, and the probe holds a
+                # real listener there, so the stand-in reaches it the way the kernel lets a real call through.
+                if probe.daemon_root() not in args[-1]:
+                    sock = socket.socket(socket.AF_UNIX)
+                    sock.connect(args[-1])
+                    sock.close()
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                if service_open:
                     return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -1045,6 +1079,20 @@ def owner_home(tmp_path):
     return home
 
 
+def test_the_file_stamp_notices_a_rewrite_that_keeps_the_time_and_the_size(tmp_path):
+    """#2942: a start that rewrites the owner's global config file with the same size at the same nanosecond still
+    changes the content, so the stamp carries the content's own digest, never the metadata alone."""
+    probe = load("operator_probe")
+    owner = tmp_path / ".claude.json"
+    owner.write_text('{"a": 1}' + "\n")
+    before = probe.file_stamp(owner)
+    stamp = os.stat(owner)
+    owner.write_text('{"a": 2}' + "\n")
+    os.utime(owner, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert owner.stat().st_size == stamp.st_size
+    assert probe.file_stamp(owner) != before
+
+
 def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypatch):
     """#2925, #2942, #2963: the probe tries a write to the owner's settings, CLAUDE.md and global config file under the
     profile, and each is refused."""
@@ -1078,19 +1126,18 @@ def test_the_probe_denies_a_write_to_the_owner_global_config_file(tmp_path, monk
 
 def config_stub(probe, starts, touch_owner=None):
     """A sandbox stand-in for `config_denials`: the append is the kernel's refusal, and a CLI start answers its events,
-    writing the owner's global config file only when `touch_owner` names it."""
+    writing the owner's global config file only when `touch_owner` names it. The argv shape tells them apart: the
+    denial carries the append program, and the start carries no such argument."""
     def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
-        if cli not in ("/bin/sh", sys.executable):
-            starts.append(list(args))
-            if touch_owner is not None:
-                Path(touch_owner).write_text("{}\n")
-            out = "\n".join([json.dumps({"type": "system", "subtype": "init", "tools": probe.TOOLS.split(","),
-                                         "permissionMode": "dontAsk"}),
-                             json.dumps({"type": "result", "subtype": "success", "is_error": False})]) + "\n"
-            return subprocess.CompletedProcess(args, 0, out, "")
         if probe.OPEN_FOR_WRITE in args:
             return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
-        raise AssertionError(f"an unexpected probe call: {args}")
+        starts.append(list(args))
+        if touch_owner is not None:
+            Path(touch_owner).write_text("{}\n")
+        out = "\n".join([json.dumps({"type": "system", "subtype": "init", "tools": probe.TOOLS.split(","),
+                                     "permissionMode": "dontAsk"}),
+                         json.dumps({"type": "result", "subtype": "success", "is_error": False})]) + "\n"
+        return subprocess.CompletedProcess(args, 0, out, "")
     return run_sandboxed
 
 
