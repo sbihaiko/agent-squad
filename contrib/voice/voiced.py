@@ -51,6 +51,12 @@ Before any of it, the daemon checks the line (#2948): it must answer a pending i
 of every link, and its text may not pass the channel's `answer_max_chars`. A refused line posts nothing and writes one row
 to `$VOICE_STATE/audit.jsonl` with its reason class.
 
+An outbox line whose top-level `kind` is exactly `action-request` is an action request, never an answer (#2939); an
+answer that mentions the kind in its text is still an answer. The daemon posts no request line: its action pass (`squad/slackactions.py`) runs in the daemon's own process, outside every session and its
+sandbox. The pass checks the request against the policy decision, runs the command the project declares, appends one
+reply in the thread and one audit line. It reads only the outbox of a channel a project owns, never the DM outbox, and
+it runs no request older than a few minutes. The session never runs a command itself.
+
 Each answered message writes one row to `$VOICE_STATE/answer-latency.jsonl`: `id`, `channel`, `question_ts`,
 `answer_ts` and `seconds`. Both ts values are Slack's own epoch stamps, so the latency needs no wall clock: the answer's
 question is the inbox line whose ts the answer threads under, else the oldest line the ledger does not answer yet.
@@ -99,7 +105,11 @@ import keychain  # noqa: E402  the one reader for the three voice secrets
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
 from squad import redact as shared_redact  # noqa: E402  the one redaction module, so an answer carries no secret (#2948)
-from squad import slackannounce, slackpolicy  # noqa: E402  the release post (#2703) and the Slack file rules (ADR-0177)
+from squad import (  # noqa: E402  a release event as a post in each subscribed owned channel (#2703)
+    slackactions,  # the action request pass that runs outside every session (#2939)
+    slackannounce,
+    slackpolicy,  # the one home of the Slack file rules (ADR-0177)
+)
 
 DEFAULT_STATE = os.path.expanduser("~/.local/state/agent-squad/voiced")
 # The profiles folder a printed plist names when the caller passes none (#2957): the live copy's own, never the deploy
@@ -123,7 +133,10 @@ CONFIG_POLL = 60.0                    # how long a moved dev tip waits for its r
 VOICE = "Charon"                       # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
+ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
+ACTION_HEARTBEAT = 60                 # empty action passes between two heartbeat log lines (#2939)
+BROKEN_LINE_BYTES = 200                # bytes of a line that is no JSON the drain keeps in its skip record
 GUARD_WINDOW = 60.0                   # the guard counts one sender's messages in this window (#2947)
 GUARD_REPLY_WINDOW = 600.0            # a refused sender hears one refusal reply per channel in ten minutes (#2947)
 AUDIT_TEXT_MAX = 80                   # the audit keeps at most this many characters of one message's text (#2947)
@@ -1174,6 +1187,95 @@ def read_lines(path):
     return out
 
 
+def names_request_kind(text):
+    """True when one outbox line that is not JSON names the reserved request kind as its own top-level `kind` key. Only
+    a line the parse cannot read reaches this test: a line that parses is read by `slackactions.is_request`, so an
+    answer that mentions the kind in plain text is posted, never skipped. A kind inside a string value of the line is a
+    mention too, so the line is no request and the drain records it as not JSON.
+
+    The line is walked with a small scanner, because no parse reads it: a string is skipped whole, braces follow the
+    depth, and the kind counts only as a key of the object's own top level."""
+    depth = 0
+    i = 0
+    size = len(text)
+    wanted = '"' + slackactions.KIND + '"'
+    while i < size:
+        char = text[i]
+        if char == '"':
+            j = i + 1
+            while j < size:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            if depth == 1 and text[i + 1:j] == "kind":
+                k = j + 1
+                while k < size and text[k] in " \t":
+                    k += 1
+                if k < size and text[k] == ":":
+                    k += 1
+                    while k < size and text[k] in " \t":
+                        k += 1
+                    if text.startswith(wanted, k):
+                        return True
+            i = j + 1
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+        i += 1
+    return False
+
+
+def request_source(text):
+    """The source of one request line, read from its raw text, or a word that names why it cannot be read. The drain logs
+    it for a line it skips, so the log names the message the request answers."""
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return "unreadable"
+    if not isinstance(record, dict):
+        return "unreadable"
+    return str(record.get("source") or "unknown")
+
+
+def read_outbox_answers(path):
+    """The answer lines of one outbox, the raw lines that are action requests, and the raw lines that are no JSON, as
+    `(answers, requests, broken)`.
+
+    A line that parses is a request only when `slackactions.is_request` reads the reserved kind on it, so an answer that
+    mentions the kind in plain text is still an answer. A top-level kind test covers only a line the parse cannot read,
+    so a malformed request line never reaches the channel either. A half line a crash left behind is no request, so its
+    first bytes go to `broken` and the drain records why it is not JSON."""
+    answers, requests, broken = [], [], []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                text = raw.strip()
+                if not text:
+                    continue
+                try:
+                    record = json.loads(text)
+                except ValueError:
+                    if names_request_kind(text):
+                        requests.append(text)
+                    else:
+                        broken.append(text[:BROKEN_LINE_BYTES])
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if slackactions.is_request(record):
+                    requests.append(text)
+                else:
+                    answers.append(record)
+    except OSError:
+        pass
+    return answers, requests, broken
+
+
 def message_id(event):
     """Slack's own id for one message: client_msg_id, else channel and ts, which name it once."""
     client_msg_id = event.get("client_msg_id")
@@ -1515,6 +1617,7 @@ class Daemon:
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
+        self._action_passes = 0   # empty action passes since the last one ran a request, for the heartbeat line
         self._last_refusal = {}   # repo -> the denial signature the owner was told about, held even when no file can hold it
         self._channel_conflicts = set()   # each refused channel claim whose DM went out, pruned when the claim is gone
         self._channel_logged = set()      # each refused channel claim already logged, pruned with the current lines
@@ -2310,7 +2413,15 @@ class Daemon:
         delivered = self.state.delivered()
         count = 0
         for channel, path in self.outbox_sources():
-            records = read_lines(path)
+            records, requests, broken = read_outbox_answers(path)
+            for raw in requests:
+                # An action request is not an answer: the pass runs it and appends its own reply line (#2939). The raw
+                # line is named in the log, so a skip is never silent.
+                self.log(f"voiced: action request not posted: channel {channel or DM} source {request_source(raw)}")
+            for raw in broken:
+                # A line no JSON cannot be posted and is no request: the log keeps its first bytes, so a malformed line
+                # is never dropped silently.
+                self.log(f"voiced: outbox line skipped, the line is not JSON: channel {channel or DM}: {raw}")
             if records and channel and not self.channel_accepts_answer(channel):
                 # A `listen` channel receives no post: the answer stays in its outbox and never leaves (SPEC 2682).
                 self.log(f"voiced: answer not posted, the channel is listen-only: {channel}")
@@ -2354,6 +2465,41 @@ class Daemon:
                 if fails + 1 == MAX_DELIVER_ATTEMPTS:
                     self.log(f"voiced: answer refused {MAX_DELIVER_ATTEMPTS} times; the next daemon tries it again")
         return count
+
+    def action_documents(self, channel):
+        """The `(committed, local)` Slack files of the project that owns one channel, from its active revision. A channel
+        with no active revision reads as empty files, so its request gets the policy's refusal and no action (#2939)."""
+        repo = self.state.channel_for(channel)
+        active = self.state.active_revision(repo) if repo else None
+        if active and active.get("revision"):
+            return active["revision"], active.get("local") or {}
+        return {}, {}
+
+    def run_action_requests(self, now=None):
+        """Run every action request no earlier pass ran, outside every operator session and its sandbox (#2939).
+
+        The sessions write one request line to an outbox; this pass reads it, asks the policy for the sender's decision,
+        checks the request through the executor, runs the command the project declares, appends one reply in the
+        thread and one audit line. It is a call in the daemon's own process, so no request reaches a sandboxed session.
+        """
+        runs = slackactions.run_pass(
+            self.state.dir,
+            lambda channel: self.state.channel_for(channel) or "",
+            self.action_documents,
+            now or datetime.now(),
+            outbox_for=self.state.outbox_for,
+            log=self.log,
+        )
+        for run in runs:
+            self.log(f"voiced: action {run.action or 'none'} for {run.sender} in {run.channel} exited {run.exit}")
+        if runs:
+            self._action_passes = 0
+        else:
+            # A pass that ran no request is still visible: one line every ACTION_HEARTBEAT passes says the pass is alive.
+            self._action_passes += 1
+            if self._action_passes % ACTION_HEARTBEAT == 0:
+                self.log(f"voiced: action pass ran no request ({self._action_passes} quiet passes)")
+        return len(runs)
 
     def policy_decision(self, event):
         """The decision of one socket event, always: from the loaded files of the project that owns its channel.
@@ -2685,6 +2831,27 @@ async def watch_outboxes(daemon, stop=None, interval=OUTBOX_POLL):
         await asyncio.sleep(interval)
 
 
+async def watch_actions(daemon, stop=None, interval=ACTION_POLL):
+    """Run each new action request as soon as the session writes it, until `stop` is set.
+
+    The pass runs in a worker thread, so a slow declared command never holds the socket loop. One guard belongs to the
+    daemon, so only one pass is in flight at a time even with two watchers: a slow declared command never lets a second
+    pass start and re-attempt the line the first is still running. A failed pass is a log line, never a watcher that
+    stops running actions.
+    """
+    guard = getattr(daemon, "action_pass_guard", None)
+    if guard is None:
+        guard = asyncio.Lock()
+        daemon.action_pass_guard = guard
+    while not (stop is not None and stop.is_set()):
+        async with guard:
+            try:
+                await asyncio.to_thread(daemon.run_action_requests)
+            except Exception as x:  # noqa: BLE001 - one bad request is a log line, never a daemon that stops acting
+                daemon.log(f"voiced: action pass failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
     """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
@@ -2729,12 +2896,13 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     outboxes = asyncio.create_task(watch_outboxes(daemon, stop))
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
+    actions = asyncio.create_task(watch_actions(daemon, stop))
     hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
                for token in apps.values()]
     try:
         await asyncio.gather(*hearing)
     finally:
-        tasks = (outboxes, configs, releases_task, *hearing)
+        tasks = (outboxes, configs, releases_task, actions, *hearing)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

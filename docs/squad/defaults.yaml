@@ -6,9 +6,9 @@
 # The ceiling bounds every child's grant, and the owner granted a child cap up to 30 USD: a lower ceiling refuses the
 # dispatch node's own grant with spend_over_ceiling.
 caps:
-  runs: 5                           # owner 2026-11-20: five runs; six ran ahead of the three gate slots, and a wave check
-                                    # came back unproven. Owner 2026-11-19: the Doing card count carries cards the loop never
-                                    # dispatches, so two idle cards cost half the dispatch at four runs.
+  runs: 10                          # owner 2026-11-25: ten runs. Owner 2026-11-20: five runs; six ran ahead of the three gate
+                                    # slots, and a wave check came back unproven. Owner 2026-11-19: the Doing card count carries
+                                    # cards the loop never dispatches, so two idle cards cost half the dispatch at four runs.
   children: 12
   gates: 4                          # owner 2026-11-20: four slots, so the landing's two-slot gate runs beside a hand or child
                                     # gate instead of waiting behind it. Owner 2026-11-19, measured: at five, two full gates ran at once and every suite ran

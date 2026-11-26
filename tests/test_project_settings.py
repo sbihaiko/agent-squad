@@ -189,7 +189,8 @@ def test_this_repository_overlay_caps_runs_and_lowers_the_gate_slots():
     # one full gate of two workers and one child gate beside it, and the loop gate never takes the whole budget.
     # Owner 2026-11-20: five runs; six ran ahead of the three gate slots, and a wave check came back unproven. Owner
     # 2026-11-20, later: four gate slots, so the landing's two-slot gate runs beside a hand or child gate.
-    assert overlay["caps"] == {"runs": 5, "children": 12, "gates": 4}
+    # Owner 2026-11-25: ten runs, up from five.
+    assert overlay["caps"] == {"runs": 10, "children": 12, "gates": 4}
     assert overlay["limits"]["max_budget_usd"] == 30
 
 

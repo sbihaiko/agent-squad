@@ -2775,3 +2775,182 @@ def test_a_start_that_cannot_spawn_is_one_log_line_and_no_raise(tmp_path, monkey
     monkeypatch.setattr(mod.subprocess, "Popen", refuse)
     assert mod.start_operator(str(tmp_path / "state"), "acme/app", log=logged.append) is False
     assert logged and "acme/app" in logged[0] and "failed" in logged[0], logged
+
+
+ACTION_DOCS = {
+    "version": 1,
+    "project": {"language": "en-US", "persona": "hal", "actions": {"status": "echo the project is green"}},
+    "personas": [{"id": "hal", "name": "HAL9K", "voice": "Kore", "tone": "Calm."}],
+    "roles": [{"id": "manager", "actions": ["status"]}],
+    "workspaces": [{"id": "T0TEAM0001", "class": "owned", "app": "hal9k",
+                    "channels": [{"id": "C0PROJ0001", "mode": "listen+speak", "roles": ["manager"]}]}],
+}
+ACTION_LOCAL = {"version": 1, "members": [{"workspace": "T0TEAM0001", "channel": "C0PROJ0001",
+                                           "role": "manager", "users": [OWNER]}]}
+
+
+def test_an_action_request_line_is_never_posted_and_the_pass_runs_it(tmp_path):
+    """#2939: the drain posts no request text, the pass runs the request outside the session, and its reply goes out."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    request = {"kind": "action-request", "action": "status", "arguments": {}, "sender": OWNER,
+               "channel": "C0PROJ0001", "source": "C0PROJ0001:1762500100.000100",
+               "thread_ts": "1762500100.000100", "at": time.time()}
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps(request) + "\n")
+    client = FakeClient()
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=client)
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    daemon.action_documents = lambda channel: (ACTION_DOCS, ACTION_LOCAL)
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert client.posts() == [], "the drain posted the request text"
+    assert daemon.run_action_requests() == 1
+    assert asyncio.run(daemon.drain_outboxes()) == 1
+    posted = [p for p in client.posts() if p.get("text") == "the project is green"]
+    assert posted and posted[0]["thread_ts"] == "1762500100.000100"
+    audit = [json.loads(line) for line in (tmp_path / "actions-audit.jsonl").read_text().splitlines()]
+    assert audit[0]["action"] == "status" and audit[0]["sender"] == OWNER and audit[0]["exit"] == 0
+
+
+def test_the_action_reply_is_written_through_the_states_own_outbox_path(tmp_path):
+    """#2939: the pass writes the reply through the state's own `outbox_for`, never a path it builds itself, so a state
+    that moves its outboxes still reaches the drain that reads them."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    request = {"kind": "action-request", "action": "status", "arguments": {}, "sender": OWNER,
+               "channel": "C0PROJ0001", "source": "C0PROJ0001:1762500100.000100",
+               "thread_ts": "1762500100.000100", "at": time.time()}
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps(request) + "\n")
+    elsewhere = tmp_path / "moved-outboxes"
+    elsewhere.mkdir()
+    state.outbox_for = lambda key: str(elsewhere / f"{key}.jsonl")
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    daemon.action_documents = lambda channel: (ACTION_DOCS, ACTION_LOCAL)
+    assert daemon.run_action_requests() == 1
+    moved = [json.loads(line) for line in (elsewhere / "C0PROJ0001.jsonl").read_text().splitlines()]
+    assert moved and moved[0]["text"] == "the project is green"
+    assert "the project is green" not in outbox.read_text(), "the pass wrote the reply to a path it built itself"
+
+
+def test_two_action_watchers_never_run_a_pass_at_once():
+    """Finding 5: only one action pass is in flight at a time, so a slow declared command never lets a second pass
+    start and re-attempt the same request line."""
+    mod = voiced()
+    active, peak = [], []
+
+    class Daemon:
+        def run_action_requests(self):
+            active.append(1)
+            peak.append(len(active))
+            time.sleep(0.05)
+            active.pop()
+
+        def log(self, line):
+            pass
+
+    async def drive():
+        stop = asyncio.Event()
+        daemon = Daemon()
+        tasks = [asyncio.create_task(mod.watch_actions(daemon, stop, interval=0.01)) for _ in range(2)]
+        await asyncio.sleep(0.25)
+        stop.set()
+        await asyncio.gather(*tasks)
+
+    asyncio.run(drive())
+    assert peak and max(peak) == 1
+
+
+def test_the_drain_posts_an_answer_that_mentions_the_request_kind_in_plain_text(tmp_path):
+    """Finding 3 (DEBT): the drain parses each line first and skips only a real request, so an answer whose text names
+    `action-request` is posted, never silently dropped."""
+    mod = voiced()
+    client = FakeClient()
+    channels = one_channel(tmp_path, mod, client)
+    app = channels["acme/app"]
+    voice = FakeVoice(tmp_path)
+    daemon = outbox_daemon(tmp_path, mod, client, channels, voice)
+
+    pending(daemon.state, app["id"])
+    # The line carries an `action-request` mention under another key, never as the top-level kind, so `is_request` reads
+    # it as an answer; the old raw-text test skipped it.
+    append_outbox(daemon.state.outbox_for(app["id"]),
+                  {"text": "The action-request pass is documented in the ADR.",
+                   "meta": {"kind": "action-request"}, "thread_ts": "1762500000.000100"})
+    assert asyncio.run(daemon.drain_outboxes()) == 1
+    assert [p.get("text") for p in client.posts() if p.get("text")] == [
+        "The action-request pass is documented in the ADR."]
+
+
+def test_an_unparseable_line_that_names_the_request_kind_is_never_posted(tmp_path):
+    """Finding 3 (DEBT) and D5: a line that is not JSON is a request only when the reserved `action-request` kind is
+    one of its own top-level keys. A line cut short whose text merely mentions the kind is no request, so the drain
+    records the skip with the first bytes of the line and the reason that it is not JSON, and never posts it."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    (tmp_path / "inboxes").mkdir(exist_ok=True)
+    (tmp_path / "inboxes" / "C0PROJ0001.jsonl").write_text(json.dumps(
+        {"id": "C0PROJ0001:1762500100.000100", "ts": "1762500100.000100", "user": OWNER, "channel": "C0PROJ0001",
+         "text": "what is the status?"}) + "\n")
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text('{"kind": "action-request", "text": "deploy with the secret token", broken\n'
+                      '{"text": "the \\"kind\\": \\"action-request\\" line is documented", broken\n')
+    client = FakeClient()
+    logged = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=logged.append, client=client)
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert client.posts() == [], client.posts()
+    assert any("action request not posted" in line for line in logged), logged
+    not_json = [line for line in logged if "the line is not JSON" in line]
+    assert len(not_json) == 1, logged
+    assert "the " in not_json[0] and "line is documented" in not_json[0], not_json
+
+
+def test_the_drain_logs_a_skipped_request_line(tmp_path):
+    """Finding 16 (DEBT 3): a request line the drain skips is one log line that names its channel and its source, so a
+    silent skip is never mistaken for a quiet channel."""
+    mod = voiced()
+    state = mod.State(str(tmp_path))
+    outbox = tmp_path / "outboxes" / "C0PROJ0001.jsonl"
+    outbox.parent.mkdir(exist_ok=True)
+    outbox.write_text(json.dumps({"kind": "action-request", "action": "status", "arguments": {},
+                                  "sender": OWNER, "channel": "C0PROJ0001",
+                                  "source": "C0PROJ0001:1762500100.000100"}) + "\n")
+    logged = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=logged.append, client=FakeClient())
+    state.save_channels({"acme/widget": {"id": "C0PROJ0001", "name": "proj-acme"}})
+    assert asyncio.run(daemon.drain_outboxes()) == 0
+    assert any("C0PROJ0001" in line and "C0PROJ0001:1762500100.000100" in line and "request" in line
+               for line in logged), logged
+
+
+def test_the_action_pass_logs_a_quiet_heartbeat(tmp_path, monkeypatch):
+    """Finding 16 (DEBT 3): the action pass logs one heartbeat line every N empty passes, so a pass that does nothing is
+    still visible in the daemon log."""
+    mod = voiced()
+    monkeypatch.setattr(mod, "ACTION_HEARTBEAT", 2)
+    state = mod.State(str(tmp_path))
+    logged = []
+    daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(),
+                        downloader=lambda url: b"", log=logged.append, client=FakeClient())
+    assert daemon.run_action_requests() == 0
+    assert not any("action pass" in line for line in logged), logged
+    assert daemon.run_action_requests() == 0
+    assert any("action pass" in line for line in logged), logged

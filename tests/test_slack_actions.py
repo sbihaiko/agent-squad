@@ -1,0 +1,1182 @@
+"""The action request of the operator session and the checked executor that runs it outside the session (#2939).
+
+The session never runs a command. A message that asks for an action makes it append one request line to its outbox,
+holding the inbox line id, the sender, the channel and one action id. The daemon's action pass reads the request, asks
+`squad/slackpolicy.py` for the decision of the sender, checks the request through `squad/slackexecutor.py`, runs the
+command the project declares for that action, writes one audit line and appends one reply in the thread.
+"""
+import copy
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timedelta
+
+import pytest
+
+from squad import slackactions as A
+
+WORKSPACE = "T0TEAM0001"
+CHANNEL = "C0PROJ0001"
+OTHER_CHANNEL = "C0OTHER001"
+OWNER = "U0OWNER001"
+PEER = "U0PEER0001"
+STRANGER = "U0STRANGE1"
+PROJECT = "acme/widget"
+NOW = datetime(2026, 11, 25, 12, 0, 0)
+MID = "C0PROJ0001:1762500100.000100"
+STATUS_COMMAND = "echo the project is green"
+DEPLOY_COMMAND = "make deploy-stg"
+
+COMMITTED = {
+    "version": 1,
+    "project": {"language": "en-US", "persona": "hal",
+                "actions": {"status": STATUS_COMMAND},
+                "deploy": {"environment": "stg", "command": DEPLOY_COMMAND}},
+    "personas": [{"id": "hal", "name": "HAL9K", "voice": "Kore", "tone": "Calm and direct."}],
+    "roles": [
+        {"id": "manager", "actions": ["status", "deploy"], "deploy": ["stg"]},
+        {"id": "colleague", "actions": ["status"]},
+        {"id": "deployer", "actions": ["deploy"], "deploy": ["stg"]},
+    ],
+    "workspaces": [{"id": WORKSPACE, "label": "team", "class": "owned", "app": "hal9k",
+                    "channels": [{"id": CHANNEL, "name": "proj-acme", "mode": "listen+speak",
+                                  "roles": ["manager", "colleague", "deployer"]},
+                                 {"id": OTHER_CHANNEL, "name": "other", "mode": "listen+speak",
+                                  "roles": ["manager"]}]}],
+}
+LOCAL = {"version": 1, "members": [
+    {"workspace": WORKSPACE, "channel": CHANNEL, "role": "manager", "users": [OWNER]},
+    {"workspace": WORKSPACE, "channel": CHANNEL, "role": "colleague", "users": [PEER]},
+    {"workspace": WORKSPACE, "channel": CHANNEL, "role": "deployer", "users": ["U0DEPLOY01"]},
+]}
+
+
+class Runner:
+    """The command runner the pass calls, in the daemon's own process. It records every command it is asked to run, and
+    the process that calls it, so a test can tell a run in the caller from a run handed to another process."""
+
+    def __init__(self, code=0, stdout="the project is green"):
+        self.code, self.stdout, self.calls, self.pids = code, stdout, [], []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        self.pids.append(os.getpid())
+
+        class Done:
+            returncode = self.code
+            stdout = self.stdout
+            stderr = ""
+        return Done()
+
+
+def inbox(state, user=OWNER, text="what is the status?", channel=CHANNEL, mid=MID, ts="1762500100.000100"):
+    """Write one inbox line, as the daemon writes it (#2687). A `ts` of None writes a line with no thread ts, so a
+    request's own `thread_ts` is what names the thread it answers."""
+    path = os.path.join(state, "inboxes", f"{channel}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    row = {"id": mid, "user": user, "channel": channel,
+           "language": "en-US", "persona": "HAL9K", "role": "", "text": text}
+    if ts is not None:
+        row["ts"] = ts
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+    return row
+
+
+def ask(state, action="status", channel=CHANNEL, sender=OWNER, arguments=None, **over):
+    """Append one request line to the channel's outbox, as the operator session writes it."""
+    over.setdefault("at", NOW.timestamp())
+    record = A.request_record(action, channel=channel, sender=sender, source=over.pop("source", MID),
+                              arguments=arguments or {}, **over)
+    record.update(over)
+    path = os.path.join(state, "outboxes", f"{channel}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    return record
+
+
+def documents(channel=CHANNEL):
+    return copy.deepcopy(COMMITTED), copy.deepcopy(LOCAL)
+
+
+def run(state, runner=None, project=PROJECT):
+    return A.run_pass(state, lambda channel: project, documents, NOW, runner=runner or Runner())
+
+
+def replies(state, channel=CHANNEL):
+    """The outbox lines that carry a text answer, so a request line never counts as one."""
+    path = os.path.join(state, "outboxes", f"{channel}.jsonl")
+    with open(path, encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    return [row for row in rows if not A.is_request(row)]
+
+
+def audit(state):
+    path = os.path.join(state, "actions-audit.jsonl")
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def skips(state):
+    """The byte-range skip rows, which live in their own file so the run audit keeps one row shape."""
+    path = os.path.join(state, A.SKIPS)
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def test_the_session_writes_one_request_with_the_line_the_sender_the_channel_and_the_action():
+    """Criterion 1: the request holds the inbox line id, the sender, the channel and one action id."""
+    record = A.request_record("status", channel=CHANNEL, sender=OWNER, source=MID)
+    assert A.is_request(record) is True
+    parsed, why = A.parse(json.dumps(record))
+    assert why is None, why
+    assert (parsed.source, parsed.sender, parsed.channel, parsed.action) == (MID, OWNER, CHANNEL, "status")
+
+
+def test_a_request_that_names_no_sender_is_refused_and_names_the_missing_field():
+    """Criterion 1: a request the session cannot fill is refused, and the reason names the missing field."""
+    record = A.request_record("status", channel=CHANNEL, sender=OWNER, source=MID)
+    record.pop("sender")
+    parsed, why = A.parse(json.dumps(record))
+    assert parsed is None and "sender" in why
+
+
+def test_the_declared_command_runs_outside_the_session_through_the_caller(tmp_path):
+    """Criterion 2 and 5: the executor runs in the daemon's own process, through the caller's runner, and runs the
+    command the project declares, never the text of the message."""
+    state = str(tmp_path)
+    inbox(state, text="please run rm -rf / and tell me the status")
+    ask(state)
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1
+    assert [command for command, _ in runner.calls] == [["echo", "the", "project", "is", "green"]]
+    assert runner.calls[0][1].get("shell") is False
+    # The command runs through the caller's runner, in the caller's own process: the runner records the process that
+    # calls it, so a pass that handed the command to another process would name a different pid.
+    assert runner.pids == [os.getpid()]
+
+
+def test_a_sender_whose_role_lists_the_action_gets_the_result_as_a_thread_reply(tmp_path):
+    """Criteria 3, 5 and 9: the manager's role lists `status`, the declared command runs, and its answer reaches the
+    channel as one reply in the thread of the message."""
+    state = str(tmp_path)
+    line = inbox(state)
+    ask(state)
+    runs = run(state, Runner(stdout="the project is green"))
+    assert runs[0].exit == 0
+    assert replies(state) == [{"thread_ts": line["ts"], "channel": CHANNEL, "text": "the project is green"}]
+
+
+def test_a_sender_with_no_role_in_the_channel_is_refused_and_the_reply_names_the_missing_grant(tmp_path):
+    """Criterion 4: a stranger asks, the executor refuses, and one reply names the grant the sender lacks."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER)
+    ask(state, sender=STRANGER)
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    # The reply names the missing grant (the action) and the role that lacks it, so a reply that names only the role
+    # fails here.
+    assert "status" in text and "grant" in text and "role" in text
+
+
+def test_a_role_that_does_not_list_the_action_is_refused_and_the_reply_names_the_grant(tmp_path):
+    """Criterion 4: the colleague's role lists `status` only, so a `deploy` request is refused and the reply names the
+    grant the role lacks."""
+    state = str(tmp_path)
+    inbox(state, user=PEER)
+    ask(state, action="deploy", sender=PEER)
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "deploy" in text and "colleague" in text and "grant" in text
+
+
+def test_the_deploy_list_of_the_role_bounds_the_target_and_runs_the_declared_command(tmp_path):
+    """Criterion 6: the deployer's role lists `stg`, the project declares one deploy command, and that command runs."""
+    state = str(tmp_path)
+    line = inbox(state, user="U0DEPLOY01")
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    runner = Runner(stdout="deployed to stg")
+    runs = run(state, runner)
+    assert runner.calls and runner.calls[0][0] == ["make", "deploy-stg"]
+    assert runs[0].exit == 0
+    assert replies(state)[0]["text"] == "deployed to stg"
+    assert runs[0].channel == CHANNEL and line["ts"] == replies(state)[0]["thread_ts"]
+
+
+def test_a_deploy_to_production_is_refused_whatever_the_role_lists(tmp_path):
+    """Criterion 6: production stays with the owner, so a request that names `prod` never runs a command."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, action="deploy", arguments={"environment": "prod"})
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "prod" in replies(state)[0]["text"]
+
+
+def test_an_owner_only_action_is_never_an_action_id(tmp_path):
+    """Criterion 7: an action outside the role vocabulary is refused by name, and no command runs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, action="publish_to_prod")
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "publish_to_prod" in text and "owner" in text
+
+
+def test_each_action_run_writes_one_audit_line(tmp_path):
+    """Criterion 8: one audit line holds the time, the sender, the role, the channel, the action and the exit code."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    row = audit(state)[0]
+    # The row names the handled key, so a later pass tells the row of a finished run from one a crash left unwritten.
+    assert set(row) == {"time", "sender", "role", "channel", "action", "exit", "error", "key"}, row
+    assert {name: row[name] for name in ("time", "sender", "role", "channel", "action", "exit", "error")} == {
+        "time": NOW.isoformat(), "sender": OWNER, "role": "manager", "channel": CHANNEL,
+        "action": "status", "exit": 0, "error": ""}
+
+
+def test_a_refused_request_writes_its_audit_line_too(tmp_path):
+    """Criterion 8: a refusal is an action run, and its audit line carries the exit code that names the failure."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER)
+    ask(state, sender=STRANGER)
+    run(state)
+    # A refused request writes exactly one audit line: the refusal keeps the same file as a run and adds no second row.
+    assert len(audit(state)) == 1, audit(state)
+    line = audit(state)[0]
+    assert line["exit"] == 1 and line["sender"] == STRANGER and line["role"] == ""
+
+
+def test_a_declared_command_that_exits_nonzero_writes_its_own_exit_code(tmp_path):
+    """Criterion 8: the audit line carries the code of the command the project declared, so a failed deploy reads."""
+    state = str(tmp_path)
+    inbox(state, user="U0DEPLOY01")
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    run(state, Runner(code=3, stdout="deploy failed"))
+    assert audit(state)[0]["exit"] == 3
+
+
+def test_a_request_is_run_once(tmp_path):
+    """Criterion 1: the pass runs each request line once, so a second pass never runs the command twice."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    run(state, runner)
+    runs = run(state, runner)
+    assert runs == ()
+    assert len(runner.calls) == 1
+    assert len(replies(state)) == 1
+
+
+def test_a_crash_after_the_reply_never_runs_the_declared_command_twice(tmp_path):
+    """Finding 1: the pass records the handled key before the reply and before the command, so a pass that dies after it
+    wrote the reply leaves the key recorded and a later pass never runs the declared command a second time."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    real = A._append_line
+
+    def crash_on_the_reply(path, record):
+        real(path, record)
+        if "thread_ts" in record:       # the reply line: the old order wrote it before the handled key
+            raise RuntimeError("the pass died after the reply")
+
+    A._append_line = crash_on_the_reply
+    try:
+        with pytest.raises(RuntimeError):
+            run(state, runner)
+    finally:
+        A._append_line = real
+    assert len(replies(state)) == 1
+    # The crash must not lose the audit line: it is written whatever raises after the reply.
+    assert len(audit(state)) == 1, "the crash lost the audit line"
+    run(state, runner)
+    assert len(runner.calls) == 1
+    assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_failed_reply_write_keeps_the_audit_line_and_the_reply_for_the_next_pass(tmp_path):
+    """Findings 2 and 4: a reply write that fails leaves the audit line, and the pass keeps the reply for its next one,
+    so the second pass writes exactly one audit row and one reply and never runs the declared command again."""
+    state = str(tmp_path)
+    line = inbox(state)
+    ask(state)
+    runner = Runner(stdout="the project is green")
+    outbox_path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    real = A._append_line
+
+    def fail_the_reply(path, record):
+        if path == outbox_path and record.get("text") == "the project is green":
+            raise OSError("no space left on device")
+        real(path, record)
+
+    A._append_line = fail_the_reply
+    try:
+        run(state, runner)
+    finally:
+        A._append_line = real
+    assert len(audit(state)) == 1, "the failed reply write lost the audit line"
+    assert audit(state)[0]["exit"] == 1 and "reply" in audit(state)[0]["error"]
+    assert replies(state) == []
+    assert len(runner.calls) == 1
+    run(state, runner)
+    assert len(runner.calls) == 1, "the second pass ran the declared command again"
+    assert len(audit(state)) == 1, audit(state)
+    assert replies(state) == [{"thread_ts": line["ts"], "channel": CHANNEL, "text": "the project is green"}]
+
+
+def test_two_request_lines_that_parse_alike_but_differ_in_thread_ts_run_once(tmp_path):
+    """Finding B2: the handled key names the parsed request, so two lines that parse to the same action, arguments,
+    sender, channel and source never run the declared command twice. The reply still reaches each thread, though: the
+    ledger records the reply thread, so a second message in another thread is answered once and the command runs once."""
+    state = str(tmp_path)
+    inbox(state, ts=None)                       # no thread on the line, so each request names its own thread
+    ask(state, thread_ts="1.0")
+    ask(state, thread_ts="2.0")
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runner.calls) == 1, runner.calls
+    assert len(runs) == 1
+    assert sorted(row["thread_ts"] for row in replies(state)) == ["1.0", "2.0"], replies(state)
+    assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_rotated_outbox_reads_only_a_bounded_tail(tmp_path, monkeypatch):
+    """Finding 5 (DEBT): an outbox that rotated below its kept place is read from a bounded tail, not the whole file, so
+    a rotation never costs a full re-read of the answer history."""
+    monkeypatch.setattr(A, "FIRST_READ_BYTES", 200)
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    early = A.request_record("status", channel=CHANNEL, sender=OWNER,
+                             source="C0PROJ0001:1762500700.000700", at=NOW.timestamp())
+    late_source = "C0PROJ0001:1762500800.000800"
+    late = A.request_record("status", channel=CHANNEL, sender=OWNER, source=late_source, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(early) + "\n")
+        f.write(("x" * 300 + "\n") * 3)
+        f.write(json.dumps(late) + "\n")
+    kept = os.path.join(state, A.OFFSETS)
+    with open(kept, "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: 1_000_000}))      # a place past the rotated file's size
+    inbox(state, mid=late_source)
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+
+
+def test_a_declared_command_that_is_not_one_argv_is_refused_as_invalid_never_as_missing(tmp_path):
+    """Finding 6 (DEBT): a declared command that names a shell metacharacter keeps its source with the reason, so the
+    refusal names the invalid command and never claims the project declares no command."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["status"] = "echo green; rm -rf /"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "one argv" in text, text
+    assert "never runs through project.actions" not in text, "an invalid command read as a missing one"
+
+
+def test_the_project_identity_environment_bounds_a_deploy_on_top_of_the_roles_list(tmp_path):
+    """Finding 7 (DEBT): the role lists `stg` and the project identity declares `qa`, so a request for `stg` is refused:
+    the identity's environment bounds the deploy as well as the role's deploy list (slackexecutor.py:182-186)."""
+    state = str(tmp_path)
+    inbox(state, user="U0DEPLOY01")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["deploy"] = {"environment": "qa", "command": "make deploy-qa"}
+    committed["roles"][2]["deploy"] = ["stg"]
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    assert "qa" in runs[0].error and "stg" in runs[0].error, runs[0].error
+
+
+def test_a_request_whose_sender_is_not_the_sender_of_the_line_is_refused(tmp_path):
+    """Criterion 3 and finding D7: the sender of the request must be the sender of the inbox line, or a session could
+    act for a peer. The executor's request carries no sender at all (`slackexecutor.py:98-105`), so this check is the
+    pass's own, and it fires before the executor runs even when the sender's role grants the action."""
+    state = str(tmp_path)
+    inbox(state, user=PEER)
+    ask(state, sender=OWNER)                    # the owner is a manager, so the role grants `status`
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "identity" in runs[0].error
+    assert "grant" not in runs[0].error, "the identity refusal came after the grant was read"
+
+
+def test_a_request_for_an_action_with_no_declared_command_names_the_missing_source(tmp_path):
+    """Criterion 5: an action the project declares no command for never reaches a command, and the reply names it."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, action="logs")
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "logs" in replies(state)[0]["text"]
+
+
+def test_a_request_in_the_outbox_of_a_channel_no_project_owns_never_runs(tmp_path):
+    """The pass reads only the outbox of a channel a project owns, so a request line in any other outbox never runs."""
+    state = str(tmp_path)
+    inbox(state, channel=OTHER_CHANNEL)
+    ask(state, channel=OTHER_CHANNEL)
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT if channel == CHANNEL else "", documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "owned by no project" in audit(state)[0]["error"]
+
+
+def test_a_request_in_the_dm_outbox_never_runs(tmp_path):
+    """The DM outbox carries the owner's answers and proposals, never an action request, so a request line there never
+    runs even when the DM channel is named."""
+    state = str(tmp_path)
+    inbox(state, channel="dm")
+    ask(state, channel="dm")
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "DM outbox" in audit(state)[0]["error"]
+
+
+def test_a_request_older_than_the_window_never_runs(tmp_path):
+    """A request line older than the small window is stale: a line a crashed pass left behind never runs on a later
+    pass, so an old request cannot act on a channel long after its message."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs == ()
+    assert "older" in audit(state)[0]["error"]
+
+
+def test_a_request_with_no_timestamp_is_stale(tmp_path):
+    """A request line with no `at` is stale, because the pass cannot tell its age, and it never runs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    with open(path, encoding="utf-8") as f:
+        record = json.loads(f.readline())
+    record.pop("at")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "older" in audit(state)[0]["error"]
+
+
+def test_a_request_for_a_project_with_no_active_revision_gets_no_reply(tmp_path):
+    """A request whose channel names no project has no session writing its outbox, so its refusal is silent: the reply
+    is None and the audit is the only record."""
+    state = str(tmp_path)
+    inbox(state)
+    record = ask(state)
+    outbox_for = lambda channel: os.path.join(state, "outboxes", f"{channel}.jsonl")  # noqa: E731
+    run = A._run_one(record, state, lambda channel: "", documents, NOW, Runner(), outbox_for)
+    assert run.exit == 1 and run.reply is None
+    assert replies(state) == []
+
+
+def test_a_run_with_no_source_is_not_a_success():
+    """A run that reports a success with no source is a wiring bug, so the audit never reads it as a success."""
+    from squad import slackexecutor as X
+
+    assert A._exit_code(X.Outcome(True, {"text": "ok"}, None), None) == 1
+    assert A._exit_code(X.Outcome(False, None, {}), None) == 1
+
+
+def test_an_answer_line_that_carries_every_request_field_is_not_a_request():
+    """The reserved `kind` field is the sole discriminator, so an answer line that happens to carry the five request
+    fields is still an answer and the drain still posts it."""
+    answer = {"action": "note", "arguments": {}, "sender": OWNER, "channel": CHANNEL, "source": MID,
+              "thread_ts": "1762500100.000100", "text": "one answer, not one request"}
+    assert A.is_request(answer) is False
+    assert A.is_request(A.request_record("status", CHANNEL, OWNER, MID)) is True
+
+
+def test_the_pass_reads_only_the_inbox_of_the_request_channel(tmp_path):
+    """The inbox line is read from the request's own channel inbox, so an id that lives in another channel's inbox never
+    matches and the request is refused at the identity."""
+    state = str(tmp_path)
+    inbox(state, channel=OTHER_CHANNEL)
+    ask(state, channel=CHANNEL)
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "identity" in runs[0].error
+
+
+def test_the_handled_ledger_appends_one_line_per_key(tmp_path):
+    """The ledger appends one key line per handled request, and one delivery line per thread its reply reached, so a
+    pass never rewrites its whole list for one request."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    path = os.path.join(state, A.HANDLED)
+
+    def lines():
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    keys = [row for row in lines() if "audit" in row]
+    assert len(keys) == 1 and keys[0]["key"], lines()
+    assert [row["thread"] for row in lines() if "thread" in row] == ["1762500100.000100"], lines()
+    run(state, Runner())
+    assert len([row for row in lines() if "audit" in row]) == 1, lines()
+
+
+def test_a_declared_command_of_a_request_action_runs(tmp_path):
+    """The sources build a command source for every action id the project declares, so a declared `request_work`
+    command runs instead of the executor refusing the action for a missing source."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    ask(state, action="request_work", arguments={"title": "fix the thing"})
+    runner = Runner(stdout="done")
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert [command for command, _ in runner.calls] == [["echo", "done"]]
+    assert runs[0].exit == 0
+    assert replies(state)[0]["text"] == "done"
+
+
+def test_the_decision_keeps_a_message_of_a_bot_out_of_the_executor(tmp_path):
+    """The policy stays the one guard: a sender the policy marks as a bot gets no role, so the request is refused."""
+    state = str(tmp_path)
+    inbox(state, user=OWNER)
+    ask(state)
+
+    def local_only_documents(channel):
+        """The members of a role live in the local file: the committed file alone grants no role."""
+        return copy.deepcopy(COMMITTED), {}
+
+    runner = Runner()
+    A.run_pass(state, lambda channel: PROJECT, local_only_documents, NOW, runner=runner)
+    assert runner.calls == []
+    assert "role" in replies(state)[0]["text"]
+
+
+def test_a_second_pass_reads_only_the_new_bytes_of_each_outbox(tmp_path):
+    """Finding 2: the pass keeps its place in each outbox beside the ledger, so a pass reads only the bytes appended
+    since the last one and a request that arrives later still runs."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    run(state, runner)
+    path = os.path.join(state, A.OFFSETS)
+    assert os.path.exists(path), "the pass kept no place in the outbox"
+    second = "C0PROJ0001:1762500200.000200"
+    inbox(state, text="and again?", mid=second)
+    ask(state, source=second)
+    runs = run(state, runner)
+    assert len(runs) == 1 and len(runner.calls) == 2
+
+
+def test_an_outbox_shorter_than_its_kept_place_is_read_from_the_start(tmp_path):
+    """Finding 2: an outbox a rotation shrank below its kept place is read from the start, never from a byte past its
+    end."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("x" * 5000 + "\n")          # a long line the pass skips, so the kept place sits past any request
+    run(state, Runner())
+    fresh = "C0PROJ0001:1762500300.000300"
+    line = inbox(state, text="start over", mid=fresh)
+    request = A.request_record("status", channel=CHANNEL, sender=OWNER, source=fresh, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(request) + "\n")
+    assert line["id"] == fresh and os.path.getsize(path) < 400
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1 and len(runner.calls) == 1
+
+
+def test_the_reply_of_an_action_that_never_runs_through_project_actions_names_it(tmp_path):
+    """Finding 3: `approve_and_move` and `loop_control` keep their own executor path, so a request for one refuses and
+    the reply states that no `project.actions` command stands in for the source it needs."""
+    state = str(tmp_path)
+    inbox(state, text="move the card")
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["actions"] = ["approve_and_move"]
+    ask(state, action="approve_and_move", arguments={"card": "1", "to": "Doing"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and "project.actions" in replies(state)[0]["text"]
+
+
+def test_an_unaddressed_request_in_an_addressed_only_channel_runs_no_command(tmp_path):
+    """Finding 6: the grant the executor checks is the decision the policy computed from the inbox line, so a channel
+    that answers only an addressed message runs no action for a message that addresses no persona."""
+    state = str(tmp_path)
+    inbox(state, text="what is the status?")
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1 and runs[0].error.startswith("reply:")
+    assert audit(state)[0]["error"].startswith("reply:")
+
+
+def test_every_audit_line_carries_an_error_field_that_names_why_it_exited(tmp_path):
+    """Finding 9: the audit alone says why a run exited nonzero, so every line carries an `error`: empty on success, the
+    executor's refusal, the policy's reason, or the code of a declared command that failed."""
+    state = str(tmp_path)
+    inbox(state, text="what is the status?")
+    ask(state)
+    run(state, Runner(code=3, stdout="deploy failed"))
+    row = audit(state)[0]
+    assert "error" in row and "3" in row["error"]
+
+    other = str(tmp_path / "refused")
+    os.makedirs(other)
+    inbox(other, user=STRANGER)
+    ask(other, sender=STRANGER)
+    run(other)
+    assert audit(other)[0]["error"].startswith("identity:")
+
+    stale = str(tmp_path / "stale")
+    os.makedirs(stale)
+    inbox(stale)
+    ask(stale, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    run(stale)
+    assert "older" in audit(stale)[0]["error"]
+
+    green = str(tmp_path / "green")
+    os.makedirs(green)
+    inbox(green)
+    ask(green)
+    run(green)
+    assert audit(green)[0]["error"] == ""
+
+
+
+def test_a_second_request_line_with_the_same_source_and_action_runs(tmp_path):
+    """Finding 10 (BLOCKING 2): the handled key names the whole request line, so a second request with the same source
+    and action but different arguments is a different request and runs, with its own audit line."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    documents_here = lambda channel: (committed, copy.deepcopy(LOCAL))  # noqa: E731
+    ask(state, action="request_work", arguments={"title": "first"})
+    ask(state, action="request_work", arguments={"title": "second"})
+    runner = Runner(stdout="done")
+    runs = A.run_pass(state, lambda channel: PROJECT, documents_here, NOW, runner=runner)
+    assert len(runs) == 2, runs
+    assert len(runner.calls) == 2, runner.calls
+    assert len(audit(state)) == 2, audit(state)
+
+
+def test_the_handled_key_names_the_whole_request_line(tmp_path):
+    """Finding 10 (BLOCKING 2): the key holds the arguments and the sender, so two requests that share the source and the
+    action never collapse into one handled key."""
+    state = str(tmp_path)
+    inbox(state, text="please start the work")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["request_work"] = "echo done"
+    committed["roles"][0]["actions"] = ["status", "request_work"]
+    documents_here = lambda channel: (committed, copy.deepcopy(LOCAL))  # noqa: E731
+    ask(state, action="request_work", arguments={"title": "first"})
+    ask(state, action="request_work", arguments={"title": "second"})
+    A.run_pass(state, lambda channel: PROJECT, documents_here, NOW, runner=Runner(stdout="done"))
+    path = os.path.join(state, A.HANDLED)
+    with open(path, encoding="utf-8") as f:
+        keys = [json.loads(line)["key"] for line in f if line.strip() and "audit" in json.loads(line)]
+    assert len(keys) == 2 and keys[0] != keys[1], keys
+
+
+def test_a_deploy_request_from_a_status_only_role_is_refused_by_the_action_grant(tmp_path):
+    """Finding 11 (BLOCKING 3 / DEBT 4): the inbox line asks for a deploy and the request asks for a deploy, and the
+    colleague's role lists `status` only. The refusal comes from the grant's action list, never from the decision's
+    kind alone."""
+    state = str(tmp_path)
+    inbox(state, user=PEER, text="please deploy to stg")
+    ask(state, action="deploy", sender=PEER, arguments={"environment": "stg"})
+    runner = Runner()
+    runs = run(state, runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    assert runs[0].error.startswith("grant:"), runs[0].error
+    assert "deploy" in runs[0].error and "colleague" in runs[0].error
+
+
+def test_the_grant_comes_from_the_role_never_from_the_text_of_the_line(tmp_path):
+    """Finding D8: `decide` grants the role's whole action set (`slackpolicy.py:1212`), never one action the text names,
+    and the executor refuses a request whose action is not in that set (`slackexecutor.py:235`). So a line whose text
+    asks for a deploy while the request names `status` runs `status`, because the manager's role grants it, and the text
+    adds no grant of its own."""
+    state = str(tmp_path)
+    inbox(state, user=OWNER, text="please deploy to stg")
+    ask(state, action="status", sender=OWNER)
+    runner = Runner()
+    runs = run(state, runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1, runner.calls
+
+
+def test_the_declared_command_runs_as_one_argv_without_a_shell(tmp_path):
+    """Finding 12 (DEBT 1): the declared command is one argv, never a shell line, so no metacharacter of a declared
+    value reaches a shell."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    runner = Runner()
+    run(state, runner)
+    assert runner.calls[0][0] == ["echo", "the", "project", "is", "green"], runner.calls[0][0]
+    assert runner.calls[0][1].get("shell") is False
+
+
+def test_a_declared_command_that_names_a_shell_metacharacter_never_runs(tmp_path):
+    """Finding 12 (DEBT 1): a declared command that carries `;`, `|`, `$(` or a backtick is refused, so a project value
+    can never chain a second command."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["actions"]["status"] = "echo green; rm -rf /"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+
+
+def test_a_crash_between_the_key_and_the_refusal_audit_writes_one_row_on_the_next_pass(tmp_path):
+    """Finding 13 (DEBT 2): the handled key is written before the refusal's audit line and carries its fields, so a
+    crash between the two writes never repeats a row: the next pass writes the row the crash cut, once."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)      # a stale line: the pass's own refusal branch
+    run(state)
+    assert len(audit(state)) == 1
+    second = "C0PROJ0001:1762500400.000400"
+    inbox(state, mid=second)
+    ask(state, source=second, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)
+    real = A._append_line
+
+    def crash_on_audit(path, record):
+        if path.endswith(A.AUDIT):
+            raise RuntimeError("the pass died before the audit line")
+        real(path, record)
+
+    A._append_line = crash_on_audit
+    try:
+        with pytest.raises(RuntimeError):
+            run(state)
+    finally:
+        A._append_line = real
+    run(state)
+    rows = audit(state)
+    assert len(rows) == 2, rows
+    assert len({row["key"] for row in rows}) == 2, rows
+
+
+def test_a_request_appended_without_its_final_newline_runs_once_the_line_is_complete(tmp_path):
+    """Blocking 1: a request line the session writes in two appends never runs half-written, and it runs on the first
+    pass after its final newline arrives. The kept place stops at the last complete line, so a partial tail is read
+    again, never skipped."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    record = A.request_record("status", channel=CHANNEL, sender=OWNER, source=MID, at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(record))             # the session has not yet written the final newline
+    runner = Runner()
+    assert run(state, runner) == (), "a half-written line ran"
+    assert runner.calls == []
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n")                           # the session completes the line
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+    assert len(replies(state)) == 1
+
+
+def test_a_refusal_in_an_addressed_only_channel_is_recorded_and_never_posted(tmp_path):
+    """Debt 1: a channel that answers only an addressed message never gets an unsolicited refusal. The stranger's
+    request is refused at the identity, the audit names it, and the channel sees no post."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER, text="what is the status?")
+    ask(state, sender=STRANGER)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    assert replies(state) == [], "an addressed-only channel got an unsolicited refusal"
+    assert audit(state)[0]["error"].startswith("identity:")
+
+
+def test_an_addressed_refusal_in_an_addressed_only_channel_is_posted(tmp_path):
+    """Debt 1: the telling fallback keeps working where the policy does answer. A message that addresses the persona
+    gets its refusal even when the channel answers only an addressed message."""
+    state = str(tmp_path)
+    inbox(state, user=STRANGER, text="@HAL9K what is the status?")
+    ask(state, sender=STRANGER)
+    committed = copy.deepcopy(COMMITTED)
+    committed["workspaces"][0]["channels"][0]["reply"] = "addressed"
+    A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW, runner=Runner())
+    assert len(replies(state)) == 1
+    assert "grant" in replies(state)[0]["text"]
+
+
+def _die_inside_the_command(state, docs, now):
+    """Run one pass in another process that dies inside the declared command, as a crash does: the handled key is
+    written, the command starts, and the process is gone before the reply and the audit line. Returns the code."""
+    script = f"""
+import json, os, sys
+from datetime import datetime
+from squad import slackactions as A
+state, now_text, docs_text = sys.argv[1], sys.argv[2], sys.argv[3]
+docs = json.loads(docs_text)
+
+def runner(*args, **kwargs):
+    os._exit(9)                                 # the daemon dies with the command in flight
+
+A.run_pass(state, lambda channel: {PROJECT!r}, lambda channel: (docs["committed"], docs["local"]),
+           datetime.fromisoformat(now_text), runner=runner)
+"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(A.__file__)))
+    return subprocess.run([sys.executable, "-c", script, state, now.isoformat(), json.dumps(docs)],
+                          cwd=root, capture_output=True, text=True)
+
+
+def test_a_real_process_death_in_the_command_records_the_run_and_never_runs_it_again(tmp_path):
+    """Debt 2: a pass that dies inside the declared command leaves the handled key and no audit row. The next pass
+    writes the one audit row that names the unfinished run and never runs the command again. The death is a real
+    process death, not a patched writer."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state)
+    committed, local = documents()
+    done = _die_inside_the_command(state, {"committed": committed, "local": local}, NOW)
+    assert done.returncode == 9, done.stderr
+    assert not os.path.exists(os.path.join(state, A.AUDIT)), "the dead pass wrote an audit line"
+    runner = Runner()
+    runs = run(state, runner)
+    assert runs == (), "the next pass ran a request the dead pass had recorded as handled"
+    assert runner.calls == [], runner.calls
+    rows = audit(state)
+    assert len(rows) == 1, rows
+    assert rows[0]["action"] == "status" and "did not finish" in rows[0]["error"], rows[0]
+    run(state, runner)
+    assert len(audit(state)) == 1, audit(state)
+
+
+def test_a_deploy_command_that_names_a_shell_metacharacter_is_refused_as_invalid(tmp_path):
+    """Debt 3: the deploy source goes through the same invalid-source check as every declared action, so a deploy
+    command that names `;` is refused as invalid and never reads as a missing command."""
+    state = str(tmp_path)
+    inbox(state, user="U0DEPLOY01")
+    committed = copy.deepcopy(COMMITTED)
+    committed["project"]["deploy"]["command"] = "make deploy-stg; rm -rf /"
+    ask(state, action="deploy", sender="U0DEPLOY01", arguments={"environment": "stg"})
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == [], runner.calls
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "one argv" in text, text
+    assert "declares no command" not in text, "an invalid deploy command read as a missing one"
+
+
+def test_a_request_whose_at_is_in_the_future_never_runs(tmp_path):
+    """Debt 4: a request line that names a time past the daemon's own clock is refused, so a session clock ahead of the
+    daemon never keeps a line fresh past the window."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() + A.REQUEST_WINDOW + 1)
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "future" in audit(state)[0]["error"]
+
+
+def test_a_session_clock_ahead_of_the_daemon_does_not_keep_a_request_fresh(tmp_path):
+    """Debt 4: a session clock ahead of the daemon by more than the small tolerance is refused, whatever the line says
+    about how long ago it was written."""
+    state = str(tmp_path)
+    inbox(state)
+    ask(state, at=NOW.timestamp() + 600)
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "future" in audit(state)[0]["error"]
+
+
+def test_a_request_written_now_runs_when_the_kept_reading_is_older_than_the_window(tmp_path):
+    """Blocking 1: the kept reading is older than the window, so it vouches for no age, and the line's own `at` is the
+    sole age bound. A request written now runs; a fresh request is never refused as stale for a quiet outbox."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    inbox(state)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # an empty outbox the pass read before
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0, "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}}))
+    ask(state, at=NOW.timestamp())                      # the line itself says it is fresh
+    runner = Runner()
+    runs = run(state, runner)
+    assert len(runs) == 1, runs
+    assert len(runner.calls) == 1, runner.calls
+    assert "did not read" not in audit(state)[0]["error"], audit(state)[0]["error"]
+
+
+def test_a_stale_line_is_refused_by_its_own_time_when_the_kept_reading_is_older_than_the_window(tmp_path):
+    """Blocking 1: when the kept reading is older than the window the line's own `at` is the sole age bound, so a line
+    past its own window still never runs."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    inbox(state)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # an empty outbox the pass read before
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0, "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}}))
+    ask(state, at=NOW.timestamp() - A.REQUEST_WINDOW - 1)   # the line's own `at` is past the window
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    assert "older than" in audit(state)[0]["error"], audit(state)[0]["error"]
+
+
+def test_a_first_pass_reads_only_the_tail_of_a_large_outbox(tmp_path):
+    """Finding 14 (DEBT 6) and D4: the first pass of a state with no kept place reads a bounded tail of each outbox, so a
+    long answer history costs one bounded read; the tail it skips is named in one audit line, so a request before the
+    tail is never dropped without a record of the bytes the pass did not read."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    early = A.request_record("status", channel=CHANNEL, sender=OWNER,
+                             source="C0PROJ0001:1762500500.000500", at=NOW.timestamp())
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(early) + "\n")
+        f.write(("x" * 2000 + "\n") * 800)          # an answer history past the bounded first read
+    inbox(state, mid="C0PROJ0001:1762500600.000600")
+    ask(state, source="C0PROJ0001:1762500600.000600")
+    runner = Runner()
+    runs = run(state, runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1
+    rows = skips(state)
+    assert len(rows) == 1, rows
+    assert rows[0]["skipped"]["bytes"] > 0 and rows[0]["skipped"]["from"] == 0, rows[0]
+    assert "did not read" in rows[0]["error"], rows[0]["error"]
+    # The skip lives in its own file, so the run audit keeps one row shape and no skip row leaks into it.
+    assert [row for row in audit(state) if "skipped" in row] == [], audit(state)
+
+
+def test_a_quiet_outbox_read_again_keeps_its_observation_fresh(tmp_path):
+    """Finding B1: the daemon's observation of an outbox is the time of its last reading, so a pass that finds no new
+    bytes still renews it. A request appended after a long quiet stretch runs, because the daemon read the outbox a
+    moment before it, never a window before it."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8"):
+        pass                                                                 # an outbox the first pass reads as empty
+    empty = lambda channel: PROJECT                                         # noqa: E731
+    runner = Runner()
+    A.run_pass(state, empty, documents, NOW, runner=runner)                 # the first pass keeps the place
+    later = NOW + timedelta(hours=1)
+    A.run_pass(state, empty, documents, later, runner=runner)               # a quiet pass reads no new byte
+    ask(state, at=later.timestamp())
+    runs = A.run_pass(state, empty, documents, later + timedelta(seconds=20), runner=runner)
+    assert [r.action for r in runs] == ["status"], runs
+    assert len(runner.calls) == 1, runner.calls
+
+
+def test_a_line_in_an_outbox_whose_kept_place_carries_no_reading_time_never_runs(tmp_path):
+    """Finding B1: a kept place that carries no time of its reading leaves the daemon no age to vouch for, so a line
+    found past it never runs, whatever its own `at` claims."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("")                                     # the place a pass kept, with no time beside it
+    with open(os.path.join(state, A.OFFSETS), "w", encoding="utf-8") as f:
+        f.write(json.dumps({path: {"offset": 0}}))
+    ask(state, at=NOW.timestamp())
+    runner = Runner()
+    assert run(state, runner) == ()
+    assert runner.calls == []
+    row = audit(state)[0]
+    assert "no time" in row["error"] or "vouch" in row["error"], row["error"]
+
+
+def test_a_stale_request_behind_an_answer_appended_between_passes_never_runs(tmp_path):
+    """Finding D6: the observation belongs to the byte region the daemon read, so an answer appended between two passes
+    never renews the age of a stale request that shares that region. The request does not run."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8"):
+        pass                                                                  # an outbox the first pass reads as empty
+    runner = Runner()
+    A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner)     # the first pass keeps the place
+    later = NOW + timedelta(seconds=A.REQUEST_WINDOW + 60)
+    ask(state, at=NOW.timestamp())                                              # a stale line, written long ago
+    with open(path, "a", encoding="utf-8") as f:                                # an answer appended in the same region
+        f.write(json.dumps({"thread_ts": "1762500100.000100", "channel": CHANNEL, "text": "an answer"}) + "\n")
+    runs = A.run_pass(state, lambda channel: PROJECT, documents, later, runner=runner)
+    assert runs == (), runs
+    assert runner.calls == []
+    assert any("older than" in row["error"] for row in audit(state)), audit(state)
+
+
+def test_a_pending_reply_whose_channel_no_project_owns_is_held_and_then_dropped(tmp_path):
+    """Finding D3: a pending reply never reaches an outbox of a channel no project owns. A fresh row is kept for the
+    next pass and a row past the window is dropped, and each refusal is one log line."""
+    state = str(tmp_path)
+    gone = "C0GONE0001"
+    pending_path = os.path.join(state, A.PENDING)
+    fresh = {"channel": gone, "reply": {"thread_ts": "1.0", "channel": gone, "text": "hi"},
+             "at": NOW.timestamp()}
+    stale = {"channel": gone, "reply": {"thread_ts": "2.0", "channel": gone, "text": "hi"},
+             "at": NOW.timestamp() - A.REQUEST_WINDOW - 1}
+    A._write_lines(pending_path, [fresh, stale])
+    log = []
+    project_of = lambda channel: "" if channel == gone else PROJECT             # noqa: E731
+    A.run_pass(state, project_of, documents, NOW, runner=Runner(), log=log.append)
+    assert not os.path.exists(os.path.join(state, A.DEFAULT_OUTBOXES, f"{gone}.jsonl")), "an ownerless outbox was written"
+    with open(pending_path, encoding="utf-8") as f:
+        left = [json.loads(line) for line in f if line.strip()]
+    assert [row["reply"]["thread_ts"] for row in left] == ["1.0"], left     # the fresh row waits, the stale one is gone
+    assert sum("no project owns" in line for line in log) == 2, log
+
+
+def test_a_non_json_outbox_line_is_logged_and_skipped(tmp_path):
+    """Debt 2: a line the pass scans that is not JSON leaves no request and is logged, so a malformed line is never
+    dropped silently. The message is the one `voiced.read_outbox_answers` uses."""
+    state = str(tmp_path)
+    inbox(state)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("this is not json\n")
+    log = []
+    runner = Runner()
+    assert A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=runner, log=log.append) == ()
+    assert runner.calls == []
+    assert any("outbox line skipped, the line is not JSON" in line for line in log), log
+
+
+def test_a_text_action_with_no_declared_command_names_the_missing_command(tmp_path):
+    """Debt 3: a text action the project declares no command for says the project declares no such command, never that
+    the action never runs through project.actions."""
+    state = str(tmp_path)
+    inbox(state)
+    committed = copy.deepcopy(COMMITTED)
+    committed["roles"][0]["actions"] = ["status", "logs"]     # the manager's role grants `logs`, so the grant passes
+    ask(state, action="logs")
+    runner = Runner()
+    runs = A.run_pass(state, lambda channel: PROJECT, lambda channel: (committed, copy.deepcopy(LOCAL)), NOW,
+                      runner=runner)
+    assert runner.calls == []
+    assert runs[0].exit == 1
+    text = replies(state)[0]["text"]
+    assert "declares no logs command" in text, text
+    assert "never runs through project.actions" not in text, text
+
+
+def test_a_loop_control_refusal_names_the_missing_project_actions_source():
+    """Debt 3: approve_and_move and loop_control keep their own executor path, so their refusal says the action never
+    runs through project.actions and no command stands in for the source it needs."""
+    text = A.refusal_text("loop_control", "source: the loop_control action needs a loop switch source")
+    assert "project.actions" in text, text
+    assert "no command stands in for the source it needs" in text, text
+    # A text action keeps the other wording: the project simply declares no command for it.
+    assert "declares no status command" in A.refusal_text("status", "source: the status action needs a status source")
+
+
+def test_a_pending_row_whose_reply_is_not_an_object_is_logged_and_dropped(tmp_path):
+    """Debt 4: a pending row whose reply is not one object is dropped with one log line, mirroring the request case, so
+    a corrupted row is never lost silently."""
+    state = str(tmp_path)
+    pending_path = os.path.join(state, A.PENDING)
+    A._write_lines(pending_path, [{"channel": CHANNEL, "reply": "not an object", "at": NOW.timestamp()}])
+    log = []
+    A.run_pass(state, lambda channel: PROJECT, documents, NOW, runner=Runner(), log=log.append)
+    assert any("not one JSON object" in line for line in log), log
+    with open(pending_path, encoding="utf-8") as f:
+        assert [line for line in f if line.strip()] == []
+
+
+def test_a_request_whose_sender_differs_replies_with_the_identity_mismatch_text(tmp_path):
+    """Debt 5: a request whose sender differs from the inbox line's sender is refused with its own check, and the reply
+    names the mismatch instead of claiming the channel gives no role."""
+    state = str(tmp_path)
+    inbox(state, user=PEER)
+    ask(state, sender=OWNER)                    # the owner is a manager, so the grant is not the reason
+    runs = run(state)
+    assert runs[0].error.startswith("identity_mismatch:"), runs[0].error
+    assert "grant" not in runs[0].error, runs[0].error
+    assert replies(state)[0]["text"] == "The request names a different sender than the message it answers."
+
+
+def test_a_skip_row_is_written_to_its_own_file_not_the_run_audit(tmp_path):
+    """Debt 6: a byte-range skip is written to actions-skips.jsonl, so actions-audit.jsonl keeps one row shape and no
+    empty-field skip row lands in the run audit."""
+    state = str(tmp_path)
+    path = os.path.join(state, "outboxes", f"{CHANNEL}.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(("x" * 2000 + "\n") * 800)      # a history past the bounded first read
+    inbox(state)
+    ask(state)
+    run(state, Runner())
+    assert len(skips(state)) == 1, skips(state)
+    assert [row for row in audit(state) if "skipped" in row] == [], audit(state)

@@ -8,7 +8,8 @@ sits in the profile folder and never enters a repository. This module loads both
 these rules. `decide` maps one event of one channel to one decision; the caller passes the clock value, and the module
 reads neither a clock nor the network. A `send_grant` lives in the local file, where only the hub writes it, and it
 holds the date of the grant (story 38). A channel row carries `class: guest` in the local file only, and the channel's
-class wins over its workspace's class (#2770).
+class wins over its workspace's class (#2770). The `project.actions` row declares one command per action id, and the
+executor runs the declared command, never one built from a message (#2939).
 
 Guards: `tests/test_slack_policy.py`, `tests/test_slack_decision.py`, `tests/test_cli_slack_check.py`,
 `tests/test_hub_slack_read.py`, `tests/test_slack_migrate.py`, `tests/test_slack_channel_class.py`,
@@ -135,6 +136,47 @@ def _deploy_identity(file, doc, out):
                            "the owner alone deploys to production; the project identity never declares prod"))
     if not command:
         out.append(_defect(file, "project.deploy.command", "the project identity names the deploy command"))
+
+
+def _project_actions(file, doc, out):
+    """The commands the project declares for its actions (#2939): one mapping of an action id to one command, and every
+    id is one the role vocabulary names, so a project never declares an owner-only action. The executor runs the
+    declared command, never the text of a message."""
+    actions = (doc.get("project") or {}).get("actions")
+    if actions is None:
+        return
+    if not isinstance(actions, dict):
+        out.append(_defect(file, "project.actions", "the project declares its action commands as one mapping of action "
+                                                   "to command"))
+        return
+    known = role_actions()
+    for action, command in actions.items():
+        if str(action) not in known:
+            out.append(_defect(file, f"project.actions.{action}",
+                               f"the {action!r} action is not one of {', '.join(known)}, so an owner-only action stays "
+                               "with the owner"))
+        if not isinstance(command, str) or not command.strip():
+            out.append(_defect(file, f"project.actions.{action}", "the project declares one non-empty command"))
+
+
+def _local_project_actions(file, doc, out):
+    """A local file declares no action command, whatever it holds (ADR-0177): the row lives in the committed file, so an
+    empty mapping or a shape the reader cannot use is a defect that names the local file and says where the row
+    belongs."""
+    project = doc.get("project")
+    if isinstance(project, dict) and "actions" in project:
+        out.append(_defect(file, "project.actions",
+                           "project.actions lives in the committed slack.yaml, and the local file declares none"))
+
+
+def project_actions(committed, local):
+    """The commands the project declares for its actions, action id to command, or an empty mapping (#2939). Only the
+    committed file declares one: the local file never widens what a role may run (ADR-0177)."""
+    actions = ((committed or {}).get("project") or {}).get("actions")
+    if not isinstance(actions, dict):
+        return {}
+    return {str(action): command.strip() for action, command in actions.items()
+            if isinstance(command, str) and command.strip()}
 
 
 def _tone(file, key, value, out):
@@ -364,6 +406,8 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
     _language("slack.yaml", "project.language", (committed.get("project") or {}).get("language"), out)
     _deploy_identity("slack.yaml", committed, out)
     _guard("slack.yaml", committed, out)
+    _project_actions("slack.yaml", committed, out)
+    _local_project_actions(local_name, local, out)
     events = {str(row.get("id")) for row in _rows(committed.get("events")) if row.get("id") is not None}
     for file, doc in ours:
         _announce(file, doc, events, out)
@@ -781,6 +825,17 @@ def addressed(committed, local, text):
         if best is None or len(name) > len(best):
             best = name
     return persona_named(committed, local, best) if best is not None else None
+
+
+def answers(committed, local, channel, text=""):
+    """True when one channel posts a reply to a message of this text: its mode speaks, and a channel that answers only
+    an addressed message answers this text only when the text addresses a persona. This is the reply rule `decide`
+    keeps, for a writer that posts with no decision of its own, so a `listen` channel and an unaddressed message of a
+    `reply: addressed` channel both post nothing (story 68)."""
+    channel = channel or {}
+    if not can_speak(channel):
+        return False
+    return str(channel.get("reply") or "all") != "addressed" or addressed(committed, local, text) is not None
 
 
 def identity(committed, local, channel_id):
