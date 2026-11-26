@@ -17,7 +17,7 @@ import time
 import pytest
 
 from tests.test_full_turn import FIRST_SESSION, MARKER, build_stand_in, calls, script
-from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, lines, project, voiced
+from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, lines, owners_registry, project, voiced
 from tests.test_voiced_active_revision import WORKSPACE, _project_channel
 from tests.test_voiced_policy import REPO, SHA, socket_message
 
@@ -60,7 +60,8 @@ def daemon_for(tmp_path, mod, checkout, client, cli):
     rows that carry each checkout (`hub_projects`)."""
     return mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
                       downloader=lambda url: b"", log=lambda line: None, client=client,
-                      projects=lambda: [REPO], configs=lambda: [project(checkout)], full_cli=cli)
+                      projects=lambda: [REPO], configs=lambda: [project(checkout)], full_cli=cli,
+                      registry=owners_registry(tmp_path))
 
 
 def setup(tmp_path, stand, row, mode="listen+speak", cli=None):

@@ -62,6 +62,9 @@ of the project, where a person reviews its commit.
     a Monitor on the inbox wakes it. Polling exists only in a `guest` workspace, where the connector is the only transport.
 11. **A role is the owner's written grant.** A role in the committed file grants the actions it lists, in an `owned` channel,
     and it never grants another owner-only action. The user ids of each role live in the local file, and so does each member's optional alias, a name the owner types so that a row reads as a person and never reaches the committed file.
+    The owner user id of each workspace lives in the hub registry, outside every repository, and the owner writes it in
+    the hub. A role that names `session: full` admits only that owner or a member the registry grants, and the validator
+    names every member the registry names neither way.
 
 ## Consequences
 
@@ -75,5 +78,6 @@ gets them from the same module, so a second copy of a rule never disagrees with 
 ## Guard
 
 `tests/test_slack_policy.py`, `tests/test_cli_slack_check.py`, `tests/test_hub_slack_events.py` (the editor of the
-project events and of each channel's `announce` list), `tests/test_setup.py` (the tracked step that arms the
+project events and of each channel's `announce` list), `tests/test_hub_slack_owner.py` (the hub route that writes a
+workspace's owner user id), `tests/test_setup.py` (the tracked step that arms the
 guard), `contrib/squad-goal/scripts/test-commit-guard.sh`.

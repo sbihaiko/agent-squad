@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from urllib.error import URLError
 
-from tests.test_voiced import OWNER, clip_event, lines
+from tests.test_voiced import OWNER, clip_event, lines, owners_registry
 
 ROOT = Path(__file__).resolve().parent.parent
 VOICE_DIR = ROOT / "contrib" / "voice"
@@ -76,7 +76,8 @@ def daemon_with(tmp_path, mod, downloader=None, transcriber=None, log=None):
     return mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER,
                       transcriber=transcriber or (lambda audio, mime: "a transcript"),
                       downloader=downloader or (lambda url: b"audio"),
-                      log=(log if log is not None else []).append)
+                      log=(log if log is not None else []).append,
+                      registry=owners_registry(tmp_path))
 
 
 def test_a_failed_download_logs_the_step_and_the_reason(tmp_path):

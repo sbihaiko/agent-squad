@@ -27,6 +27,20 @@ VOICE = ROOT / "contrib" / "voice"
 
 OWNER = "U0OWNER"
 STRANGER = "U0STRANGER"
+TEAM = "T0TEAM0001"   # the workspace the fake events name, whose owner the hub registry holds (#2966)
+
+
+def owners_registry(tmp_path, owners=None):
+    """The hub registry holding one owner id per workspace, as the hub route writes it (#2966).
+
+    The seam answers the owners file for a bare entry alone, so a project keeps the saved-sha check out of force and
+    the owner still resolves. A case that proves the saved sha keeps its own registry."""
+    path = tmp_path / "slack-saved.json"
+    path.write_text(json.dumps({"owners": {TEAM: OWNER} if owners is None else owners}))
+
+    def seam(entry):
+        return "" if str((entry or {}).get("repo") or "").strip() else str(path)
+    return seam
 CLIP_SECONDS = 20.0
 TARGET_SECONDS = 0.5 * CLIP_SECONDS + 5.0     # the spec's own target for a clip's line
 
@@ -93,6 +107,7 @@ def clip_event(ts="1762500000.000100", user=OWNER, text="", envelope_id="env-1",
                 "channel_type": channel_type,
                 "channel": channel,
                 "user": user,
+                "team": TEAM,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
                 "text": text,
@@ -119,6 +134,7 @@ def message_event(text="hello operator", user=OWNER, ts="1762500001.000200", env
                 "channel_type": channel_type,
                 "channel": channel,
                 "user": user,
+                "team": TEAM,
                 "ts": ts,
                 "client_msg_id": f"cid-{ts}",
                 "text": text,
@@ -150,7 +166,8 @@ def drive_daemon(tmp_path, envelopes, transcriber=None, downloader=None, owner=O
     daemon = mod.Daemon(state=mod.State(str(tmp_path)), owner=owner,
                         transcriber=transcriber or FakeTranscriber(),
                         downloader=downloader or (lambda url: b"audio-bytes"),
-                        log=log or (lambda line: None), client=client, projects=projects)
+                        log=log or (lambda line: None), client=client, projects=projects,
+                        registry=owners_registry(tmp_path))
     asyncio.run(mod.serve(daemon, "xapp-fake", connect=lambda url, **kw: socket,
                           open_connection=lambda: {"url": "wss://fake"}, stop=stop))
     return mod, daemon, socket
@@ -2586,7 +2603,8 @@ def startable_daemon(tmp_path, mod, starter):
     state = mod.State(str(tmp_path / "state"))
     state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
     return mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
-                      log=lambda line: None, client=FakeClient(), starter=starter)
+                      log=lambda line: None, client=FakeClient(), starter=starter,
+                      registry=owners_registry(tmp_path))
 
 
 def test_a_message_for_a_project_starts_its_operator_session_at_once(tmp_path):
@@ -2673,7 +2691,8 @@ def test_a_direct_message_starts_the_dm_session(tmp_path):
     started = []
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
                         downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
-                        starter=lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)))
+                        starter=lambda state_dir, repo, log=None, line=None: started.append((state_dir, repo)),
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
     assert started == [(daemon.state.dir, "dm")], started
@@ -2683,7 +2702,8 @@ def test_a_fixture_daemon_with_no_starter_starts_no_session(tmp_path):
     """A daemon that names no starter reads, answers and writes its outbox, and spawns nothing."""
     mod = voiced()
     daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=OWNER, transcriber=FakeTranscriber(),
-                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient())
+                        downloader=lambda url: b"", log=lambda line: None, client=FakeClient(),
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="hello", channel="D0OWNER")) == "inbox"
     assert daemon.wake_operator("acme/app") is False
@@ -2700,7 +2720,8 @@ def test_a_refused_starter_keeps_the_inbox_line_and_logs_one_line(tmp_path):
     state = mod.State(str(tmp_path / "state"))
     state.save_channels({"acme/app": {"name": "proj-acme-app", "id": "C0PROJ0001"}})
     daemon = mod.Daemon(state=state, owner=OWNER, transcriber=FakeTranscriber(), downloader=lambda url: b"",
-                        log=logged.append, client=FakeClient(), starter=starter)
+                        log=logged.append, client=FakeClient(), starter=starter,
+                        registry=owners_registry(tmp_path))
 
     assert daemon.handle(message_event(text="what changed?", channel="C0PROJ0001", channel_type="channel")) == "inbox"
     assert [row["text"] for row in lines(state.inbox_for("C0PROJ0001"))] == ["what changed?"]
