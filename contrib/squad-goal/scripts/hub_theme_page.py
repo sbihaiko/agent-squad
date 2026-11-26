@@ -2196,10 +2196,15 @@ async function prSample(){if(!prEd)return;
     if(p&&p.catch)p.catch(()=>{prPMsg="the browser refused the sound: press Play"})}catch(x){}}}
  catch(x){prPMsg="!the sample could not be fetched"}
  prRender()}
-function prPlanHtml(){const rows=((prPlan||{}).rows)||[];if(!rows)return"";
- return `<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
-  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
-function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
+function prPlanHtml(){const plan=prPlan||{},
+ rows=Array.isArray(plan.rows)?plan.rows:[],notes=Array.isArray(plan.notes)?plan.notes:[],map=Array.isArray(plan.map)?plan.map:[];
+ if(!rows.length&&!notes.length&&!map.length)return"";   // a plan of another shape draws nothing rather than throw
+ const notesHtml=notes.length?`<ul class=prnotes id=prnotes>${notes.map(n=>`<li>${prTxt(n)}</li>`).join("")}</ul>`:"";
+ const mapHtml=map.length?`<table class="ptab" id=prmap><thead><tr><th>Client</th><th>Result</th></tr></thead><tbody>`
+  +map.map(r=>`<tr><td data-l="Client">${prTxt(r.label)}</td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`:"";
+ return notesHtml+`<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
+  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`+mapHtml}
+function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max,pat=(prS||{}).name_pattern;
  const limit=max==null?"the policy's":prTxt(max);
  if(d.mode==="copy")return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
   +`<fieldset class=prf><legend>Copy</legend>${(d.copies||[]).map(c=>`<label><input type=radio name=prcopy data-prcopy="${prTxt(c.project)}"${String(c.project)===String(d.copy)?" checked":""}> ${prTxt(c.label)} <span class=prfile>${prFile(c.file)}</span> — <b>${prTxt(c.name)}</b> · ${prTxt(c.voice)} · ${prTxt(c.tone)}</label>`).join("")}</fieldset>`
@@ -2207,7 +2212,7 @@ function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[
   +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
   +(prPMsg?`<p class="mx" role=status>${prTxt(prPMsg.replace(/^!/,""))}</p>`:"")+prPlanHtml()+`</section>`;
  return `<section class=prgrp id=predit><h4>Edit ${prTxt(d.name)}</h4>`
- +`<label class=prf>Name <input id=prname value="${esc(d.name)}"></label>`
+ +`<label class=prf>Name <input id=prname value="${esc(d.name)}"${pat?` pattern="${esc(pat)}" title="letters, digits, space, period, hyphen and underscore, at most 32"`:""}></label>`
  +`<label class=prf>Voice <select id=prvoice>${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
  +`<label class=prf>Tone <input id=prtone value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`
  +`<fieldset class=prf><legend>Projects</legend>${(d.all||[]).map(p=>`<label><input type=checkbox data-prproj="${prTxt(p.id)}"${d.projects.includes(p.id)?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`

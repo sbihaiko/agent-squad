@@ -302,6 +302,32 @@ def test_a_node_boot_of_the_monitor_page_carries_the_heavy_mark():
     assert _heavy_marked(draws), "this test boots the page under node and carries no heavy mark"
 
 
+def test_a_wave_case_that_lands_a_child_in_a_real_repository_carries_the_heavy_mark():
+    """#3023: every case below runs the engine against a real repository, so its call adds a worktree and merges a child's
+    branch. The serial shard on stg pushed one of them to 2.5 s, past the 2 s line an unmarked call is held to, and the git
+    work is what each call does. Their siblings in the file carry the mark already; these were missed."""
+    from tests import test_waves as waves
+
+    landing = [
+        waves.test_a_passing_write_child_is_landed_in_the_target_and_recorded,
+        waves.test_a_childs_land_event_names_the_tip_before_the_merge,
+        waves.test_a_conflicting_second_writer_fails_with_merge_conflict_and_the_first_stays_landed,
+        waves.test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undone,
+        waves.test_a_read_only_child_and_a_failed_child_are_not_landed,
+        waves.test_the_stop_word_is_ignored_when_the_router_also_asks_for_children,
+        waves.test_a_resume_does_not_land_a_child_again,
+        waves.test_a_dispatch_child_outcome_carries_its_model_effort_and_tokens_when_known,
+        waves.test_the_ledger_tells_the_router_when_a_landed_childs_own_held_out_command_is_red,
+        waves.test_the_final_gate_runs_a_childs_commands_in_that_childs_worktree,
+        waves.test_a_plain_command_green_in_its_child_and_red_in_the_merged_target_fails_the_run,
+        waves.test_a_fix_run_whose_child_rebased_lands_its_branch,
+        waves.test_a_fix_run_with_two_children_keeps_both_landings,
+        waves.test_a_run_that_is_no_fix_run_still_fails_a_rebased_child_with_merge_conflict,
+    ]
+    missing = [_test.__name__ for _test in landing if not _heavy_marked(_test)]
+    assert missing == [], f"these cases land a child in a real repository and carry no heavy mark: {missing}"
+
+
 def test_nested_pytest_checks_explain_their_slow_marker():
     checks = NESTED_CHECKS
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {

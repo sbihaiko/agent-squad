@@ -101,6 +101,42 @@ def _merge(pairs, defaults):
 EDIT_FIELDS = ("name", "voice", "tone")
 
 
+def rename_notes(old_name, new_name):
+    """The two sentences a rename adds to the preview: the `@<name>` address and the authorship mark a channel sees
+    change. A channel addresses a persona by its name, and a reply from the owner's account opens with the mark
+    `<name>'s Msg` (issue #3012; the mark format is the policy module's `mark`). The caller states these only when the
+    name changes."""
+    old, new = _text(old_name).strip(), _text(new_name).strip()
+    return [f"the @{old} address becomes @{new}", f"the authorship mark becomes *{new}'s Msg*"]
+
+
+def default_names(clients, persona_id):
+    """The clients whose default persona is this id, in map order: id and label. A default that names the id carries a
+    stored name, and a rename writes the new name there, so the client badge and tile never show the old one."""
+    pid = _text(persona_id).strip()
+    out = []
+    for client in clients or ():
+        default = _doc(client.get("default_persona"))
+        if not pid or _text(default.get("id")).strip() != pid:
+            continue
+        cid = _text(client.get("id")).strip()
+        out.append({"client": cid, "label": _text(client.get("name")).strip() or cid,
+                    "name": _text(default.get("name")).strip() or pid})
+    return out
+
+
+def default_renames(clients, persona_id, new_name):
+    """The client defaults whose stored name a rename changes, one row for each, as `{client, label, result}`. A default
+    whose stored name already reads the new name has nothing to write and forms no row."""
+    new = _text(new_name).strip()
+    out = []
+    for default in default_names(clients, persona_id):
+        if default["name"] == new:
+            continue
+        out.append({"client": default["client"], "label": default["label"], "result": f"writes {new}"})
+    return out
+
+
 def _declared_name(doc, persona_id):
     """The name the committed document declares for one persona id, or '' when it declares none."""
     pid = _text(persona_id).strip()
@@ -108,6 +144,31 @@ def _declared_name(doc, persona_id):
         if _text(row.get("id")).strip() == pid:
             return _text(row.get("name")).strip()
     return ""
+
+
+def _seat_name(seat, persona_id):
+    """The name one roster seat declares for a persona id, from its committed file or, failing that, its local file, or
+    '' when the seat declares none. The name a seat declares answers even when the persona is only local: a preview must
+    state the name the channel shows today, whichever file holds it."""
+    pid = _text(persona_id).strip()
+    for decl in declarations(seat):
+        if decl["id"] == pid:
+            return decl["name"] if decl["name"] != pid else ""
+    return ""
+
+
+def old_name(seats, clients, persona_id):
+    """The name a persona reads today, which a rename preview states as the address and the mark it leaves: the first
+    roster seat that declares it, then the name a client default stores for it, and the id alone when neither answers."""
+    pid = _text(persona_id).strip()
+    for seat in seats or ():
+        name = _seat_name(seat, pid)
+        if name:
+            return name
+    for default in default_names(clients, pid):
+        if default["name"] != pid:
+            return default["name"]
+    return pid
 
 
 def with_fields(doc, persona_id, fields):
@@ -126,13 +187,19 @@ def with_fields(doc, persona_id, fields):
     return None
 
 
-def edit(seats, persona_id, fields, targets):
+def edit(seats, persona_id, fields, targets, clients=None):
     """The plan of one persona edit: one row for each target project, and the committed document a confirmed save writes
     into each project it can write.
 
     A target the roster does not hold, a project with no worktree, a file whose read answered a defect, and a project
     whose committed file does not declare the id are each refused by name. Every other target reads "writes <name>" and
-    carries its document, so one refused project never stops the others."""
+    carries its document, so one refused project never stops the others.
+
+    A rename adds the sentences the preview states: the address and the authorship mark change. The old name they leave
+    reads from the roster seat that declares it, committed file first, then its local file, then from the name a client
+    default stores, so a target set the hub cannot read never states the persona id as its name. When `clients` names a
+    client default that holds the persona, the plan also names the client map and carries one map row for each default
+    whose stored name changes (issue #3012)."""
     pid = _text(persona_id).strip()
     by_id, order = {}, []
     for seat in seats or ():
@@ -142,9 +209,9 @@ def edit(seats, persona_id, fields, targets):
             order.append(sid)
     rows, writes = [], []
     # The name a refusing row states comes from any project that declares the id, so a project that does not declare
-    # it still names the persona the edit was about.
-    known = next((_declared_name(s.get("committed"), pid) for s in (seats or ())
-                  if _declared_name(s.get("committed"), pid)), "")
+    # it still names the persona the edit was about. The old name a rename leaves needs no readable target at all: a
+    # target set the hub cannot read must never make the preview state the persona id in place of its real name.
+    known = old_name(seats, clients, pid)
     for target in targets or ():
         tid = _text(target).strip()
         seat = by_id.get(tid)
@@ -167,7 +234,16 @@ def edit(seats, persona_id, fields, targets):
             continue
         rows.append({**row, "result": f"writes {name}"})
         writes.append({"project": tid, "committed": changed})
-    return {"rows": rows, "writes": writes}
+    notes, map_rows = [], []
+    new_name = _text(fields.get("name")).strip()
+    if "name" in fields and new_name and new_name != known:
+        notes = rename_notes(known, new_name)
+        held = default_names(clients, pid)
+        if held:
+            notes.append(f"the client map stores {new_name} as the default name of "
+                         + ", ".join(default["label"] for default in held))
+        map_rows = default_renames(clients, pid, new_name)
+    return {"rows": rows, "writes": writes, "notes": notes, "map": map_rows}
 
 
 def settle(seats, clients, persona_id, client_id, copy_project):

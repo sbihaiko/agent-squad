@@ -180,6 +180,14 @@ def project_actions(committed, local):
             if isinstance(command, str) and command.strip()}
 
 
+def name_reason(value):
+    """The reason a persona name breaks the name rule, or None when the name holds it. The hub editor shows this reason
+    and the validator records it, so the rule and its words live here alone (ADR-0177 decision 3)."""
+    if value is not None and not NAME.match(str(value)):
+        return "a name holds letters, digits, space, period, hyphen and underscore, and at most 32 characters"
+    return None
+
+
 def _tone(file, key, value, out):
     """A tone holds at most TONE_MAX characters, whether a persona row or a role row carries it."""
     if value is not None and len(str(value)) > TONE_MAX:
@@ -189,8 +197,9 @@ def _tone(file, key, value, out):
 def _personas(file, doc, out):
     for i, persona in enumerate(_rows(doc.get("personas"))):
         base = f"personas[{i}]"
-        if persona.get("name") is not None and not NAME.match(str(persona["name"])):
-            out.append(_defect(file, f"{base}.name", "a name holds letters, digits, space, period, hyphen and underscore, and at most 32 characters"))
+        reason = name_reason(persona.get("name"))
+        if reason:
+            out.append(_defect(file, f"{base}.name", reason))
         voice = persona.get("voice")
         if voice is not None and voice not in GEMINI_VOICES:
             out.append(_defect(file, f"{base}.voice", f"voice {voice!r} is not a Gemini voice"))

@@ -93,6 +93,50 @@ def test_the_edit_names_each_refused_project_and_still_carries_the_other_writes(
     assert plan["writes"][0]["committed"]["personas"][0]["tone"] == "Direct.", plan["writes"]
 
 
+# ---------------------------------------------------------------- the rules module: the rename's own facts
+
+CLIENT = {"id": "atlas", "name": "Atlas Corp", "default_persona": {"id": "blue", "name": "Blue"},
+          "projects": [{"id": "alpha", "follows": True}]}
+
+
+def test_a_rename_names_the_address_and_the_authorship_mark():
+    """#3012 acceptance 2 and 3: the plan states that the @<name> address and the authorship mark change, and states
+    nothing of either when the name stays."""
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*"], plan["notes"]
+    kept = PS.edit([seat("alpha", PROJECT)], "blue", {"tone": "Direct."}, ["alpha"], clients=[CLIENT])
+    assert kept["notes"] == [] and kept["map"] == [], kept
+
+
+def test_a_rename_names_the_client_map_of_each_default_that_holds_the_persona():
+    """#3012 acceptance 4: the plan names the client map when a client default names the persona, and one map row for
+    each default whose stored name differs."""
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[CLIENT])
+    assert plan["notes"][-1] == "the client map stores Azure as the default name of Atlas Corp", plan["notes"]
+    assert plan["map"] == [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}], plan["map"]
+    # A default that names another persona is not this persona's, and it stays out of the plan.
+    other = {**CLIENT, "default_persona": {"id": "amber", "name": "Amber"}}
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[other])
+    assert "the client map" not in " ".join(plan["notes"]), plan["notes"]
+    assert plan["map"] == [], plan["map"]
+
+
+def test_a_rename_preview_reads_the_old_name_from_the_roster_not_from_a_written_target():
+    """A target set the hub can read nothing from must not make the preview state the persona id as the persona's old
+    name: the roster seat's own local declaration, or the name a client default stores, answers the real name."""
+    local_only = seat("alpha", {"personas": [{"id": "amber", "name": "Amber"}]},
+                      local={"personas": [{"id": "blue", "name": "Blue"}]})
+    plan = PS.edit([local_only], "blue", {"name": "Azure"}, ["ghost"], clients=[])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*"], plan["notes"]
+    # No seat declares the persona at all: the client default's stored name still answers it.
+    plan = PS.edit([seat("alpha", {})], "blue", {"name": "Azure"}, ["alpha"], clients=[CLIENT])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*",
+                             "the client map stores Azure as the default name of Atlas Corp"], plan["notes"]
+
+
 # ---------------------------------------------------------------- the route: the fields, the preview and the save
 
 def git_repo(tmp_path, name, doc):
@@ -162,6 +206,21 @@ def test_a_voice_outside_the_gemini_list_is_refused(hub):
     assert "is not a Gemini voice" in out["err"], out
 
 
+def test_a_name_outside_the_policy_pattern_is_refused_with_the_policy_message(hub):
+    """#3012 acceptance 1: the route refuses a name the policy module's pattern refuses, and states the policy's own
+    message, before any project is read."""
+    P = hub.slack_policy()
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Blue!"}, "projects": ["alpha"]})
+    assert out.get("err") == f"personas[].name: {P.name_reason('Blue!')}", out
+
+
+def test_the_read_answers_the_policy_name_pattern(hub):
+    """#3012 acceptance 1: the read answers the pattern the name field states, from the policy module alone."""
+    P = hub.slack_policy()
+    got = hub.personas_overview([], [])
+    assert got["name_pattern"] == P.NAME.pattern, got.get("name_pattern")
+
+
 def test_the_preview_names_each_project_file_and_writes_none(hub, tmp_path, monkeypatch):
     """#3011 acceptance 4 and 5: the preview names each project's file the save would write, and no file changes and no
     worktree appears."""
@@ -192,6 +251,18 @@ def test_the_read_answers_the_landing_branch_never_an_uncommitted_hub_worktree_f
                                     "committed": yaml.safe_load(c.read_text()), "committed_path": str(c),
                                     "cf": "slack.yaml"})
     assert got["committed"]["personas"][0] == BLUE_A["personas"][0], got
+def test_the_preview_of_a_rename_names_the_address_the_mark_and_the_client_map(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 2, 3 and 4: the preview states the address change and the mark change, names the client map of a
+    default that holds the persona, and writes no client name into a project file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"}, "projects": ["alpha"]})
+    assert out.get("err") is None, out
+    assert "the @Blue address becomes @Azure" in out["notes"], out["notes"]
+    assert "the authorship mark becomes *Azure's Msg*" in out["notes"], out["notes"]
+    assert "the client map stores Azure as the default name of Atlas Corp" in out["notes"], out["notes"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}], out["map"]
+    assert "Atlas Corp" not in made["alpha"][1].read_text(), "the rename wrote the client name into a project file"
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
@@ -217,21 +288,79 @@ def test_a_confirmed_save_writes_each_project_from_its_own_tree_with_one_commit_
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
+def test_a_confirmed_rename_writes_each_project_and_the_client_default_stored_name(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 5 to 8: a confirmed rename lands the new name in each target project and stores it in each
+    client default that holds the persona, the client badge and tile read it, and no client name enters a committed
+    file."""
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT}, git=True)
+    other = {"id": "other", "name": "Other Co", "default_persona": {"id": "amber", "name": "Amber"}, "projects": []}
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT, other]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"},
+                             "projects": ["alpha", "beta"], "confirm": True})
+    assert out.get("err") is None, out
+    assert {r["project"]: r["result"].startswith("wrote and pushed commit ") for r in out["rows"]} == \
+           {"alpha": True, "beta": True}, out["rows"]
+    for slug, (_co, _c, origin) in made.items():
+        landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                                capture_output=True, text=True, check=True, timeout=60).stdout
+        doc = yaml.safe_load(landed)
+        assert doc["personas"][0]["name"] == "Azure", (slug, doc)
+        assert "Atlas Corp" not in landed, f"{slug}: a client name entered the committed file"
+    stored = {c["id"]: c for c in yaml.safe_load((prof / "clients.local.yaml").read_text())["clients"]}
+    assert stored["atlas"]["default_persona"] == {"id": "blue", "name": "Azure"}, stored["atlas"]
+    assert stored["other"]["default_persona"] == {"id": "amber", "name": "Amber"}, stored["other"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp",
+                           "result": "stored Azure as the default name"}], out["map"]
+    # The client badge and tile read the stored name, so they show the new one after the save.
+    seats, _err = hub._slack_roster_checked(0.0)
+    tree = hub._slack_clients_tree_for(hub.slack_policy(), seats)
+    node = next(n for n in tree["clients"] if n.get("client") == "atlas")
+    assert node["badges"][0]["text"] == "Azure", node["badges"]
+    assert next(t for t in node["now"] if t["key"] == "Default persona")["value"] == "Azure", node["now"]
+
+
+def test_a_confirmed_rename_stores_the_client_default_even_when_no_project_is_saved(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 6 and 7: the client default's stored name changes on confirm even when every project target is
+    refused, so the badge and the tile never keep the old name after the owner confirmed the rename."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"}, "projects": ["ghost"],
+                             "confirm": True})
+    assert out.get("err") is None, out
+    assert out["saved"] == [], out["saved"]
+    assert {r["project"]: r["result"] for r in out["rows"]} == \
+           {"ghost": "refused: the project is not in the roster"}, out["rows"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp",
+                           "result": "stored Azure as the default name"}], out["map"]
+    stored = yaml.safe_load((prof / "clients.local.yaml").read_text())["clients"][0]
+    assert stored["default_persona"] == {"id": "blue", "name": "Azure"}, stored
+    seats, _err = hub._slack_roster_checked(0.0)
+    tree = hub._slack_clients_tree_for(hub.slack_policy(), seats)
+    node = next(n for n in tree["clients"] if n.get("client") == "atlas")
+    assert node["badges"][0]["text"] == "Azure", node["badges"]
+    assert next(t for t in node["now"] if t["key"] == "Default persona")["value"] == "Azure", node["now"]
+
+
+@pytest.mark.heavy   # two real repositories and their worktrees
 def test_a_project_that_does_not_validate_is_named_refused_and_the_others_are_written(hub, tmp_path, monkeypatch):
     """#3011 acceptance 8 and 9: the preview names the project whose file a save would not validate, and a confirmed save
-    refuses it by name and still writes every other target."""
-    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT}, git=True)
+    refuses it by name and still writes every other target. A name outside the pattern is refused earlier, by the
+    route itself (#3012 acceptance 1), so this file breaks another rule: a voice the policy does not know."""
     monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
-    # A name the policy refuses makes the built document fail validation in that project alone.
-    preview = hub.personas_edit({"persona": "blue", "fields": {"name": "Blue!"}, "projects": ["alpha"]})
-    assert preview["rows"][0]["result"].startswith("refused: slack.yaml: personas[0].name:"), preview["rows"]
-    out = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."}, "projects": ["alpha", "ghost"],
-                             "confirm": True})
+    broken = {**PROJECT, "personas": [{"id": "blue", "name": "Blue", "voice": "Nova", "tone": "Calm."},
+                                      PROJECT["personas"][1]]}
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": broken, "beta": PROJECT}, git=True)
+    preview = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."}, "projects": ["alpha"]})
+    assert preview["rows"][0]["result"].startswith("refused: slack.yaml: personas[0].voice:"), preview["rows"]
+    out = hub.personas_edit({"persona": "blue", "fields": {"tone": "Direct."},
+                             "projects": ["alpha", "beta", "ghost"], "confirm": True})
     rows = {r["project"]: r["result"] for r in out["rows"]}
     assert rows["ghost"] == "refused: the project is not in the roster", rows
-    assert rows["alpha"].startswith("wrote and pushed commit "), rows
+    assert rows["beta"].startswith("wrote and pushed commit "), rows
+    assert rows["alpha"].startswith("refused: slack.yaml: personas[0].voice:"), rows
     assert out["partial"], out
-    assert [s["project"] for s in out["saved"]] == ["alpha"], out["saved"]
+    assert [s["project"] for s in out["saved"]] == ["beta"], out["saved"]
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
@@ -374,6 +503,17 @@ def test_the_editor_offers_only_the_gemini_voices_and_states_the_tone_limit(hub)
     assert 'data-prproj="alpha"' in html and 'data-prproj="beta"' in html, html
 
 
+def test_the_editor_puts_the_policy_name_pattern_on_the_name_field(hub):
+    """#3012 acceptance 1: the name field states the pattern the read answers, so the browser refuses a name the policy
+    refuses before the edit reaches the hub."""
+    pat = "^[A-Za-z0-9 _.\\-]{1,32}$"
+    edit = {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm.", "projects": ["alpha"], "all": []}
+    tail = (f"prS={json.dumps({'voices': [], 'tone_max': 300, 'name_pattern': pat})};"
+            f"prEd={json.dumps(edit)};console.log(prEditor())")
+    html = _node(_src(hub, tail))
+    assert re.search(rf'<input id=prname[^>]* pattern="{re.escape(pat)}"', html), html
+
+
 def test_the_preview_body_names_no_confirm_and_the_confirm_body_confirms(hub):
     """#3011 acceptance 11: the preview body carries `confirm: false` and the confirm body `confirm: true`, so no edit
     of the theme writes before the confirm."""
@@ -397,6 +537,28 @@ def test_the_body_follows_the_editor_mode_not_a_stale_copy_field(hub):
     body = json.loads(_node(_src(hub, tail)))
     assert body == {"persona": "blue", "fields": {"name": "Blue", "voice": "Kore", "tone": "Calm."},
                     "projects": ["alpha"], "confirm": False}, body
+
+
+def test_the_preview_draws_the_rename_notes_and_the_client_map_rows(hub):
+    """#3012 acceptance 2, 3 and 4: the page draws the sentences the route answers, the client map rows included."""
+    plan = {"rows": [], "notes": ["the @Blue address becomes @Azure",
+                                  "the authorship mark becomes *Azure's Msg*"],
+            "map": [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}]}
+    tail = f"prPlan={json.dumps(plan)};console.log(prPlanHtml())"
+    html = _node(_src(hub, tail))
+    assert "the @Blue address becomes @Azure" in html, html
+    assert "the authorship mark becomes *Azure&#39;s Msg*" in html or "the authorship mark becomes *Azure's Msg*" in html, html
+    assert "Atlas Corp" in html and "writes Azure" in html, html
+
+
+def test_the_preview_survives_a_plan_whose_notes_and_map_are_not_rows(hub):
+    """A plan from an older hub, whose `notes` or `map` carries no list, still draws the project rows instead of
+    throwing, so the preview never goes blank on an answer of another shape."""
+    plan = {"rows": [{"project": "alpha", "file": "slack.yaml", "result": "writes Azure"}],
+            "notes": "old", "map": {"client": "atlas"}}
+    tail = f"prPlan={json.dumps(plan)};console.log(prPlanHtml())"
+    html = _node(_src(hub, tail))
+    assert "writes Azure" in html, html
 
 
 def test_the_sample_button_plays_the_chosen_voice_through_the_sample_route(hub):
