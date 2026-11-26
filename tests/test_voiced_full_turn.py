@@ -234,15 +234,36 @@ def wait_for(predicate, seconds=5.0):
 
 
 def alive(pid):
+    """Whether one process still runs. A zombie reads dead: its exit is recorded, only its table entry remains, and a
+    killed MCP server reparented to init is a zombie before init reaps it. Linux answers from `/proc`; elsewhere the
+    signal test is the only reading (#2968 review)."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    return True
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            stat = f.read()
+    except OSError:
+        return True     # no /proc here: the signal test is the only reading
+    return stat.rsplit(")", 1)[-1].split()[0] != "Z"
 
 
 def rows_of(daemon):
     return [row for row in lines(daemon.state.audit_path) if row.get("decision") in ("full", "stop")]
+
+
+def test_a_stop_after_a_bot_mention_still_stops():
+    """Slack puts the bot mention on a DM or a channel message, so `@the-bot !stop` must stop too, never become a turn
+    by its mention prefix (#2968 review). Any word beside `!stop` keeps the message ordinary."""
+    mod = voiced()
+    assert mod.is_stop("<@U0BOT0001> !stop") is True
+    assert mod.is_stop("<@U0BOT0001> <@U0BOT0002>   !stop") is True
+    assert mod.is_stop("!stop") is True
+    assert mod.is_stop("<@U0BOT0001> !stop now") is False
+    assert mod.is_stop("please !stop") is False
 
 
 def test_a_stop_from_a_full_role_ends_the_running_turn_and_never_becomes_one(tmp_path, stand_in, monkeypatch):

@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -213,6 +214,40 @@ def test_a_turn_past_its_deadline_ends_its_whole_process_tree(tmp_path, monkeypa
             os.kill(child, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def test_end_tree_signals_the_group_and_collects_the_process():
+    """`end_tree` is the blocking primitive: it signals the whole group and collects the process, so a caller that
+    holds no reader gets the process reaped and holds no zombie behind (#2968 review)."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        fullturn().end_tree(proc)
+        assert proc.returncode is not None, "end_tree returned before the process was collected"
+        assert proc.poll() is not None, proc.poll()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_a_stop_ends_only_the_turn_of_the_requester_who_started_it():
+    """The registry compares the identity that started the turn, so a full role handed to anyone else ends nothing
+    (#2968 review)."""
+    mod = fullturn()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    registry = mod.TurnRegistry()
+    registry.hold(REPO, proc, "U-the-owner")
+    try:
+        assert registry.stop(REPO, "U-someone-else") is False
+        assert proc.poll() is None, "another identity ended the turn it never started"
+        assert registry.stop(REPO, "U-the-owner") is True
+        assert proc.wait(timeout=10) < 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_a_turn_that_hits_the_spend_cap_names_the_spend_cap(tmp_path, monkeypatch):
