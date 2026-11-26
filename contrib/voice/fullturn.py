@@ -30,11 +30,14 @@ def owner_env(environ):
     return {key: value for key, value in environ.items() if key not in OPERATOR_OVERRIDES}
 
 
-def argv(claude, session):
+def argv(claude, session, relay=None, extra=()):
     command = [claude, "-p"]
     if session:
         command += ["--resume", session]
-    return command + ["--output-format", "json"]
+    if relay:
+        mcp_path, prompt_tool = relay
+        command += ["--mcp-config", mcp_path, "--permission-prompt-tool", prompt_tool]
+    return command + list(extra) + ["--output-format", "json"]
 
 
 def result_row(stdout):
@@ -67,10 +70,10 @@ def remember_session(state_dir, repo, session):
         os.replace(path + ".tmp", path)
 
 
-def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS):
+def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS, relay=None, extra=()):
     session = saved_sessions(state_dir).get(repo)
     try:
-        done = subprocess.run(argv(claude, session), input=message, cwd=checkout, capture_output=True, text=True,
+        done = subprocess.run(argv(claude, session, relay, extra), input=message, cwd=checkout, capture_output=True, text=True,
                               env=owner_env(os.environ if environ is None else environ), timeout=timeout)
     except (subprocess.TimeoutExpired, OSError):   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
         return Turn(session, "", None, True)

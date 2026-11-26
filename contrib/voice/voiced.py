@@ -103,6 +103,7 @@ if ROOT not in sys.path:
 import channels  # noqa: E402  the one Slack call path, so this daemon keeps no second copy of it
 import fullturn  # noqa: E402  one owner message as one turn of the project's own session (ADR-0180)
 import keychain  # noqa: E402  the one reader for the three voice secrets
+import permrelay  # noqa: E402  the permission relay of a full turn: requests to the owner's DM (SPEC 2964)
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
 from squad import redact as shared_redact  # noqa: E402  the one redaction module, so an answer carries no secret (#2948)
@@ -798,6 +799,15 @@ class State:
         if self.version < SCHEMA_VERSION:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
                 self._stamp_schema()
+
+    def dm_channel(self):
+        """The pinned owner DM channel, or an empty string while no DM is pinned (#2949)."""
+        from operators import dm_record_path
+        try:
+            with open(dm_record_path(self.dir), encoding="utf-8") as f:
+                return str((json.load(f) or {}).get("dm") or "")
+        except (OSError, ValueError):
+            return ""
 
     def pin_dm(self, channel):
         """Pin the owner's DM channel (#2949): the one channel a DM answer may carry. The daemon sees the DM's own
@@ -2563,6 +2573,42 @@ class Daemon:
                 return row["checkout"]
         return None
 
+    def permission_relay(self, workspace):
+        """The relay of every full turn in this state folder, answered only by the owner in the pinned DM (SPEC 2964)."""
+        directory = os.path.join(self.state.directory, "permission")
+        os.makedirs(directory, exist_ok=True)
+        return permrelay.Relay(directory, owner=self.owner, dm_channel=self.state.dm_channel(), workspace=workspace)
+
+    def post_permission_requests(self, relay):
+        """Post each open request of the relay to its DM once: the literal tool call and its working folder."""
+        for row in relay.unsent():
+            if self.client is None or not row["channel"]:
+                continue
+            self.client.api("chat.postMessage", {"channel": row["channel"], "text": row["text"]}, post=True)
+            relay.mark_sent(row["id"])
+
+    def relay_requests_until(self, relay, done):
+        while not done.wait(permrelay.POLL_SECONDS):
+            self.post_permission_requests(relay)
+
+    def run_relayed_turn(self, record, checkout, repo):
+        relay = self.permission_relay(record.get("workspace") or "")
+        digest = hashlib.sha256(repo.encode("utf-8")).hexdigest()[:16]
+        config = os.path.join(relay.directory, f"mcp-{digest}.json")
+        with open(config, "w", encoding="utf-8") as f:
+            json.dump(permrelay.mcp_config(sys.executable, permrelay.__file__, relay.directory, self.owner,
+                                           relay.dm_channel, relay.workspace, checkout), f)
+        done = threading.Event()
+        poster = threading.Thread(target=self.relay_requests_until, args=(relay, done), daemon=True)
+        poster.start()
+        try:
+            return fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
+                                     relay=(config, permrelay.PROMPT_TOOL))
+        finally:
+            done.set()
+            poster.join()
+            self.post_permission_requests(relay)
+
     def full_turn(self, record, decision):
         """Run the turn in the project checkout, one turn at a time per project, then post its final text in the thread.
 
@@ -2576,7 +2622,7 @@ class Daemon:
                 lock = self.full_locks.setdefault(repo, threading.Lock())
             with lock:
                 if checkout is not None:
-                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+                    turn = self.run_relayed_turn(record, checkout, repo)
         except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
@@ -2689,6 +2735,13 @@ class Daemon:
         mid = message_id(event)
         if mid in self.state.seen():
             return "duplicate"
+        workspace = str(event.get("team") or event.get("team_id") or "")
+        answer = permrelay.parse_answer(event.get("text"))
+        if answer and self.owner and str(event.get("user") or "") == str(self.owner) \
+                and event.get("channel") == self.state.dm_channel():
+            self.state.remember_message(mid)
+            self.permission_relay(workspace).decide(event.get("user"), event.get("channel"), workspace, *answer)
+            return "permission"
         target = self.inbox_path_of(event)
         decision = self.policy_decision(event)
         record = {
@@ -2696,6 +2749,7 @@ class Daemon:
             "ts": event.get("ts"),
             "user": event.get("user"),
             "channel": event.get("channel"),
+            "workspace": workspace,
             "language": decision.language,
             "persona": decision.persona.name if decision.persona else None,
             "tone": decision.tone,

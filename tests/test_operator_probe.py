@@ -134,6 +134,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["stale"] is False
@@ -529,6 +530,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == {"proxy_url": None, "bg": None, "poller": None, "writer": None}
@@ -829,6 +831,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == [tmp_path / "checkout"], seen
@@ -988,6 +991,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert roles == ["poller", "writer"]
@@ -1655,6 +1659,7 @@ def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, mon
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)
     if hasattr(probe, "full_turn_phase"):
         monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)
+        monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
     assert Path(seen["audit"]) != Path(probe.denials_path(str(seen["work"] / "state"))), seen
