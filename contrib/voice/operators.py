@@ -516,16 +516,18 @@ def persona_lines(state, unit):
 
 def action_line(state, unit):
     """What the brief does with a message that asks for an action. The DM session proposes it to the owner with a
-    second helper call under the same line (#2949). A project session answers that it only reads and answers: the tool
-    gate (#2950) allows no file write and no command but the answer helper and the project's declared read wrappers,
-    so the brief orders no append the gate would deny and the session never runs a command."""
+    second helper call under the same line (#2949). A project session writes one action request through a second helper
+    call under the same line, and the daemon's checked executor runs it outside the session (ADR-0179). The tool gate
+    (#2950) allows that call and no other command, so the session never runs one."""
     if unit["key"] == DM:
         return ("When a message asks for an action, answer in its channel that this session only reads, and then call "
                 "the helper once more for the same line, with the same --scope and --thread, with --kind proposal, and "
                 'with --text "Proposal: <the action, one line>".')
-    return ("When a message asks for an action, answer in its channel that this session only reads and answers. The "
-            "tool gate allows no file write and no command but the answer helper and the project's declared read "
-            "wrappers, so this session runs no action and writes no request line.")
+    return ("When a message asks for an action, answer in its channel that this session only reads and answers. Then "
+            "call the helper once more for the same line, with the same --scope and --thread, with --kind "
+            "action-request, with --action '<the action id>', and with --arguments '<the arguments as one JSON object, "
+            "or {}>'. The helper writes one action request line, and the daemon's checked executor runs the action "
+            "outside this session. This session runs no other command and writes no other line.")
 
 
 def monitor_lines(state, unit):

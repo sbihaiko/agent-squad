@@ -101,8 +101,10 @@ for one command line the project declares under `guard.read_wrappers`. It denies
 one audit line, and it fails closed: an error blocks the call. So the session writes no other file and makes no Slack
 write.
 
-When a message asks for an action, a project session answers that it only reads and answers. The gate allows no append
-and no command but the answer helper, so a project session writes no action request in this build.
+When a message asks for an action, a project session answers that it only reads and answers. Then it calls the helper
+once more for the same line, with `--kind action-request`, `--action` and `--arguments` (one JSON object). The helper
+appends one request line to the outbox, and the checked executor runs the action outside the session. The gate allows
+that call and no other command.
 
 The DM session also calls the helper once more for the same line, with the same `--scope` and `--thread`, with
 `--kind proposal`, and with a text that starts with `Proposal:`. The inbox keeps the question, so the second call

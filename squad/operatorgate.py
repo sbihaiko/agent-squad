@@ -42,15 +42,19 @@ from squad.redact import redact  # noqa: E402  the shared redaction of a value t
 
 TOOLS = ("Read", "Monitor", "TaskStop", "Bash")
 TAIL = ("tail", "-n", "0", "-F")          # the one Monitor command, as `OPERATOR.md` prints it
-HELPER_FLAGS = ("--scope", "--thread", "--text", "--speech", "--persona", "--kind")
-HELPER_REQUIRED = ("--scope", "--text")
-HELPER_KINDS = ("answer", "proposal")
+HELPER_FLAGS = ("--scope", "--thread", "--text", "--speech", "--persona", "--kind", "--action", "--arguments")
+ACTION_REQUEST = "action-request"          # the helper kind of a request line (squad/slackactions.KIND)
+HELPER_KINDS = ("answer", "proposal", ACTION_REQUEST)
+ANSWER_REQUIRED = ("--scope", "--text")
+ANSWER_ONLY = ("--action", "--arguments")
+REQUEST_REQUIRED = ("--scope", "--action")
+REQUEST_REFUSED = ("--text", "--speech", "--persona")
 SECRET_DIRS = (".ssh", os.path.join(".config", "gh"), ".aws")
 AUDIT_CHARS = 120                          # the most of a call an audit line keeps
 # Characters a shell reads as a control operator or a redirection, and the ones that expand or substitute.
 UNQUOTED = set(";|&<>(){}[]*?~\n\r")
 EXPANSION = set("$`")
-DENIED_SUFFIX = ".slack.local.yaml"
+SECRET_NAME = "slack.local.yaml"           # the profile's local Slack file (ADR-0177)
 EXCERPT_KEYS = ("command", "file_path", "path", "task_id")
 
 
@@ -157,7 +161,7 @@ def _secret_reason(pol, path):
             return f"{path} is another project checkout, not this session's {pol.checkout}"
     if name == ".env" or name.startswith(".env."):
         return f"the secret list refuses a Read of {path}: a project's .env carries its secrets"
-    if name.endswith(DENIED_SUFFIX):
+    if name == SECRET_NAME or name.endswith("." + SECRET_NAME):
         return f"the secret list refuses a Read of {path}: the profile's local Slack file carries its secrets"
     return None
 
@@ -273,14 +277,22 @@ def _helper(pol, argv):
     rest = argv[2:]
     if len(rest) % 2:
         return True, f"the answer helper call {shlex.join(argv)} names a flag with no value"
-    seen = set()
+    values = {}
     for flag, value in zip(rest[::2], rest[1::2], strict=True):
         if flag not in HELPER_FLAGS:
             return True, f"the answer helper takes no {flag}: it takes {', '.join(HELPER_FLAGS)}"
-        seen.add(flag)
-        if flag == "--kind" and value not in HELPER_KINDS:
-            return True, f"the answer helper's --kind is one of {', '.join(HELPER_KINDS)}, not {value!r}"
-    missing = [flag for flag in HELPER_REQUIRED if flag not in seen]
+        values[flag] = value
+    kind = values.get("--kind", "answer")
+    if kind not in HELPER_KINDS:
+        return True, f"the answer helper's --kind is one of {', '.join(HELPER_KINDS)}, not {kind!r}"
+    if kind == ACTION_REQUEST:
+        if any(flag in values for flag in REQUEST_REFUSED):
+            return True, f"an action request takes no {', '.join(REQUEST_REFUSED)}"
+        missing = [flag for flag in REQUEST_REQUIRED if flag not in values]
+    else:
+        if any(flag in values for flag in ANSWER_ONLY):
+            return True, "--action and --arguments name an action request, not an answer"
+        missing = [flag for flag in ANSWER_REQUIRED if flag not in values]
     if missing:
         return True, f"the answer helper call names no {missing[0]}"
     return True, None
