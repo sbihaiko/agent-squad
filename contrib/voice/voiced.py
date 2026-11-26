@@ -168,7 +168,8 @@ class ClipTooLarge(Exception):
 FULL_FAILED = "Your message did not reach the project session."
 FULL_REASONS = {"deadline": "Your message stopped at the project session deadline.",
                 "spend_cap": "Your message stopped at the project session spend cap.",
-                "stopped": "Your message stopped when you asked."}
+                "stopped": "Your message stopped when you asked.",
+                "session_held": "The project's session is open in a terminal. Close it and send the message again."}
 STOP_TEXT = "!stop"
 
 
@@ -1649,9 +1650,12 @@ class Daemon:
     def __init__(self, state, owner, transcriber, downloader, log=None, client=None, projects=None,
                  synthesizer=None, uploader=None, configs=None,
                  clients=None, bot_tokens=None, downloaders=None, uploaders=None, registry=None, starter=None,
-                 full_cli="claude"):
+                 full_cli="claude", session_holder=None):
         self.state = state
         self.full_cli = full_cli
+        # The pid that holds a project's session now, or None (#2969). None reads the machine's process table; a test
+        # injects its own reading, so it never sees a live process it did not start.
+        self.session_holder = session_holder or fullturn.session_holder
         self.turns = []
         self.turn_order = fullturn.TurnOrder()
         self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
@@ -2660,7 +2664,7 @@ class Daemon:
         try:
             return fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
                                      registry=self.live_turns, user=record.get("user"),
-                                     relay=(config, permrelay.PROMPT_TOOL))
+                                     relay=(config, permrelay.PROMPT_TOOL), holder=self.session_holder)
         finally:
             done.set()
             poster.join()

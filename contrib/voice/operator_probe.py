@@ -101,6 +101,8 @@ MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 FULL_REPO = "probe/full-turn"          # the project name a full turn keeps its session under
+HOLDER_REPO = "probe/holder-turn"      # the project name the session-hold phase keeps its session under
+HOLDER_WAIT = 30.0                     # seconds the live holder's way into the process table and out of it
 PERMISSION_REPO = "probe/permission-turn"
 PERMISSION_OWNER = "probe-owner"
 PERMISSION_DM = "probe-dm"
@@ -944,6 +946,48 @@ def full_turn_phase(work, cli):
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
 
 
+def wait_for_holder(session, present, wait):
+    """Wait until the process table lists the session's holder, or no longer lists it, and answer whether it did."""
+    stop = time.monotonic() + wait
+    while (fullturn.session_holder(session) is not None) != present:
+        if time.monotonic() > stop:
+            return False
+        time.sleep(0.2)
+    return True
+
+
+def holder_phase(work, cli, wait=HOLDER_WAIT):
+    """A turn is refused while a live CLI process holds the session, and runs once that holder ends (#2969).
+
+    The holder is the CLI itself: `claude -p --resume <session> --verbose` with an open stdin waits for its prompt,
+    exactly as a terminal does, and `--verbose` tells it from a turn. The probe reads the real process table, so the
+    refusal comes from the same reading the daemon uses."""
+    checkout = work / "holder-checkout"
+    state = work / "holder-state"
+    shutil.rmtree(state, ignore_errors=True)
+    checkout.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    first = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+    if first.failed or not first.session:
+        raise ProbeFailed(f"the session-hold phase's first turn did not answer (exit {first.exit})")
+    holder = subprocess.Popen([cli, "-p", "--resume", first.session, "--verbose"], cwd=str(checkout),
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              text=True, start_new_session=True)
+    try:
+        if not wait_for_holder(first.session, present=True, wait=wait):
+            raise ProbeFailed("the live CLI holder never reached the process table")
+        refused = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+        if not refused.failed or refused.reason != "session_held":
+            raise ProbeFailed("a turn ran while a live CLI held its session")
+    finally:
+        fullturn.end_tree(holder)
+    if not wait_for_holder(first.session, present=False, wait=wait):
+        raise ProbeFailed("the live CLI holder was still listed after it ended")
+    after = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
+    if after.failed or after.session != first.session:
+        raise ProbeFailed(f"the turn after the holder closed did not run (exit {after.exit})")
+
+
 def wait_for_request(relay, deadline, sender=PERMISSION_OWNER):
     """The first open request of `sender` in the relay, posted or not, whose request audit line exists.
 
@@ -1065,6 +1109,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli)
         full_turn_phase(work, cli)
+        holder_phase(work, cli)
         permission_phase(work, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
@@ -1084,6 +1129,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli, proxy.url)
     full_turn_phase(work, cli)
+    holder_phase(work, cli)
     permission_phase(work, cli)
     return len(proxy.refusals)
 
@@ -1114,6 +1160,7 @@ def main(argv=None):
           f"({HELPER.name}) and no other channel's outbox took a line, under the tool gate and an ambient hook whose "
           f"rewrite reached no tool; "
           f"a full turn outside the sandbox resumed its session and returned the word it took on stdin; "
+          f"a live CLI process holding the session refused the turn and the turn ran after it ended; "
           f"a --bg session started and was listed as {marked_name(PROBE_KEY)}, and the gate refused its one command "
           f"with one audit line; "
           f"guest poller denial held (write tool); "

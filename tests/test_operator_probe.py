@@ -134,6 +134,7 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -530,6 +531,7 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -831,6 +833,7 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -991,6 +994,7 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
     monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)   # a full turn makes live model calls (ADR-0180)
+    monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
     monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)   # a permission turn makes live model calls (SPEC 2964)
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
@@ -1659,6 +1663,7 @@ def test_the_probe_hands_the_bg_session_the_audit_file_of_its_gate(tmp_path, mon
     monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)
     if hasattr(probe, "full_turn_phase"):
         monkeypatch.setattr(probe, "full_turn_phase", lambda *a, **k: None)
+        monkeypatch.setattr(probe, "holder_phase", lambda *a, **k: None)   # the session-hold phase starts a live holder (#2969)
         monkeypatch.setattr(probe, "permission_phase", lambda *a, **k: None)
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["audit"] is not None and Path(seen["audit"]) == Path(probe.denials_path(str(tmp_path / "state")))
@@ -1698,3 +1703,48 @@ def test_a_turns_request_wait_skips_another_senders_open_requests(tmp_path):
     relay.request("probe-cap-sender", "Bash", {"command": "touch cap-0.txt"}, "/probe")
     own = relay.request("probe-owner", "Bash", {"command": "touch denied.txt"}, str(tmp_path / "checkout"))
     assert probe.wait_for_request(relay, 2.0, sender="probe-owner")["hash"] == own["hash"]
+
+
+HOLDER_STAND_IN = """#!{python}
+import json, sys
+argv = sys.argv[1:]
+if "--verbose" in argv:
+    sys.stdin.read()          # the live holder: it reads stdin until the probe ends it
+    sys.exit(1)
+stdin = sys.stdin.read()
+session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-holder-0001"
+print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
+"""
+
+EXITS_STAND_IN = """#!{python}
+import json, sys
+argv = sys.argv[1:]
+if "--verbose" in argv:
+    sys.exit(1)               # gone before the process table can list it
+stdin = sys.stdin.read()
+session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-holder-0002"
+print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
+"""
+
+
+def holder_stand_in(tmp_path, body=HOLDER_STAND_IN, name="claude-holder-stand-in"):
+    path = tmp_path / name
+    path.write_text(body.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | 0o100)
+    return str(path)
+
+
+@pytest.mark.process_bound
+@pytest.mark.heavy
+def test_a_turn_is_refused_while_a_live_cli_holds_the_session(tmp_path):
+    """Criterion (4): the probe proves the refusal through the real process table, and the turn runs after the
+    holder ends."""
+    probe = load("operator_probe")
+    probe.holder_phase(tmp_path, holder_stand_in(tmp_path))
+
+
+@pytest.mark.process_bound
+def test_a_holder_that_never_reaches_the_process_table_fails_the_probe(tmp_path):
+    probe = load("operator_probe")
+    with pytest.raises(probe.ProbeFailed, match="never reached the process table"):
+        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXITS_STAND_IN, "claude-exits-stand-in"), wait=1.0)
