@@ -359,3 +359,136 @@ def test_an_existing_row_opens_the_add_editor_with_its_projects(hub):
     got = json.loads(_node(_src(hub, tail)))
     assert got["id"] == "blue" and got["name"] == "Blue" and got["voice"] == "Kore", got
     assert got["projects"] == ["beta"], got
+
+
+# ---------------------------------------------------------------- the page: the existing-persona add keeps its fields
+
+BLUE_ROW = {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm.",
+            "projects": [{"id": "alpha", "label": "alpha", "file": "docs/squad/slack.yaml"}],
+            "default_of": [], "drift": False, "read_only": False}
+
+
+def _blue_state():
+    """The theme's read with one row: Blue, declared by alpha alone, so beta waits as its one target."""
+    return json.dumps({"err": None, "voices": ["Kore", "Puck"], "tone_max": 300, "projects": TARGETS,
+                       "groups": [{"id": "one", "name": "One", "rows": [BLUE_ROW]}]})
+
+
+def test_an_existing_persona_add_offers_no_editable_name_voice_or_tone(hub):
+    """#3013 acceptance 3: the add of an existing persona names the persona and offers the target projects, and its name,
+    voice and tone are read-only, so the source project's values never change under an edit."""
+    tail = f"prS={_blue_state()};prStartAdd('blue');console.log(prAddEditor())"
+    html = _node(_src(hub, tail))
+    assert "Blue" in html, html
+    assert 'id="prnewname"' not in html, html
+    assert 'id="prnewvoice"' not in html, html
+    assert 'id="prnewtone"' not in html, html
+
+
+def test_the_existing_persona_add_body_keeps_the_committed_fields(hub):
+    """#3013 acceptance 3: even when the fields are changed in the page, the add of an existing persona posts the row's
+    committed name, voice and tone, so the target project agrees with the source project."""
+    tail = (f"prS={_blue_state()};prStartAdd('blue');"
+            "prNew.name='Hacked';prNew.voice='Puck';prNew.tone='Loud.';"
+            "console.log(JSON.stringify(JSON.parse(prAddBody(true))))")
+    body = json.loads(_node(_src(hub, tail)))
+    assert body["persona"] == {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."}, body
+    assert body["projects"] == ["beta"], body
+
+
+def test_the_existing_row_page_body_feeds_the_add_route(hub, tmp_path, monkeypatch):
+    """#3013 acceptance 3 and 5: the body the page builds from a row's Add to project action is the body the route
+    accepts, so the page and the route agree on the id, the three fields and the targets."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": OTHER})
+    tail = (f"prS={_blue_state()};prStartAdd('blue');"
+            "console.log(JSON.stringify(JSON.parse(prAddBody(true))))")
+    body = json.loads(_node(_src(hub, tail)))
+    assert body["persona"] == {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."}, body
+    assert body["projects"] == ["beta"], body
+    body["confirm"] = False   # the preview only: the page's own confirm writes through the same body
+    out = hub.personas_add(body)
+    assert out.get("err") is None, out
+    assert {r["project"]: r["result"] for r in out["rows"]} == {"beta": "writes Blue"}, out["rows"]
+
+
+def test_the_add_sample_posts_only_a_voice_and_a_tone(hub):
+    """#3013 acceptance 8: Play sample posts the persona's voice and tone alone to the sample route, which answers a
+    sample from that pair alone (#2697)."""
+    form = json.dumps({"name": "Night Owl", "voice": "Puck", "tone": "Direct.", "projects": ["alpha"]})
+    tail = ("globalThis.fetch=async(u,o)=>{globalThis.__got={u:u,body:o.body};"
+            "return{json:async()=>({err:null,url:'data:audio/wav;base64,AAA',cached:false})}};"
+            "globalThis.Audio=function(){this.play=()=>Promise.resolve()};"
+            f"prS={_blue_state()};prNew={form};"
+            "prAddSample().then(()=>console.log(JSON.stringify(__got)))")
+    got = json.loads(_node(_src(hub, tail)))
+    assert got["u"] == "/api/slack/sample", got
+    assert json.loads(got["body"]) == {"voice": "Puck", "tone": "Direct."}, got
+
+
+# ---------------------------------------------------------------- the file the add plan names is the overview's file
+
+def test_the_add_plan_names_the_file_committed_path_not_the_bare_name():
+    """#3013 acceptance 2: the add plan's row names a project's committed_path, the same field the overview's target
+    names, so the two agree in form instead of a bare file name against a full path."""
+    one = seat("alpha", PROJECT)
+    plan = PS.add([one], {"id": "night-owl", **NIGHT}, ["alpha"])
+    assert plan["rows"][0]["file"] == one["committed_path"], plan["rows"]
+    assert plan["rows"][0]["file"].endswith("/docs/squad/slack.yaml"), plan["rows"]
+
+
+# ---------------------------------------------------------------- the rules reject an empty name or voice
+
+def test_the_add_rejects_an_empty_name_or_a_empty_voice(hub):
+    """#3013 acceptance 1: the rules never write a row whose name or voice is empty after stripping, on the new path or
+    the existing one, so a bad body can never land an unusable persona."""
+    doc = {"version": 1, "personas": [{"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."}]}
+    with pytest.raises(ValueError):
+        PS.with_persona(doc, {"id": "night-owl", "name": "   ", "voice": "Puck", "tone": "Direct."})
+    with pytest.raises(ValueError):
+        PS.with_persona(doc, {"id": "night-owl", "name": "Night Owl", "voice": "  ", "tone": "Direct."})
+    plan = PS.add([seat("alpha", PROJECT)], {"id": "broken", "name": "Broken", "voice": " ", "tone": ""}, ["alpha"])
+    assert plan.get("err"), plan
+    assert plan["writes"] == [], plan
+
+
+# ---------------------------------------------------------------- an existing persona keeps a legacy voice
+
+LEGACY = {"version": 1, "project": {"language": "en-US", "persona": "legacy"},
+          "personas": [{"id": "legacy", "name": "Legacy", "voice": "OldVoice", "tone": "Calm."}]}
+
+
+def test_an_existing_persona_with_a_legacy_voice_is_added(hub, tmp_path, monkeypatch):
+    """#3013 acceptance 3: an existing persona the overview draws with a voice outside the current Gemini list is added
+    with its own fields, because the route takes them from the merged row and the rules append the row as it stands."""
+    # The rules append the legacy row and report the write.
+    plan = PS.add([seat("alpha", LEGACY), seat("beta", OTHER)],
+                  {"id": "legacy", "name": "Legacy", "voice": "OldVoice", "tone": "Calm."}, ["beta"])
+    assert {r["project"]: r["result"] for r in plan["rows"]} == {"beta": "writes Legacy"}, plan["rows"]
+    assert plan["writes"][0]["committed"]["personas"][-1]["voice"] == "OldVoice", plan["writes"]
+    # The route resolves the fields from the merged row, never as a new persona's: the save path is stubbed, so this
+    # proves the route's own add and its plan, not the target file's separate document policy.
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": LEGACY, "beta": OTHER})
+    monkeypatch.setattr(hub, "slack_files_set", lambda *a, **k: {"files": {}, "diff": {}})
+    out = hub.personas_add({"op": "add", "persona": {"id": "legacy"}, "projects": ["beta"]})
+    assert out.get("err") is None, out
+    assert {r["project"]: r["result"] for r in out["rows"]} == {"beta": "writes Legacy"}, out["rows"]
+
+
+# ---------------------------------------------------------------- a preview over a real git project writes nothing
+
+@pytest.mark.heavy   # one real repository and its worktree
+def test_a_preview_over_a_git_project_makes_no_worktree_and_no_commit(hub, tmp_path, monkeypatch):
+    """#3013 acceptance 2 and 4: a preview over a real git project makes no worktree under SG_SLACK_WORKTREE and lands
+    no commit in the project's origin, so the preview is read-only over a real repository."""
+    hubs = tmp_path / "hubs"
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(hubs))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT}, git=True)
+    origin = made["alpha"][2]
+    before = subprocess.run(["git", "-C", str(origin), "rev-list", "--count", "dev"],
+                            capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+    out = hub.personas_add(add_body(projects=["alpha"]))
+    assert out.get("err") is None, out
+    assert not (hubs / "alpha").exists(), "the preview made a worktree"
+    after = subprocess.run(["git", "-C", str(origin), "rev-list", "--count", "dev"],
+                           capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+    assert after == before, (before, after)
