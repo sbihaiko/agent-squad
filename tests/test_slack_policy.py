@@ -748,3 +748,124 @@ def test_a_full_decision_in_a_guest_channel_runs_bounded():
     decision = S.decide(committed, local, event, NOW)
     assert decision.kind == S.PROPOSAL
     assert decision.session == S.SESSION_BOUNDED
+
+
+# ---------------------------------------------------------------- the holders of a persona (#3014)
+
+def test_the_holders_of_a_persona_name_each_place_of_both_files():
+    """#3014 acceptance 1: the policy module answers every place of the project's two files that names the persona, the
+    project row, a workspace and a channel, each with its file."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local) == [
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_channel_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 2: a channel of either file holds the persona it names."""
+    committed, local = files()
+    local["workspaces"][0]["channels"][0]["persona"] = "iara"
+    assert 'channel "support" of workspace "client-a" in slack.local.yaml' in S.persona_holders(
+        "iara", committed, local)
+
+
+def test_a_workspace_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 3: a workspace of either file holds the persona it names."""
+    committed, local = files()
+    assert 'workspace "client-a" in slack.local.yaml' in S.persona_holders("iara", committed, local)
+
+
+def test_a_project_row_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 4: a project row of either file holds the persona it names."""
+    committed, local = files()
+    local["project"] = {"persona": "iara"}
+    assert "project in slack.local.yaml" in S.persona_holders("iara", committed, local)
+
+
+def test_a_client_default_of_a_client_that_holds_the_project_names_the_persona():
+    """#3014 acceptance 5: the default of a client that holds the project holds the persona, and the holder names the
+    client."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local, clients=[("acme", "hal")]) == [
+        "client \"acme\" default",
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_client_default_of_another_persona_never_answers_a_holder():
+    """#3014 acceptance 7: the caller passes the clients that hold the project alone, and one whose default is another
+    persona answers no holder."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local, clients=[("acme", "iara")]) == [
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_persona_no_place_names_answers_no_holder():
+    committed, local = files()
+    assert S.persona_holders("ghost", committed, local) == []
+
+
+def test_the_holder_answer_trims_the_persona_id():
+    committed, local = files()
+    assert "project in slack.yaml" in S.persona_holders("  hal  ", committed, local)
+
+
+def test_a_holder_label_falls_back_from_the_label_to_the_name_to_the_id():
+    """#3014 acceptance 6: a row that states a label and a name reports its label, so a place is named by one stable
+    field and the fallback order is label, name, id."""
+    committed = {"workspaces": [{"id": "T0TEAM0001", "label": "team", "name": "Team Name", "persona": "hal",
+                                 "channels": [{"id": "C0PROJ0001", "label": "support", "name": "Support Desk",
+                                               "persona": "hal"}]}]}
+    assert S.persona_holders("hal", committed, {}) == [
+        'workspace "team" in slack.yaml',
+        'channel "support" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_holder_row_with_no_label_and_no_name_names_its_id_after_a_marker():
+    """A workspace and a channel that state neither a label nor a name still name their place: the bare Slack id never
+    stands alone, so it follows the marker `unnamed`, in parentheses."""
+    committed = {"workspaces": [{"id": "T0TEAM0001", "persona": "hal",
+                                 "channels": [{"id": "C0PROJ0001", "persona": "hal"}]}]}
+    assert S.persona_holders("hal", committed, {}) == [
+        'workspace "unnamed (T0TEAM0001)" in slack.yaml',
+        'channel "unnamed (C0PROJ0001)" of workspace "unnamed (T0TEAM0001)" in slack.yaml',
+    ]
+
+
+def test_a_document_that_is_not_a_mapping_answers_no_holder():
+    """A file that does not read is no document: it answers no holder of its own, so a client default never answers for
+    a broken file and the removal reports the read defect instead."""
+    assert S.persona_holders("hal", ["not", "a", "mapping"], {}, clients=[("acme", "hal")]) == []
+    assert S.persona_holders("hal", {}, "not a mapping", clients=[("acme", "hal")]) == []
+
+
+def test_a_broken_file_never_hides_the_holders_of_the_readable_one():
+    """Each file reads on its own: a local file that does not read never hides a holder of the readable committed
+    file. A broken file still yields no client default, so it never invents a phantom client holder."""
+    committed = {"workspaces": [{"id": "T1", "label": "team", "persona": "hal"}]}
+    assert S.persona_holders("hal", committed, "not a mapping") == ['workspace "team" in slack.yaml']
+    assert S.persona_holders("hal", "not a mapping", {"workspaces": [{"id": "T2", "label": "client", "persona": "hal"}]}) == [
+        'workspace "client" in slack.local.yaml']
+    assert 'client "acme" default' not in S.persona_holders(
+        "hal", committed, "not a mapping", clients=[("acme", "hal")]), "a broken file answered a phantom client holder"
+
+
+def test_a_holder_place_takes_the_display_name_the_roster_resolves_for_its_id():
+    """A place whose own row states no label and no name takes the display name the roster resolves for its id from
+    the other file, and `unnamed (<id>)` answers alone when no row of either file names the place."""
+    committed = {"workspaces": [{"id": "T1", "persona": "hal", "channels": [{"id": "C1", "persona": "hal"}]},
+                                {"id": "T2", "persona": "hal"}]}
+    local = {"workspaces": [{"id": "T1", "label": "team", "channels": [{"id": "C1", "name": "support"}]}]}
+    assert S.persona_holders("hal", committed, local) == [
+        'workspace "team" in slack.yaml',
+        'channel "support" of workspace "team" in slack.yaml',
+        'workspace "unnamed (T2)" in slack.yaml',
+    ]

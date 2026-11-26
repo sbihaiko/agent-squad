@@ -137,11 +137,16 @@ def default_renames(clients, persona_id, new_name):
     return out
 
 
+def _matches(row, pid):
+    """True when one persona row names the id: an exact string match, the outer spaces trimmed and the case kept."""
+    return isinstance(row, dict) and _text(row.get("id")).strip() == pid
+
+
 def _declared_name(doc, persona_id):
     """The name the committed document declares for one persona id, or '' when it declares none."""
     pid = _text(persona_id).strip()
     for row in _persona_rows(doc):
-        if _text(row.get("id")).strip() == pid:
+        if _matches(row, pid):
             return _text(row.get("name")).strip()
     return ""
 
@@ -185,6 +190,89 @@ def with_fields(doc, persona_id, fields):
                     row[key] = _text(fields[key]).strip()
             return out
     return None
+
+
+def _declared_persona_rows(doc):
+    """The persona rows one document holds, as they stand there: a document that is not a mapping holds none."""
+    rows = _doc(doc).get("personas")
+    return list(rows) if isinstance(rows, list) else []
+
+
+def _first_declared_name(seats, persona_id):
+    """The first name any seat of the roster declares for one persona id, or '', for the copy a refusal states."""
+    for seat in seats or ():
+        name = _declared_name(seat.get("committed"), persona_id)
+        if name:
+            return name
+    return ""
+
+
+def without(doc, persona_id):
+    """The committed document with the row of one persona id removed, and every other row and key in its place. None
+    when the document declares no persona with that id: a persona only the local file declares is read-only. One id's
+    duplicate rows collapse, and the match is an exact string, never a case-folded one."""
+    rows = _declared_persona_rows(doc)
+    pid = _text(persona_id).strip()
+    kept, changed = [], False
+    for row in rows:
+        if _matches(row, pid):
+            changed = True   # every row of the id goes, so an id a document declares twice loses both rows
+            continue
+        kept.append(row)
+    if not changed:
+        return None
+    out = copy.deepcopy(_doc(doc))
+    out["personas"] = copy.deepcopy(kept)
+    return out
+
+
+def remove(seats, persona_id, targets, holders=None):
+    """The plan of one persona removal: one row for each target project, and the committed document a confirmed save
+    writes into each project it can remove the persona from.
+
+    `holders` maps a project id to the places its files and its clients name the persona, from the policy module. A
+    target with any holder is refused, and the refusal names every holder, even when the committed file does not declare
+    the row. A target the roster does not hold, a project with no worktree, a file whose read answered a defect, and a
+    project whose committed file does not declare the id are each refused by name. Every other target reads
+    "removes <name>" and carries its document, so one refused project never stops the others."""
+    pid = _text(persona_id).strip()
+    held = holders or {}
+    by_id = {}
+    for seat in seats or ():
+        sid = _text(seat.get("id")).strip()
+        if sid and sid not in by_id:
+            by_id[sid] = seat
+    rows, writes = [], []
+    for target in targets or ():
+        tid = _text(target).strip()
+        seat = by_id.get(tid)
+        label = (_text(seat.get("label")) or tid) if seat else tid
+        row = {"project": tid, "label": label, "file": _text(seat.get("cf")) if seat else ""}
+        if seat is None:
+            rows.append({**row, "result": "refused: the project is not in the roster"})
+            continue
+        if not _text(seat.get("checkout")).strip():
+            rows.append({**row, "result": "refused: the project has no worktree"})
+            continue
+        defects = list(seat.get("read_defects") or ())
+        if defects:
+            rows.append({**row, "result": f"refused: the file does not read: {_text(defects[0])}"})
+            continue
+        places = [str(place) for place in (held.get(tid) or ()) if _text(place).strip()]
+        if places:
+            # A holder outranks a missing committed row: a place of either file names the persona, so the refusal names
+            # the holders and never reports the row as undeclared (acceptance 6).
+            rows.append({**row, "result": f"refused: held by {'; '.join(places)}"})
+            continue
+        changed = without(seat.get("committed"), pid)
+        # The name comes from the target project alone: another project's declaration never names this project's persona.
+        name = _declared_name(seat.get("committed"), pid) or pid
+        if changed is None:
+            rows.append({**row, "result": f"refused: {name} is not declared in this project's committed file"})
+            continue
+        rows.append({**row, "result": f"removes {name}"})
+        writes.append({"project": tid, "committed": changed})
+    return {"rows": rows, "writes": writes}
 
 
 def edit(seats, persona_id, fields, targets, clients=None):

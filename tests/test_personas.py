@@ -185,3 +185,72 @@ def test_the_seat_reads_a_document_that_is_not_a_mapping_as_no_persona():
     """A broken document never names a persona: the rules read a plain mapping and treat anything else as empty."""
     seats = [seat("alpha", None, ["not", "a", "mapping"])]
     assert PS.groups(seats, one_client(["alpha"]))[0]["rows"] == []
+
+
+# ---------------------------------------------------------------- one persona removed from a project (#3014)
+
+def test_the_removal_drops_only_the_row_of_that_id():
+    """#3014 acceptance 8: the committed document loses the persona's row alone, and every other row keeps its place."""
+    doc = {"version": 1, "personas": [persona("hal", "HAL9K"), persona("iara", "Iara")],
+           "project": {"persona": "iara"}}
+    got = PS.without(doc, "hal")
+    assert got["personas"] == [persona("iara", "Iara")], got
+    assert got["project"] == {"persona": "iara"}, got
+    assert len(doc["personas"]) == 2, "the input document changed"
+
+
+def test_a_persona_the_committed_file_does_not_declare_answers_no_document():
+    """A persona only the local file declares is read-only: the rules answer no document for it."""
+    assert PS.without({"personas": [persona("iara", "Iara")]}, "hal") is None
+
+
+def test_a_removal_with_no_holder_writes_the_document_without_the_row():
+    """#3014 acceptance 8: a plan of a project whose files name no such persona carries the committed document a
+    confirmed save writes, and it holds no row of that id and keeps every other key."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K"), persona("iara", "Iara")],
+                               "project": {"persona": "iara"}}),
+              "checkout": "/co/alpha"}]
+    plan = PS.remove(seats, "hal", ["alpha"], {})
+    assert plan["rows"][0]["result"] == "removes HAL9K", plan["rows"]
+    assert [w["committed"]["personas"] for w in plan["writes"]] == [[persona("iara", "Iara")]], plan["writes"]
+    assert plan["writes"][0]["committed"]["project"] == {"persona": "iara"}, plan["writes"]
+
+
+def test_a_refusal_names_only_a_persona_the_target_project_declares():
+    """A project whose committed file does not declare the id is refused with the bare id, whatever another project's
+    seat declares for that id: no other project's declaration names this project's persona."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K")]}), "checkout": "/co/alpha"},
+             {**seat("beta", {"personas": [persona("iara", "Iara")]}), "checkout": "/co/beta"}]
+    plan = PS.remove(seats, "hal", ["beta"], {})
+    assert plan["rows"][0]["result"] == "refused: hal is not declared in this project's committed file", plan["rows"]
+    assert plan["writes"] == [], plan["writes"]
+
+
+def test_a_removal_with_a_holder_is_refused_and_names_each_holder():
+    """#3014 acceptance 6: a project whose files name the persona is refused, and the refusal names every holder."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K")]}), "checkout": "/co/alpha"}]
+    holders = {"alpha": ["project in slack.yaml", 'workspace "team" in slack.yaml']}
+    plan = PS.remove(seats, "hal", ["alpha"], holders)
+    assert plan["rows"][0]["result"] == ('refused: held by project in slack.yaml; workspace "team" in slack.yaml'), \
+        plan["rows"]
+    assert plan["writes"] == [], plan["writes"]
+
+
+def test_the_removal_names_each_refused_project_and_still_carries_the_other_writes():
+    """A target outside the roster, a project with no worktree, a file whose read answered a defect and a project whose
+    committed file does not declare the id are each refused by name; the other targets keep their write."""
+    seats = [{**seat("alpha", {"personas": [persona("hal", "HAL9K")]}), "checkout": "/co/alpha"},
+             {**seat("beta", {"personas": [persona("hal", "HAL9K")]}), "checkout": ""},
+             {**seat("gamma", {"personas": [persona("hal", "HAL9K")]}), "checkout": "/co/gamma",
+                "read_defects": ["slack.yaml: not YAML"]},
+             {**seat("delta", {"personas": [persona("iara", "Iara")]}), "checkout": "/co/delta"}]
+    plan = PS.remove(seats, "hal", ["alpha", "beta", "gamma", "delta", "ghost"], {})
+    rows = {r["project"]: r["result"] for r in plan["rows"]}
+    assert rows["alpha"] == "removes HAL9K", rows
+    assert rows["beta"] == "refused: the project has no worktree", rows
+    assert rows["gamma"] == "refused: the file does not read: slack.yaml: not YAML", rows
+    # The name a refusal states comes from the target project alone, so delta, which declares no name for `hal`, is
+    # refused with the bare id rather than with alpha's name for it.
+    assert rows["delta"] == "refused: hal is not declared in this project's committed file", rows
+    assert rows["ghost"] == "refused: the project is not in the roster", rows
+    assert [w["project"] for w in plan["writes"]] == ["alpha"], plan["writes"]

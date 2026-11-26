@@ -137,6 +137,19 @@ def test_a_rename_preview_reads_the_old_name_from_the_roster_not_from_a_written_
                              "the client map stores Azure as the default name of Atlas Corp"], plan["notes"]
 
 
+def test_a_holder_is_named_before_the_missing_committed_row():
+    """#3014 acceptance 6: a place that names the persona refuses the removal and names the holder, even when the
+    committed file does not declare the row, so the local file's holder is never reported as a missing row."""
+    seats = [seat("alpha", {"personas": [{"id": "blue", "name": "Blue"}]},
+                  {"workspaces": [{"id": "T1", "label": "team",
+                                   "channels": [{"id": "C1", "label": "support", "persona": "amber"}]}]})]
+    plan = PS.remove(seats, "amber", ["alpha"],
+                     {"alpha": ['channel "support" of workspace "team" in slack.local.yaml']})
+    assert plan["rows"][0]["result"] == \
+        'refused: held by channel "support" of workspace "team" in slack.local.yaml', plan["rows"]
+    assert plan["writes"] == [], plan["writes"]
+
+
 # ---------------------------------------------------------------- the route: the fields, the preview and the save
 
 def git_repo(tmp_path, name, doc):
@@ -637,3 +650,167 @@ def test_the_write_route_answers_over_loopback(hub, monkeypatch):
         srv.shutdown()
         srv.server_close()
     assert got == {"seen": "blue"}, got
+
+
+# ---------------------------------------------------------------- the removal: the preview and the save (#3014)
+
+def test_the_removal_route_answers_over_loopback(hub, monkeypatch):
+    """The page posts to `/api/personas/remove`, and the dispatcher reaches `personas_remove` and answers its body as
+    JSON. The route's registration alone is checked in `tests/test_hub_run_sheet.py`; this case proves the dispatch."""
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    seen = []
+
+    def fake(body):
+        seen.append(body)
+        return {"persona": body.get("persona"), "preview": True}
+
+    monkeypatch.setattr(hub, "personas_remove", fake)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), hub.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = {"persona": "amber", "projects": ["alpha"]}
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/personas/remove",
+                                     data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json",
+                                              "Origin": f"http://127.0.0.1:{srv.server_address[1]}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = json.loads(r.read())
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert seen == [body], seen
+    assert got == {"persona": "amber", "preview": True}, got
+
+
+def test_a_confirm_that_is_not_a_boolean_is_refused_before_any_read(hub):
+    """The removal's contract: `confirm` is the boolean true or absent. A body that sends a number or the text `true`
+    is refused, so a caller that meant to confirm never reads a preview as a success."""
+    for wrong in (1, "true", "false"):
+        out = hub.personas_remove({"persona": "amber", "projects": ["alpha"], "confirm": wrong})
+        assert out == {"err": "confirm: true or absent"}, (wrong, out)
+
+
+def test_a_seat_whose_file_does_not_read_reports_the_defect_and_never_asks_the_holders(hub, monkeypatch):
+    """A file whose read answered a defect answers no holder: the removal reports the file defect, and the hub never
+    asks the policy module for a holder of a document it could not read."""
+    bad = {"id": "alpha", "label": "alpha", "checkout": "/co/alpha", "committed": ["not", "a", "mapping"],
+           "local": {}, "cf": "slack.yaml", "lf": "slack.local.yaml",
+           "committed_path": "/co/alpha/docs/squad/slack.yaml", "local_path": "/profiles/alpha.slack.local.yaml",
+           "read_defects": ["slack.yaml: not YAML"]}
+    monkeypatch.setattr(hub, "_slack_roster_checked", lambda cache=0.0: ([bad], None))
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: ([
+        {"id": "acme", "name": "Acme", "default_persona": {"id": "amber", "name": "Amber"},
+         "projects": ["alpha"]}], None))
+
+    def no_holder_read(*args, **kwargs):
+        raise AssertionError("the holder read ran on a document that did not read")
+
+    monkeypatch.setattr(hub.slack_policy(), "persona_holders", no_holder_read)
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    assert out["rows"][0]["result"] == "refused: the file does not read: slack.yaml: not YAML", out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_removal_with_no_holder_passes_the_preview_and_writes_none(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 8: a removal preview names each project's file, and no file changes."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT})
+    before = {slug: c.read_bytes() for slug, (_co, c, _o) in made.items()}
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha", "beta"]})
+    assert out.get("err") is None, out
+    assert {r["project"]: r["result"] for r in out["rows"]} == {"alpha": "removes Amber", "beta": "removes Amber"}, out
+    assert {slug: c.read_bytes() for slug, (_co, c, _o) in made.items()} == before, "the preview wrote a file"
+
+
+def test_a_removal_a_place_names_is_refused_and_the_refusal_names_each_holder(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 2, 4 and 6: the project row holds the persona, and the refusal names the place and its file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    out = hub.personas_remove({"persona": "blue", "projects": ["alpha"]})
+    assert out["rows"][0]["result"].startswith("refused: held by "), out["rows"]
+    assert "project in slack.yaml" in out["rows"][0]["result"], out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_client_default_blocks_only_the_project_it_holds(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 5 and 7: a client whose default is the persona and that holds alpha refuses alpha alone, and
+    beta, which the client does not hold, keeps its removal."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT})
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump(
+        {"clients": [{"id": "acme", "name": "Acme", "default_persona": {"id": "amber", "name": "Amber"},
+                      "projects": ["alpha"]}]}, sort_keys=False))
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha", "beta"]})
+    rows = {r["project"]: r["result"] for r in out["rows"]}
+    assert rows["alpha"].startswith("refused: held by "), rows
+    assert 'client "acme" default' in rows["alpha"], rows
+    assert rows["beta"] == "removes Amber", rows
+
+
+def local_file(prof, slug, doc):
+    """Write one project's local Slack file into the profile folder the roster reads."""
+    (prof / f"{slug}.slack.local.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_a_channel_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 2 and 6: a channel of slack.local.yaml that names the persona refuses the removal, and the
+    refusal names the channel, its workspace and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "workspaces": [
+        {"id": "T1", "label": "team",
+         "channels": [{"id": "C1", "label": "support", "persona": "amber"}]}]})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == 'refused: held by channel "support" of workspace "team" in alpha.slack.local.yaml', out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_workspace_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 3 and 6: a workspace of slack.local.yaml that names the persona refuses the removal, and the
+    refusal names the workspace and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "workspaces": [{"id": "T1", "label": "team", "persona": "amber"}]})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == 'refused: held by workspace "team" in alpha.slack.local.yaml', out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_project_row_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 4 and 6: the local file's project row that names the persona refuses the removal, and the
+    refusal names the project row and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "project": {"persona": "amber"}})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == "refused: held by project in alpha.slack.local.yaml", out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_raw_client_map_with_string_projects_still_answers_its_holders(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 5 and 7: the holder read accepts a project entry written as a bare id, so a raw map blocks the
+    project it holds and never another one."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT})
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: ([
+        {"id": "acme", "name": "Acme", "default_persona": {"id": "amber", "name": "Amber"},
+         "projects": ["alpha"]}], None))
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha", "beta"]})
+    rows = {r["project"]: r["result"] for r in out["rows"]}
+    assert rows["alpha"] == 'refused: held by client "acme" default', rows
+    assert rows["beta"] == "removes Amber", rows
+
+
+@pytest.mark.heavy   # a real repository, its worktree and a push
+def test_a_confirmed_removal_drops_the_row_from_the_committed_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 8: the confirmed save lands the committed file without the persona's row, and no other row
+    moves."""
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT}, git=True)
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"], "confirm": True})
+    assert out.get("err") is None, out
+    assert out["rows"][0]["result"].startswith("wrote and pushed commit "), out["rows"]
+    origin = made["alpha"][2]
+    landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                            capture_output=True, text=True, check=True, timeout=60).stdout
+    doc = yaml.safe_load(landed)
+    assert [row["id"] for row in doc["personas"]] == ["blue"], doc
+    assert doc["project"] == PROJECT["project"], doc
