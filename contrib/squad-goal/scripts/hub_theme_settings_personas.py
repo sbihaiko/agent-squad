@@ -243,12 +243,18 @@ def personas_edit(body):
     return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused),
             "notes": notes, "map": map_rows}
 
+def _pr_project_id(entry):
+    """The project id one entry of a client's `projects` names: its `id` for a mapping, and the text itself for a bare
+    id, so a raw map and the normalized map answer the same holder (#3014)."""
+    return _slack_text(entry.get("id") if isinstance(entry, dict) else entry).strip()
+
+
 def _pr_holding_clients(clients, project_id):
     """One `(client id, default persona id)` for each client of the map that holds the project, so a client of another
     project never answers a holder and never blocks the removal (#3014)."""
     out = []
     for client in clients or ():
-        held = any(_slack_text((entry or {}).get("id")).strip() == project_id
+        held = any(_pr_project_id(entry) == project_id
                    for entry in client.get("projects") or ())
         default = _slack_text((client.get("default_persona") or {}).get("id")).strip()
         if held and default:

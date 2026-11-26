@@ -815,3 +815,15 @@ def test_a_persona_no_place_names_answers_no_holder():
 def test_the_holder_answer_trims_the_persona_id():
     committed, local = files()
     assert "project in slack.yaml" in S.persona_holders("  hal  ", committed, local)
+
+
+def test_a_holder_label_falls_back_from_the_label_to_the_name_to_the_id():
+    """#3014 acceptance 6: a row that states a label and a name reports its label, so a place is named by one stable
+    field and the fallback order is label, name, id."""
+    committed = {"workspaces": [{"id": "T0TEAM0001", "label": "team", "name": "Team Name", "persona": "hal",
+                                 "channels": [{"id": "C0PROJ0001", "label": "support", "name": "Support Desk",
+                                               "persona": "hal"}]}]}
+    assert S.persona_holders("hal", committed, {}) == [
+        'workspace "team" in slack.yaml',
+        'channel "support" of workspace "team" in slack.yaml',
+    ]

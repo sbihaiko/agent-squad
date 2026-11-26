@@ -857,7 +857,9 @@ def persona_named(committed, local, name):
 
 
 def _place_label(row):
-    """The label a holder states for one workspace or channel row: its `label` when it has one, else its `id`."""
+    """The label a holder states for one workspace or channel row, in one fallback order: its `label`, else its `name`,
+    else its `id`. A row that states both a label and a name reports its label, so the refusal text keeps one stable
+    field for each place (#3014)."""
     return str(row.get("label") or row.get("name") or row.get("id") or "").strip()
 
 

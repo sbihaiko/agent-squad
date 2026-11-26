@@ -137,6 +137,19 @@ def test_a_rename_preview_reads_the_old_name_from_the_roster_not_from_a_written_
                              "the client map stores Azure as the default name of Atlas Corp"], plan["notes"]
 
 
+def test_a_holder_is_named_before_the_missing_committed_row():
+    """#3014 acceptance 6: a place that names the persona refuses the removal and names the holder, even when the
+    committed file does not declare the row, so the local file's holder is never reported as a missing row."""
+    seats = [seat("alpha", {"personas": [{"id": "blue", "name": "Blue"}]},
+                  {"workspaces": [{"id": "T1", "label": "team",
+                                   "channels": [{"id": "C1", "label": "support", "persona": "amber"}]}]})]
+    plan = PS.remove(seats, "amber", ["alpha"],
+                     {"alpha": ['channel "support" of workspace "team" in slack.local.yaml']})
+    assert plan["rows"][0]["result"] == \
+        'refused: held by channel "support" of workspace "team" in slack.local.yaml', plan["rows"]
+    assert plan["writes"] == [], plan["writes"]
+
+
 # ---------------------------------------------------------------- the route: the fields, the preview and the save
 
 def git_repo(tmp_path, name, doc):
@@ -671,6 +684,59 @@ def test_a_client_default_blocks_only_the_project_it_holds(hub, tmp_path, monkey
     rows = {r["project"]: r["result"] for r in out["rows"]}
     assert rows["alpha"].startswith("refused: held by "), rows
     assert 'client "acme" default' in rows["alpha"], rows
+    assert rows["beta"] == "removes Amber", rows
+
+
+def local_file(prof, slug, doc):
+    """Write one project's local Slack file into the profile folder the roster reads."""
+    (prof / f"{slug}.slack.local.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_a_channel_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 2 and 6: a channel of slack.local.yaml that names the persona refuses the removal, and the
+    refusal names the channel, its workspace and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "workspaces": [
+        {"id": "T1", "label": "team",
+         "channels": [{"id": "C1", "label": "support", "persona": "amber"}]}]})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == 'refused: held by channel "support" of workspace "team" in alpha.slack.local.yaml', out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_workspace_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 3 and 6: a workspace of slack.local.yaml that names the persona refuses the removal, and the
+    refusal names the workspace and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "workspaces": [{"id": "T1", "label": "team", "persona": "amber"}]})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == 'refused: held by workspace "team" in alpha.slack.local.yaml', out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_project_row_of_the_local_file_blocks_the_removal_and_names_its_file(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 4 and 6: the local file's project row that names the persona refuses the removal, and the
+    refusal names the project row and the local file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    local_file(prof, "alpha", {"version": 1, "project": {"persona": "amber"}})
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha"]})
+    result = out["rows"][0]["result"]
+    assert result == "refused: held by project in alpha.slack.local.yaml", out["rows"]
+    assert out["saved"] == [], out["saved"]
+
+
+def test_a_raw_client_map_with_string_projects_still_answers_its_holders(hub, tmp_path, monkeypatch):
+    """#3014 acceptance 5 and 7: the holder read accepts a project entry written as a bare id, so a raw map blocks the
+    project it holds and never another one."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT, "beta": PROJECT})
+    monkeypatch.setattr(hub, "_clients_map_read", lambda: ([
+        {"id": "acme", "name": "Acme", "default_persona": {"id": "amber", "name": "Amber"},
+         "projects": ["alpha"]}], None))
+    out = hub.personas_remove({"persona": "amber", "projects": ["alpha", "beta"]})
+    rows = {r["project"]: r["result"] for r in out["rows"]}
+    assert rows["alpha"] == 'refused: held by client "acme" default', rows
     assert rows["beta"] == "removes Amber", rows
 
 
