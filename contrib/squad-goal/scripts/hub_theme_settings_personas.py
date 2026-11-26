@@ -14,15 +14,16 @@ def personas_module():
 
 
 def personas_fields():
-    """The choice a voice field offers and the limit a tone field states: the Gemini voices alone, sorted, and the policy
-    module's tone limit. The list and the limit live in the policy module, so the hub states no rule of its own
-    (ADR-0177). A policy read that fails answers no choice and no limit, and the page draws a plain field."""
+    """The choice a voice field offers and the rules a name and a tone field state: the Gemini voices alone, sorted, the
+    policy module's tone limit, and the policy module's name pattern. The list, the limit and the pattern live in the
+    policy module, so the hub states no rule of its own (ADR-0177). A policy read that fails answers no choice and no
+    rule, and the page draws a plain field."""
     try:
         P = slack_policy()
-        return sorted(P.GEMINI_VOICES), P.TONE_MAX
+        return sorted(P.GEMINI_VOICES), P.TONE_MAX, P.NAME.pattern
     except Exception as e:
         print(f"hub: the Slack rules module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
-        return [], None
+        return [], None, None
 
 
 def _pr_newest_committed(seat):
@@ -66,12 +67,13 @@ def personas_overview(seats=None, clients=None):
     A roster read that fails answers its reason and no group, so a broken profile read never draws an empty roster as a
     roster with no persona. A client map that fails to read names no client, and the projects wait in their own
     groups. The answer carries the Gemini voices and the tone limit the theme's editor offers."""
-    voices, tone_max = personas_fields()
+    voices, tone_max, name_pattern = personas_fields()
+    fields = {"voices": voices, "tone_max": tone_max, "name_pattern": name_pattern}
     errs = []
     if seats is None:
         seats, roster_err = _slack_roster_checked(0.0)
         if roster_err:
-            return {"err": roster_err, "groups": [], "voices": voices, "tone_max": tone_max}
+            return {"err": roster_err, "groups": [], **fields}
     seats = [_pr_newest_committed(seat) for seat in seats]
     if clients is None:
         clients, map_err = _clients_map_read()
@@ -82,13 +84,13 @@ def personas_overview(seats=None, clients=None):
         PS = personas_module()
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
-        return {"err": "the persona rules are unavailable", "groups": [], "voices": voices, "tone_max": tone_max}
+        return {"err": "the persona rules are unavailable", "groups": [], **fields}
     try:
         groups = PS.groups(seats, clients)
     except Exception as e:
         print(f"hub: the personas could not be merged: {type(e).__name__}: {e}", file=sys.stderr)
-        return {"err": "the personas could not be merged", "groups": [], "voices": voices, "tone_max": tone_max}
-    return {"err": "; ".join(errs) or None, "groups": groups, "voices": voices, "tone_max": tone_max}
+        return {"err": "the personas could not be merged", "groups": [], **fields}
+    return {"err": "; ".join(errs) or None, "groups": groups, **fields}
 
 
 def _pr_edited_fields(P, fields):
@@ -101,6 +103,10 @@ def _pr_edited_fields(P, fields):
             out[key] = _slack_text(fields.get(key)).strip()
     if not out:
         return None, "fields: a body that names at least one of name, voice and tone"
+    if "name" in out:
+        reason = P.name_reason(out["name"])
+        if reason:
+            return None, f"personas[].name: {reason}"
     if "voice" in out:
         voice = next((v for v in P.GEMINI_VOICES if v.casefold() == out["voice"].casefold()), None)
         if voice is None:
