@@ -378,11 +378,35 @@ def _guest_ids(local):
     return teams, channels
 
 
-def validate(committed=None, local=None, others=(), local_name="slack.local.yaml"):
+def _full_members(file, committed, local, owners, grants, out):
+    """A member of a `session: full` role is the owner of its workspace or holds a grant for that workspace (ADR-0180).
+    The owner id map and the grant list come from the hub registry, so a member the registry names neither way is a
+    defect that names the user and the workspace it fails in."""
+    full = {str(row.get("id")) for row in _rows(committed.get("roles")) if row.get("session") == SESSION_FULL}
+    granted = {(str(g.get("workspace")), str(g.get("user"))) for g in grants or () if isinstance(g, dict)}
+    owners = owners or {}
+    for i, member in enumerate(_rows(local.get("members"))):
+        if str(member.get("role")) not in full:
+            continue
+        workspace = str(member.get("workspace") or "")
+        owner = owners.get(workspace)
+        for j, user in enumerate(member.get("users") or []):
+            if owner is not None and str(user) == str(owner):
+                continue
+            if (workspace, str(user)) in granted:
+                continue
+            out.append(_defect(file, f"members[{i}].users[{j}]",
+                               f"the {member.get('role')!r} role holds the full session, so its member must be the "
+                               f"owner of workspace {workspace} or hold a grant for it"))
+
+
+def validate(committed=None, local=None, others=(), local_name="slack.local.yaml", owners=None, grants=()):
     """Every defect of the committed file and the local file, one per failing key. `others` are `(file name, document)`
     pairs of the other projects' local files on the machine: the connector reaches one guest workspace at a time, summed
     over all of them, and their token and `secret` rules hold too. `local_name` is the local file's own name, so a
-    message names the file a person edits in the profile folder."""
+    message names the file a person edits in the profile folder. `owners` maps each workspace to its owner's user id and
+    `grants` lists `{workspace, user}` pairs, both read from the hub registry, so a `full` role admits only the owner or
+    a granted member (ADR-0180)."""
     out = []
     committed = committed or {}
     local = local or {}
@@ -427,6 +451,7 @@ def validate(committed=None, local=None, others=(), local_name="slack.local.yaml
                 out.append(_defect("slack.yaml", f"workspaces[{i}].channels[{j}].id", "a guest channel id stays in the local file"))
     for file, i in _second_guests(local_name, local, others):
         out.append(_defect(file, f"workspaces[{i}].id", SECOND_GUEST_REASON))
+    _full_members(local_name, committed, local, owners, grants, out)
     return out
 
 
@@ -701,7 +726,8 @@ class Decision(NamedTuple):
     channel that does not ask carries no clip (story 70). `deploy` is the tuple of environments the caller's role lists
     for the `deploy` action, and it is empty for a decision with no role (#2724). `tone` is the persona's tone, then the
     tone of the sender's role, and the persona's alone when the role names none (#2927). `session` is `full` only for an
-    `inbox` decision of the owner in a role that names `full`, and `bounded` otherwise (ADR-0180)."""
+    `inbox` decision of the workspace owner in a role that names `full`, in a channel with an active revision and not in
+    a direct message; every other decision is `bounded` (ADR-0180)."""
     kind: str
     role: str | None
     actions: tuple
@@ -1224,8 +1250,11 @@ def decide(committed, local, event, now, thread_state=None):
         # and its data; only the reply path is absent.
         reply = None
     kind = PROPOSAL if class_ == "guest" else INBOX
-    # Only the daemon's owner id gets the owner's session in this ADR-0180 step; every other member stays bounded.
-    session = SESSION_FULL if kind == INBOX and event.get("owner") is True and _role_session(committed, role) == SESSION_FULL \
+    # The owner's own session needs four facts at once (ADR-0180): a project channel, the owner the hub registry names
+    # for its workspace, an active revision, and a role that names `full`. A direct message and a channel with no active
+    # revision stay bounded, so no owner message runs a full turn outside a project channel.
+    session = SESSION_FULL if kind == INBOX and event.get("owner") is True and event.get("active") is True \
+        and event.get("dm") is not True and _role_session(committed, role) == SESSION_FULL \
         else SESSION_BOUNDED
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
                     next_poll, voice, _role_deploy(committed, role), tone, session)

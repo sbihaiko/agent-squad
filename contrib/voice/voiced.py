@@ -356,22 +356,43 @@ def hub_registry_seam(projects=None, env=None):
     return project_registry if hub_registries(projects, env) else None
 
 
+def read_registry(path):
+    """The hub registry's document, or an empty dict when no path is named or the file is missing or malformed."""
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def listed_revisions(path):
     """The `slack.yaml` shas the hub registry lists, or an empty set when the file is missing or malformed.
 
     One key per saved file, each value the landed sha of that save. A file this build cannot read lists nothing, so a
     project with no approved revision serves no channel, and a refusal never widens what the daemon serves.
     """
-    if not path:
-        return set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return set()
-    if not isinstance(data, dict):
-        return set()
-    return {str(entry["sha"]) for entry in data.values() if isinstance(entry, dict) and entry.get("sha")}
+    return {str(entry["sha"]) for entry in read_registry(path).values() if isinstance(entry, dict) and entry.get("sha")}
+
+
+def registry_owners(path):
+    """The owner user id of each workspace the hub registry names, or an empty map when it names none (#2966).
+
+    The owner id is the one the hub route writes, and the daemon reads no other source for it."""
+    owners = read_registry(path).get("owners")
+    if not isinstance(owners, dict):
+        return {}
+    return {str(workspace): str(user) for workspace, user in owners.items() if user}
+
+
+def registry_grants(path):
+    """The `{workspace, user}` grants the hub registry holds, or an empty list when it holds none (#2966)."""
+    grants = read_registry(path).get("grants")
+    if not isinstance(grants, list):
+        return []
+    return [grant for grant in grants if isinstance(grant, dict)]
 
 
 class TipUnreadable(Exception):
@@ -1769,6 +1790,46 @@ class Daemon:
             return self.downloaders[app](url)
         return self.downloader(url)
 
+    def registry_file(self, repo):
+        """The hub registry that holds one project's saved shas, owner ids and grants, or '' when no registry is in force.
+
+        The entry is the configured project of that repository, else a bare entry that names only the repository.
+        """
+        if self.registry is None:
+            return ""
+        entry = {"repo": repo}
+        rows = list(self.configs() or ()) if self.configs is not None else []
+        for row in rows:
+            if str((row or {}).get("repo") or "").strip() == repo:
+                entry = row
+        return self.registry(entry) or ""
+
+    def workspace_owner(self, workspace, repo=None):
+        """The owner user id the hub registry names for one Slack workspace, or None when it names none (#2966).
+
+        A project channel reads its own project's registry. A direct message owns no project, so every configured
+        project's registry is read and the first one that names the workspace answers. No other source names an owner.
+        """
+        workspace = str(workspace or "")
+        if not workspace or self.registry is None:
+            return None
+        entries = []
+        if repo:
+            entries.append({"repo": repo})
+        if self.configs is not None:
+            entries.extend(list(self.configs() or ()))
+        entries.append({"repo": None})
+        seen = set()
+        for entry in entries:
+            path = self.registry(entry) or ""
+            if path in seen:
+                continue
+            seen.add(path)
+            owner = registry_owners(path).get(workspace)
+            if owner:
+                return owner
+        return None
+
     def listed(self, projects=None):
         """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
 
@@ -1983,7 +2044,9 @@ class Daemon:
         others = [(other_name, other_doc) for other_repo, (other_name, other_doc) in local_docs.items()
                   if other_repo != repo]
         if doc is not None:
-            for defect in slackpolicy.validate(doc, local or {}, others, local_name=local_name):
+            registry = self.registry_file(repo)
+            for defect in slackpolicy.validate(doc, local or {}, others, local_name=local_name,
+                                               owners=registry_owners(registry), grants=registry_grants(registry)):
                 # `validate` names the local side with `local_name`; every other defect is the committed file.
                 (local_defects if defect.file == local_name else tip_defects).append(defect)
         if tip_defects or local_defects:
@@ -2701,35 +2764,36 @@ class Daemon:
 
         A valid active revision and its local file decide the event, so a bot, a stranger and a Slack Connect user stay
         data (SPEC 2682). A project channel whose revision is not active yet, the DM, and every channel no project owns
-        run through the daemon's empty policy instead: it names the channel and the owner as its one member, so the
-        owner's message still reaches the operator while a bot, a stranger and a Slack Connect user stay data from the
-        event flags and their missing role alone.
+        run through the daemon's empty policy instead: it names the channel and the owner the hub registry names for the
+        workspace as its one member, so the owner's message still reaches the operator while a bot, a stranger and a
+        Slack Connect user stay data from the event flags and their missing role alone.
         """
         channel = str(event.get("channel") or "")
         repo = self.state.channel_for(channel)
         active = self.state.active_revision(repo) if repo else None
-        if active and active.get("revision"):
+        live = bool(active and active.get("revision"))
+        if live:
             committed = active["revision"]
             local = active.get("local") or {}
         else:
             committed, local = self.baseline_files(event, repo)
-        return slackpolicy.decide(committed, local, self.policy_event(event, committed), datetime.now())
+        return slackpolicy.decide(committed, local, self.policy_event(event, committed, repo, live), datetime.now())
 
     def baseline_files(self, event, repo):
         """The empty policy of a channel with no loaded project files: it names the channel so the decision can
-        classify the event, and it names the owner as its one member, so the owner's message still reaches the
-        operator while every other caller has no role and stays data. A bot and a Slack Connect user stay data from
-        the event flags alone, whatever the owner is. A channel no project owns keeps the same empty policy; `handle`
-        records it as data before it reads the kind, so nothing is granted there."""
+        classify the event, and it names the workspace owner the hub registry holds as its one member, so the owner's
+        message still reaches the operator while every other caller has no role and stays data. A bot and a Slack
+        Connect user stay data from the event flags alone, whatever the owner is. A channel no project owns keeps the
+        same empty policy; `handle` records it as data before it reads the kind, so nothing is granted there."""
         channel = str(event.get("channel") or "")
         workspace = str(event.get("team") or event.get("team_id") or "")
         row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
         committed = {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
                      "roles": [{"id": "owner", "actions": []}]}
         local = {}
-        if self.owner:
-            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner",
-                                  "users": [self.owner]}]}
+        owner = self.workspace_owner(workspace, repo)
+        if owner:
+            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner", "users": [owner]}]}
         return committed, local
 
     def channel_accepts_answer(self, channel):
@@ -2746,16 +2810,20 @@ class Daemon:
                     return str(row.get("mode") or "listen") == "listen+speak"
         return True
 
-    def policy_event(self, event, committed):
+    def policy_event(self, event, committed, repo, live):
         """One socket event as the policy event the decision takes: its workspace, channel, caller, text, and the flags
-        that mark a bot, a Slack Connect user and the daemon's own post."""
+        that mark a bot, a Slack Connect user, the daemon's own post, a direct message and a live revision. The owner is
+        the owner id the hub registry names for the event's workspace (#2966), never the daemon's own setting."""
         workspace = self.workspace_of(event, committed)
+        owner = self.workspace_owner(workspace, repo)
         return {"kind": "message",
                 "workspace": workspace,
                 "channel": str(event.get("channel") or ""),
                 "user": str(event.get("user") or event.get("bot_id") or ""),
                 "text": str(event.get("text") or ""),
-                "owner": bool(self.owner) and str(event.get("user") or "") == str(self.owner),
+                "owner": owner is not None and str(event.get("user") or "") == owner,
+                "active": live,
+                "dm": (event.get("channel_type") or "") == "im",
                 "bot": bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
                 "external": bool(event.get("is_ext_shared_channel") or event.get("is_external")
                                  or event.get("external")

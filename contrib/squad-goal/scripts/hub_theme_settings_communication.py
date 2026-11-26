@@ -1229,7 +1229,8 @@ def slack_decide(query, committed=None, local=None):
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     cf, lf = _slack_name(committed, "slack.yaml"), _slack_name(local, "slack.local.yaml")
-    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf))
+    defects = list(read_defects) + list(P.validate(committed_doc, local_doc, local_name=lf,
+                                                   owners=_slack_owner_map(), grants=_slack_grants()))
     refused_keys = _slack_refused_keys(P, defects)
     ws_id, ch_id = str(query.get("workspace") or ""), str(query.get("channel") or "")
     groups = _slack_tree_workspaces(P, committed_doc, local_doc, cf, lf)
@@ -1583,7 +1584,8 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
         try: doc = yaml.safe_load(other.read_text())
         except (OSError, yaml.YAMLError): continue
         if isinstance(doc, dict): others.append((other.name, doc))
-    try: defects = P.validate(committed=new_c, local=new_l, others=others, local_name=pathlib.Path(local).name)
+    try: defects = P.validate(committed=new_c, local=new_l, others=others, local_name=pathlib.Path(local).name,
+                              owners=_slack_owner_map(), grants=_slack_grants())
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
     if defects: return {"err": str(defects[0]), "defects": [str(d) for d in defects]}
@@ -2525,6 +2527,40 @@ def slack_channels_post(body):
     gone = [{"id": i, "text": SLACK_NOT_LISTED} for i in sorted(named) if i and i not in listed]
     return {"err": None, "manual": False, "channels": [c for c in channels if c["id"] not in named],
             "unreachable": gone}
+
+def _slack_owner_map():
+    """The owner user id of each workspace, as the registry holds it: `{}` when the registry names none (#2966)."""
+    owners = _slack_registry_data().get("owners")
+    return {str(ws): str(user) for ws, user in owners.items() if user} if isinstance(owners, dict) else {}
+
+def _slack_grants():
+    """The `{workspace, user}` grants the registry holds, or `[]` when it holds none (#2966)."""
+    grants = _slack_registry_data().get("grants")
+    return [g for g in grants if isinstance(g, dict)] if isinstance(grants, list) else []
+
+def slack_owner_post(body):
+    """POST /api/slack/owner: the owner user id of one workspace, in the hub registry (#2966, ADR-0180).
+
+    `{workspace, user}` writes the id, so one workspace holds one owner. `{workspace}` alone reads the id the registry
+    holds. A value that is not a Slack user id is refused before any write, so the registry never holds a name the
+    policy cannot match against a member."""
+    if not isinstance(body, dict): return {"err": "bad request"}
+    ws = _slack_text(body.get("workspace")).strip()
+    owners = _slack_owner_map()
+    if not ws: return {"err": "a workspace id is needed", "owners": owners}
+    if "user" not in body: return {"err": None, "owner": owners.get(ws), "owners": owners}
+    user = _slack_text(body.get("user")).strip()
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "owners": owners}
+    if not P.USER_ID.match(user):
+        return {"err": f"user {user!r} is not a Slack user id (U... or W...)", "owners": owners}
+    data = _slack_registry_data()
+    owners[ws] = user
+    data["owners"] = owners
+    err = _slack_atomic(slack_registry_path(), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    if err: return {"err": err, "owners": _slack_owner_map()}
+    return {"err": None, "owner": user, "owners": owners}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and
