@@ -130,10 +130,10 @@ def remove(seats, persona_id, targets, holders=None):
     writes into each project it can remove the persona from.
 
     `holders` maps a project id to the places its files and its clients name the persona, from the policy module. A
-    target with any holder is refused, and the refusal names every holder. A target the roster does not hold, a project
-    with no worktree, a file whose read answered a defect, and a project whose committed file does not declare the id
-    are each refused by name. Every other target reads "removes <name>" and carries its document, so one refused
-    project never stops the others."""
+    target with any holder is refused, and the refusal names every holder, even when the committed file does not declare
+    the row. A target the roster does not hold, a project with no worktree, a file whose read answered a defect, and a
+    project whose committed file does not declare the id are each refused by name. Every other target reads
+    "removes <name>" and carries its document, so one refused project never stops the others."""
     pid = _text(persona_id).strip()
     held = holders or {}
     by_id = {}
@@ -159,14 +159,16 @@ def remove(seats, persona_id, targets, holders=None):
         if defects:
             rows.append({**row, "result": f"refused: the file does not read: {_text(defects[0])}"})
             continue
+        places = [str(place) for place in (held.get(tid) or ()) if _text(place).strip()]
+        if places:
+            # A holder outranks a missing committed row: a place of either file names the persona, so the refusal names
+            # the holders and never reports the row as undeclared (acceptance 6).
+            rows.append({**row, "result": f"refused: held by {'; '.join(places)}"})
+            continue
         changed = without(seat.get("committed"), pid)
         name = _declared_name(seat.get("committed"), pid) or known or pid
         if changed is None:
             rows.append({**row, "result": f"refused: {name} is not declared in this project's committed file"})
-            continue
-        places = [str(place) for place in (held.get(tid) or ()) if _text(place).strip()]
-        if places:
-            rows.append({**row, "result": f"refused: held by {'; '.join(places)}"})
             continue
         rows.append({**row, "result": f"removes {name}"})
         writes.append({"project": tid, "committed": changed})
