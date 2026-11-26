@@ -93,6 +93,35 @@ def test_the_edit_names_each_refused_project_and_still_carries_the_other_writes(
     assert plan["writes"][0]["committed"]["personas"][0]["tone"] == "Direct.", plan["writes"]
 
 
+# ---------------------------------------------------------------- the rules module: the rename's own facts
+
+CLIENT = {"id": "atlas", "name": "Atlas Corp", "default_persona": {"id": "blue", "name": "Blue"},
+          "projects": [{"id": "alpha", "follows": True}]}
+
+
+def test_a_rename_names_the_address_and_the_authorship_mark():
+    """#3012 acceptance 2 and 3: the plan states that the @<name> address and the authorship mark change, and states
+    nothing of either when the name stays."""
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[])
+    assert plan["notes"] == ["the @Blue address becomes @Azure",
+                             "the authorship mark becomes *Azure's Msg*"], plan["notes"]
+    kept = PS.edit([seat("alpha", PROJECT)], "blue", {"tone": "Direct."}, ["alpha"], clients=[CLIENT])
+    assert kept["notes"] == [] and kept["map"] == [], kept
+
+
+def test_a_rename_names_the_client_map_of_each_default_that_holds_the_persona():
+    """#3012 acceptance 4: the plan names the client map when a client default names the persona, and one map row for
+    each default whose stored name differs."""
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[CLIENT])
+    assert plan["notes"][-1] == "the client map stores Azure as the default name of Atlas Corp", plan["notes"]
+    assert plan["map"] == [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}], plan["map"]
+    # A default that names another persona is not this persona's, and it stays out of the plan.
+    other = {**CLIENT, "default_persona": {"id": "amber", "name": "Amber"}}
+    plan = PS.edit([seat("alpha", PROJECT)], "blue", {"name": "Azure"}, ["alpha"], clients=[other])
+    assert "the client map" not in " ".join(plan["notes"]), plan["notes"]
+    assert plan["map"] == [], plan["map"]
+
+
 # ---------------------------------------------------------------- the route: the fields, the preview and the save
 
 def git_repo(tmp_path, name, doc):
@@ -207,6 +236,18 @@ def test_the_read_answers_the_landing_branch_never_an_uncommitted_hub_worktree_f
                                     "committed": yaml.safe_load(c.read_text()), "committed_path": str(c),
                                     "cf": "slack.yaml"})
     assert got["committed"]["personas"][0] == BLUE_A["personas"][0], got
+def test_the_preview_of_a_rename_names_the_address_the_mark_and_the_client_map(hub, tmp_path, monkeypatch):
+    """#3012 acceptance 2, 3 and 4: the preview states the address change and the mark change, names the client map of a
+    default that holds the persona, and writes no client name into a project file."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": PROJECT})
+    (prof / "clients.local.yaml").write_text(yaml.safe_dump({"clients": [CLIENT]}, sort_keys=False))
+    out = hub.personas_edit({"persona": "blue", "fields": {"name": "Azure"}, "projects": ["alpha"]})
+    assert out.get("err") is None, out
+    assert "the @Blue address becomes @Azure" in out["notes"], out["notes"]
+    assert "the authorship mark becomes *Azure's Msg*" in out["notes"], out["notes"]
+    assert "the client map stores Azure as the default name of Atlas Corp" in out["notes"], out["notes"]
+    assert out["map"] == [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}], out["map"]
+    assert "Atlas Corp" not in made["alpha"][1].read_text(), "the rename wrote the client name into a project file"
 
 
 @pytest.mark.heavy   # two real repositories and their worktrees
@@ -426,6 +467,18 @@ def test_the_body_follows_the_editor_mode_not_a_stale_copy_field(hub):
     body = json.loads(_node(_src(hub, tail)))
     assert body == {"persona": "blue", "fields": {"name": "Blue", "voice": "Kore", "tone": "Calm."},
                     "projects": ["alpha"], "confirm": False}, body
+
+
+def test_the_preview_draws_the_rename_notes_and_the_client_map_rows(hub):
+    """#3012 acceptance 2, 3 and 4: the page draws the sentences the route answers, the client map rows included."""
+    plan = {"rows": [], "notes": ["the @Blue address becomes @Azure",
+                                  "the authorship mark becomes *Azure's Msg*"],
+            "map": [{"client": "atlas", "label": "Atlas Corp", "result": "writes Azure"}]}
+    tail = f"prPlan={json.dumps(plan)};console.log(prPlanHtml())"
+    html = _node(_src(hub, tail))
+    assert "the @Blue address becomes @Azure" in html, html
+    assert "the authorship mark becomes *Azure&#39;s Msg*" in html or "the authorship mark becomes *Azure's Msg*" in html, html
+    assert "Atlas Corp" in html and "writes Azure" in html, html
 
 
 def test_the_sample_button_plays_the_chosen_voice_through_the_sample_route(hub):

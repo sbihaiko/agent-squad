@@ -2196,9 +2196,12 @@ async function prSample(){if(!prEd)return;
     if(p&&p.catch)p.catch(()=>{prPMsg="the browser refused the sound: press Play"})}catch(x){}}}
  catch(x){prPMsg="!the sample could not be fetched"}
  prRender()}
-function prPlanHtml(){const rows=((prPlan||{}).rows)||[];if(!rows)return"";
- return `<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
-  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
+function prPlanHtml(){const plan=prPlan||{},rows=plan.rows||[];if(!rows&&!(plan.notes||[]).length&&!(plan.map||[]).length)return"";
+ const notes=(plan.notes||[]).length?`<ul class=prnotes id=prnotes>${plan.notes.map(n=>`<li>${prTxt(n)}</li>`).join("")}</ul>`:"";
+ const map=(plan.map||[]).length?`<table class="ptab" id=prmap><thead><tr><th>Client</th><th>Result</th></tr></thead><tbody>`
+  +plan.map.map(r=>`<tr><td data-l="Client">${prTxt(r.label)}</td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`:"";
+ return notes+`<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
+  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`+map}
 function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max,pat=(prS||{}).name_pattern;
  const limit=max==null?"the policy's":prTxt(max);
  if(d.mode==="copy")return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
