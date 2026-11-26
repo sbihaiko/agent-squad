@@ -62,6 +62,13 @@ session, so the session's reach is set by the gate and not by the message.
    call, so the hook fails closed.
    The gate reads its policy from one file the supervisor writes at the session start, never from a value the model
    can reach.
+8. **The kernel bound grants a background session its own pseudo-terminal, and nothing wider.** A session runs as a
+   `claude --bg` session, and the background host runs it on a pseudo-terminal, so the sandbox profile grants a data
+   write on `/dev/ptmx` and on `/dev/ttys<n>`. It grants no create, no unlink and no other device but `/dev/null`. The
+   CLI's temp folder and lock files move inside the operator's config root, so the owner's temp folder and
+   `~/.local/state` stay refused. The residual is a byte written to another of the owner's terminals, such as a title
+   or a clipboard escape on a terminal that honors it. XNU refuses `TIOCSTI` on a terminal that is not the caller's
+   controlling terminal, so the session can inject no keystroke.
 
 ## Guards
 
@@ -70,4 +77,6 @@ session, so the session's reach is set by the gate and not by the message.
   channel, the reason class, the audit fields and the redaction.
 - `tests/test_operator_gate.py` proves decision 7 case by case, one test per acceptance criterion.
 - `tests/test_answer_helper.py` proves the helper writes the request line that the gate allows.
-- `contrib/voice/operator_probe.py` proves, with the real CLI, that the executed command equals the judged command.
+- `contrib/voice/operator_probe.py` proves, with the real CLI, that the executed command equals the judged command, and
+  that a gated `--bg` session starts under the profile and leaves the audit line of its denied call.
+- `tests/test_operators.py` pins the device grants of decision 8 and fails on any wider device write.

@@ -491,12 +491,17 @@ def gate_documents(work, checkout, other_checkout):
     return path, gate_settings(str(path))
 
 
-def check_gate_denial(work, deadline=None):
+def gate_audit(work):
+    """The audit file the probe's gate policy and profile name: under the probe's state folder, never the checkout's."""
+    return Path(denials_path(str(work / "state")))
+
+
+def check_gate_denial(path, deadline=None):
     """The `--bg` session's one denied call left one audit line naming the gate's reason (#2950).
 
     The line must name this run's command, so a line of an earlier run never counts. A session that made no call, or a
-    hook that never ran, leaves no line and fails the probe."""
-    path = Path(denials_path(str(work / "state")))
+    hook that never ran, leaves no line and fails the probe. `path` is the audit file the gate's policy names (#2987)."""
+    path = Path(path)
     end = time.monotonic() + (GATE_DEADLINE if deadline is None else deadline)
     while time.monotonic() < end:
         lines = lines_in(path.read_text()) if path.exists() else []
@@ -714,7 +719,7 @@ def bg_failure(done, work):
     return message
 
 
-def bg_session(work, profile, cli, proxy_url=None, name=None, service=None, gate=None):
+def bg_session(work, profile, cli, proxy_url=None, name=None, service=None, gate=None, audit=None):
     """One `--bg` session under the profile (#2768): the CLI reaches the background service, or starts one, prints a
     session id, and lists that id under the marked name (#2925). A service the profile refuses, or a name the roster
     does not report, fails here, as it does in the supervisor. A service root keeps that service under the project's
@@ -722,14 +727,15 @@ def bg_session(work, profile, cli, proxy_url=None, name=None, service=None, gate
 
     With `gate`, the session runs under the gate's `--settings` and is asked for one command the gate must refuse. The
     audit line that command leaves proves the hook ran inside the `--bg` session itself (#2950 criterion 1). The line
-    file is emptied first, so a line of an earlier phase never answers for this session."""
+    file is emptied first, so a line of an earlier phase never answers for this session. `audit` is the file the gate's
+    policy names; the session runs in the checkout, so a path built from `work` would read another file (#2987)."""
     name = name or marked_name(PROBE_KEY)
     proxy_env = {"HTTPS_PROXY": proxy_url, "https_proxy": proxy_url, "NO_PROXY": "", "no_proxy": ""} if proxy_url else {}
     if service:
         proxy_env.update(service_env(service))
     args = ["--bg", "--name", name, BG_PROMPT, "--permission-mode", "dontAsk"]
     if gate:
-        audit = Path(denials_path(str(work / "state")))
+        audit = Path(audit) if audit is not None else Path(denials_path(str(work / "state")))
         audit.parent.mkdir(parents=True, exist_ok=True)
         audit.write_text("")   # a line of an earlier phase never answers for this session
         args = ["--bg", "--name", name, BG_GATE_PROMPT, "--permission-mode", "dontAsk", "--tools", "Bash",
@@ -742,7 +748,7 @@ def bg_session(work, profile, cli, proxy_url=None, name=None, service=None, gate
         if not bg_listed(cli, sid, work, name, service):
             raise ProbeFailed(f"the --bg session {sid} did not start under the name {name}: the CLI does not list it")
         if gate:
-            check_gate_denial(work)
+            check_gate_denial(audit)
     finally:
         stop_env = {**os.environ, **config_env(), **(service_env(service) if service else {})}
         subprocess.run([cli, "stop", sid], cwd=work, env=stop_env, capture_output=True, text=True, timeout=DEADLINE,
@@ -937,7 +943,7 @@ def run_probe(work, cli):
         check_session(init, result)
         _, gate = gate_documents(work, checkout, other_checkout)
         answer_phase(work, profile, cli, outboxes, own_inboxes, gate=gate)
-        bg_session(checkout, profile, cli, service=service, gate=gate)
+        bg_session(checkout, profile, cli, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli)
         full_turn_phase(work, cli)
         return 0
@@ -955,7 +961,7 @@ def run_probe(work, cli):
         check_session(init, result)
         _, gate = gate_documents(work, checkout, other_checkout)
         answer_phase(work, profile, cli, outboxes, own_inboxes, proxy.url, gate=gate)
-        bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate)
+        bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli, proxy.url)
     full_turn_phase(work, cli)
     return len(proxy.refusals)

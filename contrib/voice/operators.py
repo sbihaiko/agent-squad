@@ -710,8 +710,12 @@ def cli_env(state):
 
     `CLAUDE_CODE_TMPDIR` moves the CLI's temp root inside that config root (#2982). The CLI writes a per-session folder
     and, after each Bash call, a cwd file under its temp root. The default root is `/tmp`, which the profile refuses
-    and other sessions share, so every Bash call of an operator session failed with "operation not permitted"."""
-    return {CONFIG_HOME: config_root(state), CONFIG_KEYCHAIN: "", TEMP_HOME: temp_root(state)}
+    and other sessions share, so every Bash call of an operator session failed with "operation not permitted".
+
+    `TMPDIR` and `XDG_STATE_HOME` move the `--bg` service's socket folder and its lock files the same way: the owner's
+    temp folder and `~/.local/state` are never granted (#2987)."""
+    return {CONFIG_HOME: config_root(state), CONFIG_KEYCHAIN: "", TEMP_HOME: temp_root(state),
+            "TMPDIR": temp_root(state), "XDG_STATE_HOME": os.path.join(config_root(state), "state")}
 
 
 def temp_root(state):
@@ -726,6 +730,7 @@ def prepare_config(state):
     cfg = config_root(state)
     os.makedirs(cfg, exist_ok=True)
     os.makedirs(temp_root(state), exist_ok=True)   # the CLI's temp root must exist before its first Bash call (#2982)
+    os.makedirs(os.path.join(cfg, "state"), exist_ok=True)   # the `--bg` service keeps its locks here (#2987)
     owner = os.path.join(os.path.expanduser("~"), ".claude")
     for name in CONFIG_LINKS:
         source = os.path.join(owner, name)
@@ -793,6 +798,11 @@ def service_env(service):
     Every call that must reach that service carries them: the `--bg` start and the stop. The roster read carries none:
     the CLI lists every session of the machine, whatever root the caller names (#2943, measured)."""
     return {"TERMUX_VERSION": "1", "PREFIX": str(service)}
+
+
+# The pseudo-terminal devices a `--bg` host opens (#2987). A write to another of the owner's terminals is the residual
+# (ADR-0178): XNU refuses TIOCSTI on a terminal that is not the caller's controlling one, so no keystroke is injected.
+PTY_GRANT = '(allow file-write-data (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))'
 
 
 def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None, *, config, service=None,
@@ -868,6 +878,9 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         "(deny file-write*)",
         f'(allow file-write* {devices} {writes} (subpath "{home}/.claude") '
         f'(subpath "{config}"){service_write})',
+        # The `--bg` host runs its session on a pseudo-terminal, so it opens the multiplexer and its own slave; without
+        # them it exits before init (#2987). The grant is a data write only: no create, no unlink, no other device.
+        PTY_GRANT,
         # The owner's shared service root is named nowhere: the default write deny refuses it, and its own service root
         # is the only daemon a session reaches (#2943). The owner's MCP configuration sits beside the Claude home, never
         # inside it, so the allow above never covered it and no deny could follow (#2942).
