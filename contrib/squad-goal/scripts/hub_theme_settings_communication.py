@@ -75,41 +75,50 @@ def _slack_landing_file(wt, tip):
         return None
     return p
 
-def _slack_hub_worktree_file():
+def _slack_hub_worktree_file(name=None):
     """The committed file the hub's own landing worktree holds, or None when no such file is fresh. The hub saves the
     committed file in that worktree and lands it from there, so a read after a save takes the landed document from it,
     never from the loop checkout's file, whose branch may stand behind the landing branch (issue #2920). The worktree
     answers only when it hangs from the checkout's own origin and its HEAD holds the current origin/<land> tip; when it
     stands behind, the read takes the file from the landing commit itself, so a document an external landing wrote is
-    never dropped."""
+    never dropped.
+
+    `name` is the project whose own landing worktree answers: a save over several projects splits one worktree per
+    project, so the read of one project takes that project's file first, then the base worktree the Slack theme's own
+    save writes (#3013)."""
     try:
-        wt, why = slack_worktree()
+        wts = [slack_worktree(name=name)] if name else []
+        wts.append(slack_worktree())
     except (OSError, ValueError) as e:
         log_once(f"[slack] the hub worktree did not resolve: {type(e).__name__}: {e}")
         return None
-    if why or not wt: return None
-    wt = pathlib.Path(wt)
-    if not _slack_same_origin(wt): return None
-    p = wt / SLACK_YAML_REL
-    tip, head, err = _slack_landing_tip(wt)
-    if err:
-        log_once(f"[slack] {err}; the read falls back to the checkout file")
-        return None
-    if head == tip or _slack_git(wt, "merge-base", "--is-ancestor", tip, "HEAD").returncode == 0:
-        return p if p.is_file() else None
-    return _slack_landing_file(wt, tip)
+    for raw, why in wts:
+        if why or not raw: continue
+        wt = pathlib.Path(raw)
+        if not _slack_same_origin(wt): continue
+        p = wt / SLACK_YAML_REL
+        tip, head, err = _slack_landing_tip(wt)
+        if err:
+            log_once(f"[slack] {err}; the read falls back to the checkout file")
+            continue
+        if head == tip or _slack_git(wt, "merge-base", "--is-ancestor", tip, "HEAD").returncode == 0:
+            if p.is_file(): return p
+        else:
+            found = _slack_landing_file(wt, tip)
+            if found is not None: return found
+    return None
 
-def _slack_committed_path(checkout=None):
+def _slack_committed_path(checkout=None, name=None):
     """The committed file a read takes for one checkout: the copy of the hub's own landing worktree when the checkout is
     the hub's checkout and that worktree holds a file fresh to the landing branch, else the checkout's own file
-    (issue #2920)."""
+    (issue #2920). `name` picks the project's own landing worktree first (#3013)."""
     own = CHECKOUT or os.environ.get("SG_CHECKOUT") or ""
     try:
         same = bool(checkout) and bool(own) and pathlib.Path(checkout).resolve() == pathlib.Path(own).resolve()
     except (OSError, ValueError):
         same = False
     if same:
-        saved = _slack_hub_worktree_file()
+        saved = _slack_hub_worktree_file(name)
         if saved is not None: return saved
     return pathlib.Path(checkout) / SLACK_YAML_REL if checkout else None
 
@@ -875,7 +884,7 @@ def _slack_seat(slug, checkout, project):
     try: P = slack_policy()
     except Exception:
         return None
-    cp = _slack_committed_path(checkout) if checkout else None
+    cp = _slack_committed_path(checkout, slug) if checkout else None
     lp = None
     d = profiles_dir()
     if d is not None and (project or slug):

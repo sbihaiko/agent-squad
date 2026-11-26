@@ -341,7 +341,7 @@ class H(BaseHTTPRequestHandler):
                 elif self.path == "/api/slack/owner": out = slack_owner_post(body)   # the owner user id of one workspace (#2966)
                 elif self.path == "/api/slack/grant": out = slack_grant_post(body)   # one grant of full, kept in the registry (#2971)
                 elif self.path == "/api/slack/clients": out = slack_clients_post(body)   # Settings > Communication · a client default's proposed writes (#2827)
-                elif self.path == "/api/personas": out = personas_edit(body)   # Settings > Personas · the persona edit (#3011)
+                elif self.path == "/api/personas": out = personas_post(body)   # Settings > Personas · the edit (#3011) or the add (#3013)
                 elif self.path == "/api/personas/remove": out = personas_remove(body)   # Settings > Personas · the persona removal (#3014)
                 elif self.path == "/api/slack/preview": out = slack_preview(body.get("committed"), body.get("local")) if isinstance(body, dict) else slack_preview(None, None)   # the persona editor's reply preview (#2697)
                 elif self.path == "/api/slack/sample": out = slack_sample(body)   # the persona editor's voice sample (#2697)

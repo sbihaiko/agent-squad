@@ -17,6 +17,7 @@ answers (ADR-0137, ADR-0177).
 
 
 import copy
+import re
 
 
 def _text(value):
@@ -358,6 +359,71 @@ def settle(seats, clients, persona_id, client_id, copy_project):
                 "err": f"copy: {pid} carries no drift in this client, so there is no copy to choose"}
     return {"fields": {"name": copy["name"], "voice": copy["voice"], "tone": copy["tone"]},
             "targets": [c["project"] for c in row["copies"]], "err": None}
+
+
+PERSONA_FIELDS = ("id", "name", "voice", "tone")
+
+
+def persona_id(name):
+    """The id of a new persona: its name in lower case, with each run of characters outside letters, digits and hyphens
+    folded to one hyphen. A name the owner writes names one id, so the theme and the client map agree on it (#3013)."""
+    return re.sub(r"[^a-z0-9]+", "-", _text(name).casefold()).strip("-")
+
+
+def with_persona(doc, persona):
+    """The committed document with one persona row appended: its id, name, voice and tone as the add names them, and
+    every other key keeping its place and its form. None when the document already declares the id: an id names one
+    persona, so the add refuses it instead of writing a second row."""
+    out = copy.deepcopy(_doc(doc))
+    pid = _text(persona.get("id")).strip()
+    if any(_text(row.get("id")).strip() == pid for row in _persona_rows(out)):
+        return None
+    rows = out.get("personas")
+    if not isinstance(rows, list):
+        rows = out["personas"] = []
+    rows.append({key: _text(persona.get(key)).strip() for key in PERSONA_FIELDS})
+    return out
+
+
+def add(seats, persona, targets):
+    """The plan of one persona add: one row for each target project, and the committed document a confirmed save writes
+    into each project it can write.
+
+    A target the roster does not hold, a project with no worktree, a file whose read answered a defect, and a project
+    whose committed file already declares the id are each refused by name, and a refusal for a declared id names the
+    project. Every other target reads "writes <name>" and carries its document, so one refused project never stops the
+    others. The same plan adds a new persona and adds an existing persona to another project: the persona row the caller
+    names is the one the add writes."""
+    pid = _text(persona.get("id")).strip()
+    name = _text(persona.get("name")).strip() or pid
+    by_id = {}
+    for seat in seats or ():
+        sid = _text(seat.get("id")).strip()
+        if sid and sid not in by_id:
+            by_id[sid] = seat
+    rows, writes = [], []
+    for target in targets or ():
+        tid = _text(target).strip()
+        seat = by_id.get(tid)
+        label = (_text(seat.get("label")) or tid) if seat else tid
+        row = {"project": tid, "label": label, "file": _text(seat.get("cf")) if seat else ""}
+        if seat is None:
+            rows.append({**row, "result": "refused: the project is not in the roster"})
+            continue
+        if not _text(seat.get("checkout")).strip():
+            rows.append({**row, "result": "refused: the project has no worktree"})
+            continue
+        defects = list(seat.get("read_defects") or ())
+        if defects:
+            rows.append({**row, "result": f"refused: the file does not read: {_text(defects[0])}"})
+            continue
+        changed = with_persona(seat.get("committed"), persona)
+        if changed is None:
+            rows.append({**row, "result": f"refused: {label} already declares {pid}"})
+            continue
+        rows.append({**row, "result": f"writes {name}"})
+        writes.append({"project": tid, "committed": changed})
+    return {"rows": rows, "writes": writes}
 
 
 def groups(seats, clients):
