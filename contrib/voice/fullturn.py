@@ -57,10 +57,14 @@ class TurnOrder:
 
 
 class Running:
-    """One project's turn while its process runs, and whether a stop asked it to end."""
+    """One project's turn while its process runs, and whether a stop asked it to end.
 
-    def __init__(self, proc):
+    `user` is the requester who started the turn, so a stop answers only that identity: only a turn's own requester
+    ends it, never another role holder who reaches the same project (#2968 review)."""
+
+    def __init__(self, proc, user=None):
         self.proc = proc
+        self.user = user
         self.stopped = threading.Event()
 
 
@@ -71,8 +75,8 @@ class TurnRegistry:
         self.lock = threading.Lock()
         self.running = {}
 
-    def hold(self, repo, proc):
-        running = Running(proc)
+    def hold(self, repo, proc, user=None):
+        running = Running(proc, user)
         with self.lock:
             self.running[repo] = running
         return running
@@ -82,17 +86,20 @@ class TurnRegistry:
             if self.running.get(repo) is running:
                 del self.running[repo]
 
-    def stop(self, repo):
+    def stop(self, repo, user=None):
         """End the turn one project runs now, with its whole process tree, and answer whether a turn ran.
 
-        `run_turn` reads the same `Running` when its `communicate` returns, so the turn is a stopped turn and never a
-        second turn: only this thread ends the tree, and the turn's own thread collects the process."""
+        Only the requester who started the turn ends it: a stop from another identity clears nothing and answers
+        False, so a full role handed to someone else can never kill the owner's work (#2968 review). The turn's own
+        thread sits in `proc.communicate`, so this kills the group with `kill_tree` and leaves the collecting to that
+        one reader; `run_turn` reads the same `Running` when its `communicate` returns, so the turn is a stopped turn
+        and never a second turn."""
         with self.lock:
             running = self.running.get(repo)
-        if running is None:
+        if running is None or running.user != user:
             return False
         running.stopped.set()
-        end_tree(running.proc)
+        kill_tree(running.proc)
         return True
 
 
@@ -137,21 +144,35 @@ def remember_session(state_dir, repo, session):
         os.replace(path + ".tmp", path)
 
 
-def end_tree(proc):
-    """End the turn's whole process tree: the CLI and every process it started, the project's MCP servers included.
+def kill_tree(proc):
+    """Signal the turn's whole process group and return at once: the thread that reads the turn's pipes collects it.
 
     `start_new_session` gives the turn its own process group, and every process the CLI starts stays in that group
-    unless it asks for another one, so one signal to the group reaches the turn and its MCP servers alike. The turn's
-    own thread collects the process, so this never reads its pipes from a second thread."""
+    unless it asks for another one, so one signal to the group reaches the turn and its MCP servers alike. This signals
+    only: `TurnRegistry.stop` calls it while the turn's own thread sits in `proc.communicate`, and that one thread
+    reaps the process when the signal closes its pipes, so no second thread ever reads the pipes."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
 
 
-def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS, registry=None):
+def end_tree(proc):
+    """End the turn's whole process tree and collect it: the CLI, every process it started, the project's MCP servers
+    included, and the process itself.
+
+    This is the blocking primitive: it signals the group with `kill_tree` and then waits for the process, so a caller
+    that holds no reader gets it drained and reaped before the call returns, and holds no zombie behind. A caller that
+    is not the thread reading the pipes uses `kill_tree` instead, so only one thread ever reads them."""
+    kill_tree(proc)
+    proc.communicate()
+
+
+def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS, registry=None,
+             user=None):
     """Run one turn and answer its outcome. A `registry` holds the turn while its process runs, so a `!stop` from
-    another thread ends it, and the turn reports itself stopped rather than failed by its own end (#2968)."""
+    another thread ends it, and the turn reports itself stopped rather than failed by its own end (#2968). `user` is
+    the requester who started the turn, so the registry ends it for that identity alone (#2968 review)."""
     session = saved_sessions(state_dir).get(repo)
     try:   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
         proc = subprocess.Popen(argv(claude, session), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -160,11 +181,12 @@ def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=T
     except OSError:
         return Turn(session, "", None, True)
     running = registry.hold(repo, proc) if registry is not None else None
+    if running is not None:
+        running.user = user     # the requester, so only it ends this turn (#2968 review)
     try:
         stdout, _ = proc.communicate(message, timeout=timeout)
     except subprocess.TimeoutExpired:
         end_tree(proc)
-        proc.communicate()
         return Turn(session, "", None, True, "deadline")
     finally:
         if running is not None:

@@ -170,9 +170,16 @@ FULL_REASONS = {"deadline": "Your message stopped at the project session deadlin
 STOP_TEXT = "!stop"
 
 
+MENTION = re.compile(r"^(?:\s*<@[^>]+>)+")   # one or more leading Slack bot mentions, as a DM or a channel adds
+
+
 def is_stop(text):
-    """Whether one message asks to end its project's running turn (#2968). Only the message `!stop` itself stops."""
-    return str(text or "").strip() == STOP_TEXT
+    """Whether one message asks to end its project's running turn (#2968).
+
+    Only the message `!stop` itself stops, after the leading bot mentions Slack puts on a DM or a channel message are
+    dropped: `@the-bot !stop` stops too, so a stop never becomes a turn by its mention prefix. Any other word beside
+    `!stop` keeps the message an ordinary turn."""
+    return MENTION.sub("", str(text or "")).strip() == STOP_TEXT
 
 
 def one_sentence(text):
@@ -2569,10 +2576,15 @@ class Daemon:
 
         A `!stop` never becomes a turn of its own: `handle` reads it before it queues the message. The stop ends
         nothing when the project runs no turn, and the line tells the two apart. The running turn writes its own
-        line, a failed turn named `stopped`, so a stop that ends a turn leaves both lines and no lost message."""
+        line, a failed turn named `stopped`, so a stop that ends a turn leaves both lines and no lost message.
+
+        The dedup marker is durable before the kill, so a crash between the two drops a redelivered stop as a
+        duplicate instead of killing a second time and leaving a second line for one user action (#2968 review). Only
+        the requester who started the turn ends it: `TurnRegistry.stop` compares that identity, so a full role handed
+        to anyone else clears nothing."""
         repo = self.state.channel_for(record.get("channel"))
-        ended = bool(repo) and self.live_turns.stop(repo)
         self.state.remember_message(record["id"])
+        ended = bool(repo) and self.live_turns.stop(repo, record.get("user"))
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "repo": repo,
                                  "decision": "stop", "ended": ended})
@@ -2603,7 +2615,7 @@ class Daemon:
                 checkout = self.project_checkout(repo)
                 if checkout is not None:
                     turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
-                                             registry=self.live_turns)
+                                             registry=self.live_turns, user=record.get("user"))
             finally:
                 self.turn_order.leave(repo)
         except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
