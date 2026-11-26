@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from tests.test_voiced import OWNER, SLACK_VALID, FakeTranscriber, git, git_project, voiced
+from tests.test_voiced import OWNER, SLACK_VALID, TEAM, FakeTranscriber, git, git_project, voiced
 
 ROOT = Path(__file__).resolve().parent.parent
 VOICE_DIR = ROOT / "contrib" / "voice"
@@ -189,3 +189,31 @@ def test_a_channel_outside_this_pass_still_reads_its_own_registry(tmp_path):
     listed = daemon.listed(projects=[{"repo": "acme/alpha", "checkout": str(alpha)}])
 
     assert listed.get("acme/beta") == {sha_b}, listed
+
+
+def test_the_real_hub_seam_answers_a_dm_owner_from_the_configured_registry_alone(tmp_path, monkeypatch):
+    """The DM path through the real `hub_registry_seam` and `workspace_owner`: the owner comes from the registry of the
+    one configured project's profile, and a workspace named only in a registry no configs row points at resolves no
+    owner (#2966, ADR-0180)."""
+    monkeypatch.delenv("SG_SLACK_REGISTRY", raising=False)
+    mod = voiced()
+    state = tmp_path / "state-alpha"
+    write_registry(state, "a" * 40)
+    path = state / "slack-saved.json"
+    doc = json.loads(path.read_text())
+    doc["owners"] = {TEAM: OWNER}
+    path.write_text(json.dumps(doc))
+    other_state = tmp_path / "state-other"
+    write_registry(other_state, "b" * 40)
+    other = other_state / "slack-saved.json"
+    doc = json.loads(other.read_text())
+    doc["owners"] = {TEAM: "U0OTHER001", "T0OTHER001": "U0OTHER001"}
+    other.write_text(json.dumps(doc))
+    entries = [project_entry(tmp_path / "repo-alpha", "acme/alpha", state)]
+    seam = mod.hub_registry_seam(entries, {})
+    assert seam is mod.project_registry, "the real seam did not resolve to the per-project registry"
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "voice-state")), owner=None, transcriber=None,
+                        downloader=None, log=lambda line: None, configs=lambda: entries, registry=seam)
+
+    assert daemon.workspace_owner(TEAM, None) == OWNER
+    assert daemon.workspace_owner("T0OTHER001", None) is None

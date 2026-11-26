@@ -641,8 +641,40 @@ def test_a_grant_in_another_workspace_does_not_pass_a_full_role_member():
 
 
 def test_a_bounded_role_member_needs_neither_the_owner_nor_a_grant():
-    committed, local = files()
+    """A `session: bounded` role member in a declared workspace with no owner and no grant is no defect: the owner and
+    grant check belongs to the full session alone (ADR-0180)."""
+    committed, local = files(committed__roles=[{"id": "manager", "actions": ["status", "logs"],
+                                                "session": "bounded"}])
     assert S.validate(committed, local) == []
+
+
+def test_a_full_role_member_in_a_workspace_the_committed_file_does_not_declare_is_a_defect():
+    """A full-role member names a workspace the committed file declares; a workspace no file declares is a named defect
+    before any owner or grant check (#2966)."""
+    committed, local = full_files()
+    local["members"][0]["workspace"] = "T0NONE0001"
+    defects = S.validate(committed, local, owners={"T0NONE0001": "U0OWNER001"})
+    assert keys(defects) == ["members[0].workspace"], defects
+    assert "T0NONE0001" in str(defects[0]), defects
+
+
+def test_a_full_role_member_with_no_workspace_names_the_workspace_key():
+    """A full-role member with no workspace is a defect that names the key, never an empty workspace id in the text."""
+    committed, local = full_files()
+    del local["members"][0]["workspace"]
+    defects = S.validate(committed, local, owners={})
+    assert keys(defects) == ["members[0].workspace"], defects
+
+
+def test_a_full_role_member_in_a_channel_of_another_workspace_is_a_defect():
+    """A full-role member's channel, when it is named, belongs to that member's workspace; a channel another workspace
+    declares is a named defect (#2966)."""
+    committed, local = full_files()
+    committed["workspaces"].append({"id": "T0OTHER001", "class": "owned",
+                                    "channels": [{"id": "C0OTHER001", "name": "proj-other", "mode": "listen"}]})
+    local["members"][0]["channel"] = "C0OTHER001"
+    defects = S.validate(committed, local, owners={"T0TEAM0001": "U0OWNER001"})
+    assert keys(defects) == ["members[0].channel"], defects
 
 
 def test_a_full_decision_in_the_owner_project_channel_runs_the_full_session():
@@ -650,6 +682,14 @@ def test_a_full_decision_in_the_owner_project_channel_runs_the_full_session():
     decision = S.decide(committed, local, owner_event(), NOW)
     assert decision.kind == S.INBOX
     assert decision.session == S.SESSION_FULL
+
+
+def test_an_event_with_active_true_and_dm_false_runs_the_full_session():
+    """`decide` reads both keys its caller must state: `active: true` and `dm: false` together with the owner give the
+    full session. A caller that omits either one gets the bounded session (ADR-0180)."""
+    committed, local = full_files()
+    event = owner_event(active=True, dm=False)
+    assert S.decide(committed, local, event, NOW).session == S.SESSION_FULL
 
 
 def test_a_legacy_owner_event_with_no_active_flag_runs_bounded():

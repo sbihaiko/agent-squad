@@ -149,6 +149,7 @@ SCHEMA_FILE = "schema.json"
 SCHEMA_VERSION = 2                   # id-keyed queues; 1 is the name-keyed layout an older build wrote
 SUPPORTED_SCHEMA = (1, SCHEMA_VERSION)
 DM = "dm"                            # the DM is one scope beside the channels, so its queues carry a key too
+_UNRESOLVED = object()               # no workspace or owner passed in: the callee resolves it itself
 SLACK_REGISTRY = "slack-saved.json"  # the hub's saved-sha registry, in the loop state directory (#2694)
 SLACK_REGISTRY_ENV = "SG_SLACK_REGISTRY"   # an explicit registry path, for a machine that moves it
 
@@ -1705,6 +1706,9 @@ class Daemon:
         # the saved-sha check out of force, for a machine that names no registry; a callable puts it in force per
         # project, and a file it cannot read lists nothing.
         self.registry = registry
+        # (workspace, repo) -> (registry signature, owner). The owner of a workspace is read once and kept until a
+        # registry this daemon reads changes its mtime, so the message path reads no registry twice for one decision.
+        self._owner_cache = {}
         self.synthesizer = synthesizer
         self.uploader = uploader
         self.failed = {}     # digest -> consecutive refused deliveries, so a permanently refused line never spins
@@ -1809,12 +1813,17 @@ class Daemon:
 
         A project channel reads its own project's registry first, then the other configured projects'. A direct message
         owns no project, so every configured project's registry is read and the first one that names the workspace
-        answers. No other source names an owner.
+        answers. No other source names an owner. A seam that raises, and a registry a build cannot read, name no owner:
+        a broken registry never raises into the message path. The answer is kept per workspace until a registry this
+        daemon reads changes its mtime, so one decision reads no registry twice.
         """
         workspace = str(workspace or "")
         if not workspace or self.registry is None:
             return None
-        rows = list(self.configs() or ()) if self.configs is not None else []
+        try:
+            rows = list(self.configs() or ()) if self.configs is not None else []
+        except Exception:      # noqa: BLE001 - a configs seam that raises must never drop a message
+            rows = []
         entries = []
         if repo:
             own = next((row for row in rows
@@ -1822,16 +1831,35 @@ class Daemon:
             entries.append(own or {"repo": repo})
         entries.extend(rows)
         entries.append({"repo": None})
-        seen = set()
+        seen, sig = set(), []
         for entry in entries:
-            path = self.registry(entry) or ""
+            try:
+                path = self.registry(entry) or ""
+            except Exception:      # noqa: BLE001 - a registry seam that raises names no owner
+                path = ""
             if path in seen:
                 continue
             seen.add(path)
-            owner = registry_owners(path).get(workspace)
+            try:
+                mtime = os.stat(path).st_mtime_ns
+            except OSError:
+                mtime = None
+            sig.append((path, mtime))
+        signature = tuple(sig)
+        key = (workspace, repo or "")
+        cached = self._owner_cache.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+        owner = None
+        for path, _ in signature:
+            try:
+                owner = registry_owners(path).get(workspace)
+            except Exception:      # noqa: BLE001 - an unreadable registry names no owner
+                owner = None
             if owner:
-                return owner
-        return None
+                break
+        self._owner_cache[key] = (signature, owner)
+        return owner
 
     def listed(self, projects=None):
         """repository -> the shas that project's own registry lists, read fresh on every pass (#2961).
@@ -2769,7 +2797,8 @@ class Daemon:
         data (SPEC 2682). A project channel whose revision is not active yet, the DM, and every channel no project owns
         run through the daemon's empty policy instead: it names the channel and the owner the hub registry names for the
         workspace as its one member, so the owner's message still reaches the operator while a bot, a stranger and a
-        Slack Connect user stay data from the event flags and their missing role alone.
+        Slack Connect user stay data from the event flags and their missing role alone. The workspace owner is resolved
+        once for the whole decision, so its two halves never read two answers (#2966).
         """
         channel = str(event.get("channel") or "")
         repo = self.state.channel_for(channel)
@@ -2778,26 +2807,39 @@ class Daemon:
         if live:
             committed = active["revision"]
             local = active.get("local") or {}
+            workspace = self.workspace_of(event, committed)
         else:
-            committed, local = self.baseline_files(event, repo)
-        return slackpolicy.decide(committed, local, self.policy_event(event, committed, repo, live), datetime.now())
-
-    def baseline_files(self, event, repo):
-        """The empty policy of a channel with no loaded project files: it names the channel so the decision can
-        classify the event, and it names the workspace owner the hub registry holds as its one member, so the owner's
-        message still reaches the operator while every other caller has no role and stays data. A bot and a Slack
-        Connect user stay data from the event flags alone, whatever the owner is. A channel no project owns keeps the
-        same empty policy; `handle` records it as data before it reads the kind, so nothing is granted there."""
-        channel = str(event.get("channel") or "")
-        workspace = str(event.get("team") or event.get("team_id") or "")
-        row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
-        committed = {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
-                     "roles": [{"id": "owner", "actions": []}]}
-        local = {}
+            workspace = self.event_workspace(event)
+            committed = self.empty_policy(channel, workspace)
+            local = {}
         owner = self.workspace_owner(workspace, repo)
-        if owner:
-            local = {"members": [{"workspace": workspace, "channel": channel, "role": "owner", "users": [owner]}]}
-        return committed, local
+        if not live:
+            local = self.baseline_local(workspace, channel, owner)
+        return slackpolicy.decide(committed, local,
+                                  self.policy_event(event, committed, repo, live, workspace, owner), datetime.now())
+
+    @staticmethod
+    def event_workspace(event):
+        """The team the socket names for one event, or '' when it names none."""
+        return str(event.get("team") or event.get("team_id") or "")
+
+    @staticmethod
+    def empty_policy(channel, workspace):
+        """The empty policy of a channel with no loaded project files: it names the channel so the decision can classify
+        the event. The owner member lives in `baseline_local`, so a bot and a Slack Connect user stay data from the
+        event flags alone, whatever the owner is. A channel no project owns keeps the same empty policy; `handle`
+        records it as data before it reads the kind, so nothing is granted there."""
+        row = {"id": channel, "mode": "listen+speak", "roles": ["owner"]}
+        return {"workspaces": [{"id": workspace, "class": "owned", "channels": [row]}],
+                "roles": [{"id": "owner", "actions": []}]}
+
+    @staticmethod
+    def baseline_local(workspace, channel, owner):
+        """The local file of the empty policy: the workspace owner the hub registry names is its one member, so the
+        owner's message still reaches the operator while every other caller has no role and stays data."""
+        if not owner:
+            return {}
+        return {"members": [{"workspace": workspace, "channel": channel, "role": "owner", "users": [owner]}]}
 
     def channel_accepts_answer(self, channel):
         """Whether the daemon may post an answer in one channel: its project's active revision names the channel
@@ -2813,12 +2855,13 @@ class Daemon:
                     return str(row.get("mode") or "listen") == "listen+speak"
         return True
 
-    def policy_event(self, event, committed, repo, live):
+    def policy_event(self, event, committed, repo, live, workspace=_UNRESOLVED, owner=_UNRESOLVED):
         """One socket event as the policy event the decision takes: its workspace, channel, caller, text, and the flags
         that mark a bot, a Slack Connect user, the daemon's own post, a direct message and a live revision. The owner is
-        the owner id the hub registry names for the event's workspace (#2966), never the daemon's own setting."""
-        workspace = self.workspace_of(event, committed)
-        owner = self.workspace_owner(workspace, repo)
+        the owner id the hub registry names for the event's workspace (#2966), never the daemon's own setting. The
+        decision passes the workspace and owner it already resolved, so this call reads no registry again."""
+        workspace = self.workspace_of(event, committed) if workspace is _UNRESOLVED else workspace
+        owner = self.workspace_owner(workspace, repo) if owner is _UNRESOLVED else owner
         return {"kind": "message",
                 "workspace": workspace,
                 "channel": str(event.get("channel") or ""),
