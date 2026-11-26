@@ -86,6 +86,8 @@ def operators_module():
     spec = importlib.util.spec_from_file_location("operators", VOICE / "operators.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    from tests.proxystop import track_starts
+    track_starts(module)   # a session start on a runner with no loopback endpoint starts a real proxy (#2989)
     return module
 
 
