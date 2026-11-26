@@ -1728,7 +1728,7 @@ print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session
 """
 
 
-NEVER_HOLDING_NAME = "claude-exec-stand-in"
+NEVER_HOLDING_NAME = "exec-stand-in"   # never a CLI name: its pre-exec argv is listed too (#3002)
 
 
 def holder_stand_in(tmp_path, body=HOLDER_STAND_IN, name="claude-holder-stand-in"):
