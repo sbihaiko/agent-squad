@@ -136,6 +136,7 @@ VOICE = "Charon"                       # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
+PERMISSION_POLL = 1.0                 # how long a bounded session's permission request waits for its post (#2972)
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 ACTION_HEARTBEAT = 60                 # empty action passes between two heartbeat log lines (#2939)
 BROKEN_LINE_BYTES = 200                # bytes of a line that is no JSON the drain keeps in its skip record
@@ -1655,6 +1656,7 @@ class Daemon:
         self.turn_order = fullturn.TurnOrder()
         self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
         self.full_guard = threading.Lock()
+        self.perm_post_guard = threading.Lock()   # one poster of the permission relay at a time (#2972)
         # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
         # so a fixture or a reader never spawns a session; production passes `start_operator`.
         self.starter = starter
@@ -2623,15 +2625,23 @@ class Daemon:
         """Post each open request of the relay to its DM once: the literal tool call and its working folder.
 
         A request with no client or no pinned DM reaches no owner, so it is denied at once with its reason, never held
-        open until a later turn (#2970 review)."""
-        for row in relay.unsent():
-            if self.client is None or not row["channel"]:
-                reason = "no client" if self.client is None else "no DM channel"
-                relay.abandon(row["id"], reason)
-                self.log(f"voiced: permission request denied: {reason}")
-                continue
-            self.client.api("chat.postMessage", {"channel": row["channel"], "text": row["text"]}, post=True)
-            relay.mark_sent(row["id"])
+        open until a later turn (#2970 review). One guard belongs to the daemon, so a full turn's poster and the
+        bounded watcher never post one request twice (#2972)."""
+        with self.perm_post_guard:
+            for row in relay.unsent():
+                if self.client is None or not row["channel"]:
+                    reason = "no client" if self.client is None else "no DM channel"
+                    relay.abandon(row["id"], reason)
+                    self.log(f"voiced: permission request denied: {reason}")
+                    continue
+                self.client.api("chat.postMessage", {"channel": row["channel"], "text": row["text"]}, post=True)
+                relay.mark_sent(row["id"])
+
+    def post_pending_permissions(self):
+        """Post every open request of the shared relay folder once, whatever asked: a full turn or a bounded session.
+
+        A bounded session's request waits while no full turn runs, so the daemon posts it here (#2972)."""
+        self.post_permission_requests(self.permission_relay(""))
 
     def relay_requests_until(self, relay, done):
         while not done.wait(permrelay.POLL_SECONDS):
@@ -3053,6 +3063,19 @@ async def watch_actions(daemon, stop=None, interval=ACTION_POLL):
         await asyncio.sleep(interval)
 
 
+async def watch_permissions(daemon, stop=None, interval=PERMISSION_POLL):
+    """Post each open permission request as soon as the relay holds it, until `stop` is set.
+
+    A full turn posts its own requests, and this watcher posts the request a bounded session's hook opens when no turn
+    runs (#2972). A failed pass is a log line, never a watcher that stops posting."""
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.post_pending_permissions)
+        except Exception as x:  # noqa: BLE001 - one bad pass is a log line, never a daemon that stops posting
+            daemon.log(f"voiced: permission post failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
     """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
@@ -3098,12 +3121,13 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
     actions = asyncio.create_task(watch_actions(daemon, stop))
+    permissions = asyncio.create_task(watch_permissions(daemon, stop))
     hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
                for token in apps.values()]
     try:
         await asyncio.gather(*hearing)
     finally:
-        tasks = (outboxes, configs, releases_task, actions, *hearing)
+        tasks = (outboxes, configs, releases_task, actions, permissions, *hearing)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

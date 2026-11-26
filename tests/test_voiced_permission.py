@@ -145,3 +145,18 @@ def test_a_request_with_no_pinned_dm_is_denied_at_once(tmp_path, stand_in):  # n
     daemon.post_permission_requests(relay)
     assert relay.verdict(req["id"]) == "deny", "a request with no DM stayed open until a later turn"
     assert [row for row in relay_audit(daemon) if row["event"] == "undeliverable"], relay_audit(daemon)
+
+
+def test_a_bounded_sessions_request_reaches_the_owner_dm(tmp_path, stand_in):  # noqa: F811 the stand-in fixture
+    """#2972: a bounded session's denied call uses the same relay, and the daemon posts it like a full turn's."""
+    _, client, _, daemon = setup(tmp_path, stand_in, role("full"))
+    pinned(daemon)
+    relay = daemon.permission_relay("")
+    relay.request("project", "Bash", CALL, stand_in["checkout"])
+    daemon.post_pending_permissions()
+    posts = [params for method, params, _ in client.calls if method == "chat.postMessage"]
+    assert len(posts) == 1, posts
+    assert posts[0]["channel"] == DM
+    assert "Bash" in posts[0]["text"]
+    daemon.post_pending_permissions()
+    assert len([m for m, _, _ in client.calls if m == "chat.postMessage"]) == 1

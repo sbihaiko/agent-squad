@@ -5,6 +5,9 @@ folder and waits for the owner's answer. `voiced` posts each request to the owne
 `decide`. A request with no answer after ten minutes is denied. Every request, approval, denial and timeout writes one
 audit line that holds no tool input.
 
+A bounded session's tool gate asks the same relay for a call its profile denies (#2972): `call` opens the request and
+waits for the answer, and a denial, a timeout or a full sender returns one short reason for the member's thread.
+
 usage: permrelay.py serve --state DIR --owner ID --dm CHANNEL --workspace ID --sender ID --folder PATH
 """
 import argparse
@@ -28,6 +31,8 @@ STATE_FILE = "relay.json"
 LOCK_FILE = "relay.lock"
 AUDIT_FILE = "audit.jsonl"
 DENIED_MESSAGE = "The owner did not approve this call."
+TIMEOUT_MESSAGE = "The owner did not answer in time, so the call was denied."
+BUSY_MESSAGE = "The relay holds three open requests for this session, so the call was denied."
 
 
 def call_hash(tool_name, tool_input, cwd):
@@ -64,6 +69,7 @@ class Relay:
         self.timeout = timeout
         self.state_path = os.path.join(self.directory, STATE_FILE)
         self.audit_path = os.path.join(self.directory, AUDIT_FILE)
+        os.makedirs(self.directory, exist_ok=True)   # a bounded session's hook opens its request before any daemon pass
 
     @contextmanager
     def _locked(self):
@@ -165,7 +171,10 @@ class Relay:
             self._settle(rows)
             named = [(row["created"], rid) for rid, row in rows.items()
                      if row["status"] == "open" and row["hash"] == digest]
-            open_rows = [(created, rid) for created, rid in named if rows[rid].get("workspace") == workspace]
+            # A bounded session's request records the workspace of its channel. A session with no known workspace
+            # records none, and the owner's DM answer in any workspace answers it (#2972).
+            open_rows = [(created, rid) for created, rid in named
+                         if rows[rid].get("workspace") in (workspace, "")]
             if named and not open_rows:
                 self._save(rows)
                 self._audit("refused_answer", hash=digest)
@@ -201,6 +210,34 @@ class Relay:
         if status == "open":
             return "pending"
         return "allow" if was_approved else "deny"
+
+    def status(self, rid):
+        """The status of one request: `open`, `approved`, `denied`, `timeout`, `used`, or `missing`."""
+        with self._locked():
+            rows = self._load()
+            if self._settle(rows):
+                self._save(rows)
+        row = rows.get(rid)
+        return row["status"] if row else "missing"
+
+    def call(self, sender, tool_name, tool_input, cwd, poll=POLL_SECONDS, sleep=time.sleep):
+        """One denied call of a bounded session (#2972): open one request, then wait for the owner's answer.
+
+        The answer is `{"verdict": "allow"|"deny", "reason": ..., "id": ..., "hash": ...}`. An approval carries no
+        reason and allows the call once. A denial, a timeout and a sender with three open requests carry one short
+        reason, which the session gives the member in the thread. A refusal by the sender cap opens no request, so
+        `id` is None."""
+        req = self.request(sender, tool_name, tool_input, cwd)
+        if req["status"] == "refused":
+            return {"verdict": "deny", "reason": BUSY_MESSAGE, "id": None, "hash": req["hash"]}
+        verdict = self.verdict(req["id"])
+        while verdict == "pending":
+            sleep(poll)
+            verdict = self.verdict(req["id"])
+        if verdict == "allow":
+            return {"verdict": "allow", "reason": "", "id": req["id"], "hash": req["hash"]}
+        reason = TIMEOUT_MESSAGE if self.status(req["id"]) == "timeout" else DENIED_MESSAGE
+        return {"verdict": "deny", "reason": reason, "id": req["id"], "hash": req["hash"]}
 
 
 def mcp_config(python, script, state, owner, dm, workspace, folder, timeout=None):
