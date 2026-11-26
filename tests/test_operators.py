@@ -670,14 +670,13 @@ def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path,
     assert "outboxes/dm.jsonl" not in text, text
 
 
-def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
-    """#2939: the project brief tells the session to append one request line, and to never run a command. #2949 keeps
-    the one answer path the helper, so the brief names no outbox path and no free append."""
+def test_a_project_action_message_gets_a_read_only_answer(tmp_path, monkeypatch):
+    """#2950: the tool gate allows no file write and no command but the answer helper and the declared read wrappers,
+    so the project brief orders no request append the gate would deny, and it names no outbox path (#2939, #2949)."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
-    assert "never run a command" in text, text
-    for field in ('"kind"', '"at"', '"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
-        assert field in text, (field, text)
+    assert "only reads and answers" in text and "runs no action" in text, text
+    assert '"kind"' not in text, "the brief still orders a request line the gate denies"
     assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") not in text, "the brief names an outbox for a free append"
 
 
@@ -1244,14 +1243,14 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
 
 
 def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):
-    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It writes one
-    action request to the outbox of the line's channel, and runs no command itself (#2939)."""
+    """The bound refuses the DM outbox to a project session, so its brief never asks for that write. The tool gate
+    allows no append and no command but the answer helper, so the brief answers an action request read-only (#2939)."""
     op = operators(tmp_path, monkeypatch)
     found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
     unit = {"key": "acme-widget", "repo": "acme/widget", "checkout": found["acme/widget"], "channels": ["C0AAAAAA1"]}
     text = op.prompt_for(unit, str(tmp_path / "state"), "/repo")
     assert "outboxes/dm.jsonl" not in text and "Proposal:" not in text, text
-    assert "never acts" in text and "never run a command" in text, text
+    assert "never acts" in text and "only reads and answers" in text, text
 
 
 def test_a_short_id_of_letters_alone_is_read_as_the_session_id(tmp_path, monkeypatch):
