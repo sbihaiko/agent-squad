@@ -9,10 +9,17 @@ The stand-in CLI is the one tests/test_full_turn.py drives. No case reaches Slac
 """
 import json
 
-from tests.test_full_turn import MARKER, FIRST_SESSION, calls, stand_in  # noqa: F401  the stand-in CLI fixture
+import pytest
+
+from tests.test_full_turn import FIRST_SESSION, MARKER, build_stand_in, calls
 from tests.test_voiced import OWNER, FakeClient, FakeTranscriber, lines, project, voiced
 from tests.test_voiced_active_revision import WORKSPACE, _project_channel
 from tests.test_voiced_policy import REPO, SHA, socket_message
+
+
+@pytest.fixture
+def stand_in(tmp_path, monkeypatch):
+    return build_stand_in(tmp_path, monkeypatch)
 
 OTHER = "U0OTHER0001"
 SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"

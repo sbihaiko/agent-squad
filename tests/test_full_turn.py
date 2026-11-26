@@ -44,8 +44,7 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False,
 """
 
 
-@pytest.fixture
-def stand_in(tmp_path, monkeypatch):
+def build_stand_in(tmp_path, monkeypatch):
     path = tmp_path / "claude-stand-in"
     path.write_text(STUB.format(python=sys.executable, first=FIRST_SESSION))
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -58,6 +57,11 @@ def stand_in(tmp_path, monkeypatch):
     state = tmp_path / "state"
     state.mkdir()
     return {"claude": str(path), "checkout": str(checkout), "state": str(state), "record": record}
+
+
+@pytest.fixture
+def stand_in(tmp_path, monkeypatch):
+    return build_stand_in(tmp_path, monkeypatch)
 
 
 def calls(stand):
