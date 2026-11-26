@@ -847,14 +847,41 @@ def persona_named(committed, local, name):
     return None
 
 
-def _place_label(row):
-    """The label a holder states for one workspace or channel row, in one fallback order: its `label`, else its `name`,
-    else its `id` after the marker `unnamed`, in parentheses. A row that states both a label and a name reports its
-    label, so the refusal text keeps one stable field for each place, and a bare Slack id never stands alone (#3014)."""
-    label = str(row.get("label") or row.get("name") or "").strip()
+def _own_label(row):
+    """The label one row states of itself: its `label`, else its `name`, both trimmed."""
+    return str(row.get("label") or row.get("name") or "").strip()
+
+
+def _place_names(documents):
+    """The display name the roster resolves for each workspace id and each channel id: the first non-empty `label` or
+    `name` any row of the documents states for that id, the committed file first. A place named in one file reads under
+    that name in both (#3014)."""
+    workspaces, channels = {}, {}
+    for doc in documents:
+        if not isinstance(doc, dict):
+            continue
+        for workspace in _rows(doc.get("workspaces")):
+            wid = str(workspace.get("id") or "").strip()
+            name = _own_label(workspace)
+            if wid and name and wid not in workspaces:
+                workspaces[wid] = name
+            for channel in _rows(workspace.get("channels")):
+                cid = str(channel.get("id") or "").strip()
+                name = _own_label(channel)
+                if cid and name and cid not in channels:
+                    channels[cid] = name
+    return workspaces, channels
+
+
+def _place_label(row, names=None):
+    """The label a holder states for one workspace or channel row, in one fallback order: the display name the roster
+    resolved for its id, else its own `label`, else its own `name`, else its `id` after the marker `unnamed`, in
+    parentheses. A row that states both a label and a name reports its label, so the refusal text keeps one stable
+    field for each place, and a bare Slack id never stands alone (#3014)."""
+    row_id = str(row.get("id") or "").strip()
+    label = str((names or {}).get(row_id) or "").strip() or _own_label(row)
     if label:
         return label
-    row_id = str(row.get("id") or "").strip()
     return f"unnamed ({row_id})" if row_id else ""
 
 
@@ -866,30 +893,32 @@ def persona_holders(persona_id, committed, local, clients=(), files=("slack.yaml
     `clients` is one `(client id, default persona id)` for each client that holds the project, so a client of another
     project never answers a holder; `files` names the committed file first and the local file second. Each file reads
     its project row before its workspaces, and a workspace before its channels. An id no place names answers no
-    holder, so a removal of it is never refused (ADR-0177). A file that does not read is no document: it answers no
-    holder at all, not even a client default, so the removal reports the read defect instead."""
+    holder, so a removal of it is never refused (ADR-0177). Each file reads on its own: a file that does not read is
+    no document, so it answers no holder of its own and never hides the holders of the readable file, and it answers
+    no client default, so a broken file never yields a phantom client holder."""
     wanted = str(persona_id or "").strip()
     if not wanted:
         return []
-    if not isinstance(committed, dict) or not isinstance(local, dict):
-        return []
-    out = []
-    for client_id, default in clients or ():
-        if str(default or "").strip() == wanted:
-            out.append(f'client "{str(client_id or "").strip()}" default')
     cf, lf = files
-    for doc, file in ((committed if isinstance(committed, dict) else {}, cf),
-                      (local if isinstance(local, dict) else {}, lf)):
+    readable = [(doc, file) for doc, file in ((committed, cf), (local, lf)) if isinstance(doc, dict)]
+    out = []
+    # A client default answers only when both files read: a broken file never yields a phantom client holder.
+    if len(readable) == len(((committed, cf), (local, lf))):
+        for client_id, default in clients or ():
+            if str(default or "").strip() == wanted:
+                out.append(f'client "{str(client_id or "").strip()}" default')
+    workspace_names, channel_names = _place_names(doc for doc, _file in readable)
+    for doc, file in readable:
         project = doc.get("project")
         if isinstance(project, dict) and str(project.get("persona") or "").strip() == wanted:
             out.append(f"project in {file}")
         for workspace in _rows(doc.get("workspaces")):
-            label = _place_label(workspace)
+            label = _place_label(workspace, workspace_names)
             if str(workspace.get("persona") or "").strip() == wanted:
                 out.append(f'workspace "{label}" in {file}')
             for channel in _rows(workspace.get("channels")):
                 if str(channel.get("persona") or "").strip() == wanted:
-                    out.append(f'channel "{_place_label(channel)}" of workspace "{label}" in {file}')
+                    out.append(f'channel "{_place_label(channel, channel_names)}" of workspace "{label}" in {file}')
     return out
 
 

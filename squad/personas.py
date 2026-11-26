@@ -86,11 +86,16 @@ def _merge(pairs, defaults):
 EDIT_FIELDS = ("name", "voice", "tone")
 
 
+def _matches(row, pid):
+    """True when one persona row names the id: an exact string match, the outer spaces trimmed and the case kept."""
+    return isinstance(row, dict) and _text(row.get("id")).strip() == pid
+
+
 def _declared_name(doc, persona_id):
     """The name the committed document declares for one persona id, or '' when it declares none."""
     pid = _text(persona_id).strip()
     for row in _persona_rows(doc):
-        if _text(row.get("id")).strip() == pid:
+        if _matches(row, pid):
             return _text(row.get("name")).strip()
     return ""
 
@@ -128,12 +133,13 @@ def _first_declared_name(seats, persona_id):
 
 def without(doc, persona_id):
     """The committed document with the row of one persona id removed, and every other row and key in its place. None
-    when the document declares no persona with that id: a persona only the local file declares is read-only."""
+    when the document declares no persona with that id: a persona only the local file declares is read-only. One id's
+    duplicate rows collapse, and the match is an exact string, never a case-folded one."""
     rows = _declared_persona_rows(doc)
     pid = _text(persona_id).strip()
     kept, changed = [], False
     for row in rows:
-        if isinstance(row, dict) and _text(row.get("id")).strip() == pid:
+        if _matches(row, pid):
             changed = True   # every row of the id goes, so an id a document declares twice loses both rows
             continue
         kept.append(row)

@@ -841,7 +841,31 @@ def test_a_holder_row_with_no_label_and_no_name_names_its_id_after_a_marker():
 
 
 def test_a_document_that_is_not_a_mapping_answers_no_holder():
-    """A file that does not read is no document: it answers no holder at all, so a client default never answers for a
-    broken file and the removal reports the read defect instead."""
+    """A file that does not read is no document: it answers no holder of its own, so a client default never answers for
+    a broken file and the removal reports the read defect instead."""
     assert S.persona_holders("hal", ["not", "a", "mapping"], {}, clients=[("acme", "hal")]) == []
     assert S.persona_holders("hal", {}, "not a mapping", clients=[("acme", "hal")]) == []
+
+
+def test_a_broken_file_never_hides_the_holders_of_the_readable_one():
+    """Each file reads on its own: a local file that does not read never hides a holder of the readable committed
+    file. A broken file still yields no client default, so it never invents a phantom client holder."""
+    committed = {"workspaces": [{"id": "T1", "label": "team", "persona": "hal"}]}
+    assert S.persona_holders("hal", committed, "not a mapping") == ['workspace "team" in slack.yaml']
+    assert S.persona_holders("hal", "not a mapping", {"workspaces": [{"id": "T2", "label": "client", "persona": "hal"}]}) == [
+        'workspace "client" in slack.local.yaml']
+    assert 'client "acme" default' not in S.persona_holders(
+        "hal", committed, "not a mapping", clients=[("acme", "hal")]), "a broken file answered a phantom client holder"
+
+
+def test_a_holder_place_takes_the_display_name_the_roster_resolves_for_its_id():
+    """A place whose own row states no label and no name takes the display name the roster resolves for its id from
+    the other file, and `unnamed (<id>)` answers alone when no row of either file names the place."""
+    committed = {"workspaces": [{"id": "T1", "persona": "hal", "channels": [{"id": "C1", "persona": "hal"}]},
+                                {"id": "T2", "persona": "hal"}]}
+    local = {"workspaces": [{"id": "T1", "label": "team", "channels": [{"id": "C1", "name": "support"}]}]}
+    assert S.persona_holders("hal", committed, local) == [
+        'workspace "team" in slack.yaml',
+        'channel "support" of workspace "team" in slack.yaml',
+        'workspace "unnamed (T2)" in slack.yaml',
+    ]
