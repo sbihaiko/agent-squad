@@ -41,6 +41,7 @@ NAME = re.compile(r"^[A-Za-z0-9 _.\-]{1,32}\Z")     # ASCII letters, digits, spa
 TONE_MAX = 300
 SECRET_KEY = "secret"
 USER_ID = re.compile(r"^[UW][A-Z0-9]{2,}\Z")   # a Slack user id: `U` or `W`, then uppercase letters and digits
+WORKSPACE_ID = re.compile(r"^[TE][A-Z0-9]{2,}\Z")   # a Slack team id: `T`, or `E` for an enterprise, then the rest
 # The two refusals the hub editor shows beside the field: the text lives here so the editor and the validator never
 # state a rule twice (ADR-0177 decision 3).
 GUEST_TEAM_REASON = "a guest team id stays in the local file"
