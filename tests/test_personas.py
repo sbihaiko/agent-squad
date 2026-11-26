@@ -85,6 +85,43 @@ def test_two_projects_of_one_client_that_declare_different_fields_are_a_drift():
     assert (row["name"], row["voice"], row["tone"]) == ("HAL9K", "Kore", "Calm."), row
 
 
+def test_a_drifted_row_names_each_copy_with_its_project():
+    """#3015 acceptance 1: the drifted row names each differing copy with the project that declares it, so the owner
+    reads every version and no version hides behind the first."""
+    seats = [seat("alpha", {"personas": [persona("hal", "HAL9K", "Kore", "Calm.")]}),
+             seat("beta", {"personas": [persona("hal", "HAL", "Sulafat", "Warm.")]})]
+    row = PS.groups(seats, one_client(["alpha", "beta"]))[0]["rows"][0]
+    assert row["copies"] == [
+        {"project": "alpha", "label": "alpha", "name": "HAL9K", "voice": "Kore", "tone": "Calm.", "file": "slack.yaml"},
+        {"project": "beta", "label": "beta", "name": "HAL", "voice": "Sulafat", "tone": "Warm.", "file": "slack.yaml"},
+    ], row
+
+
+def test_a_settle_names_the_chosen_copy_and_only_that_client_s_projects():
+    """#3015 acceptance 2, 3 and 6: the choice answers the chosen copy's fields and the projects of that client that
+    declare the id; a project of another client that declares the same id is never a target."""
+    seats = [seat("alpha", {"personas": [persona("hal", "HAL9K", "Kore", "Calm.")]}),
+             seat("beta", {"personas": [persona("hal", "HAL", "Sulafat", "Warm.")]}),
+             seat("gamma", {"personas": [persona("hal", "Gamma", "Puck", "Direct.")]}),
+             seat("delta", {"personas": [persona("iara", "Iara")]})]
+    clients = CL.normalize({"clients": [{"id": "acme", "name": "Acme", "projects": ["alpha", "beta", "delta"]},
+                                        {"id": "globex", "name": "Globex", "projects": ["gamma"]}]})
+    got = PS.settle(seats, clients, "hal", "acme", "beta")
+    assert got["err"] is None, got
+    assert got["fields"] == {"name": "HAL", "voice": "Sulafat", "tone": "Warm."}, got
+    assert got["targets"] == ["alpha", "beta"], got
+
+
+def test_a_settle_of_a_copy_of_another_client_names_its_reason():
+    """#3015 acceptance 6: a project that belongs to another client answers no target for this client's row."""
+    seats = [seat("alpha", {"personas": [persona("hal", "HAL9K")]}),
+             seat("gamma", {"personas": [persona("hal", "Gamma")]})]
+    clients = CL.normalize({"clients": [{"id": "acme", "name": "Acme", "projects": ["alpha"]},
+                                        {"id": "globex", "name": "Globex", "projects": ["gamma"]}]})
+    got = PS.settle(seats, clients, "hal", "acme", "gamma")
+    assert got["targets"] == [] and got["fields"] is None and got["err"], got
+
+
 def test_two_clients_that_declare_one_id_with_different_fields_are_no_drift():
     """#3010 acceptance 7: drift lives inside one client, so the same id declared with another tone by another client
     carries no drift flag on either row."""

@@ -235,6 +235,72 @@ def test_a_commit_written_but_not_pushed_is_named_with_that_result(hub, tmp_path
     assert [s["project"] for s in out["saved"]] == ["alpha"], out["saved"]
 
 
+# ---------------------------------------------------------------- the route: choosing one copy of a drifted persona (#3015)
+
+# Two projects of one client declare `blue` with different fields; one project of another client declares `blue` too.
+BLUE_A = {"version": 1, "personas": [{"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm."}]}
+BLUE_B = {"version": 1, "personas": [{"id": "blue", "name": "Blue9", "voice": "Sulafat", "tone": "Warm."}]}
+BLUE_C = {"version": 1, "personas": [{"id": "blue", "name": "BlueX", "voice": "Puck", "tone": "Direct."}]}
+CLIENTS = {"clients": [{"id": "acme", "name": "Acme", "projects": ["alpha", "beta"]},
+                       {"id": "globex", "name": "Globex", "projects": ["gamma"]}]}
+
+
+def write_clients(tmp_path):
+    (tmp_path / "profiles" / "clients.local.yaml").write_text(yaml.safe_dump(CLIENTS, sort_keys=False))
+
+
+def test_the_preview_of_a_chosen_copy_targets_only_that_client_s_projects(hub, tmp_path, monkeypatch):
+    """#3015 acceptance 2, 3 and 6: the body names the client and the copy; the preview writes the chosen copy for each
+    project of that client that declares the id, and never a project of another client."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": BLUE_A, "beta": BLUE_B, "gamma": BLUE_C})
+    write_clients(tmp_path)
+    before = {slug: c.read_bytes() for slug, (_co, c, _o) in made.items()}
+    out = hub.personas_edit({"persona": "blue", "client": "acme", "copy": "beta"})
+    assert out.get("err") is None, out
+    assert [(r["project"], r["result"]) for r in out["rows"]] == [("alpha", "writes Blue9"), ("beta", "writes Blue9")], out
+    assert {slug: c.read_bytes() for slug, (_co, c, _o) in made.items()} == before, "the preview wrote a file"
+
+
+def test_a_copy_the_client_does_not_hold_is_refused(hub, tmp_path, monkeypatch):
+    """#3015 acceptance 6: a copy named from another client's row answers its reason and writes nothing."""
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": BLUE_A, "beta": BLUE_B, "gamma": BLUE_C})
+    write_clients(tmp_path)
+    out = hub.personas_edit({"persona": "blue", "client": "acme", "copy": "gamma"})
+    assert "gamma" in out["err"] and "not a project of this client" in out["err"], out
+
+
+@pytest.mark.heavy   # three real repositories and their worktrees
+def test_a_confirmed_settle_writes_the_chosen_copy_to_each_client_project_and_clears_the_drift(
+        hub, tmp_path, monkeypatch):
+    """#3015 acceptance 4, 5 and 6: each project of the client carries the chosen copy, the drift flag clears on the next
+    read, and the project of the other client keeps its own copy and its one commit."""
+    monkeypatch.setenv("SG_SLACK_WORKTREE", str(tmp_path / "hubs"))
+    prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": BLUE_A, "beta": BLUE_B, "gamma": BLUE_C}, git=True)
+    write_clients(tmp_path)
+    preview = hub.personas_overview()
+    acme = next(g for g in preview["groups"] if g["id"] == "acme")
+    assert acme["rows"][0]["drift"] is True, acme
+    out = hub.personas_edit({"persona": "blue", "client": "acme", "copy": "beta", "confirm": True})
+    assert out.get("err") is None, out
+    assert [s["project"] for s in out["saved"]] == ["alpha", "beta"], out
+    for slug in ("alpha", "beta"):
+        _co, _c, origin = made[slug]
+        landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                                capture_output=True, text=True, check=True, timeout=60).stdout
+        assert yaml.safe_load(landed)["personas"][0] == \
+               {"id": "blue", "name": "Blue9", "voice": "Sulafat", "tone": "Warm."}, slug
+    _co, _c, origin = made["gamma"]
+    landed = subprocess.run(["git", "-C", str(origin), "show", "dev:docs/squad/slack.yaml"],
+                            capture_output=True, text=True, check=True, timeout=60).stdout
+    assert yaml.safe_load(landed)["personas"][0] == BLUE_C["personas"][0], "another client's project was written"
+    count = subprocess.run(["git", "-C", str(origin), "rev-list", "--count", "dev"],
+                           capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+    assert count == "1", f"the other client's project took a commit: {count}"
+    after = hub.personas_overview()
+    acme_after = next(g for g in after["groups"] if g["id"] == "acme")
+    assert acme_after["rows"][0]["drift"] is False, acme_after
+
+
 # ---------------------------------------------------------------- the page: the editor, the preview and the sample
 
 def _node(body):
@@ -311,6 +377,43 @@ def test_the_personas_theme_holds_no_autosave_and_the_slack_theme_keeps_its_own(
     assert "setTimeout" not in block, "the Personas theme schedules a write of its own"
     assert "/api/slack/files" not in block, "the Personas theme takes the Slack save path"
     assert "slAutoSave" in hub.PAGE and "SL_COMMIT_MS" in hub.PAGE, "the Slack theme's autosave left the page"
+
+
+COPIES_ROW = {"id": "blue", "name": "Blue", "voice": "Kore", "tone": "Calm.",
+              "projects": [{"id": "alpha", "label": "alpha", "file": "slack.yaml"},
+                           {"id": "beta", "label": "beta", "file": "slack.yaml"}],
+              "copies": [{"project": "alpha", "label": "alpha", "name": "Blue", "voice": "Kore", "tone": "Calm.",
+                          "file": "slack.yaml"},
+                         {"project": "beta", "label": "beta", "name": "Blue9", "voice": "Sulafat", "tone": "Warm.",
+                          "file": "slack.yaml"}],
+              "default_of": [], "drift": True, "read_only": False}
+
+
+def test_a_drifted_row_draws_each_copy_with_its_project_and_a_choice(hub):
+    """#3015 acceptance 1 and 2: the drifted row draws each copy with the project that declares it, and each copy is a
+    control the owner presses to choose it."""
+    html = _node(_src(hub, f"console.log(prRow({json.dumps(COPIES_ROW)},'acme'))"))
+    assert 'data-prcopy="alpha"' in html and 'data-prcopy="beta"' in html, html
+    assert 'data-prclient="acme"' in html, html
+    assert "Blue9" in html and "Sulafat" in html and "Warm." in html, html
+
+
+def test_choosing_a_copy_posts_the_client_and_the_copy_and_writes_nothing_before_the_confirm(hub):
+    """#3015 acceptance 2 and 3: the choice starts an edit that names the client and the copy, and its preview body and
+    its confirm body carry the same choice, so the hub alone decides the targets."""
+    answer = {"err": None, "groups": [{"id": "acme", "name": "Acme", "rows": [COPIES_ROW]}],
+              "voices": ["Kore", "Sulafat"], "tone_max": 300}
+    tail = (f"prS={json.dumps(answer)};prCopyStart('acme','beta');"
+            "console.log(JSON.stringify({prev:JSON.parse(prBody(false)),conf:JSON.parse(prBody(true)),"
+            "name:prEd.name,voice:prEd.voice,editor:prEditor()}))")
+    got = json.loads(_node(_src(hub, tail)))
+    assert got["prev"] == {"persona": "blue", "client": "acme", "copy": "beta", "confirm": False}, got
+    assert got["conf"] == {"persona": "blue", "client": "acme", "copy": "beta", "confirm": True}, got
+    assert (got["name"], got["voice"]) == ("Blue9", "Sulafat"), got
+    editor = got["editor"]
+    assert 'data-prcopy="alpha"' in editor and 'data-prcopy="beta"' in editor, editor
+    assert re.search(r'data-prcopy="beta"[^>]*checked', editor), editor
+    assert "setTimeout" not in _block(hub.PAGE), "the Personas theme schedules a write of its own"
 
 
 def test_the_write_route_answers_over_loopback(hub, monkeypatch):

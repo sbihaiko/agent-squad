@@ -1,9 +1,10 @@
 # One hub theme (#2742). hub.py compiles this file into its own module namespace, at its place in the hub's one
 # namespace, so every name the hub defined before it -- and every name a later theme defines -- is a plain global.
 #
-# --- Settings > Personas, the read route (SPEC 3009, #3010). The route reads one seat for each roster project and the
-# profile's local client map, and the persona rules module merges them (ADR-0137, ADR-0177). The page draws what the
-# route answers. Nothing here is editable yet.
+# --- Settings > Personas, the read and the write route (SPEC 3009, #3010, #3011, #3015). The route reads one seat for
+# each roster project and the profile's local client map, and the persona rules module merges them (ADR-0137, ADR-0177).
+# The page draws what the route answers; one persona's edit, or one chosen copy of a drifted row, goes through the same
+# preview and confirm.
 
 def personas_module():
     """The one home of the persona rules: the hub holds no copy of a rule."""
@@ -24,6 +25,30 @@ def personas_fields():
         return [], None
 
 
+def _pr_newest_committed(seat):
+    """The seat with the committed document the theme reads: the newer of the project's checkout file and the hub's own
+    worktree file for that project.
+
+    The hub writes and lands a persona save from its own worktree, and the project's checkout follows the branch on its
+    own schedule. So a read that took the checkout alone would keep drawing a drift the save already settled (#3015
+    acceptance 5). The checkout wins once it is at least as new, so a later pull or a hand edit answers the theme. A
+    worktree the hub holds no file in leaves the seat as it stands, and every failure keeps the checkout's document."""
+    try:
+        checkout_path = pathlib.Path(_slack_text(seat.get("committed_path")))
+        wt, why = slack_worktree(loop=seat.get("checkout"), name=seat.get("id"))
+        if not wt or why:
+            return seat
+        hub_path = pathlib.Path(wt) / SLACK_YAML_REL
+        if not hub_path.is_file() or hub_path.stat().st_mtime <= checkout_path.stat().st_mtime:
+            return seat
+        doc = _slack_read_doc(hub_path)
+        if not doc:
+            return seat
+        return {**seat, "committed": doc, "committed_path": hub_path, "cf": _slack_name(hub_path, "slack.yaml")}
+    except (OSError, TypeError, ValueError):
+        return seat
+
+
 def personas_overview(seats=None, clients=None):
     """The groups the Personas theme draws: one group for each client of the map, then one for each project no client
     names, each with one row for each persona id its projects declare. A caller may hand the seats and the client map
@@ -38,6 +63,7 @@ def personas_overview(seats=None, clients=None):
         seats, roster_err = _slack_roster_checked(0.0)
         if roster_err:
             return {"err": roster_err, "groups": [], "voices": voices, "tone_max": tone_max}
+    seats = [_pr_newest_committed(seat) for seat in seats]
     if clients is None:
         clients, map_err = _clients_map_read()
         if map_err:
@@ -90,29 +116,57 @@ def _pr_save_result(out, name):
     return f"refused: {err}"
 
 
+def _pr_chosen_copy(P, personas, seats, pid, body):
+    """(fields, targets, error): the fields of the copy the body chose and the projects that client's save writes into.
+
+    A body that names `client` and `copy` picks one copy of a drifted row: the rules module answers the chosen copy's
+    fields and the projects of that client alone that declare the id, so a project of another client is never a target
+    (#3015). Any other body names the fields and the target projects itself (#3011)."""
+    client_id = _slack_text(body.get("client")).strip()
+    copy_project = _slack_text(body.get("copy")).strip()
+    if not (client_id or copy_project):
+        raw_fields = body.get("fields")
+        if not isinstance(raw_fields, dict):
+            return None, None, "fields: a mapping of name, voice and tone"
+        targets = body.get("projects")
+        if not isinstance(targets, list) or not targets:
+            return None, None, "projects: a body that names at least one project"
+        fields, ferr = _pr_edited_fields(P, raw_fields)
+        return (None, None, ferr) if ferr else (fields, targets, None)
+    if not (client_id and copy_project):
+        return None, None, "copy: a body that names the client and the project whose copy to use"
+    try:
+        clients, merr = _clients_map_read()
+    except Exception as e:
+        return None, None, f"the client map did not resolve: {type(e).__name__}: {e}"
+    if merr:
+        return None, None, merr
+    try:
+        pick = personas.settle(seats, clients, pid, client_id, copy_project)
+    except Exception as e:
+        print(f"hub: the persona copy could not be chosen: {type(e).__name__}: {e}", file=sys.stderr)
+        return None, None, "the persona copy could not be chosen"
+    if pick.get("err"):
+        return None, None, pick["err"]
+    fields, ferr = _pr_edited_fields(P, pick["fields"])
+    return (None, None, ferr) if ferr else (fields, pick["targets"], None)
+
+
 def personas_edit(body):
-    """POST /api/personas: one persona's edit over the target projects the body names. Without `confirm` it is the
-    preview: the hub builds each project's document through the rules module and calls that project's save path with no
-    confirm, so the answer names each file and the diff, and writes nothing. On confirm each project is written,
-    committed and landed from its own worktree, and one refused project never stops the others."""
+    """POST /api/personas: one persona's edit over the target projects the body names, or one chosen copy of a drifted
+    row over that client's projects alone (#3015). Without `confirm` it is the preview: the hub builds each project's
+    document through the rules module and calls that project's save path with no confirm, so the answer names each file
+    and the diff, and writes nothing. On confirm each project is written, committed and landed from its own worktree,
+    and one refused project never stops the others."""
     if not isinstance(body, dict):
         return {"err": "bad request"}
     pid = _slack_text(body.get("persona")).strip()
     if not pid:
         return {"err": "persona: a body that names one persona id"}
-    raw_fields = body.get("fields")
-    if not isinstance(raw_fields, dict):
-        return {"err": "fields: a mapping of name, voice and tone"}
-    targets = body.get("projects")
-    if not isinstance(targets, list) or not targets:
-        return {"err": "projects: a body that names at least one project"}
     try:
         P = slack_policy()
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
-    fields, ferr = _pr_edited_fields(P, raw_fields)
-    if ferr:
-        return {"err": ferr}
     seats, rerr = _slack_roster_checked(0.0)   # a save always reads the roster fresh, never a cached one
     if rerr:
         return {"err": rerr}
@@ -121,6 +175,9 @@ def personas_edit(body):
     except Exception as e:
         print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
         return {"err": "the persona rules are unavailable"}
+    fields, targets, perr = _pr_chosen_copy(P, PS, seats, pid, body)
+    if perr:
+        return {"err": perr}
     try:
         plan = PS.edit(seats, pid, fields, targets)
     except Exception as e:

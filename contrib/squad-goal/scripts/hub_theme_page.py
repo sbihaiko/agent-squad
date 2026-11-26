@@ -2167,8 +2167,17 @@ const prRowAt=id=>prRows().find(r=>String(r.id)===String(id))||null;
 function prStartEdit(id){const r=prRowAt(id);if(!r||r.read_only)return;
  prEd={id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
  prPlan=null;prPMsg="";prRender()}
+/* A drifted row offers one copy for each project that declares the id (#3015): the choice starts an edit that names the
+   client and the copy, and the hub alone decides the targets, so a project of another client is never written. */
+function prCopyStart(client,project){const g=((prS||{}).groups||[]).find(x=>String(x.id)===String(client));if(!g)return;
+ const r=(g.rows||[]).find(x=>(x.copies||[]).some(c=>String(c.project)===String(project)));if(!r)return;
+ const cp=(r.copies||[]).find(c=>String(c.project)===String(project));if(!cp)return;
+ prEd={id:r.id,name:cp.name,voice:cp.voice,tone:cp.tone,client:g.id,copy:cp.project,copies:(r.copies||[]).slice()};
+ prPlan=null;prPMsg="";prRender()}
 function prStopEdit(){prEd=null;prPlan=null;prPMsg="";prRender()}
-function prBody(confirm){return JSON.stringify({persona:prEd.id,fields:{name:prEd.name,voice:prEd.voice,tone:prEd.tone},
+function prBody(confirm){if(prEd.copy)return JSON.stringify({persona:prEd.id,client:prEd.client,copy:prEd.copy,
+ confirm:!!confirm});
+ return JSON.stringify({persona:prEd.id,fields:{name:prEd.name,voice:prEd.voice,tone:prEd.tone},
  projects:prEd.projects,confirm:!!confirm})}
 async function prPost(confirm){if(!prEd)return;
  prPMsg=confirm?"saving":"reading the preview";prPlan=null;prRender();
@@ -2192,6 +2201,11 @@ function prPlanHtml(){const rows=((prPlan||{}).rows)||[];if(!rows)return"";
   +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
 function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
  const limit=max==null?"the policy's":prTxt(max);
+ if(d.copy)return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
+  +`<fieldset class=prf><legend>Copy</legend>${(d.copies||[]).map(c=>`<label><input type=radio name=prcopy data-prcopy="${prTxt(c.project)}"${String(c.project)===String(d.copy)?" checked":""}> ${prTxt(c.label)} <span class=prfile>${prFile(c.file)}</span> — <b>${prTxt(c.name)}</b> · ${prTxt(c.voice)} · ${prTxt(c.tone)}</label>`).join("")}</fieldset>`
+  +`<p class=m>The preview writes the chosen copy into each project of this client that declares ${prTxt(d.id)}.</p>`
+  +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
+  +(prPMsg?`<p class="mx" role=status>${prTxt(prPMsg.replace(/^!/,""))}</p>`:"")+prPlanHtml()+`</section>`;
  return `<section class=prgrp id=predit><h4>Edit ${prTxt(d.name)}</h4>`
  +`<label class=prf>Name <input id=prname value="${esc(d.name)}"></label>`
  +`<label class=prf>Voice <select id=prvoice>${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
@@ -2199,9 +2213,10 @@ function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[
  +`<fieldset class=prf><legend>Projects</legend>${(d.all||[]).map(p=>`<label><input type=checkbox data-prproj="${prTxt(p.id)}"${d.projects.includes(p.id)?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
  +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-sample>Play sample</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
  +(prPMsg?`<p class="mx" role=status>${prTxt(prPMsg.replace(/^!/,""))}</p>`:"")+prPlanHtml()+`</section>`}
-function prRow(r){
+function prRow(r,client){
  const cell=(label,body)=>`<td data-l="${label}"><span class=pv>${body}</span></td>`;   // one item for the value: a bare text node would take the label's own grid cell
- const projects=(r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;";
+ const copies=r.drift?(r.copies||[]).map(c=>`<span class=prcopy><b>${prTxt(c.name)}</b> <span class=m>${prTxt(c.voice)} · ${prTxt(c.tone)}</span> <button data-prcopy="${prTxt(c.project)}" data-prclient="${prTxt(client)}">Use this copy</button></span>`).join("<br>"):"";
+ const projects=((r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;")+(copies?`<br>${copies}`:"");
  const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
  const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}">Edit</button>`;   // a local-only persona is read-only
  return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
@@ -2213,13 +2228,14 @@ function prRender(){const el=$("#prbody");if(!el)return;
  const txt=rows?`${prPlural(rows,"persona")} · ${prPlural(groups.length,"client")}`:"no persona";
  for(const sel of ["#prsnav","#prssr"]){const el=$(sel);if(el)el.textContent=txt}   // the nav line and the panel's own chip read one text
  const ban=prMsg?`<p class="mx err" role=status>${prTxt(prMsg.replace(/^!/,""))}</p>`:"";
- el.innerHTML=ban+prEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(prRow).join("")}</tbody></table></section>`).join("")
+ el.innerHTML=ban+prEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(r=>prRow(r,g.id)).join("")}</tbody></table></section>`).join("")
   :`<p class=m>${prTxt("No persona: no roster project declares one.")}</p>`)}
 // }PRS
 /* The Personas editor's own events (#3011): a field stages its value and posts nothing, so no edit of the theme writes
    before the confirm. The preview and the confirm are the two buttons that post, and the confirm is the one write. */
 $("#prbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const dt=b.dataset||{};
  if(dt.predit){prStartEdit(dt.predit);return}
+ if(dt.prcopy!==undefined&&dt.prclient!==undefined){prCopyStart(dt.prclient,dt.prcopy);return}
  if(dt.preditPreview!==undefined){prPost(false);return}
  if(dt.preditConfirm!==undefined){prPost(true);return}
  if(dt.preditSample!==undefined){prSample();return}
@@ -2228,6 +2244,8 @@ $("#prbody").addEventListener("input",e=>{if(!prEd)return;const t=e.target;
  if(t.id==="prname"){prEd.name=t.value;return}
  if(t.id==="prtone"){prEd.tone=t.value}});
 $("#prbody").addEventListener("change",e=>{if(!prEd)return;const t=e.target,dt=t.dataset||{};
+ if(dt.prcopy!==undefined&&prEd.copy){const c=(prEd.copies||[]).find(x=>String(x.project)===String(dt.prcopy));
+  if(c){prEd.copy=c.project;prEd.name=c.name;prEd.voice=c.voice;prEd.tone=c.tone;prRender()}return}
  if(t.id==="prvoice"){prEd.voice=t.value;return}
  if(dt.prproj!==undefined){const ids=new Set(prEd.projects);if(t.checked)ids.add(dt.prproj);else ids.delete(dt.prproj);
   prEd.projects=[...ids]}});
