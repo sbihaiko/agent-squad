@@ -14,6 +14,9 @@ answers (ADR-0137, ADR-0177).
 """
 
 
+import copy
+
+
 def _text(value):
     return "" if value is None else str(value)
 
@@ -78,6 +81,78 @@ def _merge(pairs, defaults):
             if all(p["id"] != project_id for p in row["projects"]):
                 row["projects"].append({"id": project_id, "label": label, "file": decl["file"]})
     return rows
+
+
+EDIT_FIELDS = ("name", "voice", "tone")
+
+
+def _declared_name(doc, persona_id):
+    """The name the committed document declares for one persona id, or '' when it declares none."""
+    pid = _text(persona_id).strip()
+    for row in _persona_rows(doc):
+        if _text(row.get("id")).strip() == pid:
+            return _text(row.get("name")).strip()
+    return ""
+
+
+def with_fields(doc, persona_id, fields):
+    """The committed document with one persona's name, voice and tone set to the fields the edit names. A field the edit
+    does not name keeps its value, and every other key keeps its place and its form. None when the document declares no
+    persona with that id: a persona only the local file declares is read-only."""
+    out = copy.deepcopy(_doc(doc))
+    rows = out.get("personas")
+    pid = _text(persona_id).strip()
+    for row in rows if isinstance(rows, list) else ():
+        if isinstance(row, dict) and _text(row.get("id")).strip() == pid:
+            for key in EDIT_FIELDS:
+                if key in fields:
+                    row[key] = _text(fields[key]).strip()
+            return out
+    return None
+
+
+def edit(seats, persona_id, fields, targets):
+    """The plan of one persona edit: one row for each target project, and the committed document a confirmed save writes
+    into each project it can write.
+
+    A target the roster does not hold, a project with no worktree, a file whose read answered a defect, and a project
+    whose committed file does not declare the id are each refused by name. Every other target reads "writes <name>" and
+    carries its document, so one refused project never stops the others."""
+    pid = _text(persona_id).strip()
+    by_id, order = {}, []
+    for seat in seats or ():
+        sid = _text(seat.get("id")).strip()
+        if sid and sid not in by_id:
+            by_id[sid] = seat
+            order.append(sid)
+    rows, writes = [], []
+    # The name a refusing row states comes from any project that declares the id, so a project that does not declare
+    # it still names the persona the edit was about.
+    known = next((_declared_name(s.get("committed"), pid) for s in (seats or ())
+                  if _declared_name(s.get("committed"), pid)), "")
+    for target in targets or ():
+        tid = _text(target).strip()
+        seat = by_id.get(tid)
+        label = (_text(seat.get("label")) or tid) if seat else tid
+        row = {"project": tid, "label": label, "file": _text(seat.get("cf")) if seat else ""}
+        if seat is None:
+            rows.append({**row, "result": "refused: the project is not in the roster"})
+            continue
+        if not _text(seat.get("checkout")).strip():
+            rows.append({**row, "result": "refused: the project has no worktree"})
+            continue
+        defects = list(seat.get("read_defects") or ())
+        if defects:
+            rows.append({**row, "result": f"refused: the file does not read: {_text(defects[0])}"})
+            continue
+        changed = with_fields(seat.get("committed"), pid, fields)
+        name = _text(fields.get("name")).strip() or _declared_name(seat.get("committed"), pid) or known or pid
+        if changed is None:
+            rows.append({**row, "result": f"refused: {name} is not declared in this project's committed file"})
+            continue
+        rows.append({**row, "result": f"writes {name}"})
+        writes.append({"project": tid, "committed": changed})
+    return {"rows": rows, "writes": writes}
 
 
 def groups(seats, clients):
