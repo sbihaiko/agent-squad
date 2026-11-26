@@ -367,16 +367,39 @@ def denied(done):
 def service_denial(work, profile, service):
     """Prove that the profile reaches one project's own background service and no other (#2943).
 
-    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. A
-    connect inside the project's own root must land on that service, so the probe binds a real listener there and fails
-    unless the listener accepts the connect: a call the kernel merely lets run proves nothing. Both paths name the
-    socket by `operators.CONTROL_SOCKET`, the CLI's one name for it. The project's root is required: without the
-    positive control, a profile that refuses every service would pass. Returns the shared path tried."""
-    shared = os.path.join(daemon_root(), operators.CONTROL_SOCKET)
-    done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
-    if not denied(done):
-        raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
-                          + (f": {done.stderr.strip()}" if done.returncode else ""))
+    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. The
+    CLI keeps one control socket per daemon instance, in a folder under its shared root, so `<root>/control.sock`
+    never exists: a connect there fails as ENOENT, and a missing file proves no denial (#2942). The probe therefore
+    stands in for the shared service: it binds a real listener in a folder of its own under that root, reaches it once
+    on its own, and then requires the kernel to refuse the same path from inside. A connect inside the project's own
+    root must land on that service, so the probe binds a real listener there too and fails unless the listener accepts
+    the connect: a call the kernel merely lets run proves nothing. Both paths name the socket by
+    `operators.CONTROL_SOCKET`, the CLI's one name for it. The project's root is required: without the positive
+    control, a profile that refuses every service would pass. Returns the shared path tried."""
+    shared_folder = os.path.join(daemon_root(), f"probe-{os.getpid()}")
+    shared = os.path.join(shared_folder, operators.CONTROL_SOCKET)
+    os.makedirs(shared_folder, exist_ok=True)
+    stand_in = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        stand_in.bind(shared)
+        stand_in.listen(1)
+        stand_in.settimeout(ACCEPT_DEADLINE)
+        # The path is a live socket before the sandboxed call: one unsandboxed connect of our own reaches it, so a
+        # refusal below can only come from the kernel, never from a missing file.
+        mine = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            mine.connect(shared)
+            reached, _ = stand_in.accept()
+            reached.close()
+        finally:
+            mine.close()
+        done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ""))
+    finally:
+        stand_in.close()
+        shutil.rmtree(shared_folder, ignore_errors=True)
     own = os.path.join(str(service), operators.CONTROL_SOCKET)
     os.makedirs(str(service), exist_ok=True)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
