@@ -20,9 +20,22 @@ def describe(pids):
     """One line per pid: its parent and its command line, so a leak names the test folder its refusals path holds (#2989)."""
     lines = []
     for pid in pids:
-        result = subprocess.run(["ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
-        lines.append(f"{pid}: {result.stdout.strip() or 'gone'}")
+        result = subprocess.run(["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
+        lines.append(f"{pid}: {result.stdout.strip() or 'gone'}{started_by(pid)}")
     return "\n".join(lines)
+
+
+def started_by(pid):
+    """The test that started the process, from the `PYTEST_CURRENT_TEST` it inherited; Linux only, empty elsewhere."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as handle:
+            env = handle.read().split(b"\0")
+    except OSError:
+        return ""
+    for item in env:
+        if item.startswith(b"PYTEST_CURRENT_TEST="):
+            return f" (started by {item.split(b'=', 1)[1].decode(errors='replace')})"
+    return ""
 
 
 def track_starts(module):
