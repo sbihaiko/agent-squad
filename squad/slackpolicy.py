@@ -212,6 +212,8 @@ def _roles(file, doc, out):
                 out.append(_defect(file, f"roles[{i}].actions", "an ignore role lists no action"))
             if items:
                 out.append(_defect(file, f"roles[{i}].deploy", "an ignore role lists no deploy target"))
+        if "session" in role and role.get("session") not in SESSION_MODES:
+            out.append(_defect(file, f"roles[{i}].session", f"session {role.get('session')!r} is not one of {', '.join(SESSION_MODES)}"))
         if isinstance(role.get("actions"), (list, tuple)):
             actions = role_actions()
             for j, action in enumerate(role["actions"]):
@@ -664,6 +666,9 @@ def check(target=".", profile=None, project=None):
 # One decision of the policy module. The four kinds are the whole set: an event the module does not handle, a message
 # that stays data, a command that reaches the inbox, and a request that becomes a proposal to the owner.
 IGNORE, DATA, INBOX, PROPOSAL = "ignore", "data", "inbox", "proposal"
+# The session a role's message runs in: `full` is the owner's own Claude session, `bounded` the operator's (ADR-0180).
+SESSION_FULL, SESSION_BOUNDED = "full", "bounded"
+SESSION_MODES = (SESSION_FULL, SESSION_BOUNDED)
 DEFAULT_LANGUAGE = "en-US"
 # The reply paths that leave from the owner's account, so the reply needs the AI authorship mark (SPEC 2682).
 _OWNER_ACCOUNT_REPLIES = ("draft", "send")
@@ -695,7 +700,8 @@ class Decision(NamedTuple):
     non-guest channel. `voice_reply` is true exactly when the `guest` channel asks for the reply also in audio, so a
     channel that does not ask carries no clip (story 70). `deploy` is the tuple of environments the caller's role lists
     for the `deploy` action, and it is empty for a decision with no role (#2724). `tone` is the persona's tone, then the
-    tone of the sender's role, and the persona's alone when the role names none (#2927)."""
+    tone of the sender's role, and the persona's alone when the role names none (#2927). `session` is `full` only for an
+    `inbox` decision of the owner in a role that names `full`, and `bounded` otherwise (ADR-0180)."""
     kind: str
     role: str | None
     actions: tuple
@@ -707,6 +713,7 @@ class Decision(NamedTuple):
     voice_reply: bool = False
     deploy: tuple = ()
     tone: str = ""
+    session: str = SESSION_BOUNDED
 
 
 def _row_at(rows, key, value):
@@ -898,6 +905,14 @@ def _role_actions(committed, role):
         if str(row.get("id")) == role:
             return tuple(str(action) for action in row.get("actions") or ())
     return ()
+
+
+def _role_session(committed, role):
+    """The session mode the role names; a role with no field, or a role the file does not hold, is `bounded`."""
+    for row in _rows(committed.get("roles")):
+        if str(row.get("id")) == role:
+            return row.get("session") if row.get("session") in SESSION_MODES else SESSION_BOUNDED
+    return SESSION_BOUNDED
 
 
 def _role_deploy(committed, role):
@@ -1209,8 +1224,11 @@ def decide(committed, local, event, now, thread_state=None):
         # and its data; only the reply path is absent.
         reply = None
     kind = PROPOSAL if class_ == "guest" else INBOX
+    # Only the daemon's owner id gets the owner's session in this ADR-0180 step; every other member stays bounded.
+    session = SESSION_FULL if kind == INBOX and event.get("owner") is True and _role_session(committed, role) == SESSION_FULL \
+        else SESSION_BOUNDED
     return Decision(kind, role, _role_actions(committed, role), language, persona, reply, reply in _OWNER_ACCOUNT_REPLIES,
-                    next_poll, voice, _role_deploy(committed, role), tone)
+                    next_poll, voice, _role_deploy(committed, role), tone, session)
 
 
 # --- the one-time migration of the old per-profile Slack file (SPEC 2682 #2700, story 46) -------------
