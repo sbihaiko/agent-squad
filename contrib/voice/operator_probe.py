@@ -65,6 +65,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -75,6 +76,7 @@ sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
 import fullturn  # noqa: E402  the one full-turn runner the daemon uses (ADR-0180)
 import operators  # noqa: E402  the one config root and profile a live session runs under
+import permrelay  # noqa: E402  the permission relay a full turn asks before a call (SPEC 2964)
 from model_proxy import ModelProxy  # noqa: E402
 from operators import (  # noqa: E402
     SECRET_DIRS,
@@ -98,6 +100,12 @@ MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
 FULL_REPO = "probe/full-turn"          # the project name a full turn keeps its session under
+PERMISSION_REPO = "probe/permission-turn"
+PERMISSION_OWNER = "probe-owner"
+PERMISSION_DM = "probe-dm"
+PERMISSION_WORKSPACE = "probe-workspace"
+PERMISSION_TIMEOUT = 8.0               # seconds, the relay's window for the call nobody answers
+PERMISSION_PROMPT = "Run this exact shell command and nothing else: touch {name}"
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
@@ -930,6 +938,110 @@ def full_turn_phase(work, cli):
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
 
 
+def wait_for_request(relay, deadline):
+    """The first open request of the relay, posted or not, whose request audit line exists.
+
+    The poll reads both `unsent()` and the open rows, so a request an earlier pass already marked sent is still found
+    (#2970 review)."""
+    stop = time.monotonic() + deadline
+    while time.monotonic() < stop:
+        queued = relay.unsent()
+        if queued:
+            return queued[0]
+        named = {row.get("hash") for row in audit_rows_in(relay.directory) if row.get("event") == "request"}
+        posted = [row for row in relay.open_requests() if row.get("sent") and row["hash"] in named]
+        if posted:
+            return posted[0]
+        time.sleep(0.5)
+    raise ProbeFailed("no permission request reached the relay")
+
+
+def permission_turn(cli, checkout, state, name, answer, relay_timeout):
+    relay_dir = state / "permission"
+    relay_dir.mkdir(parents=True, exist_ok=True)
+    relay = permrelay.Relay(relay_dir, owner=PERMISSION_OWNER, dm_channel=PERMISSION_DM,
+                            workspace=PERMISSION_WORKSPACE)
+    config = relay_dir / f"mcp-{name}.json"
+    config.write_text(json.dumps(permrelay.mcp_config(
+        sys.executable, permrelay.__file__, str(relay_dir), PERMISSION_OWNER, PERMISSION_DM,
+        PERMISSION_WORKSPACE, str(checkout), timeout=relay_timeout)), encoding="utf-8")
+    settings = relay_dir / f"ask-{name}.json"
+    settings.write_text(json.dumps({"permissions": {"ask": ["Bash"]}}), encoding="utf-8")
+    turn = {}
+    worker = threading.Thread(target=lambda: turn.update(value=fullturn.run_turn(
+        cli, str(checkout), str(state), PERMISSION_REPO, PERMISSION_PROMPT.format(name=name), timeout=DEADLINE,
+        relay=(str(config), permrelay.PROMPT_TOOL), extra=("--settings", str(settings)))), daemon=True)
+    worker.start()
+    request = wait_for_request(relay, DEADLINE)
+    if str(checkout) not in request["text"] or name not in request["text"]:
+        raise ProbeFailed("the permission request did not name the literal call and its folder")
+    if answer:
+        if relay.decide(PERMISSION_OWNER, PERMISSION_DM, PERMISSION_WORKSPACE, "approve", request["hash"]) != "approved":
+            raise ProbeFailed("the owner's approval did not reach the request")
+    worker.join(DEADLINE + relay_timeout)
+    if worker.is_alive():
+        raise ProbeFailed("the full turn did not end after the permission was answered")
+    if turn["value"].failed:
+        raise ProbeFailed(f"the full turn with a permission request failed (exit {turn['value'].exit})")
+    return relay, request
+
+
+def permission_cap(relay):
+    """The fourth open request of one sender is refused, with its audit line.
+
+    One turn never opens past one request, because its permission prompt blocks the next call, so the cap is proven at
+    the relay the turn uses (#2970 review)."""
+    sender = "probe-cap-sender"
+    for n in range(permrelay.MAX_OPEN_PER_SENDER):
+        row = relay.request(sender, "Bash", {"command": f"touch cap-{n}.txt"}, "/probe")
+        if row["status"] != "pending":
+            raise ProbeFailed("the relay refused an open request under the sender cap")
+    fourth = relay.request(sender, "Bash", {"command": "touch cap-4.txt"}, "/probe")
+    if fourth["status"] != "refused":
+        raise ProbeFailed("the fourth open request of one sender was not refused")
+    refused = [row for row in audit_rows_in(relay.directory)
+               if row.get("event") == "refused" and row.get("hash") == fourth["hash"] and row.get("sender") == sender]
+    if not refused:
+        raise ProbeFailed("the refused request wrote no audit line")
+
+
+def permission_phase(work, cli):
+    """Two full turns that each need one permission: an approval lets its call run, and a call nobody answers is denied
+    when the relay's window closes (SPEC 2964). The probe answers in place of the owner's DM."""
+    checkout = work / "permission-checkout"
+    state = work / "permission-state"
+    shutil.rmtree(state, ignore_errors=True)
+    checkout.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    relay, approved = permission_turn(cli, checkout, state, "approved.txt", True, relay_timeout=DEADLINE)
+    if not (checkout / "approved.txt").exists():
+        raise ProbeFailed("an approved call did not run")
+    if not [row for row in audit_rows(state)
+            if row.get("event") == "approval" and row.get("hash") == approved["hash"]]:
+        raise ProbeFailed("the approval wrote no audit line")
+    permission_cap(relay)
+    _, denied = permission_turn(cli, checkout, state, "denied.txt", False, relay_timeout=PERMISSION_TIMEOUT)
+    if (checkout / "denied.txt").exists():
+        raise ProbeFailed("a call nobody approved ran")
+    if not [row for row in audit_rows(state)
+            if row.get("event") == "timeout" and row.get("hash") == denied["hash"]]:
+        raise ProbeFailed("the timeout of the unanswered request wrote no audit line")
+    if [row for row in audit_rows(state)
+            if row.get("event") == "timeout" and row.get("hash") == approved["hash"]]:
+        raise ProbeFailed("the approved request timed out")
+
+
+def audit_rows(state):
+    return audit_rows_in(Path(state) / "permission")
+
+
+def audit_rows_in(directory):
+    path = Path(directory) / permrelay.AUDIT_FILE
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
@@ -946,6 +1058,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli)
         full_turn_phase(work, cli)
+        permission_phase(work, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
         checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = profile_for(
@@ -964,6 +1077,7 @@ def run_probe(work, cli):
         bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate, audit=gate_audit(work))
         guest_sessions(work, profile, cli, proxy.url)
     full_turn_phase(work, cli)
+    permission_phase(work, cli)
     return len(proxy.refusals)
 
 

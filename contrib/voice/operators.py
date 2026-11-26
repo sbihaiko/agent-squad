@@ -65,6 +65,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 for folder in (HERE, ROOT):
     if folder not in sys.path:
         sys.path.insert(0, folder)
+import permrelay  # noqa: E402  the one approval relay, shared with a full turn, so a bounded deny names no second one
 import voiced  # noqa: E402  the one reader of a scope's active Slack revision, so the supervisor needs no second copy
 
 from squad import slackpolicy  # noqa: E402  the one home of the Slack file rules, so a wrapper is read as written
@@ -75,7 +76,9 @@ DAEMON = f"/tmp/cc-daemon-{os.getuid()}"  # the CLI background service's runtime
 PROXY = os.path.join(HERE, "model_proxy.py")
 ANSWER = os.path.join(HERE, "answer.py")    # the one answer path of a session (#2949)
 GATE = os.path.join(HERE, "operator_gate.py")   # the session's one tool gate, every call decided (#2950)
-GATE_TIMEOUT = 30.0                      # seconds, one hook call
+GATE_TIMEOUT = 30.0                      # seconds, one hook call that decides alone
+# A denied call waits for the owner's answer, so the hook's own limit covers the relay's timeout and a margin (#2972).
+GATE_RELAY_TIMEOUT = GATE_TIMEOUT + permrelay.TIMEOUT_SECONDS + GATE_TIMEOUT
 BINDING_ENV = "VOICE_ANSWER_BINDING"         # the env var that names the session's own project binding
 MODEL_URL = "https://api.anthropic.com"  # the endpoint when ANTHROPIC_BASE_URL is unset
 LOOPBACK = ("localhost", "127.0.0.1", "::1")
@@ -806,7 +809,7 @@ PTY_GRANT = '(allow file-write-data (literal "/dev/ptmx") (regex #"^/dev/ttys[0-
 
 
 def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports=None, *, config, service=None,
-                 audit=None):
+                 audit=None, relay=None):
     """The kernel bound of one operator session: write only its project's outboxes, read only its project's inboxes,
     reach loopback only on the model route (#2925, #2951).
 
@@ -836,12 +839,17 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
 
     The audit file (#2950): `audit` names the one file the session's tool gate appends a denial to. The hook runs as a
     child of the sandboxed session, so the kernel must let that one file take an append and nothing else.
+
+    The relay folder (#2972): `relay` names the one folder the hook writes a permission request into. The grant makes
+    the request possible; it never widens what the call itself may read, write or reach, so an approval lifts the hook's
+    denial alone.
     """
     home = os.path.realpath(os.path.expanduser("~"))
     service_dir = os.path.realpath(service) if service else None
     # The service root is named only when the caller names one: a profile with no service grant refuses every daemon,
     # so a caller that forgets the root fails closed (#2943).
     service_write = f' (subpath "{service_dir}")' if service_dir else ""
+    relay_write = f' (subpath "{os.path.realpath(relay)}")' if relay else ""
     service_net = [f'(allow network-outbound (remote unix-socket (subpath "{service_dir}")))'] if service_dir else []
     outboxes = [outboxes] if isinstance(outboxes, str) else list(outboxes)
     own_inboxes = [own_inboxes] if isinstance(own_inboxes, str) else list(own_inboxes)
@@ -877,7 +885,7 @@ def profile_text(outboxes, inboxes, own_inboxes, checkout=None, others=(), ports
         "(allow default)",
         "(deny file-write*)",
         f'(allow file-write* {devices} {writes} (subpath "{home}/.claude") '
-        f'(subpath "{config}"){service_write})',
+        f'(subpath "{config}"){service_write}{relay_write})',
         # The `--bg` host runs its session on a pseudo-terminal, so it opens the multiplexer and its own slave; without
         # them it exits before init (#2987). The grant is a data write only: no create, no unlink, no other device.
         PTY_GRANT,
@@ -935,9 +943,52 @@ def guard_digest(state, repo):
     return hashlib.sha256(json.dumps(guard_for(state, repo), sort_keys=True).encode()).hexdigest()
 
 
+def relay_path(state):
+    """The one folder of the permission relay (#2972): the daemon's own, so a bounded session and a full turn share it."""
+    return os.path.realpath(os.path.join(state, "permission"))
+
+
+def owner_id(state):
+    """The owner's user id, from the one `owner` file beside the inbox: the id a bounded request waits for (#2972)."""
+    try:
+        with open(os.path.join(state, "owner"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def unit_workspace(state, repo, channels):
+    """The workspace id of the project's active revision that names one of the unit's channels, else "" (#2972).
+
+    A bounded request records it, so the owner's DM answer in that workspace answers the request. The DM session has no
+    revision and records none, and the relay takes the owner's DM answer in any workspace."""
+    try:
+        with open(voiced.slack_record_path(state, repo), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    revision = record.get("revision") if isinstance(record, dict) else None
+    for workspace in (revision or {}).get("workspaces") or []:
+        for row in (workspace or {}).get("channels") or []:
+            if str((row or {}).get("id") or "") in {str(scope) for scope in channels}:
+                return str((workspace or {}).get("id") or "")
+    return ""
+
+
+def relay_block(state, unit, repo):
+    """The relay facts of one bounded session (#2972): where to ask, who answers, and what asked.
+
+    The sender is the session's key, so the relay holds at most three open requests per session. The block lives in the
+    gate's policy, outside every checkout, so a session never writes the answer it waits for."""
+    checkout = os.path.realpath(unit.get("checkout") or repo)
+    return {"state": relay_path(state), "owner": owner_id(state), "dm": dm_channel(state, pinned=True),
+            "workspace": unit_workspace(state, unit.get("repo") or "", unit["channels"]), "sender": unit["key"],
+            "folder": checkout, "timeout": permrelay.TIMEOUT_SECONDS}
+
+
 def gate_policy(state, unit, repo, others=()):
     """The document one session's tool gate reads: its checkout, its own inboxes, the project's declared read wrappers,
-    the shipped answer helper, every other project checkout, and the audit file (#2950).
+    the shipped answer helper, every other project checkout, the audit file, and its relay block (#2950, #2972).
 
     The gate holds no decision of its own: `squad/operatorgate.py` names the rules, and this document names the facts
     of one session. The DM is not a project, so it declares no wrapper and answers through the helper alone.
@@ -950,14 +1001,18 @@ def gate_policy(state, unit, repo, others=()):
             "wrappers": wrappers,
             "answer": os.path.realpath(ANSWER),
             "others": [os.path.realpath(path) for path in others if path and os.path.realpath(path) != checkout],
-            "audit": os.path.realpath(denials_path(state))}
+            "audit": os.path.realpath(denials_path(state)),
+            "relay": relay_block(state, unit, repo)}
 
 
 def gate_settings(policy_path):
-    """The CLI `--settings` value that runs the tool gate with one policy file, for every tool."""
+    """The CLI `--settings` value that runs the tool gate with one policy file, for every tool.
+
+    The hook's own limit covers the relay's timeout, because a denied call waits for the owner's answer (#2972). An
+    allowed call still answers in milliseconds."""
     command = shlex.join([sys.executable, GATE, str(policy_path)])
     return json.dumps({"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
-        {"type": "command", "command": command, "timeout": GATE_TIMEOUT}]}]}})
+        {"type": "command", "command": command, "timeout": GATE_RELAY_TIMEOUT}]}]}})
 
 
 def start_proxy(key, state, host, port):
@@ -1017,6 +1072,7 @@ def start(unit, state, repo, others=()):
     prepare_config(state)                    # the CLI's own config home, never the owner's global config file (#2963)
     seed_trust(state, [checkout, own_repo])  # `--bg` refuses a folder whose trust the operator's own file lacks
     os.makedirs(root(state), exist_ok=True)
+    os.makedirs(relay_path(state), exist_ok=True)   # the hook writes its request here, and the kernel grants this one folder (#2972)
     service = service_root(state, key)            # the project's own background service root, never the shared one (#2943)
     os.makedirs(service, exist_ok=True)
     outboxes = [os.path.realpath(outbox_path(state, scope)) for scope in unit["channels"]]
@@ -1029,7 +1085,8 @@ def start(unit, state, repo, others=()):
     ports = [port] if host in LOOPBACK else [proxy["port"]]
     try:
         profile = profile_text(outboxes, inboxes, own, checkout=checkout, others=others, ports=ports,
-                               config=config_root(state), service=service, audit=denials_path(state))
+                               config=config_root(state), service=service, audit=denials_path(state),
+                               relay=relay_path(state))
         profile_path = os.path.join(state, "operators", "profiles", f"{key}.sb")
         os.makedirs(os.path.dirname(profile_path), exist_ok=True)
         with open(profile_path, "w", encoding="utf-8") as f:

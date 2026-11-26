@@ -103,6 +103,7 @@ if ROOT not in sys.path:
 import channels  # noqa: E402  the one Slack call path, so this daemon keeps no second copy of it
 import fullturn  # noqa: E402  one owner message as one turn of the project's own session (ADR-0180)
 import keychain  # noqa: E402  the one reader for the three voice secrets
+import permrelay  # noqa: E402  the permission relay of a full turn: requests to the owner's DM (SPEC 2964)
 import release_events as releases  # noqa: E402  the one release-event record the promotion pass and a project emit (#2702)
 
 from squad import redact as shared_redact  # noqa: E402  the one redaction module, so an answer carries no secret (#2948)
@@ -135,6 +136,7 @@ VOICE = "Charon"                       # the owner's chosen Gemini TTS voice
 OUTBOX_POLL = 0.2                     # how long an answer waits for its post, well inside the 3 s target
 RELEASE_POLL = 30.0                   # how long a release event waits for its notice in the subscribed channels
 ACTION_POLL = 1.0                     # how long an action request waits for its run, well inside the answer target
+PERMISSION_POLL = 1.0                 # how long a bounded session's permission request waits for its post (#2972)
 MAX_DELIVER_ATTEMPTS = 3              # a refused answer is retried a few times, never spun at the poll interval
 ACTION_HEARTBEAT = 60                 # empty action passes between two heartbeat log lines (#2939)
 BROKEN_LINE_BYTES = 200                # bytes of a line that is no JSON the drain keeps in its skip record
@@ -814,6 +816,15 @@ class State:
         if self.version < SCHEMA_VERSION:
             if self.migrate():     # a name file no registry entry can move yet holds the version, so a later start retries
                 self._stamp_schema()
+
+    def dm_channel(self):
+        """The pinned owner DM channel, or an empty string while no DM is pinned (#2949)."""
+        from operators import dm_record_path
+        try:
+            with open(dm_record_path(self.dir), encoding="utf-8") as f:
+                return str((json.load(f) or {}).get("dm") or "")
+        except (OSError, ValueError):
+            return ""
 
     def pin_dm(self, channel):
         """Pin the owner's DM channel (#2949): the one channel a DM answer may carry. The daemon sees the DM's own
@@ -1645,6 +1656,7 @@ class Daemon:
         self.turn_order = fullturn.TurnOrder()
         self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
         self.full_guard = threading.Lock()
+        self.perm_post_guard = threading.Lock()   # one poster of the permission relay at a time (#2972)
         # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
         # so a fixture or a reader never spawns a session; production passes `start_operator`.
         self.starter = starter
@@ -2602,6 +2614,58 @@ class Daemon:
                 return row["checkout"]
         return None
 
+    def permission_relay(self, workspace, timeout=None):
+        """The relay of every full turn in this state folder, answered only by the owner in the pinned DM (SPEC 2964)."""
+        directory = os.path.join(self.state.directory, "permission")
+        os.makedirs(directory, exist_ok=True)
+        return permrelay.Relay(directory, owner=self.owner, dm_channel=self.state.dm_channel(), workspace=workspace,
+                               timeout=permrelay.TIMEOUT_SECONDS if timeout is None else timeout)
+
+    def post_permission_requests(self, relay):
+        """Post each open request of the relay to its DM once: the literal tool call and its working folder.
+
+        A request with no client or no pinned DM reaches no owner, so it is denied at once with its reason, never held
+        open until a later turn (#2970 review). One guard belongs to the daemon, so a full turn's poster and the
+        bounded watcher never post one request twice (#2972)."""
+        with self.perm_post_guard:
+            for row in relay.unsent():
+                if self.client is None or not row["channel"]:
+                    reason = "no client" if self.client is None else "no DM channel"
+                    relay.abandon(row["id"], reason)
+                    self.log(f"voiced: permission request denied: {reason}")
+                    continue
+                self.client.api("chat.postMessage", {"channel": row["channel"], "text": row["text"]}, post=True)
+                relay.mark_sent(row["id"])
+
+    def post_pending_permissions(self):
+        """Post every open request of the shared relay folder once, whatever asked: a full turn or a bounded session.
+
+        A bounded session's request waits while no full turn runs, so the daemon posts it here (#2972)."""
+        self.post_permission_requests(self.permission_relay(""))
+
+    def relay_requests_until(self, relay, done):
+        while not done.wait(permrelay.POLL_SECONDS):
+            self.post_permission_requests(relay)
+
+    def run_relayed_turn(self, record, checkout, repo):
+        relay = self.permission_relay(record.get("workspace") or "")
+        digest = hashlib.sha256(repo.encode("utf-8")).hexdigest()[:16]
+        config = os.path.join(relay.directory, f"mcp-{digest}.json")
+        with open(config, "w", encoding="utf-8") as f:
+            json.dump(permrelay.mcp_config(sys.executable, permrelay.__file__, relay.directory, self.owner,
+                                           relay.dm_channel, relay.workspace, checkout), f)
+        done = threading.Event()
+        poster = threading.Thread(target=self.relay_requests_until, args=(relay, done), daemon=True)
+        poster.start()
+        try:
+            return fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
+                                     registry=self.live_turns, user=record.get("user"),
+                                     relay=(config, permrelay.PROMPT_TOOL))
+        finally:
+            done.set()
+            poster.join()
+            self.post_permission_requests(relay)
+
     def full_turn(self, record, decision, repo, ticket):
         """Run the turn in the project checkout, one turn at a time per project in arrival order, then post its final
         text in the thread.
@@ -2614,11 +2678,10 @@ class Daemon:
             try:
                 checkout = self.project_checkout(repo)
                 if checkout is not None:
-                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
-                                             registry=self.live_turns, user=record.get("user"))
+                    turn = self.run_relayed_turn(record, checkout, repo)
             finally:
                 self.turn_order.leave(repo)
-        except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
+        except Exception as x:      # noqa: BLE001 - the worker thread has no caller: a raise here would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
@@ -2731,6 +2794,16 @@ class Daemon:
         mid = message_id(event)
         if mid in self.state.seen():
             return "duplicate"
+        workspace = str(event.get("team") or event.get("team_id") or "")
+        answer = permrelay.parse_answer(event.get("text"))
+        if answer and self.owner and str(event.get("user") or "") == str(self.owner) \
+                and event.get("channel") == self.state.dm_channel():
+            outcome = self.permission_relay(workspace).decide(event.get("user"), event.get("channel"), workspace,
+                                                            *answer)
+            if outcome in ("approved", "denied"):
+                self.state.remember_message(mid)
+                return "permission"
+            # A line that names no open request of this workspace is a message like any other: it reaches the inbox.
         target = self.inbox_path_of(event)
         decision = self.policy_decision(event)
         record = {
@@ -2738,6 +2811,7 @@ class Daemon:
             "ts": event.get("ts"),
             "user": event.get("user"),
             "channel": event.get("channel"),
+            "workspace": workspace,
             "language": decision.language,
             "persona": decision.persona.name if decision.persona else None,
             "tone": decision.tone,
@@ -2989,6 +3063,19 @@ async def watch_actions(daemon, stop=None, interval=ACTION_POLL):
         await asyncio.sleep(interval)
 
 
+async def watch_permissions(daemon, stop=None, interval=PERMISSION_POLL):
+    """Post each open permission request as soon as the relay holds it, until `stop` is set.
+
+    A full turn posts its own requests, and this watcher posts the request a bounded session's hook opens when no turn
+    runs (#2972). A failed pass is a log line, never a watcher that stops posting."""
+    while not (stop is not None and stop.is_set()):
+        try:
+            await asyncio.to_thread(daemon.post_pending_permissions)
+        except Exception as x:  # noqa: BLE001 - one bad pass is a log line, never a daemon that stops posting
+            daemon.log(f"voiced: permission post failed: {type(x).__name__}: {str(x)[:120]}")
+        await asyncio.sleep(interval)
+
+
 async def watch_configs(daemon, stop=None, interval=CONFIG_POLL):
     """Read each project's dev tip and switch Slack revisions, until `stop` is set.
 
@@ -3034,12 +3121,13 @@ async def serve(daemon, apps, connect=None, open_connection=None, stop=None):
     configs = asyncio.create_task(watch_configs(daemon, stop))
     releases_task = asyncio.create_task(watch_releases(daemon, stop))
     actions = asyncio.create_task(watch_actions(daemon, stop))
+    permissions = asyncio.create_task(watch_permissions(daemon, stop))
     hearing = [asyncio.create_task(hear(daemon, token, connect=connect, open_connection=open_connection, stop=stop))
                for token in apps.values()]
     try:
         await asyncio.gather(*hearing)
     finally:
-        tasks = (outboxes, configs, releases_task, actions, *hearing)
+        tasks = (outboxes, configs, releases_task, actions, permissions, *hearing)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
