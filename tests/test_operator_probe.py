@@ -606,15 +606,15 @@ def test_the_shared_service_denial_probes_a_socket_that_exists(tmp_path, monkeyp
     """#2979: the kernel answers a missing path with "no such file", never a denial, so the probe binds the file it probes
     under the shared root and removes it after."""
     probe = load("operator_probe")
-    inner, seen = scripted(probe), {}
+    inner, seen = scripted(probe), []
 
     def spy(profile, cli, args, cwd, timeout, extra_env=None):
-        seen["existed"] = os.path.exists(args[-1])
+        seen.append((args[-1], os.path.exists(args[-1])))
         return inner(profile, cli, args, cwd, timeout, extra_env)
 
     monkeypatch.setattr(probe, "sandboxed", spy)
     shared = probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
-    assert seen["existed"], f"the probe named a path that does not exist: {shared}"
+    assert seen[0] == (shared, True), f"the probe named a path that does not exist: {seen[0]}"
     assert not os.path.exists(shared), "the probe left its own socket under the shared root"
 
 

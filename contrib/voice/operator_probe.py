@@ -315,16 +315,28 @@ def denied(done):
 
 
 def service_denial(work, profile, service=None):
-    """Prove that the profile reaches one project's own background service and no other (#2943).
+    """Prove that the profile reaches one project's own background service and no other (#2943, #2979).
 
-    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. A
-    connect inside the project's own root is allowed, so there the kernel's "no such file" is the answer the probe
-    expects. Returns the shared path tried."""
-    shared = os.path.join(daemon_root(), "control.sock")
-    done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
-    if not denied(done):
-        raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
-                          + (f": {done.stderr.strip()}" if done.returncode else ""))
+    A connect to the owner's shared service, which starts the sessions no sandbox bounds, is refused by the kernel. The
+    kernel answers a path that does not exist with "no such file", never a denial, and the CLI writes its socket in a run
+    directory under the shared root, so the probe binds a socket of its own there and proves the denial against that file.
+    It removes the socket after the probe. A connect inside the project's own root is allowed, so there the kernel's "no
+    such file" is the answer the probe expects. Returns the shared path tried."""
+    root = daemon_root()
+    holder = os.path.join(root, f"probe-{os.getpid()}")
+    os.makedirs(holder, exist_ok=True)
+    shared = os.path.join(holder, "control.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(shared)
+        server.listen(1)
+        done = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, shared], work, DENIAL_DEADLINE)
+        if not denied(done):
+            raise ProbeFailed(f"a denial did not happen: the session may reach the shared service {shared}"
+                              + (f": {done.stderr.strip()}" if done.returncode else ""))
+    finally:
+        server.close()
+        shutil.rmtree(holder, ignore_errors=True)
     if service:
         own = os.path.join(str(service), "control.sock")
         got = sandboxed(profile, sys.executable, ["-c", SERVICE_CONNECT, own], work, DENIAL_DEADLINE)
