@@ -946,10 +946,13 @@ def full_turn_phase(work, cli):
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
 
 
-def wait_for_holder(session, present, wait):
-    """Wait until the process table lists the session's holder, or no longer lists it, and answer whether it did."""
+def wait_for_holder(session, present, wait, holder=None):
+    """Wait until the process table lists the session's holder, or no longer lists it, and answer whether it did.
+
+    `holder` answers the pid that holds the session now, so a test reads its own rows. None reads the real table."""
+    reading = holder or fullturn.session_holder
     stop = time.monotonic() + wait
-    while (fullturn.session_holder(session) is not None) != present:
+    while (reading(session) is not None) != present:
         if time.monotonic() > stop:
             return False
         time.sleep(0.2)
@@ -975,7 +978,7 @@ def holder_phase(work, cli, wait=HOLDER_WAIT):
                               text=True, start_new_session=True)
     try:
         if not wait_for_holder(first.session, present=True, wait=wait):
-            raise ProbeFailed("the live CLI holder never reached the process table")
+            raise ProbeFailed("the live CLI holder never appeared in the process table as the session's holder")
         refused = fullturn.run_turn(cli, str(checkout), str(state), HOLDER_REPO, "Reply with ok.", timeout=DEADLINE)
         if not refused.failed or refused.reason != "session_held":
             raise ProbeFailed("a turn ran while a live CLI held its session")

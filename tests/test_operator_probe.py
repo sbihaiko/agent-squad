@@ -1716,11 +1716,12 @@ session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-hold
 print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
 """
 
-EXITS_STAND_IN = """#!{python}
-import json, sys
+EXEC_STAND_IN = """#!{python}
+import json, os, sys
 argv = sys.argv[1:]
 if "--verbose" in argv:
-    sys.exit(1)               # gone before the process table can list it
+    # a live process whose argv names neither the CLI nor the session: it is listed and never matches the holder
+    os.execv(sys.executable, [sys.executable, "-c", "import time; time.sleep(60)"])
 stdin = sys.stdin.read()
 session = argv[argv.index("--resume") + 1] if "--resume" in argv else "sess-holder-0002"
 print(json.dumps({{"type": "result", "is_error": False, "result": "ok", "session_id": session}}))
@@ -1744,7 +1745,19 @@ def test_a_turn_is_refused_while_a_live_cli_holds_the_session(tmp_path):
 
 
 @pytest.mark.process_bound
-def test_a_holder_that_never_reaches_the_process_table_fails_the_probe(tmp_path):
+def test_a_live_process_that_never_holds_the_session_fails_the_probe(tmp_path):
     probe = load("operator_probe")
-    with pytest.raises(probe.ProbeFailed, match="never reached the process table"):
-        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXITS_STAND_IN, "claude-exits-stand-in"), wait=1.0)
+    with pytest.raises(probe.ProbeFailed, match="never appeared in the process table"):
+        probe.holder_phase(tmp_path, holder_stand_in(tmp_path, EXEC_STAND_IN, "claude-exec-stand-in"), wait=1.0)
+
+
+def test_the_holder_wait_ends_at_once_when_the_reading_agrees():
+    probe = load("operator_probe")
+    assert probe.wait_for_holder("sess", present=True, wait=5.0, holder=lambda session: 4321) is True
+    assert probe.wait_for_holder("sess", present=False, wait=5.0, holder=lambda session: None) is True
+
+
+def test_the_holder_wait_gives_up_at_its_deadline():
+    probe = load("operator_probe")
+    assert probe.wait_for_holder("sess", present=False, wait=0.2, holder=lambda session: 4321) is False
+    assert probe.wait_for_holder("sess", present=True, wait=0.2, holder=lambda session: None) is False
