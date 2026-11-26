@@ -2196,12 +2196,14 @@ async function prSample(){if(!prEd)return;
     if(p&&p.catch)p.catch(()=>{prPMsg="the browser refused the sound: press Play"})}catch(x){}}}
  catch(x){prPMsg="!the sample could not be fetched"}
  prRender()}
-function prPlanHtml(){const plan=prPlan||{},rows=plan.rows||[];if(!rows&&!(plan.notes||[]).length&&!(plan.map||[]).length)return"";
- const notes=(plan.notes||[]).length?`<ul class=prnotes id=prnotes>${plan.notes.map(n=>`<li>${prTxt(n)}</li>`).join("")}</ul>`:"";
- const map=(plan.map||[]).length?`<table class="ptab" id=prmap><thead><tr><th>Client</th><th>Result</th></tr></thead><tbody>`
-  +plan.map.map(r=>`<tr><td data-l="Client">${prTxt(r.label)}</td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`:"";
- return notes+`<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
-  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`+map}
+function prPlanHtml(){const plan=prPlan||{},
+ rows=Array.isArray(plan.rows)?plan.rows:[],notes=Array.isArray(plan.notes)?plan.notes:[],map=Array.isArray(plan.map)?plan.map:[];
+ if(!rows.length&&!notes.length&&!map.length)return"";   // a plan of another shape draws nothing rather than throw
+ const notesHtml=notes.length?`<ul class=prnotes id=prnotes>${notes.map(n=>`<li>${prTxt(n)}</li>`).join("")}</ul>`:"";
+ const mapHtml=map.length?`<table class="ptab" id=prmap><thead><tr><th>Client</th><th>Result</th></tr></thead><tbody>`
+  +map.map(r=>`<tr><td data-l="Client">${prTxt(r.label)}</td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`:"";
+ return notesHtml+`<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
+  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`+mapHtml}
 function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max,pat=(prS||{}).name_pattern;
  const limit=max==null?"the policy's":prTxt(max);
  if(d.mode==="copy")return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
