@@ -1533,17 +1533,44 @@ def _slack_registry_data():
     except (OSError, ValueError): data = {}
     return data if isinstance(data, dict) else {}
 
+def slack_registry_lock_path():
+    """The lock file that serializes a registry read-modify-write, beside the registry it protects (#2966)."""
+    return slack_registry_path().with_name(f".{SLACK_REGISTRY}.lock")
+
+def _slack_registry_update(change):
+    """Read, change and write the registry under one exclusive lock, so two writes at once never lose one (#2966).
+    `change` takes the document and returns the document to write. Returns an error, or None."""
+    import fcntl
+    p = slack_registry_path()
+    lock = slack_registry_lock_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as e:
+        return f"{lock.name} could not be made: {e.strerror or e}"
+    try:
+        try: fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as e:
+            return f"{lock.name} could not be locked: {e.strerror or e}"
+        try:
+            return _slack_atomic(p, json.dumps(change(_slack_registry_data()), indent=2, sort_keys=True) + "\n")
+        finally:
+            try: fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError: pass
+    finally:
+        try: os.close(fd)
+        except OSError: pass
+
 def _slack_record(path, sha, committed=True):
     """Record a save in the local registry, keyed by the file it saved: the landed sha of a committed save, or the last
     landed sha of a save that changed only the local file. Returns an error, or None."""
-    p = slack_registry_path()
-    data = _slack_registry_data()
-    if sha is None:
+    def change(data):
         last = data.get(str(path)) if isinstance(data.get(str(path)), dict) else {}
-        sha = last.get("sha")
-    data[str(path)] = {"sha": sha, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                       "committed": bool(committed)}
-    return _slack_atomic(p, json.dumps(data, indent=2, sort_keys=True) + "\n")
+        data[str(path)] = {"sha": sha if sha is not None else last.get("sha"),
+                           "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                           "committed": bool(committed)}
+        return data
+    return _slack_registry_update(change)
 
 def _slack_base(paths):
     """The files a preview read, each with its size and time, so the page can tell that a file changed after its
@@ -2557,12 +2584,19 @@ def slack_owner_post(body):
     user = _slack_text(body.get("user")).strip()
     if not P.USER_ID.match(user):
         return {"err": f"user {user!r} is not a Slack user id (U... or W...)", "owners": owners}
-    data = _slack_registry_data()
-    owners[ws] = user
-    data["owners"] = owners
-    err = _slack_atomic(slack_registry_path(), json.dumps(data, indent=2, sort_keys=True) + "\n")
+    written = {}
+
+    def change(data):
+        kept = data.get("owners") if isinstance(data.get("owners"), dict) else {}
+        kept = {str(space): str(member) for space, member in kept.items() if member}
+        kept[ws] = user
+        data["owners"] = kept
+        written.clear(); written.update(kept)
+        return data
+
+    err = _slack_registry_update(change)
     if err: return {"err": err, "owners": _slack_owner_map()}
-    return {"err": None, "owner": user, "owners": owners}
+    return {"err": None, "owner": user, "owners": written}
 
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and

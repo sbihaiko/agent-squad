@@ -3124,3 +3124,52 @@ def test_a_dm_that_owns_no_project_reaches_the_baseline_policy_with_no_crash(tmp
     event = {"channel": "D0NOPROJ", "user": OWNER, "team": FULL_TEAM, "channel_type": "im",
              "text": "hello", "ts": "1762500200.000100"}
     assert daemon.policy_decision(event).session == "bounded"
+
+
+def dm_event(channel="D0NOPROJ", team=FULL_TEAM, user=OWNER):
+    return {"channel": channel, "user": user, "team": team, "channel_type": "im",
+            "text": "hello", "ts": "1762500300.000100"}
+
+
+def test_the_owner_is_resolved_once_for_one_decision(tmp_path):
+    """A decision reads the registry once: `baseline_files` and `policy_event` take the owner the decision resolved, so a
+    second read can never answer an owner the first read did not (#2966, ADR-0180)."""
+    mod = voiced()
+    path = tmp_path / "slack-saved.json"
+    path.write_text(json.dumps({"owners": {FULL_TEAM: OWNER}, "grants": []}))
+    reads = []
+
+    def seam(entry):
+        reads.append(entry)
+        return str(path)
+
+    daemon = mod.Daemon(state=mod.State(str(tmp_path / "state")), owner=None, transcriber=None, downloader=None,
+                        log=lambda line: None, registry=seam)
+    daemon.policy_decision(dm_event())
+    assert len(reads) == 1, reads
+
+
+def test_a_raising_registry_seam_answers_bounded_instead_of_dropping_the_message(tmp_path):
+    """A registry seam that raises never raises into the message path: the decision resolves no owner and answers
+    bounded, so a broken registry drops no message (#2966, ADR-0180)."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER},
+                         registry=lambda entry: (_ for _ in ()).throw(RuntimeError("registry down")))
+    assert daemon.policy_decision(dm_event()).session == "bounded"
+
+
+def test_a_raising_configs_seam_answers_bounded_instead_of_dropping_the_message(tmp_path):
+    """A configs seam that raises answers the same way: no owner, a bounded session, and the message is still answered."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER}, configs=lambda: 1 / 0)
+    assert daemon.policy_decision(dm_event()).session == "bounded"
+
+
+def test_an_unreadable_registry_answers_bounded(tmp_path):
+    """A registry file a build cannot read names no owner, so the message answers bounded and never raises."""
+    mod = voiced()
+    path = tmp_path / "slack-saved.json"
+    path.write_text("{not json")
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=lambda entry: str(path))
+    assert daemon.policy_decision(dm_event()).session == "bounded"
+    assert daemon.workspace_owner(FULL_TEAM, None) is None

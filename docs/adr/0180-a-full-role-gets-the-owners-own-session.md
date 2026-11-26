@@ -19,8 +19,10 @@ The bounded operator session ([ADR-0154](0154-the-owner-talks-to-the-operator-th
    A direct message, a guest channel and a channel with no active revision run as `bounded`. Guard:
    `tests/test_slack_full_session.py`, `tests/test_voiced_full_turn.py`, `tests/test_voiced.py`.
 3. **A full role admits only the owner or a granted member.** The validator takes the owner id map and the grant list, and
-   it names a defect for a `full` role whose member the registry names neither way. The hub writes no grant, so the
-   owner adds one to the registry file. Guard: `tests/test_slack_policy.py`.
+   it names a defect for a `full` role whose member the registry names neither way. A member of a `full` role also names
+   a workspace the committed file declares, and a channel, when it names one, that belongs to that workspace; a row that
+   fails either check is its own named defect before the owner or grant check. The hub writes no grant, so the owner
+   adds one to the registry file. Guard: `tests/test_slack_policy.py`.
 4. **The hub writes the owner id.** One hub route writes one owner user id per workspace into the registry, and it
    refuses a value that is not a Slack user id or a workspace that is not a Slack workspace id. Guard:
    `tests/test_hub_slack_owner.py`.
@@ -36,3 +38,7 @@ The bounded operator session ([ADR-0154](0154-the-owner-talks-to-the-operator-th
 A full turn holds the owner's authority over the project checkout. The sandbox wrapper does not bound it, so a full role is a grant to a session the owner runs, not to a bounded operator. The bounded path keeps its guards.
 
 The session mode lives in the committed Slack file. A change to `session` takes effect when the file's revision goes active.
+
+A caller of `slackpolicy.decide` states the event keys `owner`, `active` and `dm`, and the decision reads all three: an
+event that omits `active` runs bounded, and an event that omits `dm` reads as a channel message. The daemon fills the
+three keys from the socket event and the hub registry, so no caller infers them from a default.

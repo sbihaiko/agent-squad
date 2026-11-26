@@ -382,14 +382,35 @@ def _guest_ids(local):
 def _full_members(file, committed, local, owners, grants, out):
     """A member of a `session: full` role is the owner of its workspace or holds a grant for that workspace (ADR-0180).
     The owner id map and the grant list come from the hub registry, so a member the registry names neither way is a
-    defect that names the user and the workspace it fails in."""
+    defect that names the user and the workspace it fails in. A member must also name a workspace the committed file
+    declares, and a channel, when it names one, that belongs to that workspace: a full session runs in a project channel
+    alone, so a row that names no declared workspace or another workspace's channel is its own named defect before the
+    owner or grant check (#2966)."""
     full = {str(row.get("id")) for row in _rows(committed.get("roles")) if row.get("session") == SESSION_FULL}
     granted = {(str(g.get("workspace")), str(g.get("user"))) for g in grants or () if isinstance(g, dict)}
     owners = owners or {}
+    declared = {}
+    for ws in _rows(committed.get("workspaces")):
+        wid = str(ws.get("id") or "")
+        if wid:
+            declared[wid] = {str(ch.get("id")) for ch in _rows(ws.get("channels")) if ch.get("id")}
     for i, member in enumerate(_rows(local.get("members"))):
         if str(member.get("role")) not in full:
             continue
         workspace = str(member.get("workspace") or "")
+        if not workspace:
+            continue   # `_members` already names a member that names no workspace
+        if workspace not in declared:
+            out.append(_defect(file, f"members[{i}].workspace",
+                               f"the {member.get('role')!r} role holds the full session, so its member must name a "
+                               f"workspace the committed file declares, not {workspace}"))
+            continue
+        channel = str(member.get("channel") or "")
+        if channel and channel not in declared[workspace]:
+            out.append(_defect(file, f"members[{i}].channel",
+                               f"the {member.get('role')!r} role holds the full session, so its member's channel must "
+                               f"belong to workspace {workspace}, not {channel}"))
+            continue
         owner = owners.get(workspace)
         for j, user in enumerate(member.get("users") or []):
             if owner is not None and str(user) == str(owner):
@@ -1206,7 +1227,11 @@ def decide(committed, local, event, now, thread_state=None):
     `event` names `workspace`, `channel`, `user` and `kind` (a `message` unless stated), and flags `bot`, `external`
     and `own`. A `kind` other than `message` and an `own` event (the agent's own post) get `ignore`. `thread_state` names
     `last_message_at` and `thread_last_at` of the agent's thread. The module reads no clock and calls no network, so the
-    caller passes both answers."""
+    caller passes both answers.
+
+    A caller that wants the full session states `owner` and `active` and sets `dm` for a direct message: the full
+    session holds only for `owner is True`, `active is True`, `dm` not `True` and a `full` role. An event that omits
+    `active` runs bounded, and an event that omits `dm` reads as a channel message (ADR-0180)."""
     committed = committed or {}
     local = local or {}
     workspace_id = str(event.get("workspace") or "")
