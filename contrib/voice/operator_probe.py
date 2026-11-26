@@ -59,6 +59,7 @@ import argparse
 import fcntl
 import json
 import os
+import secrets
 import shlex
 import shutil
 import socket
@@ -72,6 +73,7 @@ ROOT = Path(__file__).resolve().parents[2]
 VOICE = Path(__file__).resolve().parent
 sys.path.insert(0, str(VOICE))
 sys.path.insert(0, str(ROOT))
+import fullturn  # noqa: E402  the one full-turn runner the daemon uses (ADR-0180)
 import operators  # noqa: E402  the one config root and profile a live session runs under
 from model_proxy import ModelProxy  # noqa: E402
 from operators import (  # noqa: E402
@@ -95,6 +97,7 @@ MODEL_HOST = "api.anthropic.com"
 MODEL_PORT = 443
 SPEND = "0.50"                         # USD, the one CLI call's cap
 DEADLINE = 180.0                       # seconds, the one CLI call
+FULL_REPO = "probe/full-turn"          # the project name a full turn keeps its session under
 DENIAL_DEADLINE = 30.0                 # seconds, one denial command
 SENTINEL = "PROBE-OTHER-INBOX-LINE"
 OWN_SENTINEL = "PROBE-OWN-INBOX-LINE"   # one line in each own inbox: the session must read it, never its neighbour's
@@ -901,6 +904,26 @@ def project_shape(work, ports):
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
+def full_turn_phase(work, cli):
+    """Two full turns outside the sandbox: the first keeps a word given on stdin, and the resumed second returns it."""
+    word = secrets.token_hex(6)
+    checkout = work / "full-checkout"
+    state = work / "full-state"
+    shutil.rmtree(state, ignore_errors=True)
+    checkout.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    first = fullturn.run_turn(cli, str(checkout), str(state), FULL_REPO, f"Remember this code: {word}. Reply with ok.",
+                              timeout=DEADLINE)
+    if first.failed or not first.session:
+        raise ProbeFailed(f"the first full turn did not answer (exit {first.exit})")
+    second = fullturn.run_turn(cli, str(checkout), str(state), FULL_REPO,
+                               "Reply with the code I gave you and nothing else.", timeout=DEADLINE)
+    if second.failed or second.session != first.session:
+        raise ProbeFailed(f"the resumed full turn did not answer on the same session (exit {second.exit})")
+    if word not in second.text:
+        raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
+
+
 def run_probe(work, cli):
     host, port, loopback = model_endpoint()
     if loopback:
@@ -916,6 +939,7 @@ def run_probe(work, cli):
         answer_phase(work, profile, cli, outboxes, own_inboxes, gate=gate)
         bg_session(checkout, profile, cli, service=service, gate=gate)
         guest_sessions(work, profile, cli)
+        full_turn_phase(work, cli)
         return 0
     with ModelProxy((host, port), work / "proxy.log") as proxy:
         checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = profile_for(
@@ -933,6 +957,7 @@ def run_probe(work, cli):
         answer_phase(work, profile, cli, outboxes, own_inboxes, proxy.url, gate=gate)
         bg_session(checkout, profile, cli, proxy.url, service=service, gate=gate)
         guest_sessions(work, profile, cli, proxy.url)
+    full_turn_phase(work, cli)
     return len(proxy.refusals)
 
 
@@ -961,6 +986,7 @@ def main(argv=None):
           f"dontAsk, cap ${SPEND}; a live session answered one pending inbox line through the shipped helper "
           f"({HELPER.name}) and no other channel's outbox took a line, under the tool gate and an ambient hook whose "
           f"rewrite reached no tool; "
+          f"a full turn outside the sandbox resumed its session and returned the word it took on stdin; "
           f"a --bg session started and was listed as {marked_name(PROBE_KEY)}, and the gate refused its one command "
           f"with one audit line; "
           f"guest poller denial held (write tool); "

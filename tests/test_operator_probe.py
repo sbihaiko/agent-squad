@@ -652,6 +652,52 @@ def test_the_real_cli_probe_passes():
     assert probe.main([]) == 0
 
 
+FULL_STAND_IN = """#!{python}
+import json, os, sys
+argv = sys.argv[1:]
+stdin = sys.stdin.read()
+store = os.environ["STUB_STORE"]
+if "--resume" in argv:
+    session = argv[argv.index("--resume") + 1]
+    answer = open(store, encoding="utf-8").read() if os.environ.get("STUB_REMEMBERS") else "I do not know."
+else:
+    session = "sess-probe-0001"
+    with open(store, "w", encoding="utf-8") as f:
+        f.write(stdin)
+    answer = "ok"
+print(json.dumps({{"type": "result", "is_error": False, "result": answer, "session_id": session}}))
+"""
+
+
+def full_stand_in(tmp_path, monkeypatch, remembers):
+    path = tmp_path / "claude-full-stand-in"
+    path.write_text(FULL_STAND_IN.format(python=sys.executable))
+    path.chmod(path.stat().st_mode | 0o100)
+    monkeypatch.setenv("STUB_STORE", str(tmp_path / "said.txt"))
+    monkeypatch.setenv("STUB_REMEMBERS", "1" if remembers else "")
+    return str(path)
+
+
+def test_a_full_turn_returns_on_resume_the_word_it_was_given_on_stdin(tmp_path, monkeypatch):
+    """#2965 criteria (4) to (6) and (13): the second full turn resumes the first session and returns its stdin word."""
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=True)
+
+    def no_sandbox(*args, **kwargs):
+        raise AssertionError("a full call ran through the sandbox wrapper")
+
+    monkeypatch.setattr(probe, "sandboxed", no_sandbox)
+    monkeypatch.setattr(probe, "cli_call", no_sandbox)
+    probe.full_turn_phase(tmp_path, cli)
+
+
+def test_a_full_turn_that_forgets_the_stdin_word_fails_the_probe(tmp_path, monkeypatch):
+    probe = load("operator_probe")
+    cli = full_stand_in(tmp_path, monkeypatch, remembers=False)
+    with pytest.raises(probe.ProbeFailed, match="stdin"):
+        probe.full_turn_phase(tmp_path, cli)
+
+
 def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project(tmp_path):
     """#2925 criteria 9 to 11: the probe's profile is the live project shape, one outbox and one inbox per channel, and
     another project's inbox and checkout stay refused (#2951)."""
