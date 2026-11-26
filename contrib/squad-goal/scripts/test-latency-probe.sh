@@ -14,8 +14,11 @@ PY="${PYTHON:-python3}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/latency-probe.XXXXXX")
 stub="$T/claude-stand-in"
-monitor_pid=""
-cleanup() { [ -n "$monitor_pid" ] && kill "$monitor_pid" 2>/dev/null; rm -rf "$T"; }
+cleanup() {
+  grep -rhoE '"pid":[ ]*[0-9]+,"text":"armed"' "$T" 2>/dev/null | sed -n 's/.*"pid":[ ]*\([0-9][0-9]*\).*/\1/p' |
+    while read -r p; do kill "$p" 2>/dev/null; done
+  rm -rf "$T"
+}
 trap cleanup EXIT INT TERM
 
 cat > "$stub" <<'STUB'
@@ -65,5 +68,15 @@ chmod +x "$silent"
 # The real CLI never runs unwrapped: the bound is the measurement's premise.
 "$PY" "$probe" --state "$T/state3" --work "$T/work3" --cli claude --no-sandbox \
      >/dev/null 2>&1 && fail "the probe ran the real CLI with no kernel bound"
+
+# A session that arms its poller and then fails to start leaves no poller behind: the probe fails before its stop.
+armed_fail="$T/claude-armed-then-fail"
+sed 's/^echo deadbeef$/exit 1/' "$stub" > "$armed_fail"
+chmod +x "$armed_fail"
+"$PY" "$probe" --state "$T/state4" --work "$T/work4" --cli "$armed_fail" --no-sandbox \
+     --target 1 --deadline 1 --timeout 1 >/dev/null 2>&1 && fail "a session that never started passed the probe"
+poller=$(grep -rhoE '"pid":[ ]*[0-9]+,"text":"armed"' "$T/state4" | sed -n 's/.*"pid":[ ]*\([0-9][0-9]*\).*/\1/p' | tail -n 1)
+[ -n "$poller" ] || fail "the stand-in never armed a poller"
+kill -0 "$poller" 2>/dev/null && fail "a poller outlived a probe that failed before its stop"
 
 echo "test-latency-probe: ok"
