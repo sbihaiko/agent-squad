@@ -221,12 +221,26 @@ def personas_edit(body):
                      "diff": out.get("diff")})
         if confirm and not out.get("err"):
             saved.append({"project": row["project"], "sha": out.get("sha")})
+    map_rows = list(plan.get("map") or ())
     if confirm:
         _slack_roster_clear()   # a write changed a project's files, so the next read reads the roster fresh
+        # A rename stores the new name in each client default that holds the persona (#3012), so the client badge and
+        # tile never show the old name. The map waits for one saved project: it never names a name no project holds.
+        new_name = _slack_text(fields.get("name")).strip()
+        written = []
+        for row in map_rows:
+            if not saved:
+                written.append({**row, "result": "not written: no project was saved"})
+                continue
+            werr = _clients_default_write(row["client"], pid, new_name)
+            written.append({**row, "result": f"refused: {werr}" if werr else
+                                             f"stored {new_name} as the default name"})
+        map_rows = written
     refused = [r for r in rows if r["result"].startswith("refused:")]
+    refused += [r for r in map_rows if r["result"].startswith("refused:")]
     notes = list(plan.get("notes") or ())
     if merr:
         notes.append(f"the client map did not read: {merr}")
     # No `err` key on a success: the write routes answer 400 on a body that carries one (#3011).
     return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused),
-            "notes": notes, "map": list(plan.get("map") or ())}
+            "notes": notes, "map": map_rows}
