@@ -87,6 +87,7 @@ from operators import (  # noqa: E402
     gate_settings,
     marked_name,
     profile_text,
+    relay_path,
     service_env,
     service_root,
 )
@@ -136,6 +137,7 @@ PROBE_CHANNEL = "CPROBE01"
 GATE_TAMPER = "PROBE-AMBIENT-TAMPER-WON"
 GATE_DENIED = "echo PROBE-GATE-DENIED"   # one command the gate refuses in the `--bg` session, so its audit line proves it
 GATE_DEADLINE = 30.0                     # seconds the probe waits for the `--bg` session's audit line
+GATE_RELAY_WAIT = 5.0                    # seconds the probe's relay waits for an owner that never answers (#2994)
 # The background-service phase (#2768): a `--bg` session runs under the same profile, so a service the sandbox refuses
 # fails the probe rather than a live operator.
 BG_PROMPT = "Reply with the single word ok. Use no tool."
@@ -492,6 +494,9 @@ def gate_documents(work, checkout, other_checkout):
     calls the same two writers, so the document and the settings it hands the CLI are the ones a live start hands it."""
     unit = {"key": PROBE_KEY, "repo": "", "checkout": str(checkout), "channels": list(PROBE_CHANNELS)}
     doc = gate_policy(str(work / "state"), unit, str(checkout), [str(other_checkout)])
+    # No owner answers the probe's relay, so a denied call ends by the relay's timeout: a probe-sized wait, inside the
+    # wait for the audit line, never the production ten minutes (#2994).
+    doc["relay"]["timeout"] = GATE_RELAY_WAIT
     folder = work / "gate"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "policy.json"
@@ -898,8 +903,9 @@ def project_shape(work, ports):
     leak = work / "elsewhere" / "leak.txt"
     service = Path(service_root(str(work / "state"), PROBE_KEY))
     audit = Path(denials_path(str(work / "state")))
+    relay = Path(relay_path(str(work / "state")))   # the hook writes a denied call's request here (#2972, #2994)
     for folder in (checkout, other_checkout, outboxes[0].parent, own_inboxes[0].parent, leak.parent, service,
-                   audit.parent):
+                   audit.parent, relay):
         folder.mkdir(parents=True, exist_ok=True)
     # The gate appends to one file, so the folder and the file exist before the session starts: a mkdir inside the
     # session is a write the profile refuses, and an append to the file is the one write it allows (#2950).
@@ -914,7 +920,7 @@ def project_shape(work, ports):
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
                            checkout=str(checkout), others=[str(other_checkout)], ports=ports,
-                           config=str(config_root()), service=str(service), audit=str(audit))
+                           config=str(config_root()), service=str(service), audit=str(audit), relay=str(relay))
     return checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile
 
 
@@ -938,18 +944,19 @@ def full_turn_phase(work, cli):
         raise ProbeFailed("the resumed full turn did not return the code it was given on stdin")
 
 
-def wait_for_request(relay, deadline):
-    """The first open request of the relay, posted or not, whose request audit line exists.
+def wait_for_request(relay, deadline, sender=PERMISSION_OWNER):
+    """The first open request of `sender` in the relay, posted or not, whose request audit line exists.
 
     The poll reads both `unsent()` and the open rows, so a request an earlier pass already marked sent is still found
-    (#2970 review)."""
+    (#2970 review). The sender filter keeps the sender-cap check's open requests out of the next turn's wait (#2994)."""
     stop = time.monotonic() + deadline
     while time.monotonic() < stop:
-        queued = relay.unsent()
+        queued = [row for row in relay.unsent() if row.get("sender") == sender]
         if queued:
             return queued[0]
         named = {row.get("hash") for row in audit_rows_in(relay.directory) if row.get("event") == "request"}
-        posted = [row for row in relay.open_requests() if row.get("sent") and row["hash"] in named]
+        posted = [row for row in relay.open_requests()
+                  if row.get("sent") and row["hash"] in named and row.get("sender") == sender]
         if posted:
             return posted[0]
         time.sleep(0.5)
