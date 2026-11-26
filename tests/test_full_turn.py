@@ -4,7 +4,8 @@ The CLI is a stand-in script that records its argv, working folder, stdin and co
 Guards: the first turn creates the session and names no `--resume`; a later turn resumes it by id; the turn carries no
 tool bound, no MCP bound and no operator brief; the message reaches the CLI on stdin only; the owner's environment drops
 every operator override; the state folder keeps each project's session id; a failed turn never raises; the audit row
-holds no message and no answer.
+holds no message and no answer; a terminal holds a session that has no saved id yet; an unreadable process table
+refuses conservatively; a refusal has its own audit shape.
 """
 import importlib.util
 import json
@@ -165,6 +166,16 @@ def test_the_audit_row_holds_no_message_and_no_answer(stand_in):
     assert result.session in row
 
 
+def test_a_refused_turn_has_its_own_audit_shape():
+    """#2969 review Debt: a refusal carries an explicit flag, so a reader never takes it for a turn that ran and
+    failed for another reason."""
+    mod = fullturn()
+    row = mod.refused_audit("terminal-holds-session")
+    assert row["refused"] is True and row["failed"] is True, row
+    assert row["session"] is None and row["exit"] is None and row["chars"] == 0, row
+    assert mod.Turn(FIRST_SESSION, "answer", 0, False).audit()["refused"] is False
+
+
 def script(tmp_path, body):
     path = tmp_path / "claude-script"
     path.write_text(f"#!{sys.executable}\nimport json, os, sys, time\n" + body)
@@ -293,23 +304,70 @@ def test_a_claude_process_on_another_session_does_not_hold_this_one():
     assert mod.held_by_terminal([["claude", "--resume", "sess-other-9999"]], FIRST_SESSION) is False
 
 
-def test_no_saved_session_is_held_by_no_process():
+def test_an_open_terminal_holds_the_session_before_any_saved_id():
+    """#2969 review: a session held by a terminal is detected even before the state folder saves one. An interactive
+    claude process, one with no print flag, may hold the project's session."""
     mod = fullturn()
-    assert mod.held_by_terminal([["claude", "--resume", FIRST_SESSION]], None) is False
+    assert mod.held_by_terminal([["claude", "--resume", FIRST_SESSION]], None) is True
+    assert mod.held_by_terminal([["claude"]], None) is True
+
+
+def test_a_print_turn_holds_no_session_when_no_saved_id_exists():
+    """A `claude -p` turn is the daemon's own, never a terminal's: it holds no session without a saved id."""
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "-p", "--resume", FIRST_SESSION]], None) is False
+    assert mod.held_by_terminal([["claude", "--print"]], None) is False
+
+
+def test_the_daemons_own_operator_session_holds_no_session_with_no_saved_id():
+    """A `claude --bg`/`--name` operator session is the daemon's bounded path, not the owner's terminal (#2969)."""
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--bg", "--name", "SQUAD-OPERATOR-probe"]], None) is False
+    assert mod.held_by_terminal([["claude", "--name=SQUAD-OPERATOR-probe", "brief"]], None) is False
+
+
+def test_an_unreadable_process_table_refuses_conservatively():
+    """#2969 review: when the listing is unknown, the probe answers True so the turn is refused, never run blind."""
+    mod = fullturn()
+    assert mod.held_by_terminal(None, None) is True
+    assert mod.held_by_terminal(None, FIRST_SESSION) is True
 
 
 def test_the_live_listing_keeps_the_argument_lists_of_the_claude_processes(monkeypatch):
     mod = fullturn()
-    table = types.SimpleNamespace(stdout=f"/usr/local/bin/claude --resume {FIRST_SESSION}\n  vim notes.md\n")
+    table = types.SimpleNamespace(stdout=f"/usr/local/bin/claude --resume {FIRST_SESSION}\n  vim notes.md\n",
+                                  returncode=0)
     monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
     assert mod.live_claude_argvs() == [["/usr/local/bin/claude", "--resume", FIRST_SESSION]]
 
 
 def test_the_live_listing_drops_a_process_whose_executable_is_not_claude(monkeypatch):
     mod = fullturn()
-    table = types.SimpleNamespace(stdout=f"vim notes-claude.md {FIRST_SESSION}\ngrep claude\n/usr/bin/claude-helper --x\n")
+    table = types.SimpleNamespace(stdout=f"vim notes-claude.md {FIRST_SESSION}\ngrep claude\n/usr/bin/claude-helper --x\n",
+                                  returncode=0)
     monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
     assert mod.live_claude_argvs() == [], mod.live_claude_argvs()
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("ps"), subprocess.TimeoutExpired("ps", 10),
+                                   PermissionError("Operation not permitted")],
+                         ids=["missing", "timeout", "denied"])
+def test_the_live_listing_is_unknown_when_ps_cannot_finish(monkeypatch, error):
+    """#2969 review Blocking: a missing or hung `ps` returns the unknown marker, never a raise inside the turn."""
+    mod = fullturn()
+
+    def refuse(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(mod.subprocess, "run", refuse)
+    assert mod.live_claude_argvs() is None
+
+
+def test_the_live_listing_is_unknown_when_ps_exits_nonzero(monkeypatch):
+    mod = fullturn()
+    table = types.SimpleNamespace(stdout="", returncode=1)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
+    assert mod.live_claude_argvs() is None
 
 
 def test_a_script_whose_name_contains_claude_does_not_hold_the_session():

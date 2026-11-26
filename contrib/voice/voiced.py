@@ -2624,11 +2624,12 @@ class Daemon:
                                                  registry=self.live_turns, user=record.get("user"))
             finally:
                 self.turn_order.leave(repo)
-        except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
+        except Exception as x:   # noqa: BLE001 - a worker thread has no caller: a raise would lose the message with no trace
             self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
+        row = fullturn.refused_audit("terminal-holds-session") if held else turn.audit()
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
-                                 **{**turn.audit(), "reason": "terminal-holds-session" if held else turn.reason}})
+                                 **row})
         if not self.channel_accepts_answer(record.get("channel")):
             self.log(f"voiced: full turn in {record.get('channel')} kept: the channel is listen only")
             return
