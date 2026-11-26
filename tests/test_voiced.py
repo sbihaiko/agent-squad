@@ -3031,7 +3031,7 @@ def hub_registry(tmp_path, owners, grants=None):
     return lambda entry: str(path)
 
 
-def full_daemon(tmp_path, mod, owner, owners, revision=True):
+def full_daemon(tmp_path, mod, owner, owners, revision=True, registry=None, configs=None):
     state = mod.State(str(tmp_path))
     state.save_channels({FULL_REPO: {"id": FULL_CHANNEL}})
     if revision:
@@ -3039,7 +3039,23 @@ def full_daemon(tmp_path, mod, owner, owners, revision=True):
         state.save_active_revision(FULL_REPO, {"repo": FULL_REPO, "sha": "a" * 40, "revision": committed,
                                                "local": local})
     return mod.Daemon(state=state, owner=owner, transcriber=None, downloader=None, log=lambda line: None,
-                      registry=hub_registry(tmp_path, owners))
+                      registry=registry or hub_registry(tmp_path, owners), configs=configs)
+
+
+def state_registries(tmp_path, by_state):
+    """A registry seam shaped like the production one: it resolves a path from the entry's state directory, so two
+    configured projects hold two different registries and a later row never answers for an earlier project."""
+    paths = {}
+    for state, owners in by_state.items():
+        path = tmp_path / f"registry-{state}.json"
+        path.write_text(json.dumps({"owners": owners, "grants": []}))
+        paths[state] = path
+
+    def seam(entry):
+        state = str((entry or {}).get("state") or "")
+        return str(paths[state]) if state in paths else ""
+
+    return seam
 
 
 def owner_event(user=OWNER, channel=FULL_CHANNEL, channel_type=None):
@@ -3078,3 +3094,33 @@ def test_a_full_decision_in_a_channel_with_no_active_revision_runs_bounded(tmp_p
     mod = voiced()
     daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: OWNER}, revision=False)
     assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_project_channels_owner_comes_from_its_own_projects_registry(tmp_path):
+    """The owner of a project channel comes from that project's registry, even when another configured project's
+    registry names a different owner for the same workspace and sits earlier in the configs list."""
+    mod = voiced()
+    seam = state_registries(tmp_path, {"acme": {FULL_TEAM: OWNER}, "other": {FULL_TEAM: "U0OTHER001"}})
+    configs = [{"repo": "other/app", "state": "other"}, {"repo": FULL_REPO, "state": "acme"}]
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=seam, configs=lambda: configs)
+    assert daemon.policy_decision(owner_event()).session == "full"
+
+
+def test_a_direct_message_reads_every_configured_projects_registry(tmp_path):
+    """A DM owns no project, so the first configured registry that names the workspace answers its owner."""
+    mod = voiced()
+    seam = state_registries(tmp_path, {"acme": {FULL_TEAM: OWNER}, "other": {"T0ELSE0001": "U0OTHER001"}})
+    configs = [{"repo": "other/app", "state": "other"}, {"repo": FULL_REPO, "state": "acme"}]
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={}, registry=seam, configs=lambda: configs)
+    assert daemon.workspace_owner(FULL_TEAM, None) == OWNER
+    assert daemon.policy_decision(owner_event(channel_type="im")).session == "bounded"
+
+
+def test_a_dm_that_owns_no_project_reaches_the_baseline_policy_with_no_crash(tmp_path):
+    """The blocking regression: a DM channel the state names no project for falls through the baseline policy, whose
+    owner lookup must not raise, and the owner's DM still runs bounded."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER})
+    event = {"channel": "D0NOPROJ", "user": OWNER, "team": FULL_TEAM, "channel_type": "im",
+             "text": "hello", "ts": "1762500200.000100"}
+    assert daemon.policy_decision(event).session == "bounded"

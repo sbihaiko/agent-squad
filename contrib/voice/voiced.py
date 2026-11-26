@@ -1803,17 +1803,20 @@ class Daemon:
     def workspace_owner(self, workspace, repo=None):
         """The owner user id the hub registry names for one Slack workspace, or None when it names none (#2966).
 
-        A project channel reads its own project's registry. A direct message owns no project, so every configured
-        project's registry is read and the first one that names the workspace answers. No other source names an owner.
+        A project channel reads its own project's registry first, then the other configured projects'. A direct message
+        owns no project, so every configured project's registry is read and the first one that names the workspace
+        answers. No other source names an owner.
         """
         workspace = str(workspace or "")
         if not workspace or self.registry is None:
             return None
+        rows = list(self.configs() or ()) if self.configs is not None else []
         entries = []
         if repo:
-            entries.append({"repo": repo})
-        if self.configs is not None:
-            entries.extend(list(self.configs() or ()))
+            own = next((row for row in rows
+                        if str((row or {}).get("repo") or "").strip() == repo), None)
+            entries.append(own or {"repo": repo})
+        entries.extend(rows)
         entries.append({"repo": None})
         seen = set()
         for entry in entries:
