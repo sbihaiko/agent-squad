@@ -58,6 +58,13 @@ def test_a_value_that_is_not_a_slack_user_id_is_refused_and_writes_nothing(hub, 
     assert not exists(hub)
 
 
+def test_a_value_that_is_not_a_slack_workspace_id_is_refused_and_writes_nothing(hub, state):
+    """A registry key no event can match is a silent failure, so the route refuses a workspace that is not an id."""
+    out = hub.slack_owner_post({"workspace": "acme", "user": OWNER})
+    assert "err" in out, out
+    assert not exists(hub)
+
+
 def test_a_read_names_the_owner_the_registry_holds(hub, state):
     hub.slack_owner_post({"workspace": TEAM, "user": OWNER})
     out = hub.slack_owner_post({"workspace": TEAM})
