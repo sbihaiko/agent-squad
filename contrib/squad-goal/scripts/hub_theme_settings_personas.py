@@ -153,3 +153,88 @@ def personas_edit(body):
     refused = [r for r in rows if r["result"].startswith("refused:")]
     # No `err` key on a success: the write routes answer 400 on a body that carries one (#3011).
     return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused)}
+
+
+def _pr_holding_clients(clients, project_id):
+    """One `(client id, default persona id)` for each client of the map that holds the project, so a client of another
+    project never answers a holder and never blocks the removal (#3014)."""
+    out = []
+    for client in clients or ():
+        held = any(_slack_text((entry or {}).get("id")).strip() == project_id
+                   for entry in client.get("projects") or ())
+        default = _slack_text((client.get("default_persona") or {}).get("id")).strip()
+        if held and default:
+            out.append((client["id"], default))
+    return out
+
+
+def personas_remove(body):
+    """POST /api/personas/remove: one persona removed from the target projects the body names. Without `confirm` it is
+    the preview: the hub asks the policy module for each project's holders of the persona, builds the committed
+    document without its row through the rules module, and calls that project's save path with no confirm, so the
+    answer names each file and the diff, and writes nothing. A project whose files or clients name the persona is
+    refused, and the refusal names every holder. On confirm each project is written, committed and landed from its own
+    worktree, and one refused project never stops the others."""
+    if not isinstance(body, dict):
+        return {"err": "bad request"}
+    pid = _slack_text(body.get("persona")).strip()
+    if not pid:
+        return {"err": "persona: a body that names one persona id"}
+    targets = body.get("projects")
+    if not isinstance(targets, list) or not targets:
+        return {"err": "projects: a body that names at least one project"}
+    try:
+        P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}"}
+    seats, rerr = _slack_roster_checked(0.0)   # a save always reads the roster fresh, never a cached one
+    if rerr:
+        return {"err": rerr}
+    clients = _clients_map_read()[0]
+    try:
+        PS = personas_module()
+    except Exception as e:
+        print(f"hub: the persona module did not resolve: {type(e).__name__}: {e}", file=sys.stderr)
+        return {"err": "the persona rules are unavailable"}
+    by_id = {s["id"]: s for s in seats}
+    holders = {}
+    for target in targets:
+        seat = by_id.get(_slack_text(target).strip())
+        if seat is None:
+            continue
+        holders[seat["id"]] = P.persona_holders(
+            pid, seat.get("committed"), seat.get("local"),
+            clients=_pr_holding_clients(clients, seat["id"]),
+            files=(seat.get("cf") or "slack.yaml", seat.get("lf") or "slack.local.yaml"))
+    try:
+        plan = PS.remove(seats, pid, targets, holders)
+    except Exception as e:
+        print(f"hub: the persona removal could not be planned: {type(e).__name__}: {e}", file=sys.stderr)
+        return {"err": "the persona removal could not be planned"}
+    writes = {w["project"]: w for w in plan["writes"]}
+    confirm = body.get("confirm") is True
+    rows, saved = [], []
+    for row in plan["rows"]:
+        write = writes.get(row["project"])
+        if write is None:
+            rows.append(row)
+            continue
+        seat = by_id[row["project"]]
+        name = row["result"][len("removes "):] if row["result"].startswith("removes ") else pid
+        payload = {"committed": write["committed"], "local": _slack_read_doc(seat["local_path"])}
+        if confirm:
+            payload["confirm"] = True
+        out = slack_files_set(payload, committed=seat["committed_path"], local=seat["local_path"],
+                              loop=seat["checkout"], name=seat["id"])
+        files = out.get("files") or {}
+        result = (_pr_save_result(out, name) if confirm
+                  else (row["result"] if not out.get("err") else f"refused: {out['err']}"))
+        rows.append({**row, "file": files.get("committed") or row["file"], "result": result,
+                     "diff": out.get("diff")})
+        if confirm and not out.get("err"):
+            saved.append({"project": row["project"], "sha": out.get("sha")})
+    if confirm:
+        _slack_roster_clear()   # a write changed a project's files, so the next read reads the roster fresh
+    refused = [r for r in rows if r["result"].startswith("refused:")]
+    # No `err` key on a success: the write routes answer 400 on a body that carries one (#3011).
+    return {"persona": pid, "rows": rows, "confirm": confirm, "saved": saved, "partial": bool(refused)}

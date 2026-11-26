@@ -847,6 +847,43 @@ def persona_named(committed, local, name):
     return None
 
 
+def _place_label(row):
+    """The label a holder states for one workspace or channel row: its `label` when it has one, else its `id`."""
+    return str(row.get("label") or row.get("name") or row.get("id") or "").strip()
+
+
+def persona_holders(persona_id, committed, local, clients=(), files=("slack.yaml", "slack.local.yaml")):
+    """Every place of the project's two files that names one persona id, one string each: `client "<id>" default`,
+    `project in <file>`, `workspace "<label>" in <file>`, and
+    `channel "<label>" of workspace "<label>" in <file>`.
+
+    `clients` is one `(client id, default persona id)` for each client that holds the project, so a client of another
+    project never answers a holder; `files` names the committed file first and the local file second. Each file reads
+    its project row before its workspaces, and a workspace before its channels. An id no place names answers no
+    holder, so a removal of it is never refused (ADR-0177)."""
+    wanted = str(persona_id or "").strip()
+    if not wanted:
+        return []
+    out = []
+    for client_id, default in clients or ():
+        if str(default or "").strip() == wanted:
+            out.append(f'client "{str(client_id or "").strip()}" default')
+    cf, lf = files
+    for doc, file in ((committed if isinstance(committed, dict) else {}, cf),
+                      (local if isinstance(local, dict) else {}, lf)):
+        project = doc.get("project")
+        if isinstance(project, dict) and str(project.get("persona") or "").strip() == wanted:
+            out.append(f"project in {file}")
+        for workspace in _rows(doc.get("workspaces")):
+            label = _place_label(workspace)
+            if str(workspace.get("persona") or "").strip() == wanted:
+                out.append(f'workspace "{label}" in {file}')
+            for channel in _rows(workspace.get("channels")):
+                if str(channel.get("persona") or "").strip() == wanted:
+                    out.append(f'channel "{_place_label(channel)}" of workspace "{label}" in {file}')
+    return out
+
+
 def persona_with_id(committed, local, persona_id):
     """The persona an id declares, or None. An outbox line names its persona by id, and the row comes from the
     committed file, then the local file. A channel persona and this one differ, so a line answers under its own."""

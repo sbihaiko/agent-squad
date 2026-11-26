@@ -111,6 +111,68 @@ def with_fields(doc, persona_id, fields):
     return None
 
 
+def without(doc, persona_id):
+    """The committed document with the row of one persona id removed, and every other row and key in its place. None
+    when the document declares no persona with that id: a persona only the local file declares is read-only."""
+    rows = _doc(doc).get("personas")
+    pid = _text(persona_id).strip()
+    kept = [row for row in (rows if isinstance(rows, list) else ())
+            if not (isinstance(row, dict) and _text(row.get("id")).strip() == pid)]
+    if len(kept) == len(rows if isinstance(rows, list) else ()):
+        return None
+    out = copy.deepcopy(_doc(doc))
+    out["personas"] = copy.deepcopy(kept)
+    return out
+
+
+def remove(seats, persona_id, targets, holders=None):
+    """The plan of one persona removal: one row for each target project, and the committed document a confirmed save
+    writes into each project it can remove the persona from.
+
+    `holders` maps a project id to the places its files and its clients name the persona, from the policy module. A
+    target with any holder is refused, and the refusal names every holder. A target the roster does not hold, a project
+    with no worktree, a file whose read answered a defect, and a project whose committed file does not declare the id
+    are each refused by name. Every other target reads "removes <name>" and carries its document, so one refused
+    project never stops the others."""
+    pid = _text(persona_id).strip()
+    held = holders or {}
+    by_id = {}
+    for seat in seats or ():
+        sid = _text(seat.get("id")).strip()
+        if sid and sid not in by_id:
+            by_id[sid] = seat
+    rows, writes = [], []
+    known = next((_declared_name(s.get("committed"), pid) for s in (seats or ())
+                  if _declared_name(s.get("committed"), pid)), "")
+    for target in targets or ():
+        tid = _text(target).strip()
+        seat = by_id.get(tid)
+        label = (_text(seat.get("label")) or tid) if seat else tid
+        row = {"project": tid, "label": label, "file": _text(seat.get("cf")) if seat else ""}
+        if seat is None:
+            rows.append({**row, "result": "refused: the project is not in the roster"})
+            continue
+        if not _text(seat.get("checkout")).strip():
+            rows.append({**row, "result": "refused: the project has no worktree"})
+            continue
+        defects = list(seat.get("read_defects") or ())
+        if defects:
+            rows.append({**row, "result": f"refused: the file does not read: {_text(defects[0])}"})
+            continue
+        changed = without(seat.get("committed"), pid)
+        name = _declared_name(seat.get("committed"), pid) or known or pid
+        if changed is None:
+            rows.append({**row, "result": f"refused: {name} is not declared in this project's committed file"})
+            continue
+        places = [str(place) for place in (held.get(tid) or ()) if _text(place).strip()]
+        if places:
+            rows.append({**row, "result": f"refused: held by {'; '.join(places)}"})
+            continue
+        rows.append({**row, "result": f"removes {name}"})
+        writes.append({"project": tid, "committed": changed})
+    return {"rows": rows, "writes": writes}
+
+
 def edit(seats, persona_id, fields, targets):
     """The plan of one persona edit: one row for each target project, and the committed document a confirmed save writes
     into each project it can write.

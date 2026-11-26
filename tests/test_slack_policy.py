@@ -748,3 +748,70 @@ def test_a_full_decision_in_a_guest_channel_runs_bounded():
     decision = S.decide(committed, local, event, NOW)
     assert decision.kind == S.PROPOSAL
     assert decision.session == S.SESSION_BOUNDED
+
+
+# ---------------------------------------------------------------- the holders of a persona (#3014)
+
+def test_the_holders_of_a_persona_name_each_place_of_both_files():
+    """#3014 acceptance 1: the policy module answers every place of the project's two files that names the persona, the
+    project row, a workspace and a channel, each with its file."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local) == [
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_channel_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 2: a channel of either file holds the persona it names."""
+    committed, local = files()
+    local["workspaces"][0]["channels"][0]["persona"] = "iara"
+    assert 'channel "support" of workspace "client-a" in slack.local.yaml' in S.persona_holders(
+        "iara", committed, local)
+
+
+def test_a_workspace_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 3: a workspace of either file holds the persona it names."""
+    committed, local = files()
+    assert 'workspace "client-a" in slack.local.yaml' in S.persona_holders("iara", committed, local)
+
+
+def test_a_project_row_of_the_local_file_holds_the_persona_it_names():
+    """#3014 acceptance 4: a project row of either file holds the persona it names."""
+    committed, local = files()
+    local["project"] = {"persona": "iara"}
+    assert "project in slack.local.yaml" in S.persona_holders("iara", committed, local)
+
+
+def test_a_client_default_of_a_client_that_holds_the_project_names_the_persona():
+    """#3014 acceptance 5: the default of a client that holds the project holds the persona, and the holder names the
+    client."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local, clients=[("acme", "hal")]) == [
+        "client \"acme\" default",
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_client_default_of_another_persona_never_answers_a_holder():
+    """#3014 acceptance 7: the caller passes the clients that hold the project alone, and one whose default is another
+    persona answers no holder."""
+    committed, local = files()
+    assert S.persona_holders("hal", committed, local, clients=[("acme", "iara")]) == [
+        "project in slack.yaml",
+        'workspace "team" in slack.yaml',
+        'channel "proj-agent-squad" of workspace "team" in slack.yaml',
+    ]
+
+
+def test_a_persona_no_place_names_answers_no_holder():
+    committed, local = files()
+    assert S.persona_holders("ghost", committed, local) == []
+
+
+def test_the_holder_answer_trims_the_persona_id():
+    committed, local = files()
+    assert "project in slack.yaml" in S.persona_holders("  hal  ", committed, local)
