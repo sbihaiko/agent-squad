@@ -192,8 +192,9 @@ def measure(state, cli, work, target, deadline, timeout, bounded=True):
         path.touch()
     watch = MonitorWatch(inbox)
     watch.start()
-    sid = start_session(cli, work, state, inbox, outbox, timeout, bounded=bounded)
+    sid = None
     try:
+        sid = start_session(cli, work, state, inbox, outbox, timeout, bounded=bounded)
         if wait_for(outbox, lambda r: r.get("text") == "armed", timeout) is None:
             raise ProbeFailed("the session never armed its Monitor")
         ts = f"{time.time():.6f}"                    # one Slack-shaped ts: epoch seconds with microseconds
@@ -214,7 +215,7 @@ def measure(state, cli, work, target, deadline, timeout, bounded=True):
         monitor_seconds = (watch.seen() - sent_ns) / 1e9
     finally:
         watch.stop()
-        stop_session(cli, sid, outbox, timeout)
+        stop_session(cli, sid or "", outbox, timeout)
     return monitor_seconds, session_seconds
 
 

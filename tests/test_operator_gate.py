@@ -203,6 +203,21 @@ def test_monitor_denies_any_other_command(tmp_path):
 
 # Criteria 4 and 5: Read only inside the project checkout, minus the secret list.
 
+def test_the_bounded_profile_denies_every_write_to_the_hub_registry(tmp_path):
+    """The hub registry holds the grants of `full`, so no bounded session reads it or writes it (#2971)."""
+    tree_ = tree(tmp_path)
+    registry = Path(tree_["audit"]).parent.parent / "slack-saved.json"
+    registry.write_text("{}")
+    probes = [read_event(registry),
+              bash_event(f"echo '{{}}' > {registry}"),
+              bash_event(f"cp /dev/null {registry}"),
+              bash_event(f"python3 -c 'open({str(registry)!r}, \"w\")'")]
+    for event in probes:
+        allowed, reason, _ = call(run(tmp_path, tree_, event))
+        assert not allowed, f"the bounded profile allowed {event} ({reason})"
+    assert registry.read_text() == "{}", "a denied call still wrote the registry"
+
+
 def test_read_allows_a_path_inside_the_project_checkout(tmp_path):
     tree_ = tree(tmp_path)
     inside = Path(tree_["checkout"]) / "README.md"
