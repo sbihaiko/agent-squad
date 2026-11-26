@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -275,3 +276,30 @@ def test_turns_of_one_project_run_in_the_order_they_arrived():
     for thread in threads:
         thread.join(10)
     assert ran == tickets, ran
+
+
+def test_a_live_claude_process_that_names_the_session_holds_it():
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--resume", FIRST_SESSION]], FIRST_SESSION) is True
+
+
+def test_a_process_that_names_the_session_but_is_not_claude_does_not_hold_it():
+    mod = fullturn()
+    assert mod.held_by_terminal([["vim", FIRST_SESSION]], FIRST_SESSION) is False
+
+
+def test_a_claude_process_on_another_session_does_not_hold_this_one():
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--resume", "sess-other-9999"]], FIRST_SESSION) is False
+
+
+def test_no_saved_session_is_held_by_no_process():
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--resume", FIRST_SESSION]], None) is False
+
+
+def test_the_live_listing_keeps_the_argument_lists_of_the_claude_processes(monkeypatch):
+    mod = fullturn()
+    table = types.SimpleNamespace(stdout=f"/usr/local/bin/claude --resume {FIRST_SESSION}\n  vim notes.md\n")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
+    assert mod.live_claude_argvs() == [["/usr/local/bin/claude", "--resume", FIRST_SESSION]]

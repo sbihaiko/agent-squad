@@ -55,21 +55,21 @@ def full_revision(tmp_path, mod, channel, row, mode="listen+speak"):
     mod.State(str(tmp_path)).save_active_revision(REPO, {"repo": REPO, "sha": SHA, "revision": committed, "local": local})
 
 
-def daemon_for(tmp_path, mod, checkout, client, cli):
+def daemon_for(tmp_path, mod, checkout, client, cli, live=lambda: []):
     """The production shape (#2965 review): `projects` lists repository names (`hub_repos`), and `configs` lists the
     rows that carry each checkout (`hub_projects`)."""
     return mod.Daemon(state=mod.State(str(tmp_path)), owner=OWNER, transcriber=FakeTranscriber(),
                       downloader=lambda url: b"", log=lambda line: None, client=client,
-                      projects=lambda: [REPO], configs=lambda: [project(checkout)], full_cli=cli)
+                      projects=lambda: [REPO], configs=lambda: [project(checkout)], full_cli=cli, live_argvs=live)
 
 
-def setup(tmp_path, stand, row, mode="listen+speak", cli=None):
+def setup(tmp_path, stand, row, mode="listen+speak", cli=None, live=lambda: []):
     mod = voiced()
     client = FakeClient()
     channel = _project_channel(tmp_path, mod, client)
     full_revision(tmp_path, mod, channel, row, mode)
     checkout = stand["checkout"]
-    return mod, client, channel, daemon_for(tmp_path, mod, checkout, client, cli or stand["claude"])
+    return mod, client, channel, daemon_for(tmp_path, mod, checkout, client, cli or stand["claude"], live)
 
 
 def deliver(daemon, channel, text, ts="1762500100.000100", user=OWNER):
@@ -345,3 +345,26 @@ def test_each_stop_writes_one_audit_line(tmp_path, stand_in, monkeypatch):
     assert row["user"] == OWNER and row["role"] == "manager" and row["channel"] == channel, row
     assert row["ended"] is True, row
     assert "slow" not in json.dumps(row), row
+
+
+def test_a_terminal_that_holds_the_session_refuses_the_turn_and_names_the_reason(tmp_path, stand_in):
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"))
+    deliver(daemon, channel, "first", ts="1762500100.000100")
+    daemon.live_argvs = lambda: [["claude", "--resume", FIRST_SESSION]]
+    deliver(daemon, channel, "second", ts="1762500101.000100")
+    assert len(calls(stand_in)) == 1, calls(stand_in)
+    posts = [p for p in client.posts() if p.get("channel") == channel and p.get("thread_ts") == "1762500101.000100"]
+    assert len(posts) == 1 and posts[0]["text"] == mod.FULL_HELD, client.posts()
+    rows = [r for r in lines(daemon.state.audit_path) if r.get("decision") == "full"]
+    assert rows[-1]["reason"] == "terminal-holds-session" and rows[-1]["failed"] is True, rows
+
+
+def test_a_turn_runs_once_the_terminal_closes(tmp_path, stand_in):
+    mod, client, channel, daemon = setup(tmp_path, stand_in, role("full"))
+    deliver(daemon, channel, "first", ts="1762500100.000100")
+    daemon.live_argvs = lambda: [["claude", "--resume", FIRST_SESSION]]
+    deliver(daemon, channel, "while open", ts="1762500101.000100")
+    daemon.live_argvs = lambda: []
+    deliver(daemon, channel, "after close", ts="1762500102.000100")
+    assert len(calls(stand_in)) == 2, calls(stand_in)
+    assert calls(stand_in)[1]["stdin"].strip() == "after close", calls(stand_in)

@@ -107,6 +107,15 @@ def owner_env(environ):
     return {key: value for key, value in environ.items() if key not in OPERATOR_OVERRIDES}
 
 
+def live_claude_argvs():
+    listing = subprocess.run(["ps", "-axww", "-o", "args="], capture_output=True, text=True, timeout=10).stdout
+    return [line.split() for line in listing.splitlines() if "claude" in line]
+
+
+def held_by_terminal(argvs, session):
+    return bool(session) and any(session in args and any("claude" in token for token in args) for args in argvs)
+
+
 def argv(claude, session):
     command = [claude, "-p"]
     if session:
