@@ -2981,3 +2981,79 @@ def test_the_first_owner_dm_starts_the_dm_session(tmp_path):
     assert started == ["dm"], started
     record = Path(daemon.state.dir) / "operators" / "sessions" / "dm.json"
     assert json.loads(record.read_text())["dm"] == "D0OWNER", record.read_text()
+
+
+# --- the full session's owner comes from the hub registry, never the daemon's setting (#2966) --------------
+FULL_REPO = "acme/app"
+FULL_TEAM = "T0TEAM0001"
+FULL_CHANNEL = "C0FULLPROJ"
+
+
+def full_revision():
+    """An active revision whose one `session: full` role has its member in the project channel."""
+    committed = {
+        "version": 1,
+        "project": {"language": "en-US"},
+        "roles": [{"id": "manager", "actions": ["status"], "session": "full"}],
+        "workspaces": [{"id": FULL_TEAM, "class": "owned", "channels": [
+            {"id": FULL_CHANNEL, "name": "proj-acme-app", "mode": "listen+speak", "roles": ["manager"]}]}],
+    }
+    local = {"version": 1, "members": [
+        {"workspace": FULL_TEAM, "channel": FULL_CHANNEL, "role": "manager", "users": [OWNER]}]}
+    return committed, local
+
+
+def hub_registry(tmp_path, owners, grants=None):
+    """The hub's registry of one project, holding the owner id of each workspace."""
+    path = tmp_path / "slack-saved.json"
+    path.write_text(json.dumps({"owners": owners, "grants": list(grants or [])}))
+    return lambda entry: str(path)
+
+
+def full_daemon(tmp_path, mod, owner, owners, revision=True):
+    state = mod.State(str(tmp_path))
+    state.save_channels({FULL_REPO: {"id": FULL_CHANNEL}})
+    if revision:
+        committed, local = full_revision()
+        state.save_active_revision(FULL_REPO, {"repo": FULL_REPO, "sha": "a" * 40, "revision": committed,
+                                               "local": local})
+    return mod.Daemon(state=state, owner=owner, transcriber=None, downloader=None, log=lambda line: None,
+                      registry=hub_registry(tmp_path, owners))
+
+
+def owner_event(user=OWNER, channel=FULL_CHANNEL, channel_type=None):
+    event = {"channel": channel, "user": user, "team": FULL_TEAM, "text": "status please", "ts": "1762500100.000100"}
+    if channel_type:
+        event["channel_type"] = channel_type
+    return event
+
+
+def test_the_full_session_owner_is_the_one_the_hub_registry_names(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=None, owners={FULL_TEAM: OWNER})
+    assert daemon.policy_decision(owner_event()).session == "full"
+
+
+def test_the_daemon_owner_setting_never_grants_the_full_session(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: "U0BOSS0001"})
+    assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_full_role_with_no_owner_in_the_registry_runs_bounded(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={})
+    assert daemon.policy_decision(owner_event()).session == "bounded"
+
+
+def test_a_full_decision_in_a_direct_message_runs_bounded(tmp_path):
+    """The direct-message flag alone keeps the session bounded, even when the owner and an active revision agree."""
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: OWNER})
+    assert daemon.policy_decision(owner_event(channel_type="im")).session == "bounded"
+
+
+def test_a_full_decision_in_a_channel_with_no_active_revision_runs_bounded(tmp_path):
+    mod = voiced()
+    daemon = full_daemon(tmp_path, mod, owner=OWNER, owners={FULL_TEAM: OWNER}, revision=False)
+    assert daemon.policy_decision(owner_event()).session == "bounded"
