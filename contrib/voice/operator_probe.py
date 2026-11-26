@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prove the operator session's tool set and kernel bound with the real `claude` CLI (#1619, #1656, #2925).
 
-Two phases, one command. Every call runs through contrib/squad-goal/scripts/claude-sandboxed.sh with the profile this
-probe writes. The profile is the one a live project session runs under: it writes the outbox of each channel of one
+Two phases, one command. Each call that starts a bounded session runs through contrib/squad-goal/scripts/claude-sandboxed.sh
+with the profile this probe writes; a full turn runs outside it and proves its resume and its stdin (ADR-0180). The profile is the one a live project session runs under: it writes the outbox of each channel of one
 project, reads the inbox of each of them, and nothing else of the inbox folder. The denials come first: a write outside
 those outboxes, a read of another project's inbox, a read of a secret or another project's checkout (#2951) and a foreign
 host on port 443 must each fail, while a write into each own outbox and a read of each own inbox must pass. Then one
