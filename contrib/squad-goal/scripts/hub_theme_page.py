@@ -591,6 +591,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:var(--bg);min-h
 #tab-set #prbody .prfile{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--mute);font-weight:400}   /* the file reads as a chip, as the Slack theme draws it, so the reader tells a name from the file it lives in */
 #tab-set #prbody .pflag{display:inline-block;margin:0 4px 2px 0;padding:0 7px;border-radius:var(--radius-lg);border:1px solid var(--line);color:var(--mute);font-size:var(--fs-caption);font-weight:600}
 #tab-set #prbody .pflag.err{border-color:var(--tint-err-line);background:var(--tint-err);color:var(--err)}
+#tab-set #prbody .prf{display:block;margin:0 0 8px}#tab-set #prbody .prf input[type=checkbox]{margin-right:4px}
+#tab-set #prbody .prbar{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
 @media (max-width:600px){#tab-set #prbody .ptab,#tab-set #prbody .ptab tbody,#tab-set #prbody .ptab tr{display:block}#tab-set #prbody .ptab thead{display:none}#tab-set #prbody .ptab tr{padding:6px 0;border-bottom:1px solid var(--line)}#tab-set #prbody .ptab td{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;border:0;padding:2px 0}#tab-set #prbody .ptab td[data-l]::before{content:attr(data-l);color:var(--mute);font-weight:600}#tab-set #prbody .ptab .nw{white-space:normal}}   /* a phone stacks each field under its own label, so no column is clipped and no word is cut (#3010) */
 /* A phone forced into the desktop view (#926): one column, a full-width sidebar, and nothing wider than 390 px. The docked
    board lays the window out as a two-column grid of its own (`body.dockb`), so the phone states both layouts: on a 390 px
@@ -2149,30 +2151,86 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
  if(b.dataset.slevrm!==undefined){slEvRemove(+b.dataset.slevrm);slD=null;slRender()}
  else if(b.id==="slevadd"){if(slEvAdd($("#slevnew").value)){slD=null;slRender()}}
  });
-/* Settings > Personas (SPEC 3009, #3010): the personas of every roster project, grouped by client and merged by id
-   inside a client. The view constructs, binds and delegates: the hub merges the rows and answers them at /api/personas,
-   and the view holds no rule (ADR-0137). Nothing here is editable. */
+/* Settings > Personas (SPEC 3009, #3010, #3011): the personas of every roster project, grouped by client and merged by
+   id inside a client. The view constructs, binds and delegates: the hub merges the rows and answers them at /api/personas,
+   and the view holds no rule (ADR-0137). An edit stages in the page and posts the persona id, the changed fields and the
+   target projects; the preview posts with no confirm and writes nothing, and the confirm is the theme's one write. The
+   theme never saves by itself. */
 // PRS{
-let prS=null,prMsg="";
+let prS=null,prMsg="",prEd=null,prPlan=null,prPMsg="";
 async function prLoad(){try{prS=await (await fetch("/api/personas")).json();prMsg=prS.err?"!"+prS.err:""}catch(e){prMsg="!load failed"}prRender()}
 const prTxt=t=>esc(t==null?"":String(t));
 const prPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
+const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks after a dot, never inside a word
+const prRows=()=>((prS||{}).groups||[]).flatMap(g=>g.rows||[]);
+const prRowAt=id=>prRows().find(r=>String(r.id)===String(id))||null;
+function prStartEdit(id){const r=prRowAt(id);if(!r||r.read_only)return;
+ prEd={id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
+ prPlan=null;prPMsg="";prRender()}
+function prStopEdit(){prEd=null;prPlan=null;prPMsg="";prRender()}
+function prBody(confirm){return JSON.stringify({persona:prEd.id,fields:{name:prEd.name,voice:prEd.voice,tone:prEd.tone},
+ projects:prEd.projects,confirm:!!confirm})}
+async function prPost(confirm){if(!prEd)return;
+ prPMsg=confirm?"saving":"reading the preview";prPlan=null;prRender();
+ try{const d=await(await fetch("/api/personas",{method:"POST",headers:{"Content-Type":"application/json"},body:prBody(confirm)})).json();
+  if(d.err)prPMsg="!"+d.err;
+  else if(confirm){prPMsg=d.partial?"saved: some projects were refused":"saved: each project wrote and pushed";prEd=null;prRender();prLoad();return}
+  else{prPlan=d;prPMsg=d.partial?"the preview names each refused project":"the preview writes nothing"}
+ }catch(e){prPMsg="!the edit could not be posted"}
+ prRender()}
+async function prSample(){if(!prEd)return;
+ prPMsg="the sample is being made";prRender();
+ try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice:prEd.voice,tone:prEd.tone})})).json();
+  if(r.err)prPMsg="!"+r.err;
+  else{prPMsg=r.cached?"the same voice and tone: the cached sample plays":"a new voice and tone: the sample is made once and cached now";
+   try{const a=new Audio(r.url),p=a.play();
+    if(p&&p.catch)p.catch(()=>{prPMsg="the browser refused the sound: press Play"})}catch(x){}}}
+ catch(x){prPMsg="!the sample could not be fetched"}
+ prRender()}
+function prPlanHtml(){const rows=((prPlan||{}).rows)||[];if(!rows)return"";
+ return `<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
+  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
+function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
+ const limit=max==null?"the policy's":prTxt(max);
+ return `<section class=prgrp id=predit><h4>Edit ${prTxt(d.name)}</h4>`
+ +`<label class=prf>Name <input id=prname value="${esc(d.name)}"></label>`
+ +`<label class=prf>Voice <select id=prvoice>${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
+ +`<label class=prf>Tone <input id=prtone value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`
+ +`<fieldset class=prf><legend>Projects</legend>${(d.all||[]).map(p=>`<label><input type=checkbox data-prproj="${prTxt(p.id)}"${d.projects.includes(p.id)?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
+ +`<div class=prbar><button data-predit-preview>Preview</button> <button data-predit-sample>Play sample</button> <button data-predit-confirm>Confirm</button> <button data-predit-cancel>Cancel</button></div>`
+ +(prPMsg?`<p class="mx" role=status>${prTxt(prPMsg.replace(/^!/,""))}</p>`:"")+prPlanHtml()+`</section>`}
 function prRow(r){
  const cell=(label,body)=>`<td data-l="${label}"><span class=pv>${body}</span></td>`;   // one item for the value: a bare text node would take the label's own grid cell
- const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks after a dot, never inside a word
  const projects=(r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;";
  const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
+ const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}">Edit</button>`;   // a local-only persona is read-only
  return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
  +cell("Voice",`<span class=nw>${prTxt(r.voice)||"&mdash;"}</span>`)+cell("Tone",prTxt(r.tone)||"&mdash;")
- +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)+"</tr>"}
+ +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)
+ +cell("Edit",edit)+"</tr>"}
 function prRender(){const el=$("#prbody");if(!el)return;
  const groups=((prS||{}).groups||[]).filter(g=>(g.rows||[]).length),rows=groups.reduce((n,g)=>n+g.rows.length,0);
  const txt=rows?`${prPlural(rows,"persona")} · ${prPlural(groups.length,"client")}`:"no persona";
  for(const sel of ["#prsnav","#prssr"]){const el=$(sel);if(el)el.textContent=txt}   // the nav line and the panel's own chip read one text
  const ban=prMsg?`<p class="mx err" role=status>${prTxt(prMsg.replace(/^!/,""))}</p>`:"";
- el.innerHTML=ban+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th></tr></thead><tbody>${g.rows.map(prRow).join("")}</tbody></table></section>`).join("")
+ el.innerHTML=ban+prEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(prRow).join("")}</tbody></table></section>`).join("")
   :`<p class=m>${prTxt("No persona: no roster project declares one.")}</p>`)}
 // }PRS
+/* The Personas editor's own events (#3011): a field stages its value and posts nothing, so no edit of the theme writes
+   before the confirm. The preview and the confirm are the two buttons that post, and the confirm is the one write. */
+$("#prbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const dt=b.dataset||{};
+ if(dt.predit){prStartEdit(dt.predit);return}
+ if(dt.preditPreview!==undefined){prPost(false);return}
+ if(dt.preditConfirm!==undefined){prPost(true);return}
+ if(dt.preditSample!==undefined){prSample();return}
+ if(dt.preditCancel!==undefined){prStopEdit()}});
+$("#prbody").addEventListener("input",e=>{if(!prEd)return;const t=e.target;
+ if(t.id==="prname"){prEd.name=t.value;return}
+ if(t.id==="prtone"){prEd.tone=t.value}});
+$("#prbody").addEventListener("change",e=>{if(!prEd)return;const t=e.target,dt=t.dataset||{};
+ if(t.id==="prvoice"){prEd.voice=t.value;return}
+ if(dt.prproj!==undefined){const ids=new Set(prEd.projects);if(t.checked)ids.add(dt.prproj);else ids.delete(dt.prproj);
+  prEd.projects=[...ids]}});
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
    writes each field on its own and keeps no button (#2433). Access has no Save: the bar says so. */
