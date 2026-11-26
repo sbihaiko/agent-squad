@@ -2548,11 +2548,13 @@ def slack_owner_post(body):
     ws = _slack_text(body.get("workspace")).strip()
     owners = _slack_owner_map()
     if not ws: return {"err": "a workspace id is needed", "owners": owners}
-    if "user" not in body: return {"err": None, "owner": owners.get(ws), "owners": owners}
-    user = _slack_text(body.get("user")).strip()
     try: P = slack_policy()
     except Exception as e:
         return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "owners": owners}
+    if not P.WORKSPACE_ID.match(ws):
+        return {"err": f"workspace {ws!r} is not a Slack workspace id (T... or E...)", "owners": owners}
+    if "user" not in body: return {"err": None, "owner": owners.get(ws), "owners": owners}
+    user = _slack_text(body.get("user")).strip()
     if not P.USER_ID.match(user):
         return {"err": f"user {user!r} is not a Slack user id (U... or W...)", "owners": owners}
     data = _slack_registry_data()

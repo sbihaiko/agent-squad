@@ -14,12 +14,16 @@ The bounded operator session ([ADR-0154](0154-the-owner-talks-to-the-operator-th
 2. **Only the owner of the channel's workspace gets a full session, and only in a project channel.** The owner user id of
    each workspace lives in the hub registry, and `voiced` reads it from there and from no other source. A `full` decision
    holds only when the sender that id names owns a `full` role, the revision is active, and the event is a channel message.
+   A project channel reads its own project's registry entry. A direct message and a channel that owns no project read
+   every configured project's registry, and the first workspace match answers (`Daemon.workspace_owner`).
    A direct message, a guest channel and a channel with no active revision run as `bounded`. Guard:
    `tests/test_slack_full_session.py`, `tests/test_voiced_full_turn.py`, `tests/test_voiced.py`.
 3. **A full role admits only the owner or a granted member.** The validator takes the owner id map and the grant list, and
-   it names a defect for a `full` role whose member the registry names neither way. Guard: `tests/test_slack_policy.py`.
+   it names a defect for a `full` role whose member the registry names neither way. The hub writes no grant, so the
+   owner adds one to the registry file. Guard: `tests/test_slack_policy.py`.
 4. **The hub writes the owner id.** One hub route writes one owner user id per workspace into the registry, and it
-   refuses a value that is not a Slack user id. Guard: `tests/test_hub_slack_owner.py`.
+   refuses a value that is not a Slack user id or a workspace that is not a Slack workspace id. Guard:
+   `tests/test_hub_slack_owner.py`.
 5. **A full message runs one turn of the project's session.** `voiced` runs `claude -p`, with `--resume` after the first turn, in the project checkout. The message goes to the CLI on stdin, never as an argument. The turn carries no tool bound, no MCP bound and no operator brief, so the owner's settings, MCP servers, skills and permission mode apply. The turn drops the operator's config and temporary-folder overrides. Guard: `tests/test_full_turn.py`.
 6. **The state folder keeps one session id per project.** The first turn creates the session and records its id. Later turns of that project resume it. Turns of one project run one at a time. Guard: `tests/test_full_turn.py`, `tests/test_voiced_full_turn.py`.
 7. **The answer posts after redaction.** `voiced` posts the turn's final text in the owner's thread after the secret redaction of [squad/redact.py](../../squad/redact.py). A failed turn posts one fixed sentence. Guard: `tests/test_voiced_full_turn.py`.
