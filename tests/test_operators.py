@@ -24,7 +24,6 @@ VOICE = ROOT / "contrib" / "voice"
 
 FAKE = """#!/bin/sh
 printf -- '---CALL---\\n%s\\n' "$*" >> "$FAKE_LOG"
-printf '%s|%s|%s\\n' "${TERMUX_VERSION-unset}" "${PREFIX-unset}" "$(printf '%s' "$*" | tr '\\n' ' ')" >> "$FAKE_ENV_LOG"
 case "$1 $2" in
   "agents --json")
     if [ -s "$FAKE_STOPPED" ]; then
@@ -59,7 +58,6 @@ def operators(tmp_path, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
     monkeypatch.setenv("FAKE_LOG", str(tmp_path / "calls.log"))
-    monkeypatch.setenv("FAKE_ENV_LOG", str(tmp_path / "env.log"))
     monkeypatch.setenv("FAKE_SCENARIO", str(tmp_path / "scenario.json"))
     monkeypatch.setenv("FAKE_STOPPED", str(tmp_path / "stopped-ids"))
     monkeypatch.setenv("FAKE_FAIL_STOP", str(tmp_path / "fail-stop"))
@@ -138,15 +136,6 @@ def calls(tmp_path):
 def started(tmp_path):
     """The `--bg` calls the fake CLI got: one per session started."""
     return [c for c in calls(tmp_path) if c.startswith("--bg")]
-
-
-def envs(tmp_path):
-    """Each CLI call the fake got, with the two variables that must name the project's own service: (termux, prefix,
-    argv)."""
-    path = tmp_path / "env.log"
-    if not path.exists():
-        return []
-    return [tuple(line.split("|", 2)) for line in path.read_text().splitlines() if line.count("|") >= 2]
 
 
 def record(tmp_path):
@@ -593,7 +582,7 @@ def test_the_profile_writes_only_the_projects_outboxes_and_the_claude_runtime(tm
     home = os.path.realpath(os.path.expanduser("~"))
     assert f'(subpath "{home}/.claude")' in write, "the CLI's own state under the Claude home stays writable"
     assert f'(subpath "{op.config_root(state)}")' in write, write
-    assert ".claude.json" not in write, "the session may write the owner's global config file"
+    assert ".claude.json" not in write, "the owner's MCP configuration is never a write grant (#2942)"
     assert "/checkouts/" not in write, "the project checkout must stay read-only"
 
 
@@ -921,104 +910,26 @@ def test_the_session_tells_the_cli_it_already_runs_under_a_sandbox(tmp_path, mon
     assert "sandboxed=1" in wrap_log(tmp_path)
 
 
-def test_the_profile_reaches_only_the_projects_own_service(tmp_path, monkeypatch):
-    """#2943: a session reaches the CLI background service of its own project. The owner's shared root, which serves
-    every unsandboxed session, stays outside the profile."""
+def test_the_profile_grants_the_shared_service_root_and_no_private_one(tmp_path, monkeypatch):
+    """#2942 review B1: the profile keeps the owner's shared daemon grant, so a `--bg` start reaches the service the
+    CLI runs. No per-project daemon root ships, and no Termux emulation moves the CLI's own root."""
     op = operators(tmp_path, monkeypatch)
-    service = os.path.realpath(tmp_path / "state" / "operators" / "services" / "acme-widget")
-    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
-                           config=str(tmp_path / "config"), service=service)
+    root = os.path.realpath(tmp_path / "config")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
-    assert f'(subpath "{service}")' in write, write
-    assert f'(allow network-outbound (remote unix-socket (subpath "{service}")))' in text.splitlines(), text
-    assert op.daemon_root() not in text, "the owner's shared service is outside the profile (#2943)"
+    assert f'(subpath "{op.daemon_root()}")' in write, write
+    assert f'(allow network-outbound (remote unix-socket (subpath "{op.daemon_root()}")))' in text.splitlines(), text
+    assert not hasattr(op, "service_env"), "the Termux per-project daemon root must not ship (B1)"
 
 
-def test_a_started_session_gets_its_own_service_root(tmp_path, monkeypatch):
-    """#2943: the start moves the CLI's background service under the project's own root and records that root, so the
-    profile the session runs under grants that root and no other."""
+def test_a_started_session_carries_no_termux_service_emulation(tmp_path, monkeypatch):
+    """#2942 review B1: the start sets neither TERMUX_VERSION nor PREFIX, so the CLI's daemon root never moves, and
+    the record names no service root."""
     op = wrapped(tmp_path, monkeypatch)
     assert op.run_pass(str(tmp_path / "state"), str(tmp_path / "repo")) == 0
-    state = os.path.realpath(tmp_path / "state")
-    entry = record(tmp_path)["dm"]
-    service = os.path.join(state, "operators", "services", "dm")
-    assert entry["service"] == service, entry
     log = wrap_log(tmp_path)
-    assert f"prefix={service}" in log and "termux=1" in log, log
-    profile = Path(entry["profile"]["path"]).read_text()
-    assert f'(subpath "{service}")' in profile, profile
-    assert op.daemon_root() not in profile, profile
-
-
-def test_a_stop_reaches_the_projects_own_service(tmp_path, monkeypatch):
-    """#2943: the stop carries the project's own service root, the one its session started under. The roster read is
-    the CLI's own and names no root, as the real CLI lists every session whatever root it is given (measured)."""
-    op = operators(tmp_path, monkeypatch)
-    found = hub(tmp_path, monkeypatch, op, ["acme/widget"])
-    registry(tmp_path, [("acme/widget", "C0AAAAAA1", "proj-widget")])
-    revision(tmp_path, "acme/widget", ["C0AAAAAA1"])
-    scenario(tmp_path, [])
-    state = str(tmp_path / "state")
-    assert op.run_pass(state, str(tmp_path / "repo"), only="acme/widget") == 0
-    service = os.path.realpath(os.path.join(state, "operators", "services", "acme-widget"))
-    held = record(tmp_path)["acme-widget"]
-    assert held["service"] == service, held
-    scenario(tmp_path, [session(found["acme/widget"], "acme-widget", held["id"], started=1000),
-                        session(found["acme/widget"], "acme-widget", "bbbb0002-0000-0000-0000-000000000002",
-                                started=2000)])
-    assert op.run_pass(state, str(tmp_path / "repo")) == 0
-    stops = [row for row in envs(tmp_path) if row[2].startswith("stop")]
-    assert stops, envs(tmp_path)
-    assert all(row[0] == "1" and row[1] == service for row in stops), stops
-    listings = [row for row in envs(tmp_path) if row[2].startswith("agents")]
-    assert listings and all(row[0] == "unset" and row[1] == "unset" for row in listings), listings
-
-
-def test_a_stop_falls_back_to_the_cli_own_service_for_a_session_an_older_build_started(tmp_path, monkeypatch):
-    """#2943: a session an older build started lives under the owner's shared service. The stop names the project's own
-    root first, and falls back to the CLI's own service, so the restart still reaches that session."""
-    op = operators(tmp_path, monkeypatch)
-    seen = []
-
-    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
-        seen.append(env)
-        if env is not None:
-            raise op.Refused("stop exited 1: No session matching 'aaaaaaaa'")
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(op, "call", fake_call)
-    op.stop("aaaaaaaa", service=str(tmp_path / "service"))
-    assert len(seen) == 2, seen
-    assert seen[0]["PREFIX"] == str(tmp_path / "service") and seen[0]["TERMUX_VERSION"] == "1"
-    assert seen[1] is None
-
-
-def test_a_stop_that_fails_under_the_projects_own_service_is_never_retried_on_the_shared_one(tmp_path, monkeypatch):
-    """#2943: only a session its own service never held may fall back. Any other refusal is the real answer, and a
-    retry against the shared service could stop a foreign session whose id collides, or hide the failure."""
-    op = operators(tmp_path, monkeypatch)
-    seen = []
-
-    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
-        seen.append(env)
-        raise op.Refused("stop exited 1: the service is not running")
-
-    monkeypatch.setattr(op, "call", fake_call)
-    with pytest.raises(op.Refused):
-        op.stop("aaaaaaaa", service=str(tmp_path / "service"))
-    assert len(seen) == 1, seen
-
-
-def test_a_stop_that_both_services_refuse_is_named(tmp_path, monkeypatch):
-    """A stop no service confirms raises Refused, so the pass keeps ownership and retries later."""
-    op = operators(tmp_path, monkeypatch)
-
-    def fake_call(argv, cwd=None, timeout=op.DEADLINE, env=None):
-        raise op.Refused("stop exited 1: No session matching 'aaaaaaaa'")
-
-    monkeypatch.setattr(op, "call", fake_call)
-    with pytest.raises(op.Refused):
-        op.stop("aaaaaaaa", service=str(tmp_path / "service"))
+    assert "prefix=unset" in log and "termux=unset" in log, log
+    assert "service" not in record(tmp_path)["dm"], record(tmp_path)["dm"]
 
 
 def test_a_loopback_endpoint_starts_its_session_with_no_proxy(tmp_path, monkeypatch):
@@ -1356,6 +1267,24 @@ def test_the_profile_refuses_writes_to_the_owners_claude_configuration(tmp_path,
     assert "/memory" in text[allow:], "a project memory folder stays writable"
 
 
+def test_the_cli_keeps_its_own_state_in_the_config_root_and_the_owner_global_config_file_is_refused(tmp_path, monkeypatch):
+    """#2942, #2963: the CLI writes its runtime state under the operator's own config root, so the owner's global
+    config file needs no write grant, and the profile refuses it. The config root holds the CLI's login too: auth
+    moves with `CLAUDE_CONFIG_DIR`, and the empty secure-storage dir keeps the owner's keychain entry (measured,
+    CLI 2.1.332)."""
+    op = operators(tmp_path, monkeypatch)
+    home = os.path.realpath(os.path.expanduser("~"))
+    config = str(tmp_path / "config")
+    text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"],
+                           config=config)
+    write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
+    assert f'(subpath "{os.path.realpath(config)}")' in write, write
+    allow = text.index(f'(subpath "{home}/.claude")')
+    rule = f'(deny file-write* (literal "{home}/.claude.json"))'
+    assert rule in text.splitlines(), text
+    assert text.index(rule) > allow, "the deny must follow the allow: Seatbelt applies the last matching rule"
+
+
 def test_a_project_session_never_writes_to_the_dm_outbox(tmp_path, monkeypatch):
     """The bound refuses the DM outbox to a project session, so its brief never asks for that write. It writes one
     action request to the outbox of the line's channel, and runs no command itself (#2939)."""
@@ -1391,8 +1320,9 @@ def test_the_profile_refuses_the_owner_global_config_file_and_grants_the_cli_its
     text = op.profile_text(["/state/outboxes/C1.jsonl"], "/state/inboxes", ["/state/inboxes/C1.jsonl"], config=root)
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     assert f'(subpath "{root}")' in write, write
-    assert f'(literal "{home}/.claude.json")' not in write, "no grant may let the session write the owner's global config file"
-    assert f'(deny file-write* (literal "{home}/.claude.json"))' in text, "the owner's global config file is refused by name"
+    assert f'(literal "{home}/.claude.json")' not in write, "the session may write the owner's global config file"
+    # #2942: the file sits beside the Claude home, so no grant ever covered it; it is refused by its own deny.
+    assert f'(deny file-write* (literal "{home}/.claude.json"))' in text.splitlines(), text
 
 
 def test_the_operator_config_root_reads_the_owner_keychain_by_its_default_name(tmp_path, monkeypatch):
@@ -1499,7 +1429,7 @@ def test_a_stop_the_operator_root_refuses_is_retried_on_the_owner_roster(tmp_pat
     def fake_call(argv, cwd=None, timeout=None, env=None):
         tried.append(None if env is None else env.get("CLAUDE_CONFIG_DIR"))
         if env is not None:
-            raise op.Refused("stop exited 1: No session matching 'abababab'")
+            raise op.Refused("no such session")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(op, "call", fake_call)

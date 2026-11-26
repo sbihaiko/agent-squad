@@ -133,7 +133,6 @@ def test_a_leak_marker_of_an_earlier_run_never_counts_as_a_denial(tmp_path, monk
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
-    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen["stale"] is False
 
@@ -160,23 +159,22 @@ def test_the_profile_allows_loopback_only_on_the_model_endpoint_port(monkeypatch
     assert "*:443" not in text
 
 
-def test_the_profile_grants_the_cli_background_service_its_own_runtime():
-    """#2768, #2943: `claude --bg` reaches or starts the background service under the project's own root, so the
-    profile grants that root: the `/dev/null` device of an ignored stdio, the root's write and its unix socket. The
-    owner's shared root, which serves every unsandboxed session, stays outside the profile."""
+def test_the_profile_grants_the_cli_background_service_its_runtime():
+    """#2768: `claude --bg` reaches or starts the background service, so the profile grants the service's own runtime:
+    the `/dev/null` device of an ignored stdio, the run dir under /tmp/cc-daemon-<uid> and that dir's unix socket."""
     operators = load("operators")
-    service = os.path.realpath("/work/state/operators/services/probe-project")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl", config="/work/config", service=service)
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     # The unmonkeypatched device: the kernel opens the resolved spelling of `/dev/null`, so the grant must name it, the
-    # way the service root names the resolved path. A host where `/dev/null` resolves to itself keeps the one literal.
+    # way `daemon_root()` names the resolved `/tmp`. A host where `/dev/null` resolves to itself keeps the one literal.
     resolved_null = os.path.realpath("/dev/null")
     assert f'(literal "{resolved_null}")' in write, write
     assert f'(literal "{os.path.realpath(os.devnull)}")' in write
-    assert f'(subpath "{service}")' in write
-    assert f'(allow network-outbound (remote unix-socket (subpath "{service}")))' in text.splitlines(), text
-    assert operators.daemon_root() not in text, "the owner's shared service is outside the profile (#2943)"
+    assert f'(subpath "{operators.daemon_root()}")' in write
+    # `/tmp` is a link on macOS and a plain folder on Linux, so the expected path is the resolved one (#2773).
+    assert operators.daemon_root() == os.path.realpath(f"/tmp/cc-daemon-{os.getuid()}")
+    assert f'(allow network-outbound (remote unix-socket (subpath "{operators.daemon_root()}")))' in text.splitlines()
 
 
 def test_the_profile_writes_the_resolved_device_path(tmp_path, monkeypatch):
@@ -262,29 +260,6 @@ def test_a_bg_session_the_cli_does_not_list_is_unproven(tmp_path, monkeypatch):
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
     with pytest.raises(probe.ProbeFailed, match="does not list it"):
         probe.bg_session(tmp_path, "(version 1)(allow default)", "claude")
-
-
-def test_a_bg_session_starts_in_the_projects_own_service(tmp_path, monkeypatch):
-    """#2943: the `--bg` call and the roster read and stop that follow it carry the project's own service root, so the
-    probe exercises the service the supervisor starts, never the owner's shared one."""
-    probe = load("operator_probe")
-    service = str(tmp_path / "service")
-    seen = []
-
-    def fake_run(argv, **kwargs):
-        seen.append((argv, kwargs.get("env") or {}))
-        if argv[0] == "claude" and argv[1] == "agents":
-            return subprocess.CompletedProcess(
-                argv, 0, '[{"sessionId": "ba6e7d2e", "name": "SQUAD-OPERATOR-probe-project"}]', "")
-        if argv[0] == "claude" and argv[1] == "stop":
-            return subprocess.CompletedProcess(argv, 0, "", "")
-        return subprocess.CompletedProcess(argv, 0, "backgrounded · ba6e7d2e\n", "")
-
-    monkeypatch.setattr(probe.subprocess, "run", fake_run)
-    probe.bg_session(tmp_path, "(version 1)(allow default)", "claude", service=service)
-    assert seen
-    for argv, env in seen:
-        assert env.get("TERMUX_VERSION") == "1" and env.get("PREFIX") == service, (argv, env)
 
 
 def test_an_untrusted_workspace_names_the_one_folder_to_trust(tmp_path, monkeypatch):
@@ -520,14 +495,13 @@ def test_a_loopback_endpoint_runs_the_session_with_no_proxy(tmp_path, monkeypatc
         init = {"tools": list(probe.GUEST_TOOLS), "permissionMode": "dontAsk"}
         return init, {"subtype": "success", "is_error": False}, probe.tool_calls(events_of(held_calls(probe, role)))
 
-    def fake_bg(work, profile, cli, proxy_url=None, service=None):
+    def fake_bg(work, profile, cli, proxy_url=None):
         seen["bg"] = proxy_url
 
     monkeypatch.setattr(probe, "session", fake_session)
     monkeypatch.setattr(probe, "bg_session", fake_bg)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
-    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == {"proxy_url": None, "bg": None, "poller": None, "writer": None}
 
@@ -570,22 +544,20 @@ def test_one_command_repeats_the_probe(tmp_path):
     assert "no claude CLI on the path" in done.stderr
 
 
-def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_service():
-    """#2768, #2963, #2943 keeps every write grant a literal or a named subpath: the outbox file, the Claude home, the
-    CLI's own config root, `/dev/null` and the project's own service root. No grant names a whole root, the owner's global
-    config file is granted to no one, and the owner's shared service root is a write root for no session."""
+def test_the_profile_opens_no_write_root_beyond_the_outbox_the_claude_home_and_the_daemon():
+    """#2768 keeps every write grant a literal or a named subpath: the outbox file, the Claude home, the CLI's own config
+    root (#2963), `/dev/null`, and the CLI's own daemon runtime. No grant names a whole root, and the owner's global
+    config file is granted to no one."""
     operators = load("operators")
-    service = os.path.realpath("/work/state/operators/services/probe-project")
     text = operators.profile_text("/work/state/outboxes/dm.jsonl", "/work/state/inboxes",
-                                  "/work/state/inboxes/dm.jsonl", config="/work/config", service=service)
+                                  "/work/state/inboxes/dm.jsonl", config="/work/config")
     write = next(line for line in text.splitlines() if line.startswith("(allow file-write*"))
     for root in ("/dev", "/tmp", "/private/tmp", "/private/var/folders"):
         assert f'(literal "{root}")' not in write and f'(subpath "{root}")' not in write
     assert write.count("(subpath") == 3, write
     assert '(subpath "/work/config")' in write, write
-    assert f'(subpath "{service}")' in write
     assert ".claude.json" not in write, "the owner's global config file is granted to no one"
-    assert f'(subpath "{operators.daemon_root()}")' not in write, "the shared service root is never a write root"
+    assert f'(subpath "{operators.daemon_root()}")' in write
 
 
 @pytest.mark.sandbox_bound
@@ -605,44 +577,6 @@ def test_the_profile_refuses_a_write_to_the_temp_folder(tmp_path):
     assert "Operation not permitted" in done.stderr
 
 
-def test_the_probe_proves_the_shared_service_is_out_of_reach(tmp_path, monkeypatch):
-    """#2943: a connect to the owner's shared background service, which sits outside the profile, is refused."""
-    probe = load("operator_probe")
-    monkeypatch.setattr(probe, "sandboxed", scripted(probe))
-    assert probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
-    monkeypatch.setattr(probe, "sandboxed", scripted(probe, service_open=True))
-    with pytest.raises(probe.ProbeFailed, match="shared service"):
-        probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
-
-
-@pytest.mark.sandbox_bound
-def test_the_shared_service_denial_probes_a_socket_that_exists(tmp_path, monkeypatch):
-    """#2979: the kernel answers a missing path with "no such file", never a denial, so the probe binds the file it probes
-    under the shared root and removes it after."""
-    probe = load("operator_probe")
-    inner, seen = scripted(probe), []
-
-    def spy(profile, cli, args, cwd, timeout, extra_env=None):
-        seen.append((args[-1], os.path.exists(args[-1])))
-        return inner(profile, cli, args, cwd, timeout, extra_env)
-
-    monkeypatch.setattr(probe, "sandboxed", spy)
-    shared = probe.service_denial(tmp_path, "(version 1)(allow default)", str(tmp_path / "service"))
-    assert seen[0] == (shared, True), f"the probe named a path that does not exist: {seen[0]}"
-    assert not os.path.exists(shared), "the probe left its own socket under the shared root"
-
-
-@pytest.mark.sandbox_bound
-def test_the_kernel_refuses_a_connect_to_the_shared_service(tmp_path):
-    """The real profile, the real kernel: the owner's shared service root is outside, the project's own root is inside."""
-    probe = load("operator_probe")
-    service = tmp_path / "service"
-    profile = load("operators").profile_text(str(tmp_path / "out.jsonl"), str(tmp_path / "in"),
-                                             str(tmp_path / "in" / "dm.jsonl"), config=str(tmp_path / "config"),
-                                             service=str(service))
-    assert probe.service_denial(tmp_path, profile, str(service))
-
-
 @pytest.mark.claude_bound
 @pytest.mark.heavy     # a live `claude -p` call takes seconds: over the 1 s line, so the fast battery deselects it (ADR-0139)
 def test_the_real_cli_probe_passes():
@@ -654,8 +588,7 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     """#2925 criteria 9 to 11: the probe's profile is the live project shape, one outbox and one inbox per channel, and
     another project's inbox and checkout stay refused (#2951)."""
     probe = load("operator_probe")
-    checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, service, profile = probe.project_shape(
-        tmp_path, [8016])
+    checkout, outboxes, own_inboxes, other_inbox, leak, other_checkout, profile = probe.project_shape(tmp_path, [8016])
     write = next(line for line in profile.splitlines() if line.startswith("(allow file-write*"))
     read = next(line for line in profile.splitlines() if line.startswith("(allow file-read*")
                 and f'(literal "{own_inboxes[0]}")' in line)
@@ -671,18 +604,7 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
     assert checkout.is_dir() and other_checkout.is_dir() and not leak.exists()
 
 
-def test_the_probe_builds_its_service_root_the_way_the_supervisor_does(tmp_path):
-    """#2943: the probe's service root comes from `operators.service_root`, the one a live `start()` grants, so a change
-    to that layout moves the probe with it instead of leaving it green on a shape no start produces."""
-    probe = load("operator_probe")
-    operators = load("operators")
-    _, _, _, _, _, _, service, profile = probe.project_shape(tmp_path, [8016])
-    expected = operators.service_root(str(tmp_path / "state"), probe.PROBE_KEY)
-    assert os.path.realpath(service) == expected, (service, expected)
-    assert f'(subpath "{expected}")' in profile, profile
-
-
-def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1, service_open=False):
+def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False, port=1):
     """A sandbox stand-in that answers the denial script: every refusal is the kernel's own, the controls pass unless a
     case says otherwise. `port` is the one loopback port the model route uses; every other port is refused (#2951)."""
     inbox_line = probe.OWN_SENTINEL if inbox_line is None else inbox_line
@@ -709,12 +631,6 @@ def scripted(probe, *, outbox_refused=False, inbox_line=None, config_open=False,
                     return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             if probe.NETWORK_HOST in args:
-                return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
-            if getattr(probe, "SERVICE_CONNECT", None) in args:
-                # The shared root is outside the profile; the project's own root is inside it, and the kernel there
-                # answers "no such file" because the probe starts no socket.
-                if service_open or probe.daemon_root() not in args[-1]:
-                    return subprocess.CompletedProcess(args, 0, "", "")
                 return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
             return subprocess.CompletedProcess(args, 0, "", "")
         raise AssertionError(f"unexpected denial call: {args}")
@@ -778,7 +694,6 @@ def test_the_probe_runs_its_session_in_the_project_checkout(tmp_path, monkeypatc
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "guest_sessions", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
-    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert seen == [tmp_path / "checkout"], seen
 
@@ -936,7 +851,6 @@ def test_the_probe_runs_the_poller_and_the_writer_session(tmp_path, monkeypatch)
     monkeypatch.setattr(probe, "guest_session", fake_guest)
     monkeypatch.setattr(probe, "bg_session", lambda *a, **k: None)
     monkeypatch.setattr(probe, "answer_phase", lambda *a, **k: None)
-    monkeypatch.setattr(probe, "service_denial", lambda *a, **k: None)   # the service root has its own case
     probe.run_probe(tmp_path, "/bin/true")
     assert roles == ["poller", "writer"]
 
@@ -1008,12 +922,12 @@ def owner_home(tmp_path):
     (home / ".claude").mkdir(parents=True)
     for name in ("settings.json", "CLAUDE.md"):
         (home / ".claude" / name).write_text("owner file\n")
-    (home / ".claude.json").write_text("{}\n")
+    (home / ".claude.json").write_text("owner file\n")     # the owner's MCP configuration (#2942)
     return home
 
 
 def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypatch):
-    """#2925, #2963: the probe tries a write to the owner's settings, CLAUDE.md and global config file under the
+    """#2925, #2942, #2963: the probe tries a write to the owner's settings, CLAUDE.md and global config file under the
     profile, and each is refused."""
     probe = load("operator_probe")
     home = owner_home(tmp_path)
@@ -1021,6 +935,7 @@ def test_the_probe_proves_the_owners_claude_files_are_refused(tmp_path, monkeypa
     tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
     assert sorted(os.path.basename(p) for p in tried) == [".claude.json", "CLAUDE.md", "settings.json"], tried
     assert (home / ".claude" / "settings.json").read_text() == "owner file\n"
+    assert (home / ".claude.json").read_text() == "owner file\n"
 
 
 def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_path, monkeypatch):
@@ -1029,6 +944,50 @@ def test_a_profile_that_lets_the_owners_settings_be_written_fails_the_probe(tmp_
     monkeypatch.setattr(probe, "sandboxed", scripted(probe, config_open=True))
     with pytest.raises(probe.ProbeFailed, match="may write"):
         probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+
+
+def test_config_denials_proves_the_write_denials_and_starts_no_session(tmp_path, monkeypatch):
+    """#2942 review D7: config_denials proves the write denials alone. It takes no CLI, so a transient CLI failure can
+    never read as a denial defect, and one probe run makes no second live call."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    starts = []
+    monkeypatch.setattr(probe, "sandboxed", config_stub(probe, starts))
+    tried = probe.config_denials(tmp_path, "(version 1)(allow default)", home=home)
+    assert str(home / ".claude.json") in tried, tried
+    assert starts == [], "config_denials must start no session (D7)"
+
+
+def config_stub(probe, starts):
+    """A sandbox stand-in: the append is the kernel's refusal, and any other argv would be a CLI start, which this
+    check must never make."""
+    def run_sandboxed(profile, cli, args, cwd, timeout, extra_env=None):
+        if probe.OPEN_FOR_WRITE in args:
+            return subprocess.CompletedProcess(args, 1, "", probe.DENIED + "\n")
+        starts.append(list(args))
+        return subprocess.CompletedProcess(args, 0, "", "")
+    return run_sandboxed
+
+
+def test_the_start_proof_fails_when_the_start_writes_the_owners_global_config_file(tmp_path, monkeypatch):
+    """#2942 review D7: the start-under-profile proof is its own check, named for the session it runs. A start that
+    writes the owner's global config file fails it by name, never as a denial defect."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    before = probe.owner_stamp(str(home))
+    (home / ".claude.json").write_text('{"mcpServers": {}}\n')
+    with pytest.raises(probe.ProbeFailed, match="wrote the owner's global config file") as caught:
+        probe.check_owner_config(before, str(home))
+    assert "denial" not in str(caught.value).lower(), str(caught.value)
+
+
+def test_the_start_proof_passes_when_the_owner_file_is_untouched(tmp_path, monkeypatch):
+    """#2942 review D7: one live start that keeps its state under the config root leaves the owner's global config
+    file exactly as it was, so the check passes and the probe reports no defect."""
+    probe = load("operator_probe")
+    home = owner_home(tmp_path)
+    before = probe.owner_stamp(str(home))
+    probe.check_owner_config(before, str(home))     # no raise: the file never changed
 
 
 def test_the_probe_denies_a_write_to_the_owner_global_config_file(tmp_path, monkeypatch):
@@ -1080,6 +1039,7 @@ def test_the_probe_reads_its_roster_under_the_operator_config_root(tmp_path, mon
     assert seen["env"]["CLAUDE_CONFIG_DIR"] == str(probe.config_root()), seen["env"]
 
 
+@pytest.mark.sandbox_bound   # a nested refusal says "Operation not permitted" too, so only a real apply proves this (ADR-0139)
 def test_the_real_profile_refuses_the_owners_claude_files(tmp_path, monkeypatch):
     """The operator's own profile, applied by the kernel, refuses both writes on this machine."""
     probe = load("operator_probe")
@@ -1250,7 +1210,7 @@ def test_the_answer_binding_is_written_before_the_profile_is_built(tmp_path, mon
         return real(work, ports)
 
     monkeypatch.setattr(probe, "project_shape", spy)
-    _, _, _, _, _, _, _, profile = probe.profile_for(tmp_path, [8016])
+    _, _, _, _, _, _, profile = probe.profile_for(tmp_path, [8016])
 
     assert seen["binding"] is True, "the answer binding was written after the profile was built"
     binding = json.loads((tmp_path / "answer" / "binding.json").read_text())
