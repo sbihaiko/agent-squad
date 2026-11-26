@@ -303,3 +303,30 @@ def test_the_live_listing_keeps_the_argument_lists_of_the_claude_processes(monke
     table = types.SimpleNamespace(stdout=f"/usr/local/bin/claude --resume {FIRST_SESSION}\n  vim notes.md\n")
     monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
     assert mod.live_claude_argvs() == [["/usr/local/bin/claude", "--resume", FIRST_SESSION]]
+
+
+def test_the_live_listing_drops_a_process_whose_executable_is_not_claude(monkeypatch):
+    mod = fullturn()
+    table = types.SimpleNamespace(stdout=f"vim notes-claude.md {FIRST_SESSION}\ngrep claude\n/usr/bin/claude-helper --x\n")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: table)
+    assert mod.live_claude_argvs() == [], mod.live_claude_argvs()
+
+
+def test_a_script_whose_name_contains_claude_does_not_hold_the_session():
+    mod = fullturn()
+    assert mod.held_by_terminal([["python3", "claude-picker.py", "--resume", FIRST_SESSION]], FIRST_SESSION) is False
+
+
+def test_a_helper_whose_name_starts_with_claude_does_not_hold_the_session():
+    mod = fullturn()
+    assert mod.held_by_terminal([["/usr/bin/claude-helper", "--resume", FIRST_SESSION]], FIRST_SESSION) is False
+
+
+def test_a_session_id_that_is_only_a_prefix_of_the_saved_one_is_not_held():
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--resume", "abc"]], "abcdef") is False
+
+
+def test_a_claude_process_that_names_the_session_in_another_flag_does_not_hold_it():
+    mod = fullturn()
+    assert mod.held_by_terminal([["claude", "--name", FIRST_SESSION]], FIRST_SESSION) is False
