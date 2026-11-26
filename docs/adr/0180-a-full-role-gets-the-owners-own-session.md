@@ -17,6 +17,7 @@ The bounded operator session ([ADR-0154](0154-the-owner-talks-to-the-operator-th
 5. **The answer posts after redaction.** `voiced` posts the turn's final text in the owner's thread after the secret redaction of [squad/redact.py](../../squad/redact.py). A failed turn posts one fixed sentence. Guard: `tests/test_voiced_full_turn.py`.
 6. **Each turn writes one audit line.** The line holds the time, the sender, the role, the channel, the session id, the exit code, the failure flag and the character count. It holds no message text and no answer text. Guard: `tests/test_voiced_full_turn.py`.
 7. **The probe proves a full turn outside the sandbox.** Each call of the operator probe that starts a bounded session runs through the sandbox wrapper. Each call that starts a full turn runs outside it. The probe proves the resume and the stdin message with the real CLI: a word given on stdin in the first turn comes back from the resumed second turn. Guard: `tests/test_operator_probe.py`.
+8. **A `!stop` ends the running turn out of band.** `voiced` reads the message `!stop` before it queues a message, and a full role's stop ends its project's running turn at once, with its whole process tree, before the next queued message runs. A bounded session's stop ends nothing, and each stop writes one audit line. Guard: `tests/test_voiced_full_turn.py`.
 
 ## Consequences
 

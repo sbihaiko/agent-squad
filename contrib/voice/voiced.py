@@ -165,7 +165,14 @@ class ClipTooLarge(Exception):
 
 FULL_FAILED = "Your message did not reach the project session."
 FULL_REASONS = {"deadline": "Your message stopped at the project session deadline.",
-                "spend_cap": "Your message stopped at the project session spend cap."}
+                "spend_cap": "Your message stopped at the project session spend cap.",
+                "stopped": "Your message stopped when you asked."}
+STOP_TEXT = "!stop"
+
+
+def is_stop(text):
+    """Whether one message asks to end its project's running turn (#2968). Only the message `!stop` itself stops."""
+    return str(text or "").strip() == STOP_TEXT
 
 
 def one_sentence(text):
@@ -1629,6 +1636,7 @@ class Daemon:
         self.full_cli = full_cli
         self.turns = []
         self.turn_order = fullturn.TurnOrder()
+        self.live_turns = fullturn.TurnRegistry()   # the turn each project runs now, for `!stop` (#2968)
         self.full_guard = threading.Lock()
         # The callable that starts a project's operator session at once (#2925). None leaves no session started here,
         # so a fixture or a reader never spawns a session; production passes `start_operator`.
@@ -2556,6 +2564,21 @@ class Daemon:
         for worker in turns:
             worker.join()
 
+    def stop_full_turn(self, record):
+        """End the turn one project runs now, outside the queue (#2968), and write the stop's one audit line.
+
+        A `!stop` never becomes a turn of its own: `handle` reads it before it queues the message. The stop ends
+        nothing when the project runs no turn, and the line tells the two apart. The running turn writes its own
+        line, a failed turn named `stopped`, so a stop that ends a turn leaves both lines and no lost message."""
+        repo = self.state.channel_for(record.get("channel"))
+        ended = bool(repo) and self.live_turns.stop(repo)
+        self.state.remember_message(record["id"])
+        self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
+                                 "role": record.get("role"), "channel": record.get("channel"), "repo": repo,
+                                 "decision": "stop", "ended": ended})
+        self.log(f"voiced: stop for {repo or 'no project'} ended the running turn: {ended}")
+        return "stopped"
+
     def project_checkout(self, repo):
         """The checkout of one project: from the rows that carry one (`configs`, the hub's project list), then from any
         project row that is a mapping. `projects` lists bare repository names in production (`hub_repos`), so a row
@@ -2579,7 +2602,8 @@ class Daemon:
             try:
                 checkout = self.project_checkout(repo)
                 if checkout is not None:
-                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"],
+                                             registry=self.live_turns)
             finally:
                 self.turn_order.leave(repo)
         except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
@@ -2678,11 +2702,12 @@ class Daemon:
         return {str(row.get("ts")) for row in self.state.posted().values() if row.get("ts")}
 
     def handle(self, envelope):
-        """Record one envelope: "inbox", "other", "duplicate", "failed" or "ignored". No ack happens here.
+        """Record one envelope: "inbox", "other", "duplicate", "failed", "ignored", "full" or "stopped". No ack here.
 
         The policy decision decides what the event becomes: an ignored event writes no line, a bot, a stranger and a
         Slack Connect user stay data, and every line carries the language, the persona and the caller role. A `listen`
-        channel never receives a post, neither the failure reply nor the answer.
+        channel never receives a post, neither the failure reply nor the answer. A `!stop` of a full role ends the
+        project's running turn before this method queues anything (#2968).
         """
         if (envelope.get("type") or "events_api") != "events_api":
             return "ignored"
@@ -2786,6 +2811,8 @@ class Daemon:
         record["text"] = text
         record["clip"] = bool(clip)
         if decision.session == slackpolicy.SESSION_FULL:
+            if is_stop(text):
+                return self.stop_full_turn(record)
             self.start_full_turn(record, decision)
             return "full"
         self.state.append_inbox(record, target)
