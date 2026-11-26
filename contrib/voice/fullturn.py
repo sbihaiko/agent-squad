@@ -72,7 +72,7 @@ def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=T
     try:
         done = subprocess.run(argv(claude, session), input=message, cwd=checkout, capture_output=True, text=True,
                               env=owner_env(os.environ if environ is None else environ), timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
         return Turn(session, "", None, True)
     row = result_row(done.stdout)
     failed = done.returncode != 0 or bool(row.get("is_error")) or "result" not in row

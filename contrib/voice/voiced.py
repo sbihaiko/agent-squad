@@ -2552,20 +2552,39 @@ class Daemon:
         for worker in turns:
             worker.join()
 
+    def project_checkout(self, repo):
+        """The checkout of one project: from the rows that carry one (`configs`, the hub's project list), then from any
+        project row that is a mapping. `projects` lists bare repository names in production (`hub_repos`), so a row
+        there names no checkout (#2965 review)."""
+        rows = list(self.configs() or []) if self.configs is not None else []
+        rows += [row for row in (self.projects() or []) if isinstance(row, dict)]
+        for row in rows:
+            if isinstance(row, dict) and row.get("repo") == repo and row.get("checkout"):
+                return row["checkout"]
+        return None
+
     def full_turn(self, record, decision):
-        """Run the turn in the project checkout, one turn at a time per project, then post its final text in the thread."""
+        """Run the turn in the project checkout, one turn at a time per project, then post its final text in the thread.
+
+        Every turn ends with one audit line and, where the channel takes answers, one post: a turn that raises is a
+        failed turn, never a lost message (#2965 review)."""
         repo = self.state.channel_for(record.get("channel"))
-        checkout = next((row.get("checkout") for row in self.projects() or [] if row.get("repo") == repo), None)
-        with self.full_guard:
-            lock = self.full_locks.setdefault(repo, threading.Lock())
-        with lock:
-            if checkout is None:
-                turn = fullturn.Turn(None, "", None, True)
-            else:
-                turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+        turn = fullturn.Turn(None, "", None, True)
+        try:
+            checkout = self.project_checkout(repo)
+            with self.full_guard:
+                lock = self.full_locks.setdefault(repo, threading.Lock())
+            with lock:
+                if checkout is not None:
+                    turn = fullturn.run_turn(self.full_cli, checkout, self.state.directory, repo, record["text"])
+        except Exception as x:   # the worker thread has no caller: a raise here would lose the message with no trace
+            self.log(f"voiced: full turn in {record.get('channel')} raised {type(x).__name__}")
         self.state.append_audit({"time": datetime.now().isoformat(timespec="seconds"), "user": record.get("user"),
                                  "role": record.get("role"), "channel": record.get("channel"), "decision": "full",
                                  "reason": None, **turn.audit()})
+        if not self.channel_accepts_answer(record.get("channel")):
+            self.log(f"voiced: full turn in {record.get('channel')} kept: the channel is listen only")
+            return
         answer = FULL_FAILED if turn.failed else shared_redact.redact(turn.text)
         self.post_text(record.get("channel"), record.get("ts"), answer, persona=decision.persona)
 
