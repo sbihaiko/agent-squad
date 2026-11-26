@@ -2163,8 +2163,11 @@ const prTxt=t=>esc(t==null?"":String(t));
 const prPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
 const prFile=t=>prTxt(t).replace(/\./g,".<wbr>");   // a long file name breaks after a dot, never inside a word
 const prRows=()=>((prS||{}).groups||[]).flatMap(g=>g.rows||[]);
-const prRowAt=id=>prRows().find(r=>String(r.id)===String(id))||null;
-function prStartEdit(id){const r=prRowAt(id);if(!r||r.read_only)return;
+/* A persona id is local to its projects, so two clients may each hold a row with one id (#3028): a button names its
+   client group, and the lookup asks for that group's row. A button with no client keeps the first match by id. */
+const prRowAt=(id,client)=>{const gs=((prS||{}).groups||[]).filter(g=>client==null||String(g.id)===String(client));
+ for(const g of gs){const r=(g.rows||[]).find(x=>String(x.id)===String(id));if(r)return r}return null};
+function prStartEdit(id,client){const r=prRowAt(id,client);if(!r||r.read_only)return;
  prEd={mode:"fields",id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
  prNew=null;prPlan=null;prPMsg="";prRender()}
 /* A drifted row offers one copy for each project that declares the id (#3015): the choice starts an edit that names the
@@ -2209,9 +2212,9 @@ function prPlanHtml(){const plan=prPlan||{},
    theme's one write stays the confirm. */
 const prSlug=t=>String(t==null?"":String(t)).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
 const prAddId=()=>prNew?(prNew.id||prSlug(prNew.name)):"";
-function prStartAdd(id){const all=((prS||{}).projects)||[];
+function prStartAdd(id,client){const all=((prS||{}).projects)||[];
  if(id==null){prNew={name:"",voice:((prS||{}).voices||[])[0]||"",tone:"",projects:[]}}
- else{const r=prRowAt(id);if(!r)return;const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
+ else{const r=prRowAt(id,client);if(!r)return;const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
   prNew={id:r.id,name:r.name,voice:r.voice,tone:r.tone,committed:{name:r.name,voice:r.voice,tone:r.tone},projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
  prEd=null;prAddPlan=null;prAddMsg="";prRender()}
 function prStopAdd(){prNew=null;prAddPlan=null;prAddMsg="";prRender()}
@@ -2278,8 +2281,8 @@ function prRow(r,client){
  const copies=r.drift?(r.copies||[]).map(c=>`<span class=prcopy><b>${prTxt(c.name)}</b> <span class=m>${prTxt(c.voice)} · ${prTxt(c.tone)}</span> <button data-prcopy="${prTxt(c.project)}" data-prclient="${prTxt(client)}">Use this copy</button></span>`).join("<br>"):"";
  const projects=((r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;")+(copies?`<br>${copies}`:"");
  const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
- const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}">Edit</button>`;   // a local-only persona is read-only
- const add=`<button data-praddrow="${prTxt(r.id)}">Add to project</button>`;   // the same persona reaches a project that does not declare it (#3013)
+ const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}" data-prclient="${prTxt(client)}">Edit</button>`;   // a local-only persona is read-only
+ const add=`<button data-praddrow="${prTxt(r.id)}" data-prclient="${prTxt(client)}">Add to project</button>`;   // the same persona reaches a project that does not declare it (#3013)
  return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
  +cell("Voice",`<span class=nw>${prTxt(r.voice)||"&mdash;"}</span>`)+cell("Tone",prTxt(r.tone)||"&mdash;")
  +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)
@@ -2296,14 +2299,14 @@ function prRender(){const el=$("#prbody");if(!el)return;
 /* The Personas editor's own events (#3011): a field stages its value and posts nothing, so no edit of the theme writes
    before the confirm. The preview and the confirm are the two buttons that post, and the confirm is the one write. */
 $("#prbody").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const dt=b.dataset||{};
- if(dt.predit){prStartEdit(dt.predit);return}
+ if(dt.predit){prStartEdit(dt.predit,dt.prclient);return}
  if(dt.prcopy!==undefined&&dt.prclient!==undefined){prCopyStart(dt.prclient,dt.prcopy);return}
  if(dt.preditPreview!==undefined){prPost(false);return}
  if(dt.preditConfirm!==undefined){prPost(true);return}
  if(dt.preditSample!==undefined){prSample();return}
  if(dt.preditCancel!==undefined){prStopEdit();return}
  if(dt.pradd!==undefined){prStartAdd(null);return}   // a new persona (#3013)
- if(dt.praddrow){prStartAdd(dt.praddrow);return}     // an existing persona to another project (#3013)
+ if(dt.praddrow){prStartAdd(dt.praddrow,dt.prclient);return}     // an existing persona to another project (#3013)
  if(dt.praddPreview!==undefined){prAddPost(false);return}
  if(dt.praddConfirm!==undefined){prAddPost(true);return}
  if(dt.praddSample!==undefined){prAddSample();return}

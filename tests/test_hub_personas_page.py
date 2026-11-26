@@ -122,3 +122,31 @@ def test_the_renderer_draws_each_client_group_with_its_rows(hub):
     assert "drift" in html.lower() and "read-only" in html.lower(), html
     assert html.count('<tr><td data-l="Persona">') == 2, html
     assert "1" in got["nav"], got["nav"]
+
+
+def test_edit_and_add_open_the_row_of_the_client_whose_table_holds_the_button(hub):
+    """Issue #3028: two clients declare one persona id with different projects and voices. Edit and "Add to project" in
+    the second client's table open that client's row, never the first match by id alone."""
+    esc = re.search(r"^const esc=.*$", hub.PAGE, re.M).group(0)
+    first = {**ROW, "voice": "Alnilam", "drift": False,
+             "projects": [{"id": "zesty", "label": "zesty", "file": "slack.yaml"}]}
+    second = {**ROW, "voice": "Charon", "drift": False,
+              "projects": [{"id": "squad", "label": "squad", "file": "slack.yaml"}]}
+    answer = {"err": None, "projects": [{"id": "zesty"}, {"id": "squad"}, {"id": "other"}],
+              "groups": [{"id": "wellzesta", "name": "Wellzesta", "rows": [first]},
+                         {"id": "sandro", "name": "Sandro", "rows": [second]}]}
+    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
+    probe = (
+        f"prS={json.dumps(answer)};prRender();"
+        "const html=$('#prbody').innerHTML;"
+        "const edits=[...html.matchAll(/<button ([^>]*)data-predit=\"[^\"]*\"[^>]*>Edit<\\/button>/g)].map(m=>m[0]);"
+        "const attrs=s=>Object.fromEntries([...s.matchAll(/data-([a-z]+)=\"([^\"]*)\"/g)].map(m=>[m[1],m[2]]));"
+        "const e2=attrs(edits[1]);prStartEdit(e2.predit,e2.prclient);"
+        "const ed={voice:prEd.voice,projects:prEd.projects};"
+        "const adds=[...html.matchAll(/<button [^>]*data-praddrow=\"[^\"]*\"[^>]*>/g)].map(m=>m[0]);"
+        "const a2=attrs(adds[1]);prStartAdd(a2.praddrow,a2.prclient);"
+        "console.log(JSON.stringify({ed,add:prNew.projects}))")
+    body = "\n".join([stub, esc, _block(hub.PAGE), probe])
+    got = json.loads(_node(body))
+    assert got["ed"] == {"voice": "Charon", "projects": ["squad"]}, got
+    assert got["add"] == ["zesty", "other"], got
