@@ -1,8 +1,9 @@
 """The `session` field of a role and the decision it yields (ADR-0180).
 
 Guards: a role names `full` or `bounded`, and a role with no field is `bounded`; any other value is one defect that names
-its key; `decide` returns the session mode, `full` only for the owner of a `full` role, and `bounded` for every other
-member and every other kind of decision.
+its key; `decide` returns the session mode, `full` only for the workspace owner the hub registry names in a `full` role
+of a project channel with an active revision, and `bounded` for every other member, a direct message and every other kind
+of decision.
 """
 import copy
 from datetime import datetime
@@ -31,7 +32,9 @@ LOCAL = {
 }
 
 OWNER_EVENT = {"kind": "message", "workspace": "T0TEAM0001", "channel": "C0PROJ0001", "user": "U0OWNER001",
-               "text": "status please", "bot": False, "external": False, "own": False, "owner": True}
+               "text": "status please", "bot": False, "external": False, "own": False, "owner": True,
+               "active": True, "dm": False}
+OWNERS = {"T0TEAM0001": "U0OWNER001"}   # the owner id the hub registry names for the workspace (#2966)
 
 
 def files(role=None):
@@ -48,7 +51,7 @@ def keys(defects):
 @pytest.mark.parametrize("mode", ["full", "bounded"])
 def test_a_role_names_either_session_mode(mode):
     committed, local = files({"id": "manager", "actions": ["status"], "session": mode})
-    assert S.validate(committed, local) == []
+    assert S.validate(committed, local, owners=OWNERS) == []
 
 
 def test_a_role_session_outside_the_two_modes_is_one_defect_naming_its_key():
