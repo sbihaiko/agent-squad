@@ -2157,7 +2157,7 @@ $("#sbody").addEventListener("click",e=>{const b=e.target.closest("button");
    target projects; the preview posts with no confirm and writes nothing, and the confirm is the theme's one write. The
    theme never saves by itself. */
 // PRS{
-let prS=null,prMsg="",prEd=null,prPlan=null,prPMsg="";
+let prS=null,prMsg="",prEd=null,prPlan=null,prPMsg="",prNew=null,prAddPlan=null,prAddMsg="";
 async function prLoad(){try{prS=await (await fetch("/api/personas")).json();prMsg=prS.err?"!"+prS.err:""}catch(e){prMsg="!load failed"}prRender()}
 const prTxt=t=>esc(t==null?"":String(t));
 const prPlural=(n,w)=>`${n} ${w}${n===1?"":"s"}`;
@@ -2166,14 +2166,14 @@ const prRows=()=>((prS||{}).groups||[]).flatMap(g=>g.rows||[]);
 const prRowAt=id=>prRows().find(r=>String(r.id)===String(id))||null;
 function prStartEdit(id){const r=prRowAt(id);if(!r||r.read_only)return;
  prEd={mode:"fields",id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:(r.projects||[]).map(p=>p.id),all:(r.projects||[]).slice()};
- prPlan=null;prPMsg="";prRender()}
+ prNew=null;prPlan=null;prPMsg="";prRender()}
 /* A drifted row offers one copy for each project that declares the id (#3015): the choice starts an edit that names the
    client and the copy, and the hub alone decides the targets, so a project of another client is never written. */
 function prCopyStart(client,project){const g=((prS||{}).groups||[]).find(x=>String(x.id)===String(client));if(!g)return;
  const r=(g.rows||[]).find(x=>(x.copies||[]).some(c=>String(c.project)===String(project)));if(!r)return;
  const cp=(r.copies||[]).find(c=>String(c.project)===String(project));if(!cp)return;
  prEd={mode:"copy",id:r.id,name:cp.name,voice:cp.voice,tone:cp.tone,client:g.id,copy:cp.project,copies:(r.copies||[]).slice()};
- prPlan=null;prPMsg="";prRender()}
+ prNew=null;prPlan=null;prPMsg="";prRender()}
 function prStopEdit(){prEd=null;prPlan=null;prPMsg="";prRender()}
 function prBody(confirm){if(prEd.mode==="copy")return JSON.stringify({persona:prEd.id,client:prEd.client,copy:prEd.copy,
  confirm:!!confirm});
@@ -2204,6 +2204,49 @@ function prPlanHtml(){const plan=prPlan||{},
   +map.map(r=>`<tr><td data-l="Client">${prTxt(r.label)}</td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`:"";
  return notesHtml+`<table class="ptab" id=prplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
   +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`+mapHtml}
+/* The add (#3013): a new persona with a name, a voice, a tone and the target projects, or an existing row added to a
+   project that does not declare it. It posts `op: add` through the edit's own route and holds its own preview, so the
+   theme's one write stays the confirm. */
+const prSlug=t=>String(t==null?"":String(t)).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+const prAddId=()=>prNew?(prNew.id||prSlug(prNew.name)):"";
+function prStartAdd(id){const all=((prS||{}).projects)||[];
+ if(id==null){prNew={name:"",voice:((prS||{}).voices||[])[0]||"",tone:"",projects:[]}}
+ else{const r=prRowAt(id);if(!r)return;const held=new Set((r.projects||[]).map(p=>String(p.id)));   // the projects that already declare it
+  prNew={id:r.id,name:r.name,voice:r.voice,tone:r.tone,projects:all.map(p=>String(p.id)).filter(p=>!held.has(p))}}
+ prEd=null;prAddPlan=null;prAddMsg="";prRender()}
+function prStopAdd(){prNew=null;prAddPlan=null;prAddMsg="";prRender()}
+function prAddBody(confirm){return JSON.stringify({op:"add",persona:{id:prAddId(),name:prNew.name,voice:prNew.voice,tone:prNew.tone},
+ projects:prNew.projects,confirm:!!confirm})}
+async function prAddPost(confirm){if(!prNew)return;
+ prAddMsg=confirm?"saving":"reading the preview";prAddPlan=null;prRender();
+ try{const d=await(await fetch("/api/personas",{method:"POST",headers:{"Content-Type":"application/json"},body:prAddBody(confirm)})).json();
+  if(d.err)prAddMsg="!"+d.err;
+  else if(confirm){prAddMsg=d.partial?"saved: some projects were refused":"saved: each project wrote and pushed";prNew=null;prRender();prLoad();return}
+  else{prAddPlan=d;prAddMsg=d.partial?"the preview names each refused project":"the preview writes nothing"}
+ }catch(e){prAddMsg="!the add could not be posted"}
+ prRender()}
+async function prAddSample(){if(!prNew)return;
+ prAddMsg="the sample is being made";prRender();
+ try{const r=await(await fetch("/api/slack/sample",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({voice:prNew.voice,tone:prNew.tone})})).json();
+  if(r.err)prAddMsg="!"+r.err;
+  else{prAddMsg=r.cached?"the same voice and tone: the cached sample plays":"a new voice and tone: the sample is made once and cached now";
+   try{const a=new Audio(r.url),p=a.play();
+    if(p&&p.catch)p.catch(()=>{prAddMsg="the browser refused the sound: press Play"})}catch(x){}}}
+ catch(x){prAddMsg="!the sample could not be fetched"}
+ prRender()}
+function prAddPlanHtml(){const rows=((prAddPlan||{}).rows)||[];if(!rows)return"";
+ return `<table class="ptab" id=praddplan><thead><tr><th>Project</th><th>File</th><th>Result</th></tr></thead><tbody>`
+  +rows.map(r=>`<tr><td data-l="Project">${prTxt(r.project)}</td><td data-l="File"><span class=prfile>${prFile(r.file)}</span></td><td data-l="Result">${prTxt(r.result)}</td></tr>`).join("")+`</tbody></table>`}
+function prAddEditor(){const d=prNew;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max;
+ const limit=max==null?"the policy's":prTxt(max),all=((prS||{}).projects)||[];
+ const title=d.id?`Add ${prTxt(d.name)} to another project`:"New persona";
+ return `<section class=prgrp id=pradd><h4>${title}</h4>`
+ +`<label class=prf>Name <input id="prnewname" value="${esc(d.name)}"></label>`
+ +`<label class=prf>Voice <select id="prnewvoice">${voices.map(v=>`<option${String(v)===String(d.voice)?" selected":""}>${prTxt(v)}</option>`).join("")}</select></label>`
+ +`<label class=prf>Tone <input id="prnewtone" value="${esc(d.tone)}"${max==null?"":` maxlength="${max}"`}> <span class=m>at most ${limit} characters</span></label>`
+ +`<fieldset class=prf><legend>Projects</legend>${all.map(p=>`<label><input type=checkbox data-praddproj="${prTxt(p.id)}"${d.projects.includes(String(p.id))?" checked":""}> ${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span></label>`).join("")}</fieldset>`
+ +`<div class=prbar><button data-pradd-preview>Preview</button> <button data-pradd-sample>Play sample</button> <button data-pradd-confirm>Confirm</button> <button data-pradd-cancel>Cancel</button></div>`
+ +(prAddMsg?`<p class="mx" role=status>${prTxt(prAddMsg.replace(/^!/,""))}</p>`:"")+prAddPlanHtml()+`</section>`}
 function prEditor(){const d=prEd;if(!d)return"";const voices=(prS||{}).voices||[],max=(prS||{}).tone_max,pat=(prS||{}).name_pattern;
  const limit=max==null?"the policy's":prTxt(max);
  if(d.mode==="copy")return `<section class=prgrp id=predit><h4>Use a copy of ${prTxt(d.id)}</h4>`
@@ -2224,16 +2267,18 @@ function prRow(r,client){
  const projects=((r.projects||[]).map(p=>`${prTxt(p.label)} <span class=prfile>${prFile(p.file)}</span>`).join("<br>")||"&mdash;")+(copies?`<br>${copies}`:"");
  const flags=[r.drift?'<span class="pflag err">drift</span>':"",r.read_only?"<span class=pflag>read-only</span>":""].join("")||"&mdash;";
  const edit=r.read_only?"&mdash;":`<button data-predit="${prTxt(r.id)}">Edit</button>`;   // a local-only persona is read-only
+ const add=`<button data-praddrow="${prTxt(r.id)}">Add to project</button>`;   // the same persona reaches a project that does not declare it (#3013)
  return `<tr>${cell("Persona",`<b>${prTxt(r.name)}</b>${String(r.id)!==String(r.name)?` <span class=m>${prTxt(r.id)}</span>`:""}`)}`
  +cell("Voice",`<span class=nw>${prTxt(r.voice)||"&mdash;"}</span>`)+cell("Tone",prTxt(r.tone)||"&mdash;")
  +cell("Projects",projects)+cell("Default of",(r.default_of||[]).map(prTxt).join(", ")||"&mdash;")+cell("Flags",flags)
- +cell("Edit",edit)+"</tr>"}
+ +cell("Edit",edit+" "+add)+"</tr>"}
 function prRender(){const el=$("#prbody");if(!el)return;
  const groups=((prS||{}).groups||[]).filter(g=>(g.rows||[]).length),rows=groups.reduce((n,g)=>n+g.rows.length,0);
  const txt=rows?`${prPlural(rows,"persona")} · ${prPlural(groups.length,"client")}`:"no persona";
  for(const sel of ["#prsnav","#prssr"]){const el=$(sel);if(el)el.textContent=txt}   // the nav line and the panel's own chip read one text
  const ban=prMsg?`<p class="mx err" role=status>${prTxt(prMsg.replace(/^!/,""))}</p>`:"";
- el.innerHTML=ban+prEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(r=>prRow(r,g.id)).join("")}</tbody></table></section>`).join("")
+ const bar=(prEd||prNew)?"":`<div class=prbar><button data-pradd>New persona</button></div>`;   // the one door to a new persona (#3013)
+ el.innerHTML=ban+bar+prEditor()+prAddEditor()+(groups.length?groups.map(g=>`<section class=prgrp><h4>${prTxt(g.name)}</h4><table class=ptab><thead><tr><th>Persona</th><th>Voice</th><th>Tone</th><th>Projects</th><th>Default of</th><th>Flags</th><th>Edit</th></tr></thead><tbody>${g.rows.map(r=>prRow(r,g.id)).join("")}</tbody></table></section>`).join("")
   :`<p class=m>${prTxt("No persona: no roster project declares one.")}</p>`)}
 // }PRS
 /* The Personas editor's own events (#3011): a field stages its value and posts nothing, so no edit of the theme writes
@@ -2244,16 +2289,27 @@ $("#prbody").addEventListener("click",e=>{const b=e.target.closest("button");if(
  if(dt.preditPreview!==undefined){prPost(false);return}
  if(dt.preditConfirm!==undefined){prPost(true);return}
  if(dt.preditSample!==undefined){prSample();return}
- if(dt.preditCancel!==undefined){prStopEdit()}});
-$("#prbody").addEventListener("input",e=>{if(!prEd)return;const t=e.target;
- if(t.id==="prname"){prEd.name=t.value;return}
- if(t.id==="prtone"){prEd.tone=t.value}});
-$("#prbody").addEventListener("change",e=>{if(!prEd)return;const t=e.target,dt=t.dataset||{};
- if(dt.prcopy!==undefined&&prEd.mode==="copy"){const c=(prEd.copies||[]).find(x=>String(x.project)===String(dt.prcopy));
+ if(dt.preditCancel!==undefined){prStopEdit();return}
+ if(dt.pradd!==undefined){prStartAdd(null);return}   // a new persona (#3013)
+ if(dt.praddrow){prStartAdd(dt.praddrow);return}     // an existing persona to another project (#3013)
+ if(dt.praddPreview!==undefined){prAddPost(false);return}
+ if(dt.praddConfirm!==undefined){prAddPost(true);return}
+ if(dt.praddSample!==undefined){prAddSample();return}
+ if(dt.praddCancel!==undefined){prStopAdd()}});
+$("#prbody").addEventListener("input",e=>{const t=e.target;
+ if(prEd){if(t.id==="prname"){prEd.name=t.value;return}
+  if(t.id==="prtone"){prEd.tone=t.value;return}}
+ if(prNew){if(t.id==="prnewname"){prNew.name=t.value;return}
+  if(t.id==="prnewtone"){prNew.tone=t.value}}});
+$("#prbody").addEventListener("change",e=>{const t=e.target,dt=t.dataset||{};
+ if(prEd&&dt.prcopy!==undefined&&prEd.mode==="copy"){const c=(prEd.copies||[]).find(x=>String(x.project)===String(dt.prcopy));
   if(c){prEd.copy=c.project;prEd.name=c.name;prEd.voice=c.voice;prEd.tone=c.tone;prRender()}return}
- if(t.id==="prvoice"){prEd.voice=t.value;return}
- if(dt.prproj!==undefined){const ids=new Set(prEd.projects);if(t.checked)ids.add(dt.prproj);else ids.delete(dt.prproj);
-  prEd.projects=[...ids]}});
+ if(prEd){if(t.id==="prvoice"){prEd.voice=t.value;return}
+  if(dt.prproj!==undefined){const ids=new Set(prEd.projects);if(t.checked)ids.add(dt.prproj);else ids.delete(dt.prproj);
+   prEd.projects=[...ids];return}}
+ if(prNew){if(t.id==="prnewvoice"){prNew.voice=t.value;return}
+  if(dt.praddproj!==undefined){const ids=new Set(prNew.projects);if(t.checked)ids.add(dt.praddproj);else ids.delete(dt.praddproj);
+   prNew.projects=[...ids]}}});
 /* Settings (#913): a left theme list (a select on the phone) shows one theme at a time, and one page-level Save shows
    the diff of every theme with a change, each line naming its theme, and writes only after the confirm. Spend & limits
    writes each field on its own and keeps no button (#2433). Access has no Save: the bar says so. */
