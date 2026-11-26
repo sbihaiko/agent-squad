@@ -2,7 +2,7 @@
 """Janitor: one conservative cleanup pass per watch cycle (JANITOR_DRY=1 prints and acts on nothing). Every action goes to stdout and $SG_STATE/cycle.log.
  A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree;
     a process a pass of this loop started (childcc.py: the child review, the wave landing) is never a leftover (#497).
- B  finished run (1 h old): kill its idle dashboard_server.
+ B  finished run (1 h old): kill its idle dashboard_server, read from every dashboard of this loop, not from active-runs (#3004).
  S  a counted ceiling on this loop's dashboards (JANITOR_DASHBOARD_MAX, default 8; 0 turns it off). B, J and C reap the dashboard of the one
     run the pass knows about, so a run that left active-runs.txt, or a record the pass cannot read, leaves its dashboard behind and the count
     grows with nothing bounding it (41 were alive after the freeze of 2026-10-13). S counts every dashboard this loop started, whatever the
@@ -672,9 +672,6 @@ for r in names:
             say(f"FINISHED-RUN {n}: its verdict is final, no wave stands for it, no process or lease names it; dropped from active-runs")
             drop_line(r); keep_run(r, f, i)   # the line leaves this pass (#2144), and the card pass and rule Q still read the run's record (#2138)
             continue
-        if i["idle"] > 3600:
-            for q, (_, c) in procs.items():
-                if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
         # #1854: the health pass's reap ends a run whose engine died and cannot drop its line, since rules O and R read the
         # run from the listing on the pass after the reap. This pass has read it, from `names`, and the reoffer marker
         # carries its issues to the card pass, as a rule-C zombie's do. So a run the reap ended (a killed verdict), with no
@@ -812,11 +809,21 @@ def live_run(f):   # a run still going owns its dashboard; a run with no record 
     if i is not None: return not i["verdict"]
     req = f / "request.txt"
     return req.exists() and now - req.stat().st_mtime <= 300
-if DASH_MAX:
+def our_dashboards():   # every live dashboard of this loop and the run folder it serves, from the pass-start process table
     dash = {}
     for q, (_, c) in procs.items():
         dm = re.search(r"squad\.dashboard_server\s+(\S+)", c)
-        if dm and ours(dm.group(1)): dash[q] = dm.group(1)
+        if dm and ours(dm.group(1)) and q not in killed: dash[q] = dm.group(1)
+    return dash
+# B: the one-hour bound (#3004). A finished run leaves active-runs.txt at 300 s (#2138, #2144), so a per-run check at 3600 s
+# never read one. This reads every dashboard of this loop instead, whatever list names its run, and with the ceiling turned off.
+for q, d in our_dashboards().items():
+    i = read(folder(d))
+    if i is not None and i["verdict"] and i["idle"] > 3600 \
+            and not any(LIVE.search(procs.get(x, (0, ""))[1]) for x in inside(folder(d)) if x not in killed):
+        kill(q, f"dashboard of finished run {folder(d).name}")
+if DASH_MAX:
+    dash = our_dashboards()
     orphans = sorted((q for q, d in dash.items() if not live_run(folder(d))), key=lambda q: (starts.get(q) or now, q))
     victims = orphans[:max(0, len(dash) - DASH_MAX)]
     if os.environ.get("JANITOR_DIAG"):
