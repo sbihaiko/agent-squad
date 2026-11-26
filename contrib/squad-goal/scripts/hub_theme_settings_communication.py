@@ -2620,6 +2620,37 @@ def slack_owner_post(body):
     if err: return {"err": err, "owners": _slack_owner_map()}
     return {"err": None, "owner": user, "owners": written}
 
+def slack_grant_post(body):
+    """POST /api/slack/grant: one `{workspace, user}` grant of `full` in the hub registry (#2971, ADR-0180).
+
+    A grant admits a person other than the owner to a full session, so the hub is the one writer of it. Each pair is one
+    row, a repeated pair is kept once, and a value that is not a Slack id is refused before any write.
+    """
+    if not isinstance(body, dict): return {"err": "bad request"}
+    ws = _slack_text(body.get("workspace")).strip()
+    user = _slack_text(body.get("user")).strip()
+    try: P = slack_policy()
+    except Exception as e:
+        return {"err": f"the Slack rules module did not resolve: {type(e).__name__}: {e}", "grants": _slack_grants()}
+    if not P.WORKSPACE_ID.match(ws):
+        return {"err": f"workspace {ws!r} is not a Slack workspace id (T... or E...)", "grants": _slack_grants()}
+    if not P.USER_ID.match(user):
+        return {"err": f"user {user!r} is not a Slack user id (U... or W...)", "grants": _slack_grants()}
+    grant = {"workspace": ws, "user": user}
+    written = []
+
+    def change(data):
+        kept = [g for g in data.get("grants") if isinstance(g, dict)] if isinstance(data.get("grants"), list) else []
+        if grant not in kept:
+            kept.append(grant)
+        data["grants"] = kept
+        written[:] = kept
+        return data
+
+    err = _slack_registry_update(change)
+    if err: return {"err": err, "grants": _slack_grants()}
+    return {"err": None, "grant": grant, "grants": written}
+
 def slack_people_post(body):
     """POST /api/slack/people: `{workspace, q}` resolves an email or an @name to the matching people, and
     `{workspace, ids}` answers the name of each id the directory knows. A workspace this host has no connection to

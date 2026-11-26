@@ -660,6 +660,15 @@ def test_a_grant_whose_workspace_is_not_a_string_grants_nothing():
     assert any(d.key == "members[0].users[0]" and "owner of workspace" in d.reason for d in defects), defects
 
 
+def test_a_grant_written_in_the_local_file_grants_nothing():
+    """Only the hub registry grants a full session. A `grants` key in the local file admits no member (#2971)."""
+    committed, local = full_files()
+    local["grants"] = [{"workspace": "T0TEAM0001", "user": "U0GUEST001"}]
+    local["members"][0]["users"] = ["U0GUEST001"]
+    defects = S.validate(committed, local, owners={"T0TEAM0001": "U0BOSS0001"}, grants=[])
+    assert keys(defects) == ["members[0].users[0]"], defects
+
+
 def test_a_bounded_role_member_needs_neither_the_owner_nor_a_grant():
     """A `session: bounded` role member in a declared workspace with no owner and no grant is no defect: the owner and
     grant check belongs to the full session alone (ADR-0180)."""
