@@ -10,6 +10,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -400,3 +401,79 @@ def test_the_operators_module_of_these_tests_ends_its_proxies_with_each_test():
     """#2989: a gate test that starts a session starts a model proxy where no loopback endpoint is set (the CI runner).
     The module these tests load records each start, so the test's teardown ends the proxy."""
     assert operators_module().start_proxy.__name__ == "tracked"
+
+
+# #2972: a denied call of a bounded session goes to the permission relay.
+
+OWNER = "U0OWNER"
+DM = "D0OWNERDM"
+WORKSPACE = "T0WORKSPACE"
+
+
+def permrelay_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("permrelay", VOICE / "permrelay.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def relay_doc(tmp_path, tree_, timeout=0):
+    """The policy the supervisor writes for a bounded session that may ask the owner (#2972)."""
+    doc = policy(tree_)
+    doc["relay"] = {"state": str(tmp_path / "state" / "permission"), "owner": OWNER, "dm": DM, "workspace": "",
+                    "sender": INBOX, "folder": tree_["checkout"], "timeout": timeout}
+    return doc
+
+
+def start_gate(tmp_path, doc, event, name="relay-policy.json"):
+    """The hook as a script, kept open while the test answers its request, so the wait is a real wait."""
+    path = tmp_path / name
+    path.write_text(json.dumps(doc))
+    return subprocess.Popen([sys.executable, str(GATE), str(path)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def answer_gate(proc, event, timeout=30):
+    """Write the event, read the answer: the hook's exit code and its `hookSpecificOutput`."""
+    out, err = proc.communicate(input=json.dumps(event), timeout=timeout)
+    assert proc.returncode == 0, f"the hook exited {proc.returncode}: {err}"
+    return json.loads(out)["hookSpecificOutput"]
+
+
+def test_the_owners_approval_lifts_the_hooks_denial(tmp_path):
+    tree_ = tree(tmp_path)
+    module = permrelay_module()
+    event = bash_event("curl http://example.com")
+    proc = start_gate(tmp_path, relay_doc(tmp_path, tree_, timeout=60), event)
+    relay = module.Relay(tmp_path / "state" / "permission", owner=OWNER, dm_channel=DM, workspace="")
+    digest = module.call_hash(event["tool_name"], event["tool_input"], tree_["checkout"])
+    stop = time.monotonic() + 30
+    while not relay.open_requests() and time.monotonic() < stop:
+        time.sleep(0.02)
+    assert relay.decide(OWNER, DM, WORKSPACE, "approve", digest) == "approved"
+    out = answer_gate(proc, event)
+    assert out["permissionDecision"] == "allow", out
+    assert out["updatedInput"] == event["tool_input"], out
+
+
+def test_a_denied_bounded_call_answers_one_short_reason(tmp_path):
+    tree_ = tree(tmp_path)
+    event = bash_event("curl http://example.com")
+    proc = start_gate(tmp_path, relay_doc(tmp_path, tree_, timeout=0), event)
+    out = answer_gate(proc, event)
+    assert out["permissionDecision"] == "deny", out
+    assert out["permissionDecisionReason"] == permrelay_module().DENIED_MESSAGE, out
+    lines = audit_lines(tree_)
+    assert lines and lines[-1]["reason"] == out["permissionDecisionReason"], lines
+
+
+def test_a_call_the_gate_already_allows_asks_the_relay_nothing(tmp_path):
+    tree_ = tree(tmp_path)
+    inside = Path(tree_["checkout"]) / "README.md"
+    inside.write_text("hello")
+    done = run(tmp_path, tree_, read_event(inside), doc=relay_doc(tmp_path, tree_))
+    allowed, reason, _ = call(done)
+    assert allowed, reason
+    state = tmp_path / "state" / "permission"
+    assert not state.exists() or not list(state.iterdir()), "an allowed call opened a relay request"

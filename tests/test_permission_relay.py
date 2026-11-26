@@ -1,9 +1,12 @@
-"""The permission relay of a full turn (ADR-0180, SPEC 2964).
+"""The permission relay of a full turn and of a bounded session (ADR-0180, SPEC 2964, #2972).
 
 A permission that a full turn needs reaches the owner's DM as one request that names the literal tool call and its
 working folder. An approval allows the call whose hash it names, once. A request with no answer for ten minutes is
 denied. Only the owner's id, in the owner's DM of that workspace, approves. A sender holds at most three open requests.
 Each request, approval and denial writes one audit line.
+
+A bounded session's denied call uses the same relay (#2972): `call` opens one request and waits for the owner's answer,
+and a denial, a timeout or a full sender gives the member one short reason.
 """
 import importlib.util
 import json
@@ -221,3 +224,71 @@ def test_extra_arguments_come_before_the_output_format(tmp_path):
     assert command[command.index("--settings") + 1] == str(settings)
     assert command.index("--settings") < command.index("--output-format")
     assert command[command.index("--output-format") + 1] == "json"
+
+
+# A bounded session's denied call goes to the same relay (#2972).
+
+MEMBER = "U0MEMBER"
+DENIED = "The owner did not approve this call."
+TIMED_OUT = "The owner did not answer in time, so the call was denied."
+BUSY = "The relay holds three open requests for this session, so the call was denied."
+
+
+def test_a_bounded_call_waits_for_the_owners_approval(relay):
+    polls = []
+
+    def approve_once(seconds):
+        polls.append(seconds)
+        row = relay.open_requests()[0]
+        relay.decide(OWNER, DM, WORKSPACE, "approve", row["hash"])
+
+    answer = relay.call(MEMBER, TOOL, INPUT, CWD, poll=0, sleep=approve_once)
+    assert answer["verdict"] == "allow", answer
+    assert answer["reason"] == ""
+    assert polls == [0], "the call did not wait for the owner's answer"
+
+
+def test_an_approval_of_a_bounded_call_allows_the_call_once(relay):
+    def approve_once(seconds):
+        relay.decide(OWNER, DM, WORKSPACE, "approve", relay.open_requests()[0]["hash"])
+
+    first = relay.call(MEMBER, TOOL, INPUT, CWD, poll=0, sleep=approve_once)
+    assert first["verdict"] == "allow"
+    assert relay.status(first["id"]) == "used", "a bounded approval became a standing grant"
+
+
+def test_a_bounded_call_denied_by_the_owner_gives_one_short_reason(relay):
+    def deny_once(seconds):
+        relay.decide(OWNER, DM, WORKSPACE, "deny", relay.open_requests()[0]["hash"])
+
+    answer = relay.call(MEMBER, TOOL, INPUT, CWD, poll=0, sleep=deny_once)
+    assert answer["verdict"] == "deny"
+    assert answer["reason"] == DENIED
+
+
+def test_a_bounded_call_with_no_answer_times_out_with_one_short_reason(tmp_path, clock):
+    relay = load("permrelay").Relay(tmp_path, owner=OWNER, dm_channel=DM, workspace=WORKSPACE, now=clock, timeout=30)
+
+    def elapse(seconds):
+        clock.now += 31
+
+    answer = relay.call(MEMBER, TOOL, INPUT, CWD, poll=0, sleep=elapse)
+    assert answer["verdict"] == "deny"
+    assert answer["reason"] == TIMED_OUT
+    assert relay.status(answer["id"]) == "timeout"
+
+
+def test_a_bounded_session_holds_at_most_three_open_requests(relay):
+    for n in range(3):
+        assert relay.request(MEMBER, TOOL, {"command": f"step {n}"}, CWD)["status"] == "pending"
+    answer = relay.call(MEMBER, TOOL, {"command": "step 4"}, CWD, poll=0)
+    assert answer["verdict"] == "deny"
+    assert answer["reason"] == BUSY
+    assert len([row for row in relay.open_requests() if row["sender"] == MEMBER]) == 3
+
+
+def test_a_bounded_request_with_no_workspace_is_answered_in_the_owner_dm(tmp_path, clock):
+    bounded = load("permrelay").Relay(tmp_path, owner=OWNER, dm_channel=DM, workspace="", now=clock)
+    req = bounded.request(MEMBER, TOOL, INPUT, CWD)
+    assert bounded.decide(OWNER, DM, WORKSPACE, "approve", req["hash"]) == "approved"
+    assert bounded.verdict(req["id"]) == "allow"
