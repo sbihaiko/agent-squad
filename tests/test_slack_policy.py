@@ -589,3 +589,85 @@ def test_an_action_command_that_is_empty_or_not_one_mapping_is_refused():
     assert "project.actions.status" in keys(S.validate(committed, local))
     committed["project"]["actions"] = ["squad status"]
     assert "project.actions" in keys(S.validate(committed, local))
+
+
+# --- a `full` role holds only the workspace owner or a granted member (#2966, ADR-0180) ---------------------
+NOW = datetime.datetime(2026, 11, 25, 12, 0, 0)
+FULL_ROLE = {"id": "manager", "actions": ["status", "logs"], "session": "full"}
+
+
+def full_files():
+    """The valid pair whose one `manager` role holds the full session."""
+    committed, local = files(committed__roles=[FULL_ROLE])
+    return committed, local
+
+
+def owner_event(**over):
+    """A message from the workspace owner in the project channel, which answers an active revision."""
+    event = {"kind": "message", "workspace": "T0TEAM0001", "channel": "C0PROJ0001", "user": "U0OWNER001",
+             "text": "status please", "bot": False, "external": False, "own": False, "owner": True,
+             "active": True, "dm": False}
+    event.update(over)
+    return event
+
+
+def test_a_full_role_member_who_is_the_workspace_owner_is_no_defect():
+    committed, local = full_files()
+    assert S.validate(committed, local, owners={"T0TEAM0001": "U0OWNER001"}) == []
+
+
+def test_a_full_role_member_neither_owner_nor_granted_is_one_defect_naming_the_user():
+    committed, local = full_files()
+    defects = S.validate(committed, local, owners={"T0TEAM0001": "U0BOSS0001"})
+    assert keys(defects) == ["members[0].users[0]"], defects
+
+
+def test_a_full_role_member_with_no_owner_map_is_a_defect():
+    committed, local = full_files()
+    assert keys(S.validate(committed, local)) == ["members[0].users[0]"]
+
+
+def test_a_full_role_member_granted_in_its_workspace_is_no_defect():
+    committed, local = full_files()
+    grants = [{"workspace": "T0TEAM0001", "user": "U0OWNER001"}]
+    assert S.validate(committed, local, owners={"T0TEAM0001": "U0BOSS0001"}, grants=grants) == []
+
+
+def test_a_grant_in_another_workspace_does_not_pass_a_full_role_member():
+    committed, local = full_files()
+    grants = [{"workspace": "T0OTHER001", "user": "U0OWNER001"}]
+    defects = S.validate(committed, local, owners={"T0TEAM0001": "U0BOSS0001"}, grants=grants)
+    assert keys(defects) == ["members[0].users[0]"], defects
+
+
+def test_a_bounded_role_member_needs_neither_the_owner_nor_a_grant():
+    committed, local = files()
+    assert S.validate(committed, local) == []
+
+
+def test_a_full_decision_in_the_owner_project_channel_runs_the_full_session():
+    committed, local = full_files()
+    decision = S.decide(committed, local, owner_event(), NOW)
+    assert decision.kind == S.INBOX
+    assert decision.session == S.SESSION_FULL
+
+
+def test_a_full_decision_in_a_direct_message_runs_bounded():
+    committed, local = full_files()
+    assert S.decide(committed, local, owner_event(dm=True), NOW).session == S.SESSION_BOUNDED
+
+
+def test_a_full_decision_in_a_channel_with_no_active_revision_runs_bounded():
+    committed, local = full_files()
+    assert S.decide(committed, local, owner_event(active=False), NOW).session == S.SESSION_BOUNDED
+
+
+def test_a_full_decision_in_a_guest_channel_runs_bounded():
+    committed, local = full_files()
+    local["workspaces"][0]["channels"][0]["roles"] = ["manager"]
+    local["members"] = [{"workspace": "T0CLIENT01", "channel": "C0CLISUP01", "role": "manager",
+                         "users": ["U0OWNER001"]}]
+    event = owner_event(workspace="T0CLIENT01", channel="C0CLISUP01")
+    decision = S.decide(committed, local, event, NOW)
+    assert decision.kind == S.PROPOSAL
+    assert decision.session == S.SESSION_BOUNDED
