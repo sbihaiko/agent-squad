@@ -58,9 +58,12 @@ rule of the Slack policy module (`squad/slackpolicy.py`). `voiced` checks the sa
 so a line with no pending inbox line stays in the outbox. Never append to an outbox yourself.
 
 One session answers a channel, and every helper append takes an exclusive flock on the outbox while every inbox read
-takes a shared one, so two writers that take the lock never interleave a line. The helper reads only a bounded tail of
-the inbox, so its memory and latency do not grow with the queue's age. A call that repeats the same thread and text
-writes no second line, so a retry after a lost tool result posts one answer.
+takes a shared one and reads the tail through that same descriptor, so two writers that take the lock never interleave
+a line. The daemon appends to the inbox without a lock, so the read skips only a torn trailing line. The helper reads
+only a bounded tail of the inbox, so its memory and latency do not grow with the queue's age. A call that repeats the
+same thread, text and `--kind` writes no second line, so a retry after a lost tool result posts one answer. The
+`--kind` token (default `answer`) keys the dedup: the DM's proposal second call passes `--kind proposal`, so an answer
+and a proposal that carry identical text stay two lines.
 
 One outbox line is one answer:
 
@@ -97,10 +100,12 @@ request older than a few minutes. The daemon's checked executor reads it outside
 The executor asks the policy whether the sender's role lists the action, runs the command the project declares for that
 action id, and appends one reply in the thread. It never runs the text of the message.
 
-The DM session also calls the helper once more for the same line, with the same `--scope` and `--thread`, and with a
-text that starts with `Proposal:`. The inbox keeps the question, so the second call answers the same pending line, and
-its proposal line lands beside the answer. No structured field marks a proposal line: the executor that runs an action
-selects it by the `Proposal:` text prefix. A project session cannot write the DM outbox, so it proposes nothing.
+The DM session also calls the helper once more for the same line, with the same `--scope` and `--thread`, with
+`--kind proposal`, and with a text that starts with `Proposal:`. The inbox keeps the question, so the second call
+answers the same pending line, and its proposal line lands beside the answer. The helper stamps `kind: "proposal"` on
+that line, so a retry dedups on it and it never collapses with an answer of the same text; the executor still acts only
+on a line whose reserved `kind` is `action-request`. A project session cannot write the DM outbox, so it proposes
+nothing.
 
 The session writes the CLI's own runtime under `~/.claude`, and nothing there that the owner's next session loads:
 the kernel refuses the settings files, every top-level Markdown file, the skills, agents, commands, hooks, plugins,

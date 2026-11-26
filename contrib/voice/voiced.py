@@ -799,8 +799,11 @@ class State:
         channel in the owner's event, and a first pin wins, so a later event or an inbox line never moves it."""
         if not channel:
             return
-        folder = os.path.join(self.dir, "operators", "sessions")
-        path = os.path.join(folder, f"{DM}.json")
+        # One helper names the pinned record (#2949), so the writer, the reader and the refusal spell one path. The
+        # import is local because `operators` imports this module at load time.
+        from operators import dm_record_path
+        path = dm_record_path(self.dir)
+        folder = os.path.dirname(path)
         try:
             with open(path, encoding="utf-8") as f:
                 if (json.load(f) or {}).get("dm"):

@@ -2966,3 +2966,18 @@ def test_the_action_pass_logs_a_quiet_heartbeat(tmp_path, monkeypatch):
     assert not any("action pass" in line for line in logged), logged
     assert daemon.run_action_requests() == 0
     assert any("action pass" in line for line in logged), logged
+
+
+def test_the_first_owner_dm_starts_the_dm_session(tmp_path):
+    """#2949 Blocking 2: on a fresh state the daemon pins the owner's DM channel before it starts the DM session, so the
+    first owner DM gets a session instead of being refused for a pin that only a message would write."""
+    mod = voiced()
+    started = []
+    daemon = startable_daemon(tmp_path, mod, lambda state_dir, repo, log=None, line=None: started.append(repo))
+
+    outcome = daemon.handle(message_event(channel="D0OWNER", ts="1762500001.000200"))
+
+    assert outcome == "inbox"
+    assert started == ["dm"], started
+    record = Path(daemon.state.dir) / "operators" / "sessions" / "dm.json"
+    assert json.loads(record.read_text())["dm"] == "D0OWNER", record.read_text()

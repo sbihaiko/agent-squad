@@ -18,8 +18,9 @@ same thread whose text starts with `Proposal:`. The inbox keeps the question, so
 pending line and its proposal line lands beside the answer in the same outbox. No structured field marks a proposal:
 the executor that runs an action selects it by the `Proposal:` text prefix.
 
-A retried call for the same thread and the same text writes no second line: a lost Bash tool_result makes the session
-call the helper again, and the helper skips the append when its outbox tail already holds that line.
+A retried call for the same thread, text and `--kind` writes no second line: a lost Bash tool_result makes the session
+call the helper again, and the helper skips the append when its outbox tail already holds that line. The `--kind` token
+(default `answer`) keys the dedup, so a DM answer and its proposal that carry identical text stay two lines.
 
 The helper writes no other file and makes no Slack call. It runs under the session's kernel profile, so the kernel
 refuses every write beyond the session's own outboxes whatever this helper does. One session per state folder answers
@@ -28,7 +29,7 @@ writers that take the lock never interleave a line. An inbox read takes only the
 never loads a whole queue.
 
 usage: answer.py --scope <channel id|dm> [--thread <the inbox line's ts>] --text "<the answer>"
-                 [--speech "<a 10 to 30 second summary>"] [--persona <id>]
+                 [--speech "<a 10 to 30 second summary>"] [--persona <id>] [--kind answer|proposal]
 The DM may omit `--thread`, and then answers the newest pending line of its inbox.
 Exit 0: the answer's one outbox line is present, and a retry writes no second one. Exit 2: the call is refused, and
 nothing was written. Exit 1: the write failed.
@@ -85,9 +86,9 @@ def read_lines(path):
     broken queue that names its path. An inbox whose pending line is older than the read bound answers nothing, because
     the helper never loads the whole queue.
 
-    The read holds a shared flock on the file, so a writer that takes the matching exclusive lock never meets a line
-    half written. The daemon's own inbox append takes no lock, so a torn trailing line is still possible: the helper
-    skips that one line and nothing else."""
+    The read holds a shared flock on the descriptor and reads the tail through that same descriptor, so a writer that
+    takes the matching exclusive lock on the path never meets a line half written. The daemon's own inbox append takes
+    no lock, so a torn trailing line is still possible: the helper skips that one line and nothing else."""
     out = []
     try:
         f = open(path, "rb")
@@ -97,7 +98,7 @@ def read_lines(path):
         raise Refused(f"cannot read the inbox {path}: {e.strerror or e}") from e
     with f:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-        raw_lines = operators.tail_lines(path)
+        raw_lines = operators.tail_lines_of(f)     # the tail read under this very lock, never a second open of the path
     last = len(raw_lines) - 1
     for number, raw in enumerate(raw_lines):
         raw = raw.strip()
@@ -134,7 +135,7 @@ def pending_line(inbox, thread):
     return slackpolicy.pending_line(inbox, thread)
 
 
-def answer(binding, scope, thread, text, speech=None, persona=None):
+def answer(binding, scope, thread, text, speech=None, persona=None, kind="answer"):
     """Write one outbox line for a pending inbox line of `scope`, a channel of the session's project.
 
     A second call for an already answered thread is legal: the inbox keeps the question, so the same pending line answers
@@ -180,6 +181,8 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
         record["speech"] = str(speech)
     if persona:
         record["persona"] = str(persona)
+    if kind != "answer":
+        record["kind"] = str(kind)      # a proposal and an answer with the same text stay two lines (#2949)
     if scope == DM:
         record["channel"] = line_channel
     os.makedirs(os.path.dirname(outbox), exist_ok=True)
@@ -192,8 +195,10 @@ def answer(binding, scope, thread, text, speech=None, persona=None):
                 held = json.loads(raw)
             except ValueError:
                 continue
+            # A retry carries the same caller `kind`, so a proposal and an answer with identical text never collapse.
             if (isinstance(held, dict) and str(held.get("thread_ts")) == record["thread_ts"]
-                    and str(held.get("text")) == record["text"]):
+                    and str(held.get("text")) == record["text"]
+                    and str(held.get("kind") or "answer") == kind):
                 return held                          # a retry of this answer: the line is already there
         f.seek(0, os.SEEK_END)
         lead = ""
@@ -214,12 +219,14 @@ def main(argv=None):
     ap.add_argument("--text", required=True, help="the answer Slack shows")
     ap.add_argument("--speech", default=None, help="a 10 to 30 second spoken summary")
     ap.add_argument("--persona", default=None, help="the channel persona id the answer posts under")
+    ap.add_argument("--kind", choices=("answer", "proposal"), default="answer",
+                    help="answer (default) or the DM's proposal second call; the retry dedup keys on it")
     args = ap.parse_args(argv)
     if not args.text.strip():
         print("answer: refused: the answer text is empty", file=sys.stderr)
         return 2
     try:
-        record = answer(read_binding(), args.scope, args.thread, args.text, args.speech, args.persona)
+        record = answer(read_binding(), args.scope, args.thread, args.text, args.speech, args.persona, args.kind)
     except Refused as e:
         print(f"answer: refused: {e}", file=sys.stderr)
         return 2

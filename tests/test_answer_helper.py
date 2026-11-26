@@ -547,3 +547,51 @@ def test_a_proposal_line_keeps_the_text_prefix_the_executor_selects_by(tmp_path)
     lines = outbox(state, "dm")
     assert [line["text"] for line in lines] == [ANSWER, "Proposal: restart the hub"], lines
     assert [line["text"].startswith("Proposal:") for line in lines] == [False, True], lines
+
+
+# The locked read (#2949 review, Blocking 1): `read_lines` must read the bounded tail through the descriptor it already
+# holds the shared flock on, never reopen the path and read it unlocked.
+
+def test_the_inbox_read_uses_the_descriptor_it_locks(tmp_path, monkeypatch):
+    """Blocking 1 (#2949): the helper reads the inbox tail from the very descriptor it takes the shared flock on. A
+    reader that reopened the path would step outside that lock, so the tail reader that reopens the path must never run
+    for the inbox."""
+    mod = helper()
+    binding, state = queued(tmp_path)
+    asked(state)
+    inbox = state / "inboxes" / f"{CHANNEL}.jsonl"
+    real = mod.operators.tail_lines
+
+    def refuse_inbox(path, limit=262144):
+        if os.path.realpath(str(path)) == os.path.realpath(str(inbox)):
+            raise AssertionError(f"the inbox read reopened the path {path} instead of reading the locked descriptor")
+        return real(path, limit)
+
+    monkeypatch.setattr(mod.operators, "tail_lines", refuse_inbox)
+
+    record = mod.answer(mod.read_binding(bound(binding)), CHANNEL, QUESTION, ANSWER)
+
+    assert outbox(state) == [{"thread_ts": QUESTION, "text": ANSWER}], record
+
+
+# The dedup key (#2949 review, Debt 5): an answer and a proposal with the same text are two lines, so a repeated answer
+# stays one line but a proposal with an identical text still lands beside it.
+
+def test_an_answer_and_a_proposal_with_the_same_text_are_two_lines(tmp_path):
+    """Debt 5 (#2949): the retry dedup keys on the caller's `--kind`, so an answer and a proposal that carry the same
+    text never collapse into one line, while a repeated answer still lands once."""
+    binding, state = queued(tmp_path, channels=("dm",), dm="D0AAAAAA1")
+    with open(state / "inboxes" / "dm.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({"id": f"dm:{QUESTION}", "ts": QUESTION, "user": "UPROBE0001",
+                            "channel": "D0AAAAAA1", "text": "restart the hub"}) + "\n")
+
+    assert run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", "Proposal: restart the hub",
+                   "--kind", "answer").returncode == 0
+    assert run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", "Proposal: restart the hub",
+                   "--kind", "proposal").returncode == 0
+    assert run_cli(binding, "--scope", "dm", "--thread", QUESTION, "--text", "Proposal: restart the hub",
+                   "--kind", "answer").returncode == 0     # a retry of the answer: no third line
+
+    lines = outbox(state, "dm")
+    assert [line["text"] for line in lines] == ["Proposal: restart the hub", "Proposal: restart the hub"], lines
+    assert [line.get("kind") for line in lines] == [None, "proposal"], lines

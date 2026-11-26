@@ -596,7 +596,7 @@ def test_the_probe_profile_names_one_outbox_and_inbox_per_channel_of_the_project
         assert f'(literal "{outbox}")' in write, write
     for inbox in own_inboxes:
         assert f'(literal "{inbox}")' in read, read
-        assert inbox.read_text().strip() == probe.OWN_SENTINEL
+        assert probe.OWN_SENTINEL in inbox.read_text()
     assert other_inbox.read_text().strip() == probe.SENTINEL
     assert f'(deny file-read* (subpath "{other_inbox.parent}"))' in profile, profile
     assert f'(deny file-read* (subpath "{other_checkout}"))' in profile, profile
@@ -1290,13 +1290,13 @@ def test_a_line_the_daemon_appends_during_the_phase_is_never_truncated(tmp_path,
     assert real in own[0].read_text(), "the phase deleted a line the daemon wrote"
 
 
-def test_the_operator_note_names_the_proposal_prefix_the_executor_selects_by():
-    """Debt 3 (#2949): an outbox line carries no structured proposal field, so the executor selects a proposal by the
-    `Proposal:` text prefix, and the operator note must name that rule."""
+def test_the_operator_note_names_the_proposal_prefix_and_its_kind_token():
+    """Debt 3 and Debt 5 (#2949): the DM proposal's second call passes `--kind proposal` and its text starts with
+    `Proposal:`, so the operator note must name both the prefix and the token."""
     probe = load("operator_probe")
     note = Path(probe.__file__).with_name("OPERATOR.md").read_text()
 
-    assert "Proposal:" in note and "prefix" in note, note
+    assert "Proposal:" in note and "--kind proposal" in note, note
 
 
 def test_the_answer_phase_drives_the_real_helper_end_to_end(tmp_path, monkeypatch):
@@ -1334,3 +1334,47 @@ def test_a_quoted_answer_renders_a_prompt_that_parses_back_to_its_argv():
     text = probe.answer_prompt(command)
 
     assert shlex.split(text.splitlines()[-1]) == command, text
+
+
+# The answer phase without a model (#2949 review, Debt 4): the probe's question-append, outbox check and inbox restore
+# run against the real shipped helper, so pytest proves the shape the live probe only proves with a model.
+
+def test_the_answer_phase_runs_the_real_helper_without_a_model(tmp_path):
+    """Debt 4 (#2949): `exercise_answer` appends its question under a lock, runs the real `answer` helper as the
+    subprocess the session would run, and checks the one threaded outbox line, then restores the inbox — all with no
+    model and no live session."""
+    probe = load("operator_probe")
+    checkout, outboxes, own_inboxes, *_ = probe.project_shape(tmp_path, [8000])
+    binding = probe.write_binding(tmp_path)
+    inbox_before = own_inboxes[0].read_text()
+
+    def run():
+        result = subprocess.run(
+            [sys.executable, str(probe.HELPER), "--scope", probe.PROBE_CHANNELS[0], "--thread", probe.PROBE_THREAD,
+             "--text", probe.ANSWER_TEXT],
+            env={**os.environ, "VOICE_ANSWER_BINDING": str(binding)}, capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+
+    answers = probe.exercise_answer(outboxes, own_inboxes[0], run)
+
+    got = [json.loads(raw) for raw in outboxes[0].read_text().splitlines() if raw.strip()]
+    assert got == [{"thread_ts": probe.PROBE_THREAD, "text": probe.ANSWER_TEXT}], got
+    assert answers == got
+    assert outboxes[1].read_text() == "", "the other channel's outbox took a line"
+    assert own_inboxes[0].read_text() == inbox_before, "the phase left its question in the inbox"
+
+
+def test_the_answer_phase_appends_its_question_under_an_exclusive_lock(tmp_path):
+    """Blocking 3 (#2949): the synthetic question is appended through one helper that takes the same exclusive flock
+    `restore_inbox` takes, never a bare unlocked `open(..., 'ab')`, so a concurrent appender never meets a torn line."""
+    import inspect
+    probe = load("operator_probe")
+    body = inspect.getsource(probe.append_question)
+    assert "flock" in body and "LOCK_EX" in body, body
+    phase = inspect.getsource(probe.exercise_answer)
+    assert "append_question(" in phase and "open(inbox" not in phase, phase
+
+    inbox = tmp_path / "inbox.jsonl"
+    inbox.write_text("before\n")
+    probe.append_question(str(inbox), b"X\n")
+    assert inbox.read_text() == "before\nX\n"

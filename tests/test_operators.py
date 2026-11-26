@@ -671,13 +671,14 @@ def test_an_action_request_gets_a_read_only_answer_and_one_dm_proposal(tmp_path,
 
 
 def test_a_project_action_message_writes_one_request_line_instead_of_running_a_command(tmp_path, monkeypatch):
-    """#2939: the project brief tells the session to append one request line, and to never run a command."""
+    """#2939: the project brief tells the session to append one request line, and to never run a command. #2949 keeps
+    the one answer path the helper, so the brief names no outbox path and no free append."""
     op = operators(tmp_path, monkeypatch)
     text = op.prompt_for("C0AAAAAA1", str(tmp_path / "state"), "/repo")
     assert "never run a command" in text, text
     for field in ('"kind"', '"at"', '"action"', '"arguments"', '"sender"', '"channel"', '"source"', '"thread_ts"'):
         assert field in text, (field, text)
-    assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") in text
+    assert op.outbox_path(str(tmp_path / "state"), "C0AAAAAA1") not in text, "the brief names an outbox for a free append"
 
 
 def test_the_dm_session_keeps_its_own_scope_and_the_agent_squad_repository(tmp_path, monkeypatch):
@@ -1523,3 +1524,52 @@ def test_a_dm_binding_names_the_dm_scope_and_the_helper_accepts_it(tmp_path, mon
     got = answer_module().read_binding({"VOICE_ANSWER_BINDING": path})
     assert got["channels"] == ["dm"], got
     assert op.outbox_path(state, "dm") == os.path.join(state, "outboxes", "dm.jsonl")
+
+
+# The pinned-DM record path (#2949 review, Debt 2): one helper names `<state>/operators/sessions/dm.json`, and the
+# supervisor, the reader and the refusal all use it.
+
+def test_the_pinned_dm_record_path_is_one_helper(tmp_path, monkeypatch):
+    """Debt 2 (#2949): `dm_record_path` is the one name of the pinned record, and the refusal that names a missing
+    record names that very file."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "fresh")
+    assert op.dm_record_path(state) == os.path.join(state, "operators", "sessions", "dm.json")
+
+    unit = {"key": "dm", "repo": "", "checkout": str(tmp_path), "channels": []}
+    with pytest.raises(op.Refused) as caught:
+        op.binding(state, unit)
+    assert op.dm_record_path(state) in str(caught.value), str(caught.value)
+
+
+# The persona read (#2949 review, Debt 3): a read or parse error keeps no persona and names the state and the scope;
+# any other error is a real defect and is never swallowed.
+
+def test_a_broken_slack_revision_names_the_state_and_scope(tmp_path, monkeypatch, capsys):
+    """Debt 3 (#2949): a persona read that fails on a parse error returns no persona and prints one stderr line that
+    names the state and the scope, as `dm_channel` names a skipped corrupt line."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+
+    def broken(state_dir, scope):
+        raise ValueError("bad revision")
+
+    monkeypatch.setattr(op.voiced, "scope_identity", broken)
+
+    assert op.scope_persona_id(state, "C0AAAAAA1") == ""
+    err = capsys.readouterr().err
+    assert "C0AAAAAA1" in err and state in err, err
+
+
+def test_a_persona_defect_that_is_not_a_read_is_never_swallowed(tmp_path, monkeypatch):
+    """Debt 3 (#2949): only a read or a parse error keeps the default; a defect of another kind propagates."""
+    op = operators(tmp_path, monkeypatch)
+    state = str(tmp_path / "state")
+
+    def broken(state_dir, scope):
+        raise RuntimeError("a defect")
+
+    monkeypatch.setattr(op.voiced, "scope_identity", broken)
+
+    with pytest.raises(RuntimeError):
+        op.scope_persona_id(state, "C0AAAAAA1")

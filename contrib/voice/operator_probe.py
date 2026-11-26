@@ -444,36 +444,33 @@ def check_answer_call(calls, expected):
     return command
 
 
-def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
-    """Prove a live session answers through the shipped helper (#2949).
+def append_question(inbox, appended):
+    """Append the phase's one synthetic question under the same exclusive flock `restore_inbox` takes, then fsync it, so
+    no second appender of this inbox ever meets a torn synthetic line and the helper reads it whole (#2949 Blocking 3)."""
+    with open(inbox, "ab") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.write(appended)
+        f.flush()
+        os.fsync(f.fileno())
 
-    One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
-    and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
-    outbox line must thread under the question, and no other channel's outbox may take a line. The phase appends to
-    each outbox and never truncates one, so a denial's control line an earlier phase wrote stays for its verdict. It
-    owns the one inbox it appends its own question to, so it deletes exactly the bytes it appended before it returns,
-    even when the phase fails: `bg_session` and `guest_sessions` reuse this state folder, and neither may read a
-    question this phase left behind. When a line reached that inbox during the phase, the file no longer ends at the
-    appended question, so the phase fails and leaves every line in place instead of deleting a real message."""
-    scope = PROBE_CHANNELS[0]
+
+def exercise_answer(outboxes, inbox, run, scope=PROBE_CHANNELS[0]):
+    """The answer phase's shape, with the model call passed in as `run` (#2949).
+
+    Append one pending question under an exclusive lock, run `run` (the live session in production, the shipped helper
+    itself in a test), then check that the answer threads under the question in the first outbox and that no other
+    outbox gained a line, and restore the inbox whatever happens. `bg_session` and `guest_sessions` reuse this state
+    folder, so the phase deletes exactly the bytes it appended; when a real line reached the inbox during the phase,
+    the file no longer ends at the appended question, so the phase fails and leaves every line in place."""
     held = {str(outbox): Path(outbox).read_text() for outbox in outboxes}
-    inbox = Path(own_inboxes[0])
+    inbox = Path(inbox)
     inbox_before = inbox.stat().st_size if inbox.exists() else 0
     question = {"id": f"{scope}:{PROBE_THREAD}", "ts": PROBE_THREAD, "user": "UPROBE0001", "channel": scope,
                 "text": ANSWER_QUESTION, "language": "en-US"}
     appended = (json.dumps(question) + "\n").encode("utf-8")
-    with open(inbox, "ab") as f:
-        f.write(appended)
-        f.flush()
-        os.fsync(f.fileno())
+    append_question(inbox, appended)
     try:
-        binding = write_binding(work)
-        command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
-        args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
-                "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
-                "--model", MODEL]
-        _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
-        check_answer_call(tool_calls(events), command)
+        run()
         for path, before in held.items():
             if not Path(path).read_text().startswith(before):
                 raise ProbeFailed(f"the answer phase erased a line an earlier phase wrote to {path}")
@@ -489,6 +486,27 @@ def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
         return answers
     finally:
         restore_inbox(inbox, inbox_before, appended)
+
+
+def answer_phase(work, profile, cli, outboxes, own_inboxes, proxy_url=None):
+    """Prove a live session answers through the shipped helper (#2949).
+
+    One pending inbox line waits in the first channel of the project, the session's binding names that project alone,
+    and the live session is asked to run the helper exactly. The session's one Bash call must run that helper, its
+    outbox line must thread under the question, and no other channel's outbox may take a line. `exercise_answer` holds
+    the append, the checks and the restore; this function supplies the one live-session call as their `run`."""
+    scope = PROBE_CHANNELS[0]
+    binding = write_binding(work)
+    command = [sys.executable, str(HELPER), "--scope", scope, "--thread", PROBE_THREAD, "--text", ANSWER_TEXT]
+    args = ["-p", answer_prompt(command), "--tools", TOOLS, "--allowedTools", TOOLS, "--permission-mode", "dontAsk",
+            "--strict-mcp-config", "--output-format", "stream-json", "--verbose", "--max-budget-usd", SPEND,
+            "--model", MODEL]
+
+    def run():
+        _, _, events = cli_call(work, profile, cli, args, proxy_url, extra_env={"VOICE_ANSWER_BINDING": str(binding)})
+        check_answer_call(tool_calls(events), command)
+
+    return exercise_answer(outboxes, own_inboxes[0], run, scope=scope)
 
 
 def restore_inbox(inbox, before, appended):
@@ -716,7 +734,9 @@ def project_shape(work, ports):
     for outbox in outboxes:
         outbox.write_text("")
     for inbox in own_inboxes:
-        inbox.write_text(OWN_SENTINEL + "\n")
+        # A valid JSON line, so the answer helper's inbox read never meets a corrupt line here and the read control
+        # still finds the sentinel's text in the output (#2949).
+        inbox.write_text(json.dumps({"id": "probe-own", "text": OWN_SENTINEL}) + "\n")
     other_inbox.write_text(SENTINEL + "\n")
     profile = profile_text([str(p) for p in outboxes], str(other_inbox.parent), [str(p) for p in own_inboxes],
                            checkout=str(checkout), others=[str(other_checkout)], ports=ports,

@@ -211,19 +211,31 @@ def transcript_files(cwd, session=""):
     return [path] if os.path.isfile(path) else []
 
 
+def tail_lines_of(f, limit=262144):
+    """The last lines of one already-open binary file, the tail read only: a transcript can be long, and the turn the
+    pass reads is at its end. A partial first line of the read is dropped.
+
+    The caller owns the descriptor, so a reader that holds a shared flock on `f` reads under that very lock, never
+    through a second open of the path. The file position is left at its end, and a file shorter than `limit` is read
+    whole."""
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    if size > limit:
+        f.seek(size - limit)
+        f.readline()                 # drop the partial line the bound cut in two
+    else:
+        f.seek(0)
+    return f.read().decode("utf-8", "replace").splitlines()
+
+
 def tail_lines(path, limit=262144):
     """The last lines of one file, the tail read only: a transcript can be long, and the turn the pass reads is at its
     end. A partial first line of the read is dropped. [] for a file that cannot be read."""
     try:
-        size = os.path.getsize(path)
         with open(path, "rb") as f:
-            if size > limit:
-                f.seek(size - limit)
-                f.readline()
-            data = f.read()
+            return tail_lines_of(f, limit)
     except OSError:
         return []
-    return data.decode("utf-8", "replace").splitlines()
 
 
 def last_turn_error(cwd, session=""):
@@ -502,8 +514,8 @@ def action_line(state, unit):
     command."""
     if unit["key"] == DM:
         return ("When a message asks for an action, answer in its channel that this session only reads, and then call "
-                "the helper once more for the same line, with the same --scope and --thread, and with "
-                '--text "Proposal: <the action, one line>".')
+                "the helper once more for the same line, with the same --scope and --thread, with --kind proposal, and "
+                'with --text "Proposal: <the action, one line>".')
     return ("When a message asks for an action, never run a command: append ONE request line to the outbox of the "
             "line's channel, and the daemon's executor checks the sender's role and runs it:\n"
             '  {"kind":"action-request","at":<the epoch second, from `date +%s`>,"action":"<the action id>",'
@@ -521,10 +533,16 @@ def monitor_lines(state, unit):
 
 
 def scope_persona_id(state, scope):
-    """The id of one channel's persona, or "" when the active revision declares none (#2935)."""
+    """The id of one channel's persona, or "" when the active revision declares none (#2935).
+
+    Only a read or a parse error keeps no persona: the state may be absent or a revision malformed before the first
+    load, and that is expected. One stderr line names the state and the scope, as `dm_channel` names a skipped corrupt
+    line. A defect of another kind is a real bug and propagates, never swallowed into a silent missing persona."""
     try:
         persona = voiced.scope_identity(state, scope)[1]
-    except Exception:      # noqa: BLE001 - a state that cannot be read declares no persona
+    except (OSError, ValueError, KeyError, TypeError) as x:
+        print(f"operators: the persona of scope {scope} in state {state} could not be read: "
+              f"{type(x).__name__}: {x}", file=sys.stderr)
         return ""
     return str(getattr(persona, "id", "") or "")
 
@@ -608,8 +626,7 @@ def binding(state, unit):
         # another channel, and the helper trusts the binding. With no pinned record, no DM session starts.
         own = dm_channel(state, pinned=True)
         if not own:
-            raise Refused(f"dm: no pinned DM channel at "
-                          f"{os.path.join(root(state), 'sessions', f'{DM}.json')}, so no DM session starts")
+            raise Refused(f"dm: no pinned DM channel at {dm_record_path(state)}, so no DM session starts")
         data["dm"] = own
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -620,6 +637,13 @@ def binding(state, unit):
     return path
 
 
+def dm_record_path(state):
+    """The one path of the owner's pinned-DM record: `<state>/operators/sessions/dm.json`. The supervisor writes it at a
+    session start (`voiced.pin_dm`), the binding reads it, and the refusal that names a missing record names this file,
+    so no caller spells the path a different way (#2949)."""
+    return os.path.join(root(state), "sessions", f"{DM}.json")
+
+
 def dm_channel(state, pinned=False):
     """The owner's DM channel (#2949): the supervisor's pinned record at `<state>/operators/sessions/dm.json` first,
     the newest DM inbox line only when that record is absent.
@@ -628,7 +652,8 @@ def dm_channel(state, pinned=False):
     the binding. `pinned=True` reads the record alone, so a caller that needs a verified channel gets "" instead of a
     line anything may have written. A corrupt inbox line is reported once instead of skipped in silence, so a broken
     queue stays visible."""
-    record = read_json(os.path.join(root(state), "sessions", f"{DM}.json"), {})
+    pinned_path = dm_record_path(state)
+    record = read_json(pinned_path, {})
     own = str(record.get("dm") or "") if isinstance(record, dict) else ""
     if own:
         return own
@@ -649,7 +674,7 @@ def dm_channel(state, pinned=False):
             if corrupt:
                 print(f"operators: skipped {corrupt} corrupt line(s) in the DM inbox {path}", file=sys.stderr)
             print(f"operators: the DM inbox {path} named the channel {record['channel']}; no pinned record at "
-                  f"{os.path.join(root(state), 'sessions', f'{DM}.json')} was read", file=sys.stderr)
+                  f"{pinned_path} was read", file=sys.stderr)
             return str(record["channel"])
     if corrupt:
         print(f"operators: skipped {corrupt} corrupt line(s) in the DM inbox {path}", file=sys.stderr)
