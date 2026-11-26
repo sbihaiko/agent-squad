@@ -107,11 +107,14 @@ def owner_env(environ):
     return {key: value for key, value in environ.items() if key not in OPERATOR_OVERRIDES}
 
 
-def argv(claude, session):
+def argv(claude, session, relay=None, extra=()):
     command = [claude, "-p"]
     if session:
         command += ["--resume", session]
-    return command + ["--output-format", "json", "--max-budget-usd", str(MAX_BUDGET_USD)]
+    if relay:
+        mcp_path, prompt_tool = relay
+        command += ["--mcp-config", mcp_path, "--permission-prompt-tool", prompt_tool]
+    return command + list(extra) + ["--output-format", "json", "--max-budget-usd", str(MAX_BUDGET_USD)]
 
 
 def result_row(stdout):
@@ -169,13 +172,14 @@ def end_tree(proc):
 
 
 def run_turn(claude, checkout, state_dir, repo, message, environ=None, timeout=TURN_SECONDS, registry=None,
-             user=None):
+             user=None, relay=None, extra=()):
     """Run one turn and answer its outcome. A `registry` holds the turn while its process runs, so a `!stop` from
     another thread ends it, and the turn reports itself stopped rather than failed by its own end (#2968). `user` is
-    the requester who started the turn, so the registry ends it for that identity alone (#2968 review)."""
+    the requester who started the turn, so the registry ends it for that identity alone (#2968 review). `relay` names
+    the permission relay's MCP config and prompt tool, so each permission request reaches the owner's DM (SPEC 2964)."""
     session = saved_sessions(state_dir).get(repo)
     try:   # a missing CLI or checkout is a failed turn, never a raise (#2965 review)
-        proc = subprocess.Popen(argv(claude, session), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(argv(claude, session, relay, extra), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, cwd=checkout,
                                 env=owner_env(os.environ if environ is None else environ), start_new_session=True)
     except OSError:
