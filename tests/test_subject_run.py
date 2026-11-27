@@ -48,6 +48,7 @@ def script(prep, effect):
             "actor": {"output": {"diff": {"files": [{"path": "billing/calc.py"}]}}, "spend": 0.2, "turns": 5, "effect": effect}}
 
 
+@pytest.mark.heavy  # clones a repo; CI load pushed it to 2.3 s
 def test_prepare_clones_the_subject_and_builds_a_valid_graph(tmp_path):
     repo, bench = fake_subject(tmp_path)
     prep = subject.prepare(1, repo, bench, tmp_path / "out")
