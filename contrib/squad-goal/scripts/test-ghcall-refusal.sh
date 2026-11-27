@@ -24,7 +24,7 @@ for rc in 0 1; do
   o=$(. "$T/s/ghcall.sh"; GQL_BODY="$GQL" GQL_RC=$rc SG_GH_PASS=hub gh_get graphql -f query=x); got=$?
   [ "$got" -eq 2 ] && ok "gh_get exits 2 (gh exit $rc)" || bad "gh_get exit $got (gh exit $rc): $o"
   [ "$o" = "refused: GitHub refused: API rate limit already exceeded for user ID 1." ] && ok "the line carries GitHub's own message (gh exit $rc)" || bad "line (gh exit $rc): $o"
-  tail -1 "$LOG" 2>/dev/null | grep -Eq " refused hub$" && ok "logged as refused (gh exit $rc)" || bad "log (gh exit $rc): $(tail -1 "$LOG" 2>/dev/null)"
+  tail -1 "$LOG" 2>/dev/null | grep -Eq " refused hub - -$" && ok "logged as refused (gh exit $rc)" || bad "log (gh exit $rc): $(tail -1 "$LOG" 2>/dev/null)"
 done
 o=$(. "$T/s/ghcall.sh"; GQL_BODY='{"data":{"x":1},"errors":[{"message":"partial"}]}' GQL_RC=0 gh_get graphql -f query=x); got=$?
 [ "$got" -eq 0 ] && ok "an answer that carries data is still an answer" || bad "data answer exit $got: $o"

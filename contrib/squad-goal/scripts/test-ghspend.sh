@@ -24,8 +24,8 @@ LOG="$T/st/api.log"
 cat > "$T/bin/gh" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$STUB_DIR/gh.log"
-if [ -e "$STUB_DIR/ratelimited" ]; then printf 'HTTP/2.0 403 Forbidden\r\n\r\n{"message":"API rate limit exceeded for user ID 1.","status":"403"}'; exit 1; fi
-printf 'HTTP/2.0 200 OK\r\n\r\n%s' "$(cat "$STUB_DIR/body" 2>/dev/null || echo '[]')"
+if [ -e "$STUB_DIR/ratelimited" ]; then printf 'HTTP/2.0 403 Forbidden\r\n\r\n' >&2; printf '%s' '{"message":"API rate limit exceeded for user ID 1.","status":"403"}'; exit 1; fi
+printf 'HTTP/2.0 200 OK\r\n\r\n' >&2; printf '%s' "$(cat "$STUB_DIR/body" 2>/dev/null || echo '[]')"
 STUB
 chmod +x "$T/bin/gh"
 printf '#!/bin/bash\nexit 0\n' > "$T/hbin/gh"; chmod +x "$T/hbin/gh"
@@ -36,44 +36,45 @@ reset() { rm -rf "$T/st/gh-cache" "$T/st/gh-budget.json" "$T/st/gh-cooldown.json
 health() {   # one hermetic health pass; the live loop's processes are not this suite's business
   PATH="$T/hbin:$PATH" HEALTH_NOTIFY="$T/notify" SG_WATCH_CMD_RE="$T/s/watch\.sh\$" bash "$T/s/health.sh" 2>&1
 }
-SHAPE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z (REST|GraphQL) [^ ]+ (hit|miss) [a-z]+ [a-z0-9_-]+$'
+SHAPE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z (REST|GraphQL) [^ ]+ (hit|miss) [a-z]+ [a-z0-9_-]+ (-|[0-9]+) (-|[0-9]+)$'
 
 echo "one line per call:"
 reset
 SG_GH_PASS=landing $CLI repos/o/r/labels >/dev/null; SG_GH_PASS=landing $CLI repos/o/r/labels >/dev/null
 [ "$(wc -l < "$LOG" | tr -d ' ')" = 2 ] && ok "two reads, two lines" || bad "lines: $(cat "$LOG" 2>/dev/null)"
 l1=$(sed -n 1p "$LOG"); l2=$(sed -n 2p "$LOG")
-printf '%s\n%s\n' "$l1" "$l2" | grep -Eq "$SHAPE" && ok "the line is timestamp, transport, route, cache, outcome, pass" || bad "shape: $l1 / $l2"
-case "$l1" in *" REST repos/o/r/labels miss answer landing") ok "the first read is a miss, and names the pass";; *) bad "first line: $l1";; esac
-case "$l2" in *" REST repos/o/r/labels hit answer landing") ok "the repeat is a hit, with no request";; *) bad "second line: $l2";; esac
+printf '%s\n%s\n' "$l1" "$l2" | grep -Eq "$SHAPE" && ok "the line is timestamp, transport, route, cache, outcome, pass, and the points" || bad "shape: $l1 / $l2"
+case "$l1" in *" REST repos/o/r/labels miss answer landing - -") ok "the first read is a miss, and names the pass";; *) bad "first line: $l1";; esac
+case "$l2" in *" REST repos/o/r/labels hit answer landing - -") ok "the repeat is a hit, with no request";; *) bad "second line: $l2";; esac
 [ "$(wc -l < "$T/gh.log" | tr -d ' ')" = 1 ] && ok "and the hit spent no request" || bad "requests: $(cat "$T/gh.log")"
 SG_GH_PASS=board $CLI "repos/o/r/pulls?state=open&per_page=100" >/dev/null
-tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/pulls\?state=open&per_page=100 miss [a-z]+ board$" && ok "an aggregate route is logged as GraphQL" || bad "graphql: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/pulls\?state=open&per_page=100 miss [a-z]+ board - -$" && ok "an aggregate route is logged as GraphQL" || bad "graphql: $(tail -1 "$LOG")"
 
 echo "every door logs:"
 reset
 SG_GH_PASS=autobug $RD repos/o/r/issues/7 >/dev/null
-tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/7 miss answer autobug$" && ok "ghread.py, the unthrottled door, logs its read (one issue is one GraphQL query, #256)" || bad "ghread: $(tail -1 "$LOG" 2>/dev/null)"
+tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/7 miss answer autobug - -$" && ok "ghread.py, the unthrottled door, logs its read (one issue is one GraphQL query, #256)" || bad "ghread: $(tail -1 "$LOG" 2>/dev/null)"
 SG_GH_PASS=autobug $RD --method PATCH repos/o/r/issues/7 -f state=closed >/dev/null
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 write done autobug$" && ok "a write through ghread.py logs, and names the outcome done" || bad "write: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 write done autobug - -$" && ok "a write through ghread.py logs, and names the outcome done" || bad "write: $(tail -1 "$LOG")"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=frontier gh_get -H "Accept: application/vnd.github.diff" repos/o/r/pulls/7 >/dev/null)
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/pulls/7 miss answer frontier$" && ok "gh_get logs the route, not the header" || bad "gh_get: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " REST repos/o/r/pulls/7 miss answer frontier - -$" && ok "gh_get logs the route, not the header" || bad "gh_get: $(tail -1 "$LOG")"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=board gh_send --method POST repos/o/r/issues/7/comments -f body=x >/dev/null)
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7/comments write done board$" && ok "gh_send logs the write" || bad "gh_send: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7/comments write done board - -$" && ok "gh_send logs the write" || bad "gh_send: $(tail -1 "$LOG")"
 $RD repos/o/r/issues/8 >/dev/null
-tail -1 "$LOG" | grep -Eq " unattributed$" && ok "a caller that names no pass is unattributed" || bad "no pass: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " unattributed - -$" && ok "a caller that names no pass is unattributed" || bad "no pass: $(tail -1 "$LOG")"
 touch "$T/ratelimited"; SG_GH_PASS=board $RD repos/o/r/issues/9 >/dev/null
-tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/9 miss refused board$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/9 miss refused board - -$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
 
 echo "a GraphQL read logs through the helper:"
 reset
 printf '%s' '{"data":{"repository":{"x":1}}}' > "$T/body"
 SG_GH_PASS=board python3 -c "import sys; sys.path.insert(0, '$T/s'); import ghread; print(ghread.graphql_read('query{x}').kind)" >/dev/null
-tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer board$" && ok "graphql_read logs its answer as a GraphQL read, with the pass that spent it" || bad "graphql_read: $(tail -1 "$LOG" 2>/dev/null)"
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer board - -$" && ok "graphql_read logs its answer as a GraphQL read, with the pass that spent it" || bad "graphql_read: $(tail -1 "$LOG" 2>/dev/null)"
 touch "$T/ratelimited"; SG_GH_PASS=board python3 -c "import sys; sys.path.insert(0, '$T/s'); import ghread; print(ghread.graphql_read('query{x}').kind)" >/dev/null; rm -f "$T/ratelimited"
-tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss refused board$" && ok "a refused GraphQL read is logged as refused" || bad "graphql refusal: $(tail -1 "$LOG" 2>/dev/null)"
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss refused board - -$" && ok "a refused GraphQL read is logged as refused" || bad "graphql refusal: $(tail -1 "$LOG" 2>/dev/null)"
+printf '%s' '{"data":{"rateLimit":{"cost":7,"remaining":4993},"x":1}}' > "$T/body"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=hub gh_get graphql -f query=x >/dev/null)
-tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer hub$" && ok "a shell door's GraphQL read is logged as GraphQL" || bad "shell graphql: $(tail -1 "$LOG" 2>/dev/null)"
+tail -1 "$LOG" 2>/dev/null | grep -Eq " GraphQL graphql miss answer hub 7 4993$" && ok "a shell door's GraphQL read logs the points it cost and the points left" || bad "shell graphql: $(tail -1 "$LOG" 2>/dev/null)"
 
 echo "each pass names itself:"
 for pair in startability.sh:landing autofrontier.sh:frontier autobug.sh:autobug board.sh:board; do

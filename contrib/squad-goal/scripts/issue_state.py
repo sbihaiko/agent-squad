@@ -73,11 +73,14 @@ def _is_write(args):
         if x in ("-X", "--method"): return next(it, "GET").upper() != "GET"
     return False
 
-def _log_call(args, outcome):
+def _log_call(args, outcome, body=""):
     """One api.log line for a `gh api` call this seam makes (#847). The board pass is the largest REST reader the loop has,
     and it was the one that spent the quota unlogged; the line is the door's own, so the spend reads the same everywhere.
     The line goes to $SG_STATE, the loop's one call log, even from a seam built with its own state dir (the hub's, #1328):
-    that seam still spends the loop's quota. Outside a loop (SG_STATE unset) a call writes nothing."""
+    that seam still spends the loop's quota. Outside a loop (SG_STATE unset) a call writes nothing.
+
+    A GraphQL answer carries its own points (#3043): the line names the cost of the call and what the pool had left, so the
+    hourly budget is read as the points it is spent in, never as a count of requests."""
     state = os.environ.get("SG_STATE")
     if not state: return
     it = iter(args); route = ""
@@ -90,7 +93,12 @@ def _log_call(args, outcome):
     try: import ghread
     except ImportError: return
     cache = ghread.WRITE if _is_write(args) else ghread.MISS   # a write is never a snapshot miss, whatever its outcome (#1328)
-    ghread.log_call(state, route, cache, outcome, transport="GraphQL" if route == "graphql" else "REST")
+    cost = remaining = None
+    if route == "graphql" and body:
+        try: cost, remaining = ghread.rate_limit(json.loads(body))
+        except ValueError: cost = remaining = None   # a body that is not JSON proves no points, never zero
+    ghread.log_call(state, route, cache, outcome, transport="GraphQL" if route == "graphql" else "REST",
+                    cost=cost, remaining=remaining)
 
 # The binding a repository binds the vocabulary to. A carrier is named here, and a run records the name.
 BOARD = "board"
@@ -519,7 +527,7 @@ class BoardBinding:
             except subprocess.TimeoutExpired:   # a hung call is one failed read: never retried, raised so the pass releases its lock
                 _log_call(a, "failed")
                 raise RuntimeError(f"the call passed its {limit:g}s deadline (ADR-0051)") from None
-            if not r.returncode: _log_call(a, "done" if write else "answer"); return r.stdout
+            if not r.returncode: _log_call(a, "done" if write else "answer", r.stdout); return r.stdout
             _log_call(a, "failed")   # each attempt is spent quota, so each is one line (ADR-0277)
             full = r.stderr.strip()   # read whole: gh puts the URL first, and the cause can sit past any cut (#2319)
             err = full[-200:] if len(full) > 200 else full

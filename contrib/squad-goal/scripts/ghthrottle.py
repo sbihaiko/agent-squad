@@ -22,6 +22,7 @@ Documented defaults (every one of them overridable per loop, never edited at run
     SG_GH_CACHE_WINDOW        60   seconds a read is answered from the snapshot; 0 turns the snapshot off
     SG_GH_AGGREGATE_WINDOW    90   seconds a caller that chose it reads the open-PR and open-issue lists from the snapshot
     SG_GH_FLOOR              300   requests a GraphQL or core pool may fall to before every live read is held, unsent (#2355)
+    SG_GH_STRETCH_FLOOR     1500   points a pool may fall to before every cycle waits longer, whatever its share (#3043)
 
 Why 300/60 s: the landing pass is the loop's heaviest reader and it reads in bursts, not in a stream. Its eligible-branch
 collection reads the open-PR list once and then two routes per candidate (the issue's state and its `Blocked by` body) --
@@ -100,9 +101,14 @@ STATE_ENV = "SG_STATE"
 CACHE_WINDOW_ENV = "SG_GH_CACHE_WINDOW"
 AGGREGATE_WINDOW_ENV = "SG_GH_AGGREGATE_WINDOW"
 QUOTA_FLOOR_ENV = "SG_GH_FLOOR"
+STRETCH_FLOOR_ENV = "SG_GH_STRETCH_FLOOR"
 QUOTA_POOLS = ("graphql", "core")  # every pool a read may spend; each one has its own limit and its own hour
 
 DEFAULT_QUOTA_FLOOR = 300  # requests a pool may fall to before every read is held, and no request is sent
+# The stretch floor is in POINTS, not in a share (#3043). Five times the stop floor: a pool of a 5000-point hour at 1500
+# left is 30 percent, so a pass whose calls average the 11 points the 2026-11-27 audit measured has about 130 calls left --
+# the cycle slows while there is still room to do the work of the pass, not only while there is none.
+DEFAULT_STRETCH_FLOOR = 1500
 DEFAULT_BUDGET = 300  # requests per window, shared by every process
 DEFAULT_WINDOW = 60.0  # seconds in a window
 DEFAULT_COOLDOWN = 900.0  # the first self-attributed 403/429 holds every reader back for this long
@@ -525,7 +531,7 @@ class Throttle:
             return res
 
         out = ghread.read(route, transport=probe)
-        self._log(route, ghread.MISS, out.kind)
+        self._log(route, ghread.MISS, out.kind, cost=out.cost, remaining=out.remaining)
         if _self_attributed(out, status["code"]):
             self.write_cooldown(out, _pool_of(route, out.body))
         return out
@@ -563,13 +569,54 @@ class Throttle:
                 shares.append(max(remaining, 0.0) / limit)
         return min(shares)
 
+    def points_left(self) -> int | None:
+        """The fewest points any pool has left, right now, or `None` when no reading describes a running hour (#3043).
+
+        The share says a big pool is low only when it is nearly empty; the points say it directly, and points are what an
+        hour is spent in. A pool whose hour has rolled over is not counted, exactly as `quota_left` skips it."""
+        now = self.clock()
+        lefts: list[int] = []
+        for pool in _read_json(self.quota_path).values():
+            if not isinstance(pool, dict):
+                continue
+            try:
+                remaining, reset = int(pool["remaining"]), float(pool.get("reset") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if reset == 0 or reset > now:
+                lefts.append(max(remaining, 0))
+        return min(lefts) if lefts else None
+
+    def graphql_points_left(self) -> int | None:
+        """The points the GraphQL pool has left this hour, or `None` when no reading describes it (#3043). The floor counts
+        this pool alone: points are not comparable across pools, because an hour holds 5000 of them for the GraphQL pool
+        and fewer for a small one, so one absolute floor over every pool would stretch a pool whose whole hour sits under
+        the floor itself."""
+        pool = _read_json(self.quota_path).get("graphql")
+        if not isinstance(pool, dict):
+            return None
+        try:
+            remaining, reset = int(pool["remaining"]), float(pool.get("reset") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return max(remaining, 0) if reset == 0 or reset > self.clock() else None
+
     def stretch(self, base: float) -> float:
-        """Extra seconds a cycle of `base` seconds waits: none while 20 percent or more of every pool is left."""
+        """Extra seconds a cycle of `base` seconds waits, 0 while the quota is healthy -- by either reading.
+
+        A pool under 20 percent of its limit stretches the cycle in steps (the share reading, #45), and a pool under
+        `SG_GH_STRETCH_FLOOR` points doubles it whatever its share (#3043). The longest of the two holds: a small pool
+        that is low by one reading is low."""
+        extra = 0.0
         left = self.quota_left()
         for below, times in LOW_QUOTA_STEPS:
             if left < below:
-                return base * (times - 1.0)
-        return 0.0
+                extra = base * (times - 1.0)
+                break
+        points = self.graphql_points_left()
+        if points is not None and points < _number(STRETCH_FLOOR_ENV, DEFAULT_STRETCH_FLOOR):
+            extra = max(extra, base)
+        return extra
 
     def read_aggregate(self, route: str, transport: ghread.TransportFn | None = None) -> ghread.Read:
         """Read one aggregate route (the open PRs or the open issues) from the snapshot while it is younger than
@@ -586,8 +633,8 @@ class Throttle:
         if window > 0 and out.body.strip():   # an empty body is no list: keeping it would answer the next window with nothing
             cache.store(key, out)
         return out
-    def _log(self, route: str, cache: str, outcome: str) -> None:
-        ghread.log_call(self.state_dir, route, cache, outcome, clock=self.clock)
+    def _log(self, route: str, cache: str, outcome: str, cost: int | None = None, remaining: int | None = None) -> None:
+        ghread.log_call(self.state_dir, route, cache, outcome, clock=self.clock, cost=cost, remaining=remaining)
 
     def _remaining(self, held: dict[str, Any]) -> float:
         return max(0.0, float(held.get("until", 0)) - self.clock())

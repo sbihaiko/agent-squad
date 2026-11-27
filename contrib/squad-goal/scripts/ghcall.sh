@@ -25,9 +25,10 @@
 # of the few it classifies as cheap or keyed -- so a gating route handed to `gh_snapshot` by mistake is still live.
 #
 # The spend is visible (ADR-0277): every door appends one line to $SG_STATE/api.log -- timestamp, transport, route, cache hit or
-# miss, outcome and the spending pass (`SG_GH_PASS`, which each pass script exports for itself; a caller that names none is
-# `unattributed`). gh_api and gh_snapshot log through ghread.py / ghthrottle.py; gh_get and gh_send reach `gh` themselves, so they
-# log through `ghread.py --log`, with the outcome the call had. health.sh reads the log (ghspend.py).
+# miss, outcome, the spending pass (`SG_GH_PASS`, which each pass script exports for itself; a caller that names none is
+# `unattributed`), and, for a GraphQL call, the points it cost and what its pool had left (#3043). gh_api and gh_snapshot log
+# through ghread.py / ghthrottle.py; gh_get and gh_send reach `gh` themselves, so they log through `ghread.py --log`, with the
+# outcome the call had and the points its body names. health.sh reads the log (ghspend.py).
 #
 # `-q`/`--jq` is the caller's projection and is applied HERE, on the answer, with `jq -r`, so the transport always
 # speaks raw JSON: a filtering transport cannot tell a refusal apart from an answer, and `gh` cannot either.
@@ -39,10 +40,22 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # _gh_refused <body>: 0 when the body is GitHub's own refusal shape: a REST message beside a status, or a GraphQL `errors[]`
 # list with no `data` (a rate limit comes back that way, with gh exit 0 or 1). Any body that is not JSON, or is JSON without
 # either shape, is not a refusal -- `jq -e` exits non-zero for both.
-# _gh_log_as <cache> <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument
-# that is neither a flag nor the value of one; the transport is REST, or GraphQL for the `graphql` route. A write logs cache `write`.
+# _gh_points <body>: the points one GraphQL answer spent and what its pool had left, as the answer's own
+# `data.rateLimit` reported them, as one string `"<cost> <remaining>"`; `"- -"` when the body names neither (a REST body, a
+# query that did not ask, a body that is not JSON). The cost is what an hour is spent in, and a call that logs only its
+# request count cannot say how much of the hour it spent (#3043).
+_gh_points() {
+  local out
+  out=$(printf '%s' "${1:-}" | jq -r '[(.data.rateLimit.cost // "-"), (.data.rateLimit.remaining // "-")] | join(" ")' 2>/dev/null) || out=""
+  case "$out" in ''|*[!0-9\ -]*) out="- -";; esac
+  printf '%s' "$out"
+}
+
+# _gh_log_as <cache> <outcome> <body> <gh api args…>: one call-log line for a call this file makes itself. The route is the one
+# argument that is neither a flag nor the value of one; the transport is REST, or GraphQL for the `graphql` route. A write
+# logs cache `write`. A GraphQL call's answer carries its own points, and the line carries them beside the outcome.
 _gh_log_as() {
-  local cache=$1 outcome=$2 route="" a transport=REST; shift 2
+  local cache=$1 outcome=$2 body=${3:-} route="" a transport=REST points="- -"; shift 3
   while [ $# -gt 0 ]; do
     case "$1" in
       -H|--header|-X|--method|-f|--raw-field|-F|--field|-q|--jq|--input|--cache|-t|--template|--hostname) shift 2;;
@@ -51,8 +64,8 @@ _gh_log_as() {
     esac
   done
   [ -n "$route" ] || return 0
-  [ "$route" = graphql ] && transport=GraphQL
-  $SG_GHREAD --log "$transport" "$route" "$cache" "$outcome" >/dev/null 2>&1 || true
+  if [ "$route" = graphql ]; then transport=GraphQL; points=$(_gh_points "$body"); fi
+  $SG_GHREAD --log "$transport" "$route" "$cache" "$outcome" $points >/dev/null 2>&1 || true
 }
 _gh_log() { _gh_log_as miss "$@"; }   # a read: the snapshot answers it or it is a miss
 
@@ -516,11 +529,11 @@ _gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
 # passed through verbatim, and the three outcomes are the same: a caller can tell an empty diff from a refusal.
 gh_get() {
   local o rc
-  if _gh_child_merge "$@"; then _gh_log refused "$@"; _gh_child_merge_line; return 2; fi
+  if _gh_child_merge "$@"; then _gh_log refused "" "$@"; _gh_child_merge_line; return 2; fi
   o=$(gh api "$@" 2>/dev/null); rc=$?
-  if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then _gh_log answer "$@"; printf '%s' "$o"; return 0; fi
-  if _gh_refused "$o"; then _gh_log refused "$@"; _gh_refusal_line "$o"; return 2; fi
-  _gh_log failed "$@"
+  if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then _gh_log answer "$o" "$@"; printf '%s' "$o"; return 0; fi
+  if _gh_refused "$o"; then _gh_log refused "$o" "$@"; _gh_refusal_line "$o"; return 2; fi
+  _gh_log failed "$o" "$@"
   printf 'failed: no verdict (gh exited %s)\n' "$rc"
   return 1
 }
@@ -536,11 +549,11 @@ gh_send() {
     esac
   done
   local o rc
-  if _gh_child_merge "${args[@]}"; then _gh_log_as write refused "${args[@]}"; _gh_child_merge_line; return 2; fi
+  if _gh_child_merge "${args[@]}"; then _gh_log_as write refused "" "${args[@]}"; _gh_child_merge_line; return 2; fi
   o=$(gh api "${args[@]}" 2>/dev/null); rc=$?
-  if _gh_refused "$o"; then _gh_log_as write refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
-  if [ "$rc" -ne 0 ]; then _gh_log_as write failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
-  _gh_log_as write done "${args[@]}"
+  if _gh_refused "$o"; then _gh_log_as write refused "$o" "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
+  if [ "$rc" -ne 0 ]; then _gh_log_as write failed "$o" "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
+  _gh_log_as write done "$o" "${args[@]}"
   if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q" || return 1; else printf '%s' "$o"; fi
   return 0
 }
