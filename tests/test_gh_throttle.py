@@ -384,6 +384,15 @@ def test_a_healthy_pool_stretches_nothing(tmp_path, monkeypatch):
     assert throttle(tmp_path, clock).stretch(90) == 0, "plenty left is no wait"
 
 
+def test_a_core_pool_under_the_stretch_floor_stretches_nothing(tmp_path, monkeypatch):
+    """#3043: the floor counts the GraphQL pool alone. Points are not comparable across pools, and exactly 20 percent of
+    the core pool is not yet low (#45), so a core pool's points never double the cycle for the GraphQL pool's sake."""
+    monkeypatch.delenv("SG_GH_STRETCH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=5000, core=1000)
+    assert throttle(tmp_path, clock).stretch(90) == 0
+
+
 def test_the_stretch_floor_is_configured_and_a_bad_value_falls_back(tmp_path, monkeypatch):
     clock = Clock()
     _quota(tmp_path, clock, graphql=1200, core=4909)

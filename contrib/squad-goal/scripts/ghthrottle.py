@@ -587,6 +587,20 @@ class Throttle:
                 lefts.append(max(remaining, 0))
         return min(lefts) if lefts else None
 
+    def graphql_points_left(self) -> int | None:
+        """The points the GraphQL pool has left this hour, or `None` when no reading describes it (#3043). The floor counts
+        this pool alone: points are not comparable across pools, because an hour holds 5000 of them for the GraphQL pool
+        and fewer for a small one, so one absolute floor over every pool would stretch a pool whose whole hour sits under
+        the floor itself."""
+        pool = _read_json(self.quota_path).get("graphql")
+        if not isinstance(pool, dict):
+            return None
+        try:
+            remaining, reset = int(pool["remaining"]), float(pool.get("reset") or 0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return max(remaining, 0) if reset == 0 or reset > self.clock() else None
+
     def stretch(self, base: float) -> float:
         """Extra seconds a cycle of `base` seconds waits, 0 while the quota is healthy -- by either reading.
 
@@ -599,7 +613,7 @@ class Throttle:
             if left < below:
                 extra = base * (times - 1.0)
                 break
-        points = self.points_left()
+        points = self.graphql_points_left()
         if points is not None and points < _number(STRETCH_FLOOR_ENV, DEFAULT_STRETCH_FLOOR):
             extra = max(extra, base)
         return extra
