@@ -365,6 +365,34 @@ def test_a_pool_above_its_floor_does_not_hold_the_read(tmp_path, monkeypatch):
     assert transport.seen == [OPEN_PULLS] and out.is_answer
 
 
+# --- the governor reads the points left (#3043) -----------------------------------------------------------------------
+
+def test_a_pool_under_the_stretch_floor_lengthens_the_cycle_even_above_the_share_step(tmp_path, monkeypatch):
+    """#3043: 1200 points left of a 5000-point hour is 24 percent, above the 20-percent share step, and under the stretch
+    floor: the cycle waits longer before the budget can reach zero. The reading is in points, which is what an hour is
+    spent in."""
+    monkeypatch.delenv("SG_GH_STRETCH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=1200, core=4909)
+    assert throttle(tmp_path, clock).stretch(90) == 90, "a pool under the stretch floor doubles the cycle"
+
+
+def test_a_healthy_pool_stretches_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("SG_GH_STRETCH_FLOOR", raising=False)
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=4000, core=4909)
+    assert throttle(tmp_path, clock).stretch(90) == 0, "plenty left is no wait"
+
+
+def test_the_stretch_floor_is_configured_and_a_bad_value_falls_back(tmp_path, monkeypatch):
+    clock = Clock()
+    _quota(tmp_path, clock, graphql=1200, core=4909)
+    monkeypatch.setenv("SG_GH_STRETCH_FLOOR", "1000")
+    assert throttle(tmp_path, clock).stretch(90) == 0, "1200 left is above a floor of 1000"
+    monkeypatch.setenv("SG_GH_STRETCH_FLOOR", "later")
+    assert throttle(tmp_path, clock).stretch(90) == 90, "a value that is not a number is the documented floor"
+
+
 def test_a_refusal_on_a_graphql_route_names_the_graphql_pool_in_the_cooldown(tmp_path):
     clock = Clock()
     throttle(tmp_path, clock).read(OPEN_PULLS, transport=stub(RATE_LIMITED, rc=1))

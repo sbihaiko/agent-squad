@@ -58,7 +58,7 @@ def test_a_seam_write_is_one_done_line_and_no_snapshot_miss(tmp_path, monkeypatc
 
     lines = (loop_state / "api.log").read_text().splitlines()
     assert len(lines) == 25                                  # one line per spent call (ADR-0277)
-    assert all(line.endswith(" done unattributed") for line in lines)   # no SG_GH_PASS: the spend is unattributed
+    assert all(line.endswith(" done unattributed - -") for line in lines)   # no SG_GH_PASS: the spend is unattributed; a REST write names no points
     assert ghspend._miss_rate(loop_state, time.time()) is None   # a write GitHub took is not a snapshot miss
 
 

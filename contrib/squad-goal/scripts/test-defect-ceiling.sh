@@ -121,7 +121,7 @@ printf '%s\n' "$s" | $G -qF 'HUNT filed #41' && ok "the cause the refused filing
 scene log; export SG_FILE_PASS=pass-l SG_GH_PASS=autobug
 file "refused POST repos/o/r/issues/8 [aa]" aa >/dev/null
 line=$(tail -1 "$SG_STATE/api.log" 2>/dev/null)
-case "$line" in *" REST repos/o/r/issues write done autobug") ok "the filing's write is one line of the loop's call log, under the pass that spends" ;;
+case "$line" in *" REST repos/o/r/issues write done autobug - -") ok "the filing's write is one line of the loop's call log, under the pass that spends" ;;
   *) ko "the call log holds no line for the filing: '${line:-}'";; esac
 [ "$(ledger pass-l)" = 1 ] && ok "the ceiling is the pass's own ledger, and the spend is the pass's own line" || ko "ledger under a named spend: $(cat "$SG_STATE/auto/filed-pass-l" 2>/dev/null)"
 

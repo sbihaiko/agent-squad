@@ -91,11 +91,20 @@ def test_each_call_appends_one_line_naming_transport_route_cache_outcome_and_pas
     clock.at += 5
     th.read(OPEN_PRS, transport=_ok())  # an aggregate route: GraphQL behind the same interface
     assert _lines(tmp_path) == [
-        "2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing",
-        "2025-10-09T08:53:25Z REST repos/o/r/labels hit answer landing",
-        "2025-10-09T08:53:30Z GraphQL repos/o/r/issues/7 miss answer landing",
-        "2025-10-09T08:53:35Z GraphQL repos/o/r/pulls?state=open&per_page=100 miss answer landing",
-    ]
+        "2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing - -",
+        "2025-10-09T08:53:25Z REST repos/o/r/labels hit answer landing - -",
+        "2025-10-09T08:53:30Z GraphQL repos/o/r/issues/7 miss answer landing - -",
+        "2025-10-09T08:53:35Z GraphQL repos/o/r/pulls?state=open&per_page=100 miss answer landing - -",
+    ], "the last two columns are the points, and a body that names none writes the dash"
+
+
+def test_a_graphql_answer_names_the_points_it_cost_on_the_line_the_throttle_writes(tmp_path, monkeypatch):
+    """#3043: the line the passes read carries the cost, so a pass's share of the hourly budget is a sum over its lines."""
+    monkeypatch.setenv("SG_GH_PASS", "branchland")
+    th = _throttle(tmp_path, Clock())
+    body = json.dumps({"data": {"rateLimit": {"cost": 11, "remaining": 4210}, "repository": {"pullRequests": {"pageInfo": {"hasNextPage": False}, "nodes": []}}}})
+    th.read(OPEN_PRS, transport=_ok(body))
+    assert _lines(tmp_path)[-1].endswith(" miss answer branchland 11 4210"), _lines(tmp_path)[-1]
 
 
 def test_a_refusal_a_failure_and_a_held_cooldown_each_name_their_outcome(tmp_path, monkeypatch):
@@ -117,13 +126,13 @@ def test_a_refusal_a_failure_and_a_held_cooldown_each_name_their_outcome(tmp_pat
 def test_a_caller_that_names_no_pass_is_unattributed_never_guessed(tmp_path):
     th = _throttle(tmp_path, Clock())
     th.read(LABELS, transport=_ok())
-    assert _lines(tmp_path) == ["2025-10-09T08:53:20Z REST repos/o/r/labels miss answer unattributed"]
+    assert _lines(tmp_path) == ["2025-10-09T08:53:20Z REST repos/o/r/labels miss answer unattributed - -"]
 
 
 def test_a_pass_name_that_is_not_one_word_is_unattributed(tmp_path, monkeypatch):
     monkeypatch.setenv("SG_GH_PASS", "land ing\nforged-line")
     _throttle(tmp_path, Clock()).read(LABELS, transport=_ok())
-    assert len(_lines(tmp_path)) == 1 and _lines(tmp_path)[0].endswith(" unattributed")
+    assert len(_lines(tmp_path)) == 1 and _lines(tmp_path)[0].endswith(" unattributed - -")
 
 
 def test_an_unwritable_state_dir_costs_the_log_and_not_the_read(tmp_path, monkeypatch):
@@ -138,7 +147,7 @@ def test_the_log_is_rotated_so_it_cannot_grow_without_bound(tmp_path):
     log.write_text("x" * (ghread.LOG_MAX_BYTES + 1))
     ghread.log_call(tmp_path, LABELS, "miss", "answer", pass_name="board", clock=Clock().now)
     assert (tmp_path / "api.log.1").exists()
-    assert log.read_text() == "2025-10-09T08:53:20Z REST repos/o/r/labels miss answer board\n"
+    assert log.read_text() == "2025-10-09T08:53:20Z REST repos/o/r/labels miss answer board - -\n"
 
 
 # ---------------------------------------------------------------- the cooldown is a health cause
@@ -172,7 +181,7 @@ def test_a_second_pass_under_the_cooldown_does_not_take_its_ownership(tmp_path, 
     assert out.is_refused
     (cause,) = [c for c in ghspend.causes(tmp_path, now=clock.now()) if c.name == "gh-cooldown"]
     assert "owned by landing" in cause.brief and "autobug" not in cause.detail
-    assert _lines(tmp_path)[-1].endswith(" miss cooling autobug"), "the held read is attributed to the pass that was held back"
+    assert _lines(tmp_path)[-1].endswith(" miss cooling autobug - -"), "the held read is attributed to the pass that was held back"
 
 
 def test_the_cooldown_cause_clears_when_the_cooldown_expires(tmp_path, monkeypatch):

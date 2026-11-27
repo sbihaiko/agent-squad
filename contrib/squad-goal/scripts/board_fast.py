@@ -17,14 +17,14 @@ HOUR = 3600
 LABELS_PER_CARD = 20
 INPUTS = ("st", "su", "iu", "s", "cr", "l")   # the column inputs: Status and its instant, item instant, state, close reason, labels
 QUERY = """query($owner:String!,$number:Int!,$after:String,$q:String!){
-  rateLimit{cost}
+  rateLimit{cost remaining}
   ROOT(login:$owner){projectV2(number:$number){items(first:100,after:$after,query:$q){
     pageInfo{hasNextPage endCursor}
     nodes{updatedAt isArchived
       fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}
       content{... on Issue{id number fullDatabaseId state stateReason updatedAt repository{nameWithOwner}
         labels(first:LABELS){totalCount nodes{name}}}}}}}}}"""
-NODES = """query{rateLimit{cost} nodes(ids:IDS){__typename ... on Issue{id number state stateReason updatedAt
+NODES = """query{rateLimit{cost remaining} nodes(ids:IDS){__typename ... on Issue{id number state stateReason updatedAt
   repository{nameWithOwner} labels(first:LABELS){totalCount nodes{name}}
   projectItems(first:50){totalCount nodes{updatedAt isArchived project{number owner{... on Organization{login} ... on User{login}}}
     fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name updatedAt}}}}}}}"""

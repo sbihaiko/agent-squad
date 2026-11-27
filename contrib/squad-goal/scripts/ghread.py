@@ -55,8 +55,9 @@ failure, and `Read.partial` names it: the field that failed is null and the rest
 The call log. Every door appends one line per call to `$SG_STATE/api.log`, and the writer lives here because this is the one
 module every door carries (see `log_call`):
 
-    <UTC timestamp> <transport> <route> <hit|miss> <outcome> <pass>
-    2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing
+    <UTC timestamp> <transport> <route> <hit|miss> <outcome> <pass> <cost> <remaining>
+    2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing - -
+    2026-11-27T18:12:04Z GraphQL graphql miss answer branchland 11 4210
 
 * transport: `REST`, or `GraphQL` for an aggregate route.
 * cache: `hit` when the snapshot answered it, `miss` for every read that went to GitHub, snapshottable or not, and `write` for
@@ -67,9 +68,13 @@ module every door carries (see `log_call`):
 * pass: the pass that spent the call -- `frontier`, `landing`, `autobug` or `board` -- from `SG_GH_PASS`, which each pass script
   exports for itself. A caller that names none is `unattributed`: a guess would put the spend on the wrong pass, which is the one
   thing this column exists to prevent.
+* cost, remaining: the points the call spent and what its pool had left, as the answer's own `rateLimit` field reported them
+  (#3043), or `-` when the answer carried no reading -- a REST call, a snapshot hit, a query that did not ask, or a line written
+  before these columns. The hourly budget is spent in points, so a log of request counts alone cannot say which pass emptied it.
 
-A line holds no space, so it splits into exactly six fields. A failed append costs the line and never the call, and the log is
-rotated once at `LOG_MAX_BYTES` so it cannot grow without bound. This module logs at its two CLI doors (`read`/`write` as a
+A line holds no space, so it splits into exactly eight fields; a line of six is a line written before the points columns, and it
+reads with both points unknown. A failed append costs the line and never the call, and the log is rotated once at
+`LOG_MAX_BYTES` so it cannot grow without bound. This module logs at its two CLI doors (`read`/`write` as a
 process); a library caller -- the throttle -- logs its own calls, because only it knows a snapshot answered them, and
 `graphql_read` logs its own read.
 
@@ -124,7 +129,11 @@ class Transport:
 
 @dataclass(frozen=True)
 class Read:
-    """One read's outcome. Exactly one of the three kinds, and the fields that belong to it."""
+    """One read's outcome. Exactly one of the three kinds, and the fields that belong to it.
+
+    `cost` and `remaining` are the GraphQL points the call spent and what its pool had left, as the answer's own
+    `rateLimit` field reported them (#3043). They are `None` for a REST call and for a GraphQL answer whose query did not
+    ask, and the call log writes them either way."""
 
     kind: str
     answer: Any = None
@@ -133,6 +142,8 @@ class Read:
     request_id: str = ""
     detail: str = ""
     partial: tuple[str, ...] = ()  # the fields that failed to compute while the rest of the answer was computed
+    cost: int | None = None
+    remaining: int | None = None
 
     @property
     def is_answer(self) -> bool:
@@ -273,6 +284,25 @@ def _verdict(res: Transport, success_kind: str) -> tuple[str, Any, str, str, str
     return success_kind, value, "", "", "", body
 
 
+def rate_limit(value: Any) -> tuple[int | None, int | None]:
+    """The points one GraphQL answer cost, and what its pool had left after it: `data.rateLimit { cost remaining }`,
+    which a query asks for itself (#3043).
+
+    The cost is the only measure of a GraphQL call's price that GitHub publishes; the hourly budget is spent in points, so
+    a pass that logs only its request count cannot say how much of the hour it spent. Anything other than that shape -- a
+    REST body, a query that did not ask, a value of another type -- reads as `(None, None)`: an unknown cost is never
+    written as zero."""
+    limit = _connection(_connection(value).get("data")).get("rateLimit")
+    if not isinstance(limit, dict):
+        return None, None
+
+    def whole(key: str) -> int | None:
+        number = limit.get(key)
+        return number if isinstance(number, int) and not isinstance(number, bool) else None
+
+    return whole("cost"), whole("remaining")
+
+
 # --- the aggregate routes: the facts the loop re-reads every beat -----------------------------------------------------
 
 _PAGE = 100  # the bound of one request: GitHub's first page. A repository with more open items than this is not the
@@ -280,6 +310,7 @@ _PAGE = 100  # the bound of one request: GitHub's first page. A repository with 
 # An answer the bound cut short says so, in `Read.partial`, rather than passing as the whole repository.
 
 _PULLS_QUERY = """query($owner: String!, $repo: String!) {
+  rateLimit { cost remaining }
   repository(owner: $owner, name: $repo) {
     pullRequests(states: OPEN, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) {
       pageInfo { hasNextPage }
@@ -310,6 +341,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 _COMMENTS = 50
 _ISSUE_FIELDS = f"number title body state stateReason createdAt repository {{ nameWithOwner }} labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ pageInfo {{ hasNextPage }} nodes {{ number state repository {{ nameWithOwner }} }} }} parent {{ number }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
+  rateLimit { cost remaining }
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
       pageInfo { hasNextPage }
@@ -605,7 +637,7 @@ def _numbers_fact(numbers: list[int]) -> Fact:
     candidates the open list did not carry, and the answer must not cost a read per candidate (#45)."""
     shown = numbers[:_NUMBERS_LIMIT]
     body = " ".join(f"i{n}: issue(number: {n}) {{ {_ISSUE_FIELDS} }}" for n in shown)
-    document = "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { %s } }" % body
+    document = "query($owner: String!, $repo: String!) { rateLimit { cost remaining } repository(owner: $owner, name: $repo) { %s } }" % body
     return Fact(
         "the issues of the named numbers",
         document,
@@ -662,7 +694,8 @@ def _aggregate_read(fact: Fact, value: dict[str, Any], headers: dict[str, str]) 
     partial = list(errors)
     if fact.more(data):
         partial.append(f"{fact.name}: more than {_PAGE} exist, and the first {_PAGE} are here")
-    return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped), partial=tuple(partial))
+    cost, remaining = rate_limit(value)
+    return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped), partial=tuple(partial), cost=cost, remaining=remaining)
 
 
 def read(route: str, transport: TransportFn | None = None) -> Read:
@@ -681,13 +714,17 @@ def read(route: str, transport: TransportFn | None = None) -> Read:
             out = _aggregate_read(fact, value, headers)
             if out.is_answer and _single_issue(route):
                 issue = out.answer[0] if isinstance(out.answer, list) and out.answer else {}
-                return Read(kind=ANSWER, answer=issue, body=json.dumps(issue), partial=out.partial)
+                return Read(kind=ANSWER, answer=issue, body=json.dumps(issue), partial=out.partial,
+                            cost=out.cost, remaining=out.remaining)
             return out
     kind, value, message, request_id, detail, raw = _verdict(res, ANSWER)
     if kind == ANSWER and isinstance(value, dict) and _single_issue(route):
         shaped = _issue(value)
-        return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped))
-    return Read(kind=kind, answer=value, body=raw, message=message, request_id=request_id, detail=detail)
+        cost, remaining = rate_limit(value)
+        return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped), cost=cost, remaining=remaining)
+    cost, remaining = rate_limit(value) if kind == ANSWER else (None, None)
+    return Read(kind=kind, answer=value, body=raw, message=message, request_id=request_id, detail=detail,
+                cost=cost, remaining=remaining)
 
 
 def graphql_argv(query: str, variables: dict[str, Any] | None = None) -> list[str]:
@@ -724,7 +761,8 @@ def graphql_read(query: str, variables: dict[str, Any] | None = None, transport:
         log_call(None, "graphql", MISS, FAILED, transport="GraphQL", pass_name=pass_name)
         raise
     out = _graphql_outcome(res)
-    log_call(None, "graphql", MISS, out.kind, transport="GraphQL", pass_name=pass_name)
+    log_call(None, "graphql", MISS, out.kind, transport="GraphQL", pass_name=pass_name,
+             cost=out.cost, remaining=out.remaining)
     return out
 
 
@@ -741,7 +779,8 @@ def _graphql_outcome(res: Transport) -> Read:
                     _REQUEST_ID_IN_MESSAGE.search("; ".join(errors)) or [None, ""])[1]
                 return Read(kind=REFUSED, message="; ".join(errors), request_id=str(request_id))
             return Read(kind=FAILED, detail="the query answered no data")
-        return Read(kind=ANSWER, answer=value, body=json.dumps(value), partial=errors)
+        cost, remaining = rate_limit(value)
+        return Read(kind=ANSWER, answer=value, body=json.dumps(value), partial=errors, cost=cost, remaining=remaining)
     kind, answer, message, request_id, detail, raw = _verdict(res, ANSWER)
     return Read(kind=kind, answer=answer, body=raw, message=message, request_id=request_id, detail=detail)
 
@@ -831,7 +870,8 @@ _LOG_TS = "%Y-%m-%dT%H:%M:%SZ"
 
 
 class Call(NamedTuple):
-    """One line of the call log, parsed."""
+    """One line of the call log, parsed. `cost` and `remaining` are the points the call spent and what its pool had left
+    after it, as the answer's own `rateLimit` reported them; `None` when the answer carried no reading (#3043)."""
 
     at: float
     transport: str
@@ -839,6 +879,8 @@ class Call(NamedTuple):
     cache: str
     outcome: str
     pass_name: str
+    cost: int | None = None
+    remaining: int | None = None
 
 
 def state_dir() -> Path:
@@ -857,20 +899,44 @@ def transport_name(route: str) -> str:
     return "GraphQL" if aggregate(route) is not None else "REST"
 
 
+def _points_field(points: int | None) -> str:
+    """The points column: the number, or `-` when the call carried no `rateLimit` reading (a REST call, a hit, a line
+    written before the columns existed, #3043). The dash keeps one line six or eight fields and never a hole."""
+    return "-" if points is None else str(points)
+
+
+def _points(column: str) -> int | None:
+    """The number a points column carries, or None for `-`; a column that is neither is not a line this reader trusts."""
+    if column == "-":
+        return None
+    return int(column) if column.isdigit() else None
+
+
 def call_line(call: Call) -> str:
-    return " ".join((time.strftime(_LOG_TS, time.gmtime(call.at)), call.transport, call.route, call.cache, call.outcome, call.pass_name))
+    return " ".join((
+        time.strftime(_LOG_TS, time.gmtime(call.at)), call.transport, call.route, call.cache, call.outcome, call.pass_name,
+        _points_field(call.cost), _points_field(call.remaining),
+    ))
 
 
 def parse_call(text: str) -> Call | None:
-    """One log line as a `Call`, or None for anything that is not one: a half line, a foreign line, a forged one."""
+    """One log line as a `Call`, or None for anything that is not one: a half line, a foreign line, a forged one.
+
+    A line of six fields is a line written before the points columns (#3043): it reads, and its points are unknown. A line
+    of eight carries the cost and what the pool had left."""
     parts = text.split()
-    if len(parts) != 6:
+    if len(parts) not in (6, 8):
         return None
     try:
         at = float(calendar.timegm(time.strptime(parts[0], _LOG_TS)))
     except ValueError:
         return None
-    return Call(at, parts[1], parts[2], parts[3], parts[4], parts[5])
+    if len(parts) == 6:
+        return Call(at, parts[1], parts[2], parts[3], parts[4], parts[5])
+    cost, remaining = _points(parts[6]), _points(parts[7])
+    if (cost is None) != (parts[6] == "-") or (remaining is None) != (parts[7] == "-"):
+        return None   # a points column that is neither a number nor the dash: no line this reader trusts
+    return Call(at, parts[1], parts[2], parts[3], parts[4], parts[5], cost, remaining)
 
 
 def log_call(
@@ -881,10 +947,13 @@ def log_call(
     transport: str | None = None,
     pass_name: str | None = None,
     clock: Callable[[], float] = time.time,
+    cost: int | None = None,
+    remaining: int | None = None,
 ) -> None:
     """Append one line to the call log. Never raises: an unwritable state dir costs the line and not the call."""
     path = (Path(state) if state is not None else state_dir()) / LOG_FILE
-    call = Call(clock(), transport or transport_name(route), "".join(route.split()), cache, outcome, pass_name or current_pass())
+    call = Call(clock(), transport or transport_name(route), "".join(route.split()), cache, outcome,
+                pass_name or current_pass(), cost, remaining)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
@@ -913,10 +982,12 @@ def main(argv: list[str]) -> int:
         print(f"{out.verdict}\t{out.run_id if out.run_id is not None else '-'}")
         return 0
     if args and args[0] == "--log":
-        if len(args) != 5 or args[3] not in (HIT, MISS, WRITE):
-            sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss|write> <outcome>\n")
+        # The points are optional: a door that holds no body, or whose body carried no `rateLimit`, logs no reading (#3043).
+        if len(args) not in (5, 7) or args[3] not in (HIT, MISS, WRITE):
+            sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss|write> <outcome> [<cost> <remaining>]\n")
             return _USAGE
-        log_call(None, args[2], args[3], args[4], transport=args[1])
+        cost, remaining = (_points(args[5]), _points(args[6])) if len(args) == 7 else (None, None)
+        log_call(None, args[2], args[3], args[4], transport=args[1], cost=cost, remaining=remaining)
         return 0
     if args and args[0] in _WRITE_FLAGS:
         parsed = _parse_write(args)
@@ -938,7 +1009,7 @@ def main(argv: list[str]) -> int:
         )
         return _USAGE
     out = read(args[0])
-    log_call(None, args[0], MISS, out.kind)
+    log_call(None, args[0], MISS, out.kind, cost=out.cost, remaining=out.remaining)
     if out.is_answer:
         sys.stdout.write(out.body)
         return 0
