@@ -220,7 +220,8 @@ def _slices(page):
     esc = re.search(r"^const esc=.*$", page, re.M).group(0)
     sett = page[page.index("// SETT{"):page.index("// }SETT")]
     sl = page[page.index("let slS=null"):page.index("async function slLoad()")]
-    stub = 'const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
+    stub = ('const STORE={};const $=s=>STORE[s]||(STORE[s]={innerHTML:"",textContent:""});'
+            'let prS=null;const prLoad=()=>{};')   # the personas loader setTheme calls for the Personas tab (#3036)
     return "\n".join([stub, esc, sett, sl])
 
 
