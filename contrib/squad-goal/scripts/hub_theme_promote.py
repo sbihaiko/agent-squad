@@ -7,6 +7,21 @@ def strip_instant(strip, t):
     if not strip: return strip
     return {**{k: v for k, v in strip.items() if k not in ("age", "old")}, "at": t or 0, "max": STRIP_MAX_AGE}
 
+def loop_gate_facts():
+    """The loop's own word about each served PR, as the files that carry it: auto/.pass, auto/off and auto/gate-<n>. A card's
+    chip is a pure function of them, so the served body must rebuild when one changes and never keep a reason the loop has
+    already replaced (#1771). Their stat alone keys the board: content of the same name and size in one nanosecond is no
+    change any reader could see."""
+    a = STATE / "auto"; out = []
+    for f in (a / ".pass", a / "off"):
+        try: s = f.stat(); out.append([str(f), s.st_mtime_ns, s.st_size])
+        except OSError: out.append([str(f), None])
+    for x in board_cache.get("prs") or []:
+        f = a / f"gate-{x['n']}"
+        try: s = f.stat(); out.append([str(f), s.st_mtime_ns, s.st_size])
+        except OSError: out.append([str(f), None])
+    return out
+
 _served_board = {}
 def board_served():
     """The served board body and its ETag, built once per change (#973). The key is the cache, the pending-move record and the
@@ -14,7 +29,7 @@ def board_served():
     moves = read_moves() if overlay_on() else {}
     _HOLDER_CACHE.clear(); _ACTIVE_RUNS.clear()   # the key reads the same facts the body will: a memo from an earlier build would key this board on a liveness it no longer has (#1790)
     holders = [(i["n"], holder_fact(i)[1]) for i in board_cache["items"] if (i.get("h") or {}).get("run")]   # a holder's process moves with no board read (#1661)
-    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders, predictions()], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([board_cache, moves, overlay_on(), pending_window(), board_stale(), flight_snapshot(), board_read_overdue(board_cache.get("t")), holders, predictions(), loop_gate_facts()], sort_keys=True, default=str).encode()).hexdigest()
     if _served_board.get("key") == key: return _served_board["body"], _served_board["etag"]
     try:
         _HOLDERS_READ["v"] = True   # the key read every holder a moment ago: this build asks for none of them again
