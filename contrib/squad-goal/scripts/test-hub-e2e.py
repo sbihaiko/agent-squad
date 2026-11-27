@@ -80,9 +80,9 @@ ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
 NOW = time.time()
 (S / "hubdir/hub-board.json").write_text(json.dumps(
     {"t": NOW, "items": [], "landed": [], "lc": {}, "err": None,
-     "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
+     "prs": [{"n": 1491, "r": "squad-hub-e2e/none", "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
               "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"},
-             {"n": 1492, "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
+             {"n": 1492, "r": "squad-hub-e2e/none", "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
               "u": "2026-10-11T08:30:00Z", "h": GATE_SHA, "o": "2026-10-11T07:30:00Z"}]}))
 (ST / "revci-1492.out").write_text(f"#1492 {GATE9} clean CI=success:2 VERDICT: APPROVE\n")
 def gate(at, sha9, reason, text):
@@ -138,16 +138,19 @@ try:
 
     print("== 4. the hours round-trip through the API (isolated copy)")
     before = MODELS.read_text()
+    # #3048: the row this case writes is the coding chain's head, read from the file, so a change to the owner's chain
+    # never turns the e2e red. Pinning one model id is the defect the header names (#393), and it reached this case last.
+    code = chain_rows("coding")[0]
     # a Save carries the version it read (#688): one GET before each POST, as the page does
     ver = lambda: json.loads(req("/api/models")[1])["version"]
-    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "23-06"}}}, origin=BASE)
+    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "23-06"}}}, origin=BASE)
     d = json.loads(b)
-    ck(st == 200 and d.get("hours", {}).get("coding_models", {}).get("claude-sonnet-5-5") == "23-06", "valid window stored", f"{st} {b[:120]}")
-    ck(window_of("coding", "claude-sonnet-5-5") == "23-06", "written to models.json")
-    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "25-99"}}}, origin=BASE)
+    ck(st == 200 and d.get("hours", {}).get("coding_models", {}).get(code) == "23-06", "valid window stored", f"{st} {b[:120]}")
+    ck(window_of("coding", code) == "23-06", "written to models.json")
+    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "25-99"}}}, origin=BASE)
     ck("err" in json.loads(b), "bad window rejected", b[:120])
-    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"claude-sonnet-5-5": "07-07"}}}, origin=BASE)
-    ck(window_of("coding", "claude-sonnet-5-5") != "07-07", "degenerate window (07-07) never stored", b[:120])
+    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "07-07"}}}, origin=BASE)
+    ck(window_of("coding", code) != "07-07", "degenerate window (07-07) never stored", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"not_a_chain": {"m": "01-02"}}}, origin=BASE)
     ck("err" in json.loads(b), "unknown chain refused", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {"not-in-chain": "01-02"}}}, origin=BASE)
@@ -186,14 +189,14 @@ try:
         ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
         ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
-        pg.wait_for_selector('#mbody input[data-hr="coding_models|claude-sonnet-5-5"]', timeout=15000)
+        pg.wait_for_selector(f'#mbody input[data-hr="coding_models|{bare(code)}"]', timeout=15000)
         # every chain draws the same row, the router's included (SPEC 750): each carries the hrs input and the effort select
         rows = pg.eval_on_selector_all("#mbody .mr:has(input.hr)", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
         by = {r["m"]: r for r in rows}
         rev = {bare(m): m for m in chain_rows("review")}   # the panel's id -> the spelling the file stores
         head = bare(chain_rows("review")[0])               # the chain's head, the review row this copy gave a window to
-        ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
+        ck(by.get(bare(code), {}).get("hr") == "23-06", f"coding {bare(code)} shows the window the API stored", by.get(bare(code)))   # #3048: the row this run wrote
         ck(by.get(head, {}).get("hr") == "19-07", f"review {head} shows 19-07", by.get(head))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
         idle = next(b for b, m in rev.items() if b != head and not window_of("review", m))   # a chain member with no window
         ck(by.get(idle, {}).get("hr") == "", f"{idle} has no window (all day)", by.get(idle))
