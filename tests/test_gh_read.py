@@ -394,6 +394,35 @@ def test_a_graphql_read_names_the_pass_its_caller_gives(tmp_path, monkeypatch):
     assert ghread.parse_call((tmp_path / "api.log").read_text().splitlines()[0]).pass_name == "hub"
 
 
+def test_a_graphql_read_logs_the_points_it_cost_and_the_points_left(tmp_path, monkeypatch):
+    """#3043: one user's hourly GraphQL budget ran out with no way to attribute the points. The cost is the answer's own
+    `rateLimit` reading, so the line carries the points this call spent and what the pool had left after it."""
+    monkeypatch.setenv("SG_STATE", str(tmp_path))
+    monkeypatch.setenv("SG_GH_PASS", "branchland")
+    body = '{"data":{"rateLimit":{"cost":11,"remaining":4210},"repository":{"x":1}}}'
+    ghread.graphql_read("query{rateLimit{cost remaining} x}", transport=stub(0, body))
+    call = ghread.parse_call((tmp_path / "api.log").read_text().splitlines()[0])
+    assert call is not None, (tmp_path / "api.log").read_text()
+    assert (call.cost, call.remaining) == (11, 4210), f"the line carries the points and what the pool had left: {call}"
+
+
+def test_a_log_line_written_before_the_points_columns_still_reads():
+    """The log holds lines from before #3043, and health reads them: a six-field line reads, and its points are unknown."""
+    call = ghread.parse_call("2026-11-27T18:36:00Z GraphQL graphql miss answer landing")
+    assert call is not None and call.pass_name == "landing" and call.outcome == "answer"
+    assert (call.cost, call.remaining) == (None, None), f"a line with no points column names no points: {call}"
+    forged = ghread.parse_call("2026-11-27T18:36:00Z GraphQL graphql miss answer landing eleven 4210")
+    assert forged is None, "a points column that is neither a number nor the dash is no line this reader trusts"
+
+
+def test_the_queries_the_loop_builds_ask_for_the_points_they_cost():
+    """The cost is only known when the question asks for it: every query the loop builds itself carries the reading."""
+    for route in ("repos/o/r/pulls?state=open&per_page=100", "repos/o/r/issues?state=open", "repos/o/r/issues?numbers=7,8",
+                  "repos/o/r/issues/7"):
+        query = " ".join(ghread.aggregate_argv(route)).replace(" ", "")
+        assert "rateLimit{costremaining}" in query, f"{route} asks for the points: {query[:160]}"
+
+
 def test_a_graphql_read_that_never_reaches_github_is_logged_as_failed(tmp_path, monkeypatch):
     monkeypatch.setenv("SG_STATE", str(tmp_path))
     monkeypatch.setenv("SG_GH_PASS", "board")

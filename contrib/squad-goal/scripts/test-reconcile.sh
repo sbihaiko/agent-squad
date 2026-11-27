@@ -153,7 +153,7 @@ done
 printf '%s\n' "$nums" | /usr/bin/grep -q '1090.*1170' && ok "one list names every open-list miss" || ko "the batched route does not carry the numbered list: '$nums'"
 # The spend is attributed (#1647's sibling): a pass that names itself in the call log can be read in the log that spends it.
 if [ -s "$T/st/api.log" ]; then
-  u=$(/usr/bin/grep -c ' unattributed$' "$T/st/api.log"); a=$(/usr/bin/grep -c ' reconcile$' "$T/st/api.log")
+  u=$(/usr/bin/grep -c ' unattributed - -$' "$T/st/api.log"); a=$(/usr/bin/grep -c ' reconcile - -$' "$T/st/api.log")
   [ "$u" = 0 ] && [ "$a" -gt 0 ] && ok "every read of the pass is logged under its own name" || ko "the pass spent $u unattributed and $a attributed reads"
 else ko "the pass wrote no call log line"; fi
 # A cooldown that still holds ends the pass before its first request (#1648): retrying into a refusal renews the limit.
