@@ -1675,8 +1675,12 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
         seat, serr = _slack_project_seat(project)
         if serr: return {"err": serr}
         if seat.get("read_defects"): return {"err": _slack_read_refusal(seat)}
-        if committed is None and local is None:
-            committed, local = seat["committed_path"], seat["local_path"]
+        # Both paths come from the named project, never from the page's tree (#3033): a caller that passes another
+        # project's path is refused, so one save never writes one project's document into another project's checkout.
+        for want, own in ((committed, seat.get("committed_path")), (local, seat.get("local_path"))):
+            if want is not None and own is not None and str(want) != str(own):
+                return {"err": f"the save names project {project!r}, so both files come from that project"}
+        committed, local = seat["committed_path"], seat["local_path"]
         loop, name = loop or seat["checkout"], name or seat["id"]
     # The save's own target is the hub worktree, which `_slack_provision` makes fresh before any write, so this path
     # takes the checkout's committed path and spends no landing-tip fetch on it (#2920).

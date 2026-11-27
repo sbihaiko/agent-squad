@@ -1738,9 +1738,13 @@ function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(e
  if(k==="project")return {kind:"field",scope:"project",field:String(field),value:v};
  if(k.indexOf("ws:")===0)return {kind:"field",scope:"workspace",workspace:k.slice(3),field:String(field),value:v};
  return {kind:"field",channel:k,field:String(field),value:v}}
+/* The project a node belongs to (#3033): the nearest ancestor that names an edit, so a workspace or a channel below
+   another profile's project reads that project's own file, never the page's. */
+const slPoOwner=n=>{const path=n&&n.id?slTPath(n.id):[n];
+ for(let i=path.length-1;i>=0;i--)if(path[i]&&path[i].edit&&path[i].edit.project)return path[i];return null};
 function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),
  // A node of another project draws the value its own staged documents hold (#3033), never the page's own files.
- docs=n.edit?slPoDocs(n.edit.project):slDocsCur();
+ owner=slPoOwner(n),docs=owner?slPoDocs(owner.edit.project):slDocsCur();
  if(sc==="project"){const p=(docs.committed||{}).project;return p&&p[f]!==undefined&&p[f]!==null?String(p[f]):""}
  if(sc.indexOf("ws:")===0){const id=sc.slice(3);
   for(const d of ["committed","local"])for(const w of Array.isArray((docs[d]||{}).workspaces)?docs[d].workspaces:[])
@@ -1753,7 +1757,8 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),f=String(c.field||""),
  tgt=ch||sc,   // the channel id, `project` or `ws:<id>`: the target the hub named for the row (#2901)
- at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"${n.edit?` data-slproj="${slA(n.edit.project)}"`:""}`:"",   // an edit of another project names it (#3033)
+ own=slPoOwner(n),proj=own?String(own.edit.project):"",
+ at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"${proj?` data-slproj="${slA(proj)}"`:""}`:"",   // an edit of another project names it (#3033)
  lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
  sv=v===undefined||v===null?"":String(v),
  id=`slf_${tgt}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
@@ -2036,7 +2041,7 @@ async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST
    holds every rule (ADR-0137, ADR-0177); this view binds the edit to a project and hands the documents back. */
 let slPo={};
 function slPoSt(id){id=String(id);return slPo[id]||(slPo[id]={id,docs:null,saved:null,timer:null,j:"",saving:false,
- msg:"",undo:null,undoAt:0,retry:null,chain:Promise.resolve()})}
+ undoing:false,msg:"",undo:null,undoAt:0,retry:null,chain:Promise.resolve()})}
 const slPoDocs=id=>{const s=slPo[String(id)];return (s&&s.docs)||{committed:{},local:{}}};
 const slPoDirty=id=>{const s=slPo[String(id)];return !!s&&!!s.docs&&JSON.stringify(s.docs)!==JSON.stringify(s.saved||{})};
 function slPoSet(id,docs){const s=slPoSt(id);s.docs=slClone(docs)}
@@ -2054,13 +2059,15 @@ function slPoSchedule(id){const s=slPoSt(id);if(!s.docs)return;const j=JSON.stri
  const only=JSON.stringify(s.docs.committed)===JSON.stringify((s.saved||{}).committed);
  s.timer=setTimeout(()=>{s.timer=null;slPoSave(id)},only?SL_LOCAL_MS:SL_COMMIT_MS)}   // the same debounce as the page's own project
 async function slPoSave(id){const s=slPoSt(id);if(!s.docs||!slPoDirty(id))return;if(s.saving)return;
- const sent=JSON.stringify(s.docs),prev=s.saved?slClone(s.saved):null;
- s.saving=true;s.msg="";slBarSync();
+ if(JSON.stringify(s.docs)===JSON.stringify(s.saved))return;   // the branch already holds this document: no commit, no claim (#3033)
+ const sent=JSON.stringify(s.docs),prev=s.saved?slClone(s.saved):null,undoing=!!s.undoing;   // Undo's own save offers no second Undo
+ s.undoing=false;s.saving=true;s.msg="";slBarSync();
  try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
   body:JSON.stringify({project:s.id,committed:s.docs.committed,local:s.docs.local,confirm:true})})).json();
   if(d.err){s.msg="!"+d.err;s.undo=null;s.retry=()=>{s.failJ="";slPoSave(id)};slRetryFn=s.retry}
-  else{s.saved=JSON.parse(sent);if(JSON.stringify(s.docs)===sent)s.docs=JSON.parse(sent);
-   s.msg="saved";s.retry=null;slRetryFn=null;slUndo={project:id,docs:prev};slUndoAt=Date.now()}}
+  else{s.saved=JSON.parse(sent);if(JSON.stringify(s.docs)===sent)s.docs=JSON.parse(sent);s.retry=null;slRetryFn=null;
+   if(d.sha&&!undoing){s.msg="saved";slUndo={project:id,docs:prev};slUndoAt=Date.now()}   // only a landed commit offers Undo
+   else{if(slUndo&&slUndo.project===id)slUndo=null;s.msg=""}}}   // no sha: the document was already there, so the page claims no save
  catch(x){s.msg="!save failed"}finally{s.saving=false}
  slRender();slBarSync()}
 const slPoIdOf=n=>n&&n.edit&&n.edit.project?String(n.edit.project):"";
@@ -2100,7 +2107,7 @@ async function slAutoSave(){clearTimeout(slAutoT);slAutoT=null;slAutoJ="";if(!sl
  if(slAgain||slDirty()){slAgain=false;slAutoSchedule()}slBarSync()}
 function slUndoLast(){if(!slUndo)return;
  if(slUndo.project){const id=slUndo.project,docs=slUndo.docs;slUndo=null;const s=slPoSt(id);   // Undo puts back the documents of the project the edit came from (#3033)
-  s.docs=slClone(docs);s.failJ="";slPoSave(id);return}
+  s.docs=slClone(docs);s.failJ="";s.undoing=true;slPoSave(id);return}   // Undo's own save re-offers no Undo (#3033)
  slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
 const slBarState=()=>{const o=slPoSel();
  if(o){if(o.saving)return {text:"Saving…",undo:false,retry:false,err:false};

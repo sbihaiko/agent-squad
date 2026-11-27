@@ -295,3 +295,74 @@ def test_the_page_own_project_keeps_its_autosave(hub):
     got = _run(hub, script)
     assert got["sent"] and got["sent"][0].get("project") in (None, ""), got["sent"]
     assert got["own"] == "pt-BR" and got["other"] == 0, got
+
+
+# ---------------------------------------------------------------- the page never claims a save that landed no commit
+
+BETA_RICH = {"committed": {"version": 1, "project": {"language": "es-ES", "persona": "nova"},
+                           "workspaces": [{"id": "T0BETA0001", "language": "es-ES", "channels": [
+                               {"id": "C0BETA0001", "language": "es-ES", "persona": "nova"}]}]},
+             "local": {"version": 1}}
+
+
+def test_a_save_that_lands_no_commit_claims_no_save_and_offers_no_undo(hub):
+    """#3033 acceptance 4 at the page: a save of the document the project's branch already holds posts nothing, and a
+    save the hub answers with no sha claims no save and offers no Undo of a no-op."""
+    script = ('let SENT=[];globalThis.fetch=(u,o)=>{SENT.push(JSON.parse(o.body));'
+              'return Promise.resolve({json:()=>Promise.resolve({committed_unchanged:true})})};'
+              '(async()=>{const s=slPoSt("beta");s.saved=slClone(' + json.dumps(BETA_DOCS) + ');s.docs=slClone(s.saved);'
+              'await slPoSave("beta");const same={sent:SENT.length,msg:s.msg,undo:slUndo};'
+              's.saved=null;s.docs=slClone(' + json.dumps(BETA_DOCS) + ');await slPoSave("beta");'
+              'console.log(JSON.stringify({same,later:{sent:SENT.length,msg:s.msg,undo:slUndo}}))})()')
+    got = _run(hub, script)
+    assert got["same"]["sent"] == 0, got["same"]
+    assert got["same"]["msg"] == "" and got["same"]["undo"] is None, got["same"]
+    assert got["later"]["sent"] == 1, got["later"]
+    assert got["later"]["msg"] != "saved" and got["later"]["undo"] is None, got["later"]
+
+
+def test_undo_reverts_without_claiming_a_save_or_offering_a_second_undo(hub):
+    """#3033 acceptance 15: Undo saves the reverted document through its own project, and the bar then shows the reverted
+    state, not "saved", with no second Undo that would save the previous document again."""
+    script = ('let SENT=[];globalThis.fetch=(u,o)=>{SENT.push(JSON.parse(o.body));'
+              'return Promise.resolve({json:()=>Promise.resolve({sha:"abc1234"})})};'
+              '(async()=>{const s=slPoSt("beta");s.saved=slClone(' + json.dumps(BETA_DOCS) + ');s.docs=slClone(s.saved);'
+              's.docs.committed.project.language="en-US";await slPoSave("beta");'
+              'const first=s.msg==="saved"&&slUndo&&slUndo.project==="beta";slUndoLast();await ticks();'
+              'const after={msg:s.msg,undo:slUndo,sent:SENT.length,lang:s.docs.committed.project.language};'
+              'slUndoLast();await ticks();'
+              'console.log(JSON.stringify({first,after,again:SENT.length,lang2:s.docs.committed.project.language}))})()')
+    got = _run(hub, script)
+    assert got["first"] is True, got
+    assert got["after"]["msg"] != "saved" and got["after"]["undo"] is None, got["after"]
+    assert got["after"]["lang"] == "es-ES" and got["after"]["sent"] == 2, got["after"]
+    assert got["again"] == 2 and got["lang2"] == "es-ES", "a second Undo saves nothing"
+
+
+def test_a_child_node_of_another_project_reads_that_projects_document(hub):
+    """#3033 acceptance 11: a setting below another profile's project reads that project's own file, never the page's
+    committed or local values."""
+    tree = {"clients": [{"id": "c0", "kind": "client", "name": "Acme", "children": [
+        {"id": "c0.p0", "kind": "project", "name": "alpha", "here": True, "children": []},
+        {"id": "c0.p1", "kind": "project", "name": "beta", "here": False, "edit": {"project": "beta"},
+         "children": [{"id": "c0.p1.w0", "kind": "workspace", "children": [
+             {"id": "c0.p1.w0.c0", "kind": "channel", "ids": {"channel": "C0BETA0001"}, "settings": {"rows": []}}]}]}]}]}
+    script = ('slT=' + json.dumps(tree) + ';slPoSet("beta",' + json.dumps(BETA_RICH) + ');'
+              'const ch=slTSettingVal(slTNode("c0.p1.w0.c0"),{doc:"committed"},{field:"language"}),'
+              'ws=slTSettingVal(slTNode("c0.p1.w0"),{doc:"committed"},{scope:"ws:T0BETA0001",field:"language"}),'
+              'own=slTSettingVal(slTNode("c0.p0"),{doc:"committed"},{scope:"project",field:"language"});'
+              'console.log(JSON.stringify({ch,ws,own}))')
+    got = _run(hub, script)
+    assert got["ch"] == "es-ES", got
+    assert got["ws"] == "es-ES", got
+    assert got["own"] == "en-US", "the page's own project keeps its own value"
+
+
+def test_a_save_that_names_a_project_takes_both_paths_from_that_project(hub, tmp_path, monkeypatch):
+    """#3033 acceptance 12: a body that names a project and one explicit path of the page's own tree is refused, so both
+    paths always come from the named project."""
+    _prof, made = wire(tmp_path, monkeypatch, hub, {"alpha": ALPHA, "beta": BETA})
+    out = hub.slack_files_set({"project": "beta", "committed": staging_new(BETA, language="en-US"), "local": LOCAL,
+                               "confirm": True}, local=made["alpha"]["local"])
+    assert out.get("err"), out
+    assert "beta" in out["err"], out["err"]
