@@ -61,25 +61,46 @@ def _controls(node):
     return [c for r in (node.get("settings") or {}).get("rows") or [] for c in r.get("controls") or []]
 
 
-def test_another_project_shows_its_own_values_read_only(hub, tmp_path):
+def test_another_projects_node_offers_the_persona_and_language_controls(hub, tmp_path):
+    """#3033 acceptance 1: the project node of another profile shows the Persona and Language controls, not plain
+    values, so the owner changes them from any page."""
     tree, _, _ = _tree(hub, tmp_path)
     beta = _project(tree, "beta")
     controls = {c["field"]: c for c in _controls(beta)}
-    assert controls["persona"] == {"field": "persona", "kind": "read", "value": "Nova"}, controls
-    assert controls["language"] == {"field": "language", "kind": "read", "value": "es-ES"}, controls
-    alpha = _project(tree, "alpha")
-    assert {c["kind"] for c in _controls(alpha)} == {"select"}, _controls(alpha)
+    assert controls["persona"]["kind"] == "select", controls
+    assert controls["persona"]["value"] == "nova", controls
+    assert [o["value"] for o in controls["persona"]["options"]] == ["", "nova"], controls
+    assert controls["language"]["kind"] == "select" and controls["language"]["value"] == "es-ES", controls
+    assert {c["scope"] for c in controls.values()} == {"project"}, controls
 
 
-def test_no_node_of_another_project_carries_an_edit(hub, tmp_path):
+def test_the_project_node_names_its_target_and_keeps_other_settings_read_only(hub, tmp_path):
+    """#3033 acceptance 10 and 11: the node names the project its edit writes and shows no 'Edited on ...'s page'
+    sentence; the settings below it stay read-only and keep their link."""
     tree, _, _ = _tree(hub, tmp_path)
     beta = _project(tree, "beta")
+    assert beta["edit"] == {"project": "beta"}, beta.get("edit")
+    assert "elsewhere" not in beta, beta.get("elsewhere")
     for node in walk(beta):
+        if node is beta:
+            continue
         assert {c["kind"] for c in _controls(node)} <= {"read"}, (node["name"], _controls(node))
         assert not node.get("channel_add") and not node.get("channel_remove"), node["name"]
         assert node.get("elsewhere") == "/beta/#settings", (node["name"], node.get("elsewhere"))
-    alpha = _project(tree, "alpha")
-    assert not any(n.get("elsewhere") for n in walk(alpha))
+
+
+def test_the_page_draws_selects_and_no_edited_elsewhere_sentence_for_the_project(hub, tmp_path):
+    """#3033 acceptance 1 and 10 in the renderer: the project node's two controls are selects that carry the project they
+    write, and the node states no sentence about an edit made on another page."""
+    tree, _, _ = _tree(hub, tmp_path)
+    beta = _project(tree, "beta")
+    body = (_slices(hub.PAGE) + f"\nslS={{}};slR={{}};slT={json.dumps(tree)};slTsel={json.dumps(beta['id'])};"
+            + "globalThis.fetch=()=>new Promise(()=>{});slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
+    html = json.loads(_node(body))
+    detail = html[html.index("id=sltdetail"):]
+    assert 'data-slproj="beta"' in detail, detail
+    assert detail.count("<select") == 2, detail
+    assert "Edited on " not in detail, detail
 
 
 def test_a_staged_edit_keeps_every_project(hub, tmp_path, monkeypatch):

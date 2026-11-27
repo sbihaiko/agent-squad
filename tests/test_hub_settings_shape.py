@@ -425,7 +425,7 @@ let mdln=0,limn=0,slkn=0;
 function mdlLoad(){mdln++;}function limLoad(){limn++;}function slLoad(){slkn++;}
 const mdlChanged=()=>false,slDirty=()=>false,kanDirty=()=>false,slotDirty=()=>false;
 const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};   // the theme's age tickers, stubbed: this harness proves the loads, not the clock
-let mdl=null,limS=null,slS=null,slDraft=null,slotS=null,slotDraft=null;
+let mdl=null,limS=null,slS=null,slDraft=null,slotS=null,slotDraft=null,prS={};   // the Personas state sits outside the slices: a truthy value keeps its boot load out of this harness (#3036)
 const ls=__STORED__,save=()=>{};
 """
     tail = """

@@ -1059,15 +1059,43 @@ def _slack_read_control(control):
     if control.get("label"): out["label"] = control["label"]
     return out
 
+def _slack_project_seat(project, cache=0.0):
+    """(seat, error): the one project a roster read names by its id, or the error of a read that did not finish. A save
+    takes no cache, so the file it writes is the file the tree just showed (#3033)."""
+    project = _slack_text(project).strip()
+    if not project:
+        return None, "project: a body that names one project id"
+    roster, err = _slack_roster_checked(cache)
+    if err:
+        return None, err
+    seat = next((s for s in roster if s.get("id") == project), None)
+    if seat is None:
+        return None, f"the hub knows no project {project!r}"
+    return seat, None
+
+
+def _slack_read_refusal(seat):
+    """The one message a project whose Slack file does not read earns (#3033): the file and the key the reader could not
+    take, so the refusal names the reason. An absent file is no defect and takes the edit."""
+    defects = list(seat.get("read_defects") or [])
+    first = str(defects[0]) if defects else "the file did not read"
+    return f"the Slack file of {_slack_text(seat.get('label') or seat.get('id'))} does not read: {first}"
+
+
 def _slack_tree_elsewhere(node, hub):
-    """A project node of another profile and its subtree, read-only (#2919): the page edits its own project's files
-    only, so each control becomes the value of that project's own files, no add or remove target stays, and every node
-    names the page that edits it."""
+    """A project node of another profile and its subtree (#2919, #3033): the owner edits the project's own Persona and
+    Language here, so the node keeps its two selects and names the project their edit writes (`edit`). Every other
+    control of the node and of its subtree becomes the value that project's own files hold, no add or remove target
+    stays, and every node below the project names the page that edits it. The project node itself states no 'Edited
+    on ...'s page' sentence, because its own settings are edited here (#3033)."""
+    node["edit"] = {"project": node["project"]}
+    node.pop("elsewhere", None)
     for n in [node] + [d for d in _slack_walk(node) if d is not node]:
-        n["elsewhere"] = hub
         n.pop("channel_add", None); n.pop("channel_remove", None)
-        for row in (n.get("settings") or {}).get("rows") or []:
-            row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]
+        if n is not node:
+            n["elsewhere"] = hub
+            for row in (n.get("settings") or {}).get("rows") or []:
+                row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]
 
 def _slack_walk(node):
     yield node
@@ -1080,6 +1108,7 @@ def _slack_tree_project(P, seat, entry, group, node_id, seats, here):
     built = _slack_project_node(P, seat, node_id)
     node = built["node"]
     node["here"] = _slack_here(seat, seats, here)
+    node["project"] = seat["id"]   # the project a save names, so an edit of this node writes this project's own file (#3033)
     node["hub"] = f"/{urllib.parse.quote(str(seat['id']))}/#settings"
     node["badges"] = list(node["badges"]) + [
         _slack_badge("inherits from client", "muted", "follow") if entry["follows"]
@@ -1638,6 +1667,17 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
     commits and lands the committed file in the hub's own worktree. Returns the diff, the landed sha, and both files
     read back, so the change applies at once."""
     if not isinstance(body, dict): return {"err": "bad request"}
+    # An edit of another profile's project node names that project: the save takes the project's own two paths and its
+    # own checkout, so the write lands in that project's repository, never the page's (#3033). A file that does not read
+    # is refused by name before any write; an absent file is no defect and takes the edit.
+    project = _slack_text(body.get("project")).strip()
+    if project:
+        seat, serr = _slack_project_seat(project)
+        if serr: return {"err": serr}
+        if seat.get("read_defects"): return {"err": _slack_read_refusal(seat)}
+        if committed is None and local is None:
+            committed, local = seat["committed_path"], seat["local_path"]
+        loop, name = loop or seat["checkout"], name or seat["id"]
     # The save's own target is the hub worktree, which `_slack_provision` makes fresh before any write, so this path
     # takes the checkout's committed path and spends no landing-tip fetch on it (#2920).
     if committed is None and local is None:
@@ -2445,6 +2485,15 @@ def slack_docs_edit(body, committed=None, local=None):
     if not isinstance(body, dict): return {"err": "bad request"}
     op = body.get("op")
     if not isinstance(op, dict): return {"err": "the operation is a mapping"}
+    # An edit of another profile's project node names that project: the hub reads that project's own two files and
+    # stages the edit over them, so the page's own documents take no part (#3033). A file that does not read is refused
+    # by name; an absent file is no defect and takes the edit.
+    project = _slack_text(body.get("project")).strip()
+    if project and committed is None and local is None:
+        seat, serr = _slack_project_seat(project)
+        if serr: return {"err": serr}
+        if seat.get("read_defects"): return {"err": _slack_read_refusal(seat)}
+        committed, local = seat["committed_path"], seat["local_path"]
     if committed is None and local is None: committed, local = slack_yaml_paths()
     local_name = body.get("local_name") or (pathlib.Path(local).name if local else "slack.local.yaml")
     try: P = slack_policy()

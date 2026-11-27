@@ -1554,7 +1554,8 @@ function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.childr
    Settings; another project names the page that edits them, so no section reads as global. */
 function slTProject(n){if(!n||n.kind!=="project")return "";
  if(n.here)return slReadHtml(slR);
- // Its personas are edited once for every client in the Personas theme; its roles and events stay on its own page (#3016).
+ // Its Persona and Language are edited on this node (#3033); its persona definitions are edited once for every client
+ // in the Personas theme, and its roles and events stay on its own page (#3016).
  return n.hub?`<p class=slttext>${esc("Its personas are edited in the ")}<a href="#set-prs" data-sp=prs>${esc("Personas theme")}</a>${esc(". Its roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
@@ -1737,7 +1738,9 @@ function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(e
  if(k==="project")return {kind:"field",scope:"project",field:String(field),value:v};
  if(k.indexOf("ws:")===0)return {kind:"field",scope:"workspace",workspace:k.slice(3),field:String(field),value:v};
  return {kind:"field",channel:k,field:String(field),value:v}}
-function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),docs=slDocsCur();
+function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),
+ // A node of another project draws the value its own staged documents hold (#3033), never the page's own files.
+ docs=n.edit?slPoDocs(n.edit.project):slDocsCur();
  if(sc==="project"){const p=(docs.committed||{}).project;return p&&p[f]!==undefined&&p[f]!==null?String(p[f]):""}
  if(sc.indexOf("ws:")===0){const id=sc.slice(3);
   for(const d of ["committed","local"])for(const w of Array.isArray((docs[d]||{}).workspaces)?docs[d].workspaces:[])
@@ -1750,7 +1753,8 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),f=String(c.field||""),
  tgt=ch||sc,   // the channel id, `project` or `ws:<id>`: the target the hub named for the row (#2901)
- at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
+ at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"${n.edit?` data-slproj="${slA(n.edit.project)}"`:""}`:"",   // an edit of another project names it (#3033)
+ lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
  sv=v===undefined||v===null?"":String(v),
  id=`slf_${tgt}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  ph=c.default?` placeholder="default: ${slA(c.default)}"`:(f.indexOf("poll.")===0?` placeholder="the policy default"`:"");
@@ -2026,6 +2030,41 @@ async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
  if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)
  catch(x){slMsg="!the edit failed"}slRender();slChTree()}   // an edit may plant a new workspace, whose add pane needs its list (#2957)
+/* Another profile's project node (#3033): the node names the project its Persona and Language edit writes, the hub
+   reads and stages that project's own two files, and the save posts the project with only its own documents. Each
+   project keeps its own pending save, refusal, retry and undo, so a switch of project never redirects one. The hub
+   holds every rule (ADR-0137, ADR-0177); this view binds the edit to a project and hands the documents back. */
+let slPo={};
+function slPoSt(id){id=String(id);return slPo[id]||(slPo[id]={id,docs:null,saved:null,timer:null,j:"",saving:false,
+ msg:"",undo:null,undoAt:0,retry:null,chain:Promise.resolve()})}
+const slPoDocs=id=>{const s=slPo[String(id)];return (s&&s.docs)||{committed:{},local:{}}};
+const slPoDirty=id=>{const s=slPo[String(id)];return !!s&&!!s.docs&&JSON.stringify(s.docs)!==JSON.stringify(s.saved||{})};
+function slPoSet(id,docs){const s=slPoSt(id);s.docs=slClone(docs)}
+function slPoField(id,field,el){const s=slPoSt(id),v=el&&el.type==="checkbox"?!!el.checked:(el&&el.value!==undefined?el.value:"");
+ const op={kind:"field",scope:"project",field:String(field),value:v};
+ s.chain=s.chain.then(()=>slPoOp(s,op)).catch(()=>{s.msg="!the edit failed";slRender();slBarSync()})}
+async function slPoOp(s,op){try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({project:s.id,op})})).json();
+ if(d.err){s.msg="!"+d.err;s.retry=null;slRender();slBarSync();return}
+ const before=JSON.stringify(s.docs||{});s.docs={committed:d.committed,local:d.local};s.msg="";
+ slRender();if(JSON.stringify(s.docs)!==before)slPoSchedule(s.id);slBarSync()}
+ catch(x){s.msg="!the edit failed";slRender()}}
+function slPoSchedule(id){const s=slPoSt(id);if(!s.docs)return;const j=JSON.stringify(s.docs);
+ if(j===s.j)return;s.j=j;clearTimeout(s.timer);   // a refused document waits for Retry, never a burst of retries
+ const only=JSON.stringify(s.docs.committed)===JSON.stringify((s.saved||{}).committed);
+ s.timer=setTimeout(()=>{s.timer=null;slPoSave(id)},only?SL_LOCAL_MS:SL_COMMIT_MS)}   // the same debounce as the page's own project
+async function slPoSave(id){const s=slPoSt(id);if(!s.docs||!slPoDirty(id))return;if(s.saving)return;
+ const sent=JSON.stringify(s.docs),prev=s.saved?slClone(s.saved):null;
+ s.saving=true;s.msg="";slBarSync();
+ try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({project:s.id,committed:s.docs.committed,local:s.docs.local,confirm:true})})).json();
+  if(d.err){s.msg="!"+d.err;s.undo=null;s.retry=()=>{s.failJ="";slPoSave(id)};slRetryFn=s.retry}
+  else{s.saved=JSON.parse(sent);if(JSON.stringify(s.docs)===sent)s.docs=JSON.parse(sent);
+   s.msg="saved";s.retry=null;slRetryFn=null;slUndo={project:id,docs:prev};slUndoAt=Date.now()}}
+ catch(x){s.msg="!save failed"}finally{s.saving=false}
+ slRender();slBarSync()}
+const slPoIdOf=n=>n&&n.edit&&n.edit.project?String(n.edit.project):"";
+function slPoSel(){const n=slTNode(slTsel),id=slPoIdOf(n);return id?slPoSt(id):null}
 const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
  value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
 const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
@@ -2059,8 +2098,17 @@ async function slAutoSave(){clearTimeout(slAutoT);slAutoT=null;slAutoJ="";if(!sl
  if(slMsg.startsWith("!")){slUndo=null;slFailJ=sent;slRetryFn=()=>{slFailJ="";slAutoSave()}}
  else{slUndo=prev;slUndoAt=Date.now();slRetryFn=null;setTimeout(slBarSync,SL_UNDO_MS+50)}
  if(slAgain||slDirty()){slAgain=false;slAutoSchedule()}slBarSync()}
-function slUndoLast(){if(!slUndo)return;slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
-const slBarState=()=>{if(slSaving)return {text:"Saving…",undo:false,retry:false,err:false};
+function slUndoLast(){if(!slUndo)return;
+ if(slUndo.project){const id=slUndo.project,docs=slUndo.docs;slUndo=null;const s=slPoSt(id);   // Undo puts back the documents of the project the edit came from (#3033)
+  s.docs=slClone(docs);s.failJ="";slPoSave(id);return}
+ slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
+const slBarState=()=>{const o=slPoSel();
+ if(o){if(o.saving)return {text:"Saving…",undo:false,retry:false,err:false};
+  if(o.msg&&o.msg[0]==="!")return {text:"Not saved: "+o.msg.slice(1),undo:false,retry:!!o.retry,err:true};
+  if(o.timer)return {text:"Saving in a moment",undo:false,retry:false,err:false};
+  return o.msg?{text:"Slack: saved by itself",undo:false,retry:false,err:false}
+   :{text:"Slack: each edit saves by itself",undo:false,retry:false,err:false}}
+ if(slSaving)return {text:"Saving…",undo:false,retry:false,err:false};
  if(slMsg.startsWith("!"))return {text:"Not saved: "+slMsg.slice(1),undo:false,retry:!!slRetryFn,err:true};
  if(slAutoT||slProposeT)return {text:"Saving in a moment",undo:false,retry:false,err:false};
  const undo=!!slUndo&&Date.now()-slUndoAt<SL_UNDO_MS;
@@ -2080,7 +2128,9 @@ async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender();slChTree()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};
- if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
+ if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");
+  if(dt.slproj){slPoField(dt.slproj,s.slice(i+1),e.target);return}   // one field of another project's node, bound to that project (#3033)
+  slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
  const s=dt.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
  const k=dt.sl;if(!k)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});
