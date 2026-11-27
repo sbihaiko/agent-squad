@@ -189,3 +189,23 @@ def test_the_page_draws_the_refusal_the_board_row_carries(hub):
     page = mod.PAGE
     assert "x.mr" in page, "the card does not draw the refusal its row carries"
     assert "pending" in page, "the card does not draw the pending mark"
+
+
+def test_the_board_serves_a_new_chip_when_the_loop_writes_its_own_reason(hub):
+    """The chip is the loop's own file, so a served body built before it changed is a reason the loop already replaced (#1771).
+    The key that keeps the body reads auto/off, auto/.pass and auto/gate-<n>, so the card follows the file (SPEC 3049)."""
+    mod, port = hub
+    mod.board_cache["prs"] = [{"n": 9, "r": "x/y", "t": "a pull request", "d": False, "ci": [], "ms": "clean",
+                               "u": "2026-01-01T00:00:00Z", "h": "abcdef0123456789ab"}]
+    st = pathlib.Path(mod.STATE) / "auto"
+    st.mkdir(exist_ok=True)
+    (pathlib.Path(mod.STATE) / "revci-9.out").write_text("#9 abcdef012 clean CI=success:2 VERDICT: APPROVE\n")
+    (st / "off").write_text("")
+    kill_switch, _ = mod.board_served()
+    mod.board_served()   # a build marks its own rows, so the second serve settles the key: only the loop's file changes below
+    (st / "off").unlink()
+    (st / ".pass").write_text(str(time.time()))
+    (st / "gate-9").write_text(f"abcdef012\t{int(time.time())}\tmerged\tmerged as abc1234: APPROVE + CI green\n")
+    merged, _ = mod.board_served()
+    assert json.loads(kill_switch)["prs"]["items"][0]["ps"][1] == "loop off"
+    assert json.loads(merged)["prs"]["items"][0]["ps"][1] == "ready to merge"
