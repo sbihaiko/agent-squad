@@ -136,6 +136,7 @@ def _page_slices(page, stub=None):
                     'let limS=null,slDraft=null,slS=null;const mdlChanged=()=>false,slDirty=()=>false,brdDirty=()=>false;'
                     'const mdlLoad=()=>{},limLoad=()=>{};'   # the two loaders the page answers on boot (#1278, #2432)
                     'const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};'   # the theme's age tickers (#2433)
+                    'let prS=null;const prLoad=()=>{};'   # the personas loader setTheme calls for the Personas tab (#3036)
                     'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};')
     return "\n".join([stub, esc, usd, iq, sett, gauges, state])
 
@@ -150,6 +151,7 @@ _LIVE = ('const STORE={},HANDLERS={},SENT=[];'
          'let limS=null,slDraft=null,slS=null;const mdlChanged=()=>false,slDirty=()=>false,brdDirty=()=>false;'
          'const mdlLoad=()=>{},limLoad=()=>{};'   # the two loaders the page answers on boot (#1278, #2432)
          'const limTickStart=()=>{},limTickStop=()=>{},kanTickStart=()=>{},kanTickStop=()=>{};'   # the theme's age tickers (#2433)
+         'let prS=null;const prLoad=()=>{};'   # the personas loader setTheme calls for the Personas tab (#3036)
          'globalThis.document={addEventListener(){},querySelectorAll:()=>[],activeElement:null};'
          'globalThis.fetch=(u)=>{SENT.push(u);return Promise.resolve({json:async()=>({})})};'
          'globalThis.XMLHttpRequest=function(){this.open=(m,u)=>SENT.push(u);this.send=()=>SENT.push("sent");'
