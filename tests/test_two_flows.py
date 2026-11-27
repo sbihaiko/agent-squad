@@ -15,6 +15,7 @@ from tests.test_five_phases import script as five_script
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.mark.heavy  # two git child runs; CI load pushed it to 3.1 s
 @pytest.mark.anyio
 async def test_the_router_picks_a_different_skill_child_for_two_inputs(tmp_path):
     a = make(tmp_path / "a", {"router": routed(req("tdd")), "route.router.1": CHILD})
