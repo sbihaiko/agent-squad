@@ -1554,7 +1554,8 @@ function slTHere(){const walk=n=>!n?null:n.kind==="project"&&n.here?n:((n.childr
    Settings; another project names the page that edits them, so no section reads as global. */
 function slTProject(n){if(!n||n.kind!=="project")return "";
  if(n.here)return slReadHtml(slR);
- // Its personas are edited once for every client in the Personas theme; its roles and events stay on its own page (#3016).
+ // Its Persona and Language are edited on this node (#3033); its persona definitions are edited once for every client
+ // in the Personas theme, and its roles and events stay on its own page (#3016).
  return n.hub?`<p class=slttext>${esc("Its personas are edited in the ")}<a href="#set-prs" data-sp=prs>${esc("Personas theme")}</a>${esc(". Its roles and events are edited on ")}<a href="${slA(n.hub)}">${esc(n.name)}${esc("'s page")}</a>.</p>`:""}
 const slTNode=id=>{const find=n=>!n?null:n.id===id?n:((n.children||[]).map(find).find(Boolean)||null);
  for(const r of slTRoots()){const hit=find(r);if(hit)return hit}return null};
@@ -1661,15 +1662,20 @@ const slTRefused=n=>{const bad=(n.proposal||[]).filter(r=>r.action==="refused");
 const slTClient=n=>{if(n.kind!=="client"||n.own)return "";   // the page of one unnamed project draws no client map chrome (#2922)
  const opts=n.persona_options||[],cur=n.default_persona||"";
  const sel=`<select id=slclpersona aria-label="${slA("Default persona")}">${opts.map(o=>`<option value="${slA(o.id)}"${o.id===cur?" selected":""}>${esc(o.name)}</option>`).join("")}</select>`;
+ // The default language (#3035): a select over the languages the policy module accepts, beside the default persona.
+ const langs=n.language_options||[],lcur=n.default_language||"";
+ const lsel=`<select id=slcllanguage aria-label="${slA("Default language")}">${langs.map(o=>`<option value="${slA(o.value)}"${o.value===lcur?" selected":""}>${esc(o.label)}</option>`).join("")}</select>`;
  // The Add project control lists the hub's free projects by name, and Delete client asks the hub's one question (#2922).
  const free=n.client?(n.add_projects||[]):[];   // a node the map does not name has no map to change (#2922)
  const add=!n.client?"":(free.length
   ?`<div class="slad sltadd"><select id=slclproject aria-label="${slA("Project to add")}">${free.map(p=>`<option value="${slA(p.id)}">${esc(p.name)}</option>`).join("")}</select><button type=button data-slcaddproj="${slA(n.id)}">${esc("Add project")}</button></div>`
   :`<p class=m>${esc("No project waits to be added.")}</p>`);
- const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div>`+add+`</div>`;
+ const follow=(n.children||[]).map(p=>`<label class=slchk><input type=checkbox data-slfollang="${slA(p.project||"")}"${p.follows_language?" checked":""} aria-label="${slA("Follow the client language")}"> ${esc(p.name)}</label>`).join("");
+ const projects=`<div class=setblk><h3 class=blkh>${esc("Projects")}</h3><div class=sltprojs>`+(n.children||[]).map(p=>`<span class=sltproj>${slTGlyph(p)}${esc(p.name)}${(p.badges||[]).map(slTBadge).join("")}</span>`).join("")+`</div>`+follow+add+`</div>`;
  const del=n.ask?`<div class=sltacts><button type=button class=sltdanger data-slcask="${slA(n.id)}">${esc("Delete client")}</button></div>`:"";
  return `<div class=sltsethead><h3 class=blkh>${esc("Settings")}</h3><span class=slfile title="${slA("the profile folder")}">clients.local.yaml</span></div>`
  +`<div class=sltrow><span class=sl>${esc("Default persona")}</span><span class=sc>${sel}</span></div>`
+ +`<div class=sltrow><span class=sl>${esc("Default language")}</span><span class=sc>${lsel}</span></div>`
  +`<p class=sltjump><a href="#set-prs" data-sp=prs>${esc("Open the Personas theme")}</a></p>`   // the theme edits the personas of every client (#3016)
  +slTRefused(n)+projects+del};
 /* The project's one control (#2922): Remove from client. The question it shows is the hub's, and it names the project
@@ -1703,8 +1709,10 @@ function slTDetail(){const n=slTNode(slTsel)||slTRoots()[0];if(!n)return "";
  +`<h3 class=slth>${esc(n.name)} ${badges}</h3>`
  +`<p class=sltsub>${esc((n.detail||{}).sub||"")}</p>`+(n.kind==="channel"&&n.ids&&n.ids.channel?`<p class=sltids><button type=button class=sltcopy data-slt-copy="${slA(n.ids.channel)}" title="${slA("Copy the Slack channel id")}">copy id</button>${n.open?` <a class=sltopen href="${slA(n.open)}" target=_blank rel=noopener>Open in Slack</a>`:""}</p>`:"")+((n.detail||{}).verdict?`<p class=sltverdict>${esc(n.detail.verdict)}</p>`:"")+`${notice}${defects}`+slTConfirm(n)
  +((n.detail||{}).text&&!(n.setup||[]).length?`<p class=slttext>${esc(n.detail.text)}</p>`:"")+slTSetup(n)+slTNow(n)+slTNote(n)+slTClient(n)+slTClientActions(n)+slTElsewhere(n)+slTChAdd(n)+slTSettings(n)+slTProject(n)+slTPerms(n)+(n.elsewhere?"":slTPreview(n))+slTChRm(n)}
-/* A node of another profile's project is read-only here: the page edits its own project's files only (#2919). */
-const slTElsewhere=n=>n&&n.elsewhere&&n.kind!=="project"?`<p class=slttext>${esc("Edited on ")}<a href="${slA(n.elsewhere)}">${esc((slTPath(n.id).find(x=>x.kind==="project")||{}).name||"its project")}${esc("'s page")}</a>.</p>`:"";
+/* A node of another profile's project is read-only here: the page edits its own project's files only (#2919). The
+   workspace and the channel edit their Persona and Language here, so a channel names only its other settings as edited
+   on the project's page (#3034). */
+const slTElsewhere=n=>n&&n.elsewhere&&n.kind!=="project"?`<p class=slttext>${esc(n.kind==="channel"?"Its other settings are edited on ":"Edited on ")}<a href="${slA(n.elsewhere)}">${esc((slTPath(n.id).find(x=>x.kind==="project")||{}).name||"its project")}${esc("'s page")}</a>.</p>`:"";
 /* Add and remove a channel from its own tree node (#2918). The hub names the row each edit writes and lists the
    workspace's channels by name, the ones the files name left out; the view draws the list and sends the edit. */
 let slChList={},slChAsk={};
@@ -1737,7 +1745,13 @@ function slFieldOp(ch,field,el){const v=el&&el.type==="checkbox"?!!el.checked:(e
  if(k==="project")return {kind:"field",scope:"project",field:String(field),value:v};
  if(k.indexOf("ws:")===0)return {kind:"field",scope:"workspace",workspace:k.slice(3),field:String(field),value:v};
  return {kind:"field",channel:k,field:String(field),value:v}}
-function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),docs=slDocsCur();
+/* The project a node belongs to (#3033): the nearest ancestor that names an edit, so a workspace or a channel below
+   another profile's project reads that project's own file, never the page's. */
+const slPoOwner=n=>{const path=n&&n.id?slTPath(n.id):[n];
+ for(let i=path.length-1;i>=0;i--)if(path[i]&&path[i].edit&&path[i].edit.project)return path[i];return null};
+function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),
+ // A node of another project draws the value its own staged documents hold (#3033), never the page's own files.
+ owner=slPoOwner(n),docs=owner?slPoDocs(owner.edit.project):slDocsCur();
  if(sc==="project"){const p=(docs.committed||{}).project;return p&&p[f]!==undefined&&p[f]!==null?String(p[f]):""}
  if(sc.indexOf("ws:")===0){const id=sc.slice(3);
   for(const d of ["committed","local"])for(const w of Array.isArray((docs[d]||{}).workspaces)?docs[d].workspaces:[])
@@ -1750,7 +1764,9 @@ function slTSettingVal(n,row,c){const f=String(c.field||""),ch=String((n.ids||{}
  return c.value===undefined||c.value===null?"":String(c.value)}
 function slTSettingCtl(n,row,c){const ch=String((n.ids||{}).channel||""),sc=String(c.scope||""),f=String(c.field||""),
  tgt=ch||sc,   // the channel id, `project` or `ws:<id>`: the target the hub named for the row (#2901)
- at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"`:"",lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
+ own=slPoOwner(n),proj=own?String(own.edit.project):"",
+ at=tgt&&f?`data-slf="${slA(tgt)}|${slA(f)}"${proj?` data-slproj="${slA(proj)}"`:""}`:"",   // an edit of another project names it (#3033)
+ lab=slA(c.label||row.label||f),v=slTSettingVal(n,row,c),
  sv=v===undefined||v===null?"":String(v),
  id=`slf_${tgt}_${f}`,   // a stable id, so a redraw puts the keyboard back on the control the owner changed (#2846)
  ph=c.default?` placeholder="default: ${slA(c.default)}"`:(f.indexOf("poll.")===0?` placeholder="the policy default"`:"");
@@ -1808,7 +1824,7 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
  const pid=(el&&el.value)||n.default_persona||"";
  const opt=(n.persona_options||[]).find(o=>o.id===pid)||((el&&el.options&&el.options[el.selectedIndex])||{});
- const pname=String(opt.name||opt.text||pid),body={client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827)
+ const pname=String(opt.name||opt.text||pid),body={op:"set_persona",client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827); the op names the change, so no body picks a route by its shape (#3035)
  if(confirm)body.confirm=true;slSaving=!!confirm;slMsg="";slBarSync();
  const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slPropose(id,true);slRender()};
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
@@ -1818,6 +1834,23 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
   if(confirm){n.default_persona=pid;slMsg=o.partial?"saved in part · a project was not written":"saved"}   // the refused projects are named in the pane (#2908)
   slRender()})
  .catch(()=>fail("the client default could not be saved: the hub did not answer"))}
+/* The client default language (#3035): a change saves by itself, with no proposed-writes table. The answer's rows carry
+   only the projects a write could not reach, so the pane names them. The route binds one change to its own client. */
+function slLangPick(id,lang){const n=slTNode(id);if(!n)return;
+ slSaving=true;slMsg="";slBarSync();
+ const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slLangPick(id,lang);slRender()};
+ fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({op:"set_language",client:n.client||"",language:String(lang||""),confirm:true})})   // the op names the change, so no body picks a route by its shape (#3035)
+ .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
+ .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client language could not be saved");return}
+  slSaving=false;slRetryFn=null;if(o.rows)n.proposal=o.rows;
+  n.default_language=String(o.language||lang||"");slMsg=o.partial?"saved in part · a project was not written":"saved"
+  slRender()})
+ .catch(()=>fail("the client language could not be saved: the hub did not answer"))}
+/* The language Follow toggle of one project (#3035): off makes an exception, and on removes it and writes the client
+   default language to that project. The route answers the write. */
+function slFollowLang(pid,follows){const n=slTNode(slTsel);if(!n)return;
+ slMapPost({op:"follow_language",client:n.client||"",project:String(pid||""),follows:!!follows,confirm:true},slTsel)}
 /* The client map's own changes (#2922): add a project, remove a project, add a client, delete a client. Every change is
    one confirmed POST to the client route, and the hub writes the map and answers; the view then reads the tree again,
    so what it draws is the hub's answer. The list, the targets and the question are the hub's (ADR-0137, ADR-0177). */
@@ -2026,6 +2059,44 @@ async function slOp(op){try{const r=await fetch("/api/slack/files",{method:"POST
  body:JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local,local_name:slDocName("local"),op})}),d=await r.json();
  if(d.err){slMsg="!"+d.err;slOpen=""}else{slDocs={committed:d.committed,local:d.local};if(d.tree)slT=d.tree;slMsg=""}}   // the Now block follows the staged documents (#2846)
  catch(x){slMsg="!the edit failed"}slRender();slChTree()}   // an edit may plant a new workspace, whose add pane needs its list (#2957)
+/* Another profile's project node (#3033): the node names the project its Persona and Language edit writes, the hub
+   reads and stages that project's own two files, and the save posts the project with only its own documents. Each
+   project keeps its own pending save, refusal, retry and undo, so a switch of project never redirects one. The hub
+   holds every rule (ADR-0137, ADR-0177); this view binds the edit to a project and hands the documents back. */
+let slPo={};
+function slPoSt(id){id=String(id);return slPo[id]||(slPo[id]={id,docs:null,saved:null,timer:null,j:"",saving:false,
+ undoing:false,msg:"",undo:null,undoAt:0,retry:null,chain:Promise.resolve()})}
+const slPoDocs=id=>{const s=slPo[String(id)];return (s&&s.docs)||{committed:{},local:{}}};
+const slPoDirty=id=>{const s=slPo[String(id)];return !!s&&!!s.docs&&JSON.stringify(s.docs)!==JSON.stringify(s.saved||{})};
+function slPoSet(id,docs){const s=slPoSt(id);s.docs=slClone(docs)}
+function slPoField(id,field,el,target){const s=slPoSt(id);   // target: `project`, `ws:<id>` or a channel id (#2901, #3034)
+ const op=slFieldOp(target||"project",field,el);
+ s.chain=s.chain.then(()=>slPoOp(s,op)).catch(()=>{s.msg="!the edit failed";slRender();slBarSync()})}
+async function slPoOp(s,op){try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({project:s.id,op})})).json();
+ if(d.err){s.msg="!"+d.err;s.retry=null;slRender();slBarSync();return}
+ const before=JSON.stringify(s.docs||{});s.docs={committed:d.committed,local:d.local};s.msg="";
+ if(d.tree)slT=d.tree;   // the redrawn tree carries the values a row inherits, so a channel follows its workspace (#3034)
+ slRender();if(JSON.stringify(s.docs)!==before)slPoSchedule(s.id);slBarSync()}
+ catch(x){s.msg="!the edit failed";slRender()}}
+function slPoSchedule(id){const s=slPoSt(id);if(!s.docs)return;const j=JSON.stringify(s.docs);
+ if(j===s.j)return;s.j=j;clearTimeout(s.timer);   // a refused document waits for Retry, never a burst of retries
+ const only=JSON.stringify(s.docs.committed)===JSON.stringify((s.saved||{}).committed);
+ s.timer=setTimeout(()=>{s.timer=null;slPoSave(id)},only?SL_LOCAL_MS:SL_COMMIT_MS)}   // the same debounce as the page's own project
+async function slPoSave(id){const s=slPoSt(id);if(!s.docs||!slPoDirty(id))return;if(s.saving)return;
+ if(JSON.stringify(s.docs)===JSON.stringify(s.saved))return;   // the branch already holds this document: no commit, no claim (#3033)
+ const sent=JSON.stringify(s.docs),prev=s.saved?slClone(s.saved):null,undoing=!!s.undoing;   // Undo's own save offers no second Undo
+ s.undoing=false;s.saving=true;s.msg="";slBarSync();
+ try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({project:s.id,committed:s.docs.committed,local:s.docs.local,confirm:true,direct_edit:true})})).json();   // the owner's own edit of another project (#3035)
+  if(d.err){s.msg="!"+d.err;s.undo=null;s.retry=()=>{s.failJ="";slPoSave(id)};slRetryFn=s.retry}
+  else{s.saved=JSON.parse(sent);if(JSON.stringify(s.docs)===sent)s.docs=JSON.parse(sent);s.retry=null;slRetryFn=null;
+   if(d.sha&&!undoing){s.msg="saved";slUndo={project:id,docs:prev};slUndoAt=Date.now()}   // only a landed commit offers Undo
+   else{if(slUndo&&slUndo.project===id)slUndo=null;s.msg=""}}}   // no sha: the document was already there, so the page claims no save
+ catch(x){s.msg="!save failed"}finally{s.saving=false}
+ slRender();slBarSync()}
+const slPoIdOf=n=>n&&n.edit&&n.edit.project?String(n.edit.project):"";
+function slPoSel(){const n=slTNode(slTsel),id=slPoIdOf(n);return id?slPoSt(id):null}
 const slAddWsOp=()=>slOp({kind:"add",doc:"committed",path:["workspaces"],
  value:{id:($("[data-slwsid]")||{}).value,label:($("[data-slwslabel]")||{}).value,class:($("[data-slwsclass]")||{}).value,app:($("[data-slwsapp]")||{}).value}});
 const slAddChOp=(d,i)=>slOp({kind:"add",doc:d,path:["workspaces",i,"channels"],
@@ -2059,8 +2130,17 @@ async function slAutoSave(){clearTimeout(slAutoT);slAutoT=null;slAutoJ="";if(!sl
  if(slMsg.startsWith("!")){slUndo=null;slFailJ=sent;slRetryFn=()=>{slFailJ="";slAutoSave()}}
  else{slUndo=prev;slUndoAt=Date.now();slRetryFn=null;setTimeout(slBarSync,SL_UNDO_MS+50)}
  if(slAgain||slDirty()){slAgain=false;slAutoSchedule()}slBarSync()}
-function slUndoLast(){if(!slUndo)return;slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
-const slBarState=()=>{if(slSaving)return {text:"Saving…",undo:false,retry:false,err:false};
+function slUndoLast(){if(!slUndo)return;
+ if(slUndo.project){const id=slUndo.project,docs=slUndo.docs;slUndo=null;const s=slPoSt(id);   // Undo puts back the documents of the project the edit came from (#3033)
+  s.docs=slClone(docs);s.failJ="";s.undoing=true;slPoSave(id);return}   // Undo's own save re-offers no Undo (#3033)
+ slDocs=slClone(slUndo);slUndo=null;slT=null;slAutoSave()}
+const slBarState=()=>{const o=slPoSel();
+ if(o){if(o.saving)return {text:"Saving…",undo:false,retry:false,err:false};
+  if(o.msg&&o.msg[0]==="!")return {text:"Not saved: "+o.msg.slice(1),undo:false,retry:!!o.retry,err:true};
+  if(o.timer)return {text:"Saving in a moment",undo:false,retry:false,err:false};
+  return o.msg?{text:"Slack: saved by itself",undo:false,retry:false,err:false}
+   :{text:"Slack: each edit saves by itself",undo:false,retry:false,err:false}}
+ if(slSaving)return {text:"Saving…",undo:false,retry:false,err:false};
  if(slMsg.startsWith("!"))return {text:"Not saved: "+slMsg.slice(1),undo:false,retry:!!slRetryFn,err:true};
  if(slAutoT||slProposeT)return {text:"Saving in a moment",undo:false,retry:false,err:false};
  const undo=!!slUndo&&Date.now()-slUndoAt<SL_UNDO_MS;
@@ -2071,7 +2151,7 @@ async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
  const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)
- try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm})}),d=await r.json();
+ try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm,direct_edit:true})}),d=await r.json();   // the owner's own edit, so the hub may turn a follower's language flag off (#3035)
  slPv=null;   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=JSON.parse(sent);if(mine())slDocs=slClone(slSavedDocs);slD=null;slMsg="saved";   // the commit is the hub's business, not the owner's (#2908)
@@ -2080,7 +2160,11 @@ async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().
  else{const g=slGroups(d);slD=g.some(x=>x.lines.length)?g:null;slMsg=slD?"":"nothing changed"}}catch(x){slMsg="!save failed"}
  slRender();slChTree()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};
- if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
+ if(e.target.id==="slcllanguage"){slLangPick(slTsel,e.target.value);return}   // the client default language saves by itself (#3035)
+ if(dt.slfollang!==undefined){slFollowLang(dt.slfollang,!!e.target.checked);return}   // one project's language follow toggle (#3035)
+ if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");
+  if(dt.slproj){slPoField(dt.slproj,s.slice(i+1),e.target,s.slice(0,i));return}   // one field of another project's node, bound to that project (#3033, #3034)
+  slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
  const s=dt.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
  const k=dt.sl;if(!k)return;slD=null;slMsg="";slEdit(k,e.target);slRender()});

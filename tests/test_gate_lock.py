@@ -238,6 +238,52 @@ def promote_runner(tmp_path):
     return (["bash", str(d / "promote-stg.sh")], tmp_path, env, st, ran, None)
 
 
+def _slow_reader(tmp_path):
+    """A stand-in for the process reader (`SG_PS`) that answers every question serial.sh asks and spends a second on the
+    holder's start-time read, so the instant a lock is taken stays open long enough to observe. It never reads the process
+    table, so this case runs wherever a session denies /bin/ps (ADR-0139)."""
+    f = tmp_path / "reader"
+    f.write_text("#!/bin/bash\nspec=\npid=\n"
+                 'while [ $# -gt 0 ]; do case "$1" in -o) shift; spec=$1;; -p) shift; pid=$1;; esac; shift; done\n'
+                 'case "$spec" in\n'
+                 '  lstart=*) sleep 1; echo "reader start";;\n'
+                 '  stat=*) echo S;;\n'
+                 '  command=*) echo "bash serial.sh gate the holder";;\n'
+                 '  ppid=*) echo 1;;\n'
+                 '  pgid=*) echo "${pid:-0}";;\nesac\n')
+    f.chmod(0o755)
+    return f
+
+
+def test_a_holder_never_reads_as_a_queued_waiter(tmp_path):
+    """A marker says "this process waits" (#2883); once the process holds the lock the marker must be gone (#3037). A holder
+    still in the queue made the next waiter report a phantom wait ahead of it instead of the held lock, which reddened the
+    complete tier at full-xdist-4. The second waiter here must print the held-by line and no queued-ahead line."""
+    d = _tree(tmp_path)
+    st = tmp_path / "st"
+    env = _env(st) | {"SG_PS": str(_slow_reader(tmp_path)), "SERIAL_POLL_SECONDS": "0.05"}
+    with _grouped(["bash", str(d / "serial.sh"), "gate", "sleep", "30"], env=env,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL):
+        pidf = st / "locks" / "gate" / "pid"
+        deadline = time.time() + 20
+        while time.time() < deadline and not (pidf.exists() and pidf.read_text().strip()):
+            time.sleep(0.02)
+        assert pidf.exists() and pidf.read_text().strip(), "the holder never took the gate lock"
+        held = pidf.read_text().strip()
+        markers = [m for m in (st / "locks" / "waiting").glob("gate-*")
+                   if m.read_text().split("\t")[2:3] == [held]]
+        assert not markers, f"the holder pid {held} sits in the queue while it holds the lock: {[m.name for m in markers]}"
+        err = tmp_path / "waiter.err"
+        with err.open("w") as ef:
+            with _grouped(["bash", str(d / "serial.sh"), "gate", "true"], env=env, stdout=ef, stderr=subprocess.STDOUT):
+                deadline = time.time() + 10
+                while time.time() < deadline and "serial: waiting for lock" not in err.read_text():
+                    time.sleep(0.02)
+        out = err.read_text()
+        assert WAIT_LINE.search(out), f"the waiter never said it waits for the held lock: {out}"
+        assert "queued ahead" not in out, f"the waiter reported a queued process ahead of a held lock: {out}"
+
+
 @pytest.mark.slow(reason="each case builds a git remote and runs a whole runner script")
 @pytest.mark.heavy
 @pytest.mark.parametrize("fixture", ["branchland_runner", "promote_runner"])   # the wave entry holds, never waits (#575): below

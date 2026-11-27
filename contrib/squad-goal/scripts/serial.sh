@@ -11,8 +11,8 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
 # A waiter also records that it is queued, in `$SG_STATE/locks/waiting/<lock>-<pid>`: one line of four fields,
-# `<epoch> TAB <lock> TAB <pid> TAB <priority>`, written on arrival (#2883) and removed when the lock is taken or the waiter
-# exits. It is the only reading of "queued for the lock" the live check has (spec 1163): a slot waiter whose every slot
+# `<epoch> TAB <lock> TAB <pid> TAB <priority>`, written on arrival (#2883) and removed when the waiter exits or takes the
+# lock. A taker removes it before it writes the lock's pid, so no reader ever sees a holder listed as a queued waiter (#3037). It is the only reading of "queued for the lock" the live check has (spec 1163): a slot waiter whose every slot
 # holder sits in that queue is a child starved by a queued slot holder, and the check reports it. Guard: test-serial.sh, test-live-check.sh.
 # A fourth field carries the waiter's priority (`SG_SERIAL_PRIORITY=1`): the landing's gate is the delivery that ends a run, so a
 # waiter that carries one is first out of the queue (ADR-0164, #1858). The queue is in order (#2883): priority first, then the
@@ -117,9 +117,12 @@ while :; do
   [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
   sleep "${SERIAL_POLL_SECONDS:-3}"; done
-hpid=$$; due=$(( $(date +%s) + hold ))
+# The marker goes the moment this process holds the lock, before the pid is written: a marker says "this process waits", and a
+# holder still listed as a waiter makes the next waiter report a phantom process queued ahead of a held lock (#3037). A reader
+# that sees the lock's pid therefore never sees the holder in the queue.
+rm -f "$wmark"; hpid=$$; due=$(( $(date +%s) + hold ))
 echo "$hpid" > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo "$due" > "$L/due"; inc_of "$hpid" > "$L/inc"
-rm -f "$wmark"; unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"; rm -f "$wmark"' EXIT INT TERM
+unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"; rm -f "$wmark"' EXIT INT TERM
 # The deadline reaches the command itself: past it the holder stops the command's whole process tree and releases the lock
 # (exit 75). Without this the cap lives only in the waiter's head, where an orphaned holder can never read it.
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together
