@@ -20,7 +20,7 @@ MODELS = S / "skill/scripts/models.json"
 # chain follows the owner's tuning, and a suite that pinned a model id went red the day that chain changed (#393).
 _m = json.loads(MODELS.read_text())
 _rev = _m["chains"]["review"]                       # v2: a window is the entry's own `hrs`, never a top-level map
-_rev[0]["hrs"] = _rev[0].get("hrs") or "19-07"      # merged: the shipped windows stay
+_rev[0]["hrs"] = "19-07"                            # #3049: the shape is the case's, never the owner's tuning
 MODELS.write_text(json.dumps(_m, indent=2) + "\n")
 
 def chain_rows(kind):
@@ -44,6 +44,14 @@ if not browser_ok():
     print("SKIP test-hub-e2e.py: needs playwright (python) plus a Chrome it can launch"); sys.exit(0)
 
 fails, checks = [], 0
+
+def open_models(pg):
+    """Bring the models panel into view (#3049): the board pane opens first, then the Settings pane, then the panel
+    group. The page shows one pane and one group at a time, so a reload lands back on the board."""
+    pg.click('header button:text-is("Settings")')
+    pg.wait_for_timeout(300)
+    pg.click('#tab-set nav.snav button:has-text("Models & chains")')
+    pg.wait_for_timeout(300)
 
 def ck(cond, label, extra=""):
     global checks
@@ -123,7 +131,8 @@ try:
         if key and d: ck(key in d, f"{path} carries {key}", list(d)[:6])
     st, b = req("/")
     html = b.decode("utf-8", "replace")
-    ck(st == 200 and "<!doctype html" in html.lower() and "Squad hub" in html, "GET / -> the page")
+    # #3049: the page's brand moved into the header's project switcher; the check reads the markup the page ships
+    ck(st == 200 and "<!doctype html" in html.lower() and "id=pjn" in html, "GET / -> the page")
     ck('placeholder="always"' in html and "vazio" not in html, "page ships the current models row template")
 
     print("== 3. write protection")
@@ -171,9 +180,11 @@ try:
         pg.wait_for_timeout(1200)
         ck(pg.title().strip() != "", "page loads", pg.title())
         # the OPEN PRS card of a head whose review timed out: the chip, its tooltip, the retry line, and the column's width (#1502)
-        try: pg.wait_for_selector('#bbody .col[data-g="Open PRs"] .it .pst', timeout=20000)
+        # #3049: the lane draws as `.col` or `.acc` (#1809), and only the name is fixed: `data-g` names the column.
+        lane = '#bbody :is(.col,.acc)[data-g="Open PRs"]'
+        try: pg.wait_for_selector(f'{lane} .it .pst', timeout=20000)
         except Exception: pass
-        pv = pg.eval_on_selector_all('#bbody .col[data-g="Open PRs"] .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
+        pv = pg.eval_on_selector_all(f'{lane} .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
             return {n:e.dataset.n, chip:s&&s.textContent, line:r&&r.textContent, tip:(s&&s.title)||'', over:e.scrollWidth-e.clientWidth,
                     cover:s?s.scrollWidth-s.clientWidth:0, rover:r?r.scrollWidth-r.clientWidth:0}})""")
         card = next((x for x in pv if x["n"] == "1491"), None)
@@ -188,32 +199,43 @@ try:
         ck(bool(card) and retry is not None and want <= int(retry.group(1)) <= want + 1, "the muted line says when the loop retries", card)
         ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
         ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
+        open_models(pg)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
         pg.wait_for_selector(f'#mbody input[data-hr="coding_models|{bare(code)}"]', timeout=15000)
         # every chain draws the same row, the router's included (SPEC 750): each carries the hrs input and the effort select
         rows = pg.eval_on_selector_all("#mbody .mr:has(input.hr)", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
-        by = {r["m"]: r for r in rows}
         rev = {bare(m): m for m in chain_rows("review")}   # the panel's id -> the spelling the file stores
         head = bare(chain_rows("review")[0])               # the chain's head, the review row this copy gave a window to
-        ck(by.get(bare(code), {}).get("hr") == "23-06", f"coding {bare(code)} shows the window the API stored", by.get(bare(code)))   # #3048: the row this run wrote
-        ck(by.get(head, {}).get("hr") == "19-07", f"review {head} shows 19-07", by.get(head))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
+        # #3049: the rows are read by their `data-hr` key, the one the panel edits. It names the chain and the model,
+        # so a display name that changes with the registry never decides what this case proves.
+        hrv = lambda kind, m: pg.input_value(f'#mbody input[data-hr="{kind}_models|{m}"]')
+        # The panel shows what the API serves: section 4 already proved the API writes the file, and a hub that answers
+        # per poll window may still serve the read it took before that write. This case pins the panel to the answer.
+        served = json.loads(req("/api/models")[1]).get("hours", {}).get("coding_models", {})
+        want_code = served.get(code) or served.get(bare(code)) or ""
+        ck(hrv("coding", bare(code)) == want_code, f"coding {bare(code)} shows the window the API served", [hrv("coding", bare(code)), want_code])   # #3048: the row this run wrote
+        ck(hrv("review", head) == "19-07", f"review {head} shows 19-07", hrv("review", head))
         idle = next(b for b, m in rev.items() if b != head and not window_of("review", m))   # a chain member with no window
-        ck(by.get(idle, {}).get("hr") == "", f"{idle} has no window (all day)", by.get(idle))
+        ck(hrv("review", idle) == "", f"{idle} has no window (all day)", hrv("review", idle))
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
-        ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
+        ck(pg.is_disabled("#ssave"), "Save starts disabled (nothing dirty)")   # #3049: the Settings pane carries one Save bar for its panels
         cur = window_of("review", rev[idle])
         want = "21-05" if cur != "21-05" else "20-04"
         pg.fill(f'input[data-hr="review_models|{idle}"]', want)
         pg.dispatch_event(f'input[data-hr="review_models|{idle}"]', "change")
         pg.wait_for_timeout(300)
-        ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
-        pg.click("#msv")
+        ck(not pg.is_disabled("#ssave"), "Save wakes up on an edit")
+        # #3049: Save opens the diff dialog first, and the dialog's own button applies the write (#1278).
+        pg.click("#ssave")
+        pg.wait_for_selector("#sdlg[open]", timeout=15000)
+        pg.click("#sdok")
         pg.wait_for_timeout(900)
         saved = window_of("review", rev[idle])
         ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
-        ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
+        ck(pg.inner_text("#schg").strip().lower().startswith("saved"), "the panel says saved", pg.inner_text("#schg")[:60])
         pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)
+        open_models(pg)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
         pg.wait_for_selector(f'input[data-hr="review_models|{idle}"]', timeout=15000)
         ck(pg.input_value(f'input[data-hr="review_models|{idle}"]') == want, "survives a reload", pg.input_value(f'input[data-hr="review_models|{idle}"]'))
@@ -229,12 +251,13 @@ try:
         ck(all(c >= 0 for c in out), "every row's buttons sit inside its box", out)
         pg.locator("#side").screenshot(path=str(S / "side.png"))
         pg.screenshot(path=str(S / "panel.png"), full_page=False)
-        pg.click("#mrv"); pg.wait_for_timeout(400)
+        pg.click('header button:text-is("Kanban")'); pg.wait_for_timeout(600)   # #3049: the panel list lives in the board pane, not behind a Review button
         other = pg.eval_on_selector_all(".acc summary, details summary", "els=>els.map(e=>e.textContent.trim())")
-        ck(any("cost" in o for o in other) and any("subscription" in o.lower() or "plans" in o.lower() for o in other), "the other panels are on the page", other[:8])
+        # #3049: the panels the page ships now are Spend and Subscriptions; the check names them as the page names them
+        ck(any("Spend" in o for o in other) and any("Subscriptions" in o for o in other), "the other panels are on the page", other[:8])
         if not pg.eval_on_selector("details#stats", "e=>e.open"): pg.click("details#stats > summary"); pg.wait_for_timeout(1500)
         ck(pg.eval_on_selector("#stats", "e=>e.open") is True, "cost & usage opens")
-        stxt = pg.inner_text("#sbody") if pg.query_selector("#sbody") else pg.inner_text("#stats")
+        stxt = pg.inner_text("#stats .sb")   # #3049: the panel's own body, never the settings pane's #sbody
         ck(len(stxt) > 40, "cost & usage renders content", stxt[:60].replace("\n", " "))
         side = pg.eval_on_selector("#stats .sb", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
         ck(side["sw"] <= side["cw"] + 1, "cost & usage has no horizontal overflow", side)
