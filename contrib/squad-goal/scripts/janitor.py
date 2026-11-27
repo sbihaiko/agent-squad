@@ -417,6 +417,13 @@ def read(f):
         # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
         # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
         if stands and node is not None: land_nodes.add(str(node))
+    # The request's CHILD headers are the run's issues (#3042). An accept line echoes the whole child prompt, and a prompt cites
+    # other issues in prose ("issue #4 is open", "the spec issue #1"), so the scan above reads them too: rule DUP then killed a
+    # run for an issue no child of it worked, and the card pass moved that issue to Doing. A request that names no issue keeps
+    # the scan's reading, so a router-only run still maps its children. Each child's own set stays the scan's: rule `unheld`
+    # reads a child mapped to an issue its request does not name as mapped, and that is the case it exists to catch (#794).
+    named = req_issues(f)
+    if named: acc &= named
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     # node -> the reason of the child's final landing, only when that landing failed and the node is a child (#2015): the
     # run's own landing stage is no child's failure, and a failure a retry stood is no failure.
