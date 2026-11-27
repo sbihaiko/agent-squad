@@ -19,7 +19,7 @@ ISSUE = {"number": 5, "title": "an open issue", "state": "open", "labels": [{"na
          "created_at": "2026-10-20T10:00:00Z", "sub_issues_summary": {"total": 0, "completed": 0}}
 LABELS = [{"name": "bug", "color": "D73A4A"}]
 MERGED = {"number": 1200, "merged_at": "2026-10-27T10:00:00Z", "created_at": "2026-10-27T09:00:00Z"}
-BLOCKERS = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+BLOCKERS = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
 
 
 class _Stop(BaseException):

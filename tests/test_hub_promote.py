@@ -561,14 +561,17 @@ def test_a_parent_read_that_fails_is_incomplete(hub, monkeypatch):
 
 RATE_LIMIT_BODY = json.dumps({"errors": [{"type": "RATE_LIMIT", "code": "graphql_rate_limit",
                                           "message": "API rate limit already exceeded for user ID 1."}]})
+# The body `gh` really printed when the quota ran out on 2026-11-27: a bare message, no `errors`, no `data`.
+REFUSAL_BODY = json.dumps({"message": "API rate limit already exceeded for user ID 122891372."})
 
 
-def test_a_rate_limited_parent_read_is_incomplete(hub, monkeypatch):
-    """#3044: `gh api graphql` prints the RATE_LIMIT body on stdout and exits 1. That answer is no empty last page: the
+@pytest.mark.parametrize("body", [REFUSAL_BODY, RATE_LIMIT_BODY], ids=["observed-refusal", "typed-rate-limit"])
+def test_a_rate_limited_parent_read_is_incomplete(hub, monkeypatch, body):
+    """#3044: `gh api graphql` prints the refusal body on stdout and exits 1. That answer is no empty last page: the
     read is incomplete, so no card loses the parent spec the last good pass recorded."""
     mod, _ = hub
     monkeypatch.setattr(mod.subprocess, "run",
-                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, RATE_LIMIT_BODY, "gh: rate limited"))
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, body, "gh: rate limited"))
     nodes, complete = mod.open_relations()
     assert nodes == [] and complete is False
     items = [{"n": 2717}, {"n": 2722}]
@@ -596,6 +599,17 @@ def test_an_answer_with_no_issues_field_is_incomplete(hub, monkeypatch):
     mod, _ = hub
     monkeypatch.setattr(mod.subprocess, "run",
                         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps({"data": {"repository": None}}), ""))
+    assert mod.open_relations() == ([], False)
+
+
+@pytest.mark.parametrize("issues", [{}, {"nodes": [], "pageInfo": {}}, {"nodes": [], "pageInfo": {"hasNextPage": None}}],
+                         ids=["no-pages", "no-flag", "flag-not-a-bool"])
+def test_a_page_that_names_no_last_page_is_incomplete(hub, monkeypatch, issues):
+    """#3044: a page with no `pageInfo`, or one whose `hasNextPage` is not a bool, says nothing about a last page, so
+    the read is incomplete. An empty `{}` for `issues` is the shape a refusal parses into."""
+    mod, _ = hub
+    body = json.dumps({"data": {"repository": {"issues": issues}}})
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, body, ""))
     assert mod.open_relations() == ([], False)
 
 

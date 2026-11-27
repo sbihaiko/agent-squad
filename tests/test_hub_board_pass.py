@@ -60,7 +60,7 @@ def _fake_gh(calls, fail=False):
         elif "issues?state=open" in s:
             out = ""
         elif "blockedBy" in s:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         elif "pullRequests(first:100" in s:
             out = PRS_PAYLOAD                                      # the open-PR query
         elif "/labels?" in s:

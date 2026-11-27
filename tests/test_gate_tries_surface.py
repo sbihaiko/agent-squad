@@ -84,7 +84,7 @@ def _fake_gh(calls, items):
             out = json.dumps([{"id": "PVTSSF_status", "name": "Status", "options": []},
                               {"id": "F_TRIES", "name": "Gate Tries", "dataType": "NUMBER"}])
         elif "blockedBy" in joined:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         elif "/labels?" in joined:
             out = ""
         elif "pullRequests(first:100" in joined:

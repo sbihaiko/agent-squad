@@ -40,7 +40,7 @@ def _fake_gh(items):
         if "projectsV2" in s and "/items" in s:
             out = "".join(json.dumps(i) + "\n" for i in items) + json.dumps({"_page": len(items)}) + "\n"
         elif "blockedBy" in s:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         elif "pullRequests(first:100" in s:
             out = json.dumps({"data": {"repository": {"pullRequests": {"nodes": []}}}})
         elif "search/issues" in s:

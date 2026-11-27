@@ -97,7 +97,7 @@ def _gh(calls, cards=(), open_issues=(), fail=False, unparseable=False):
         elif "issues?state=open" in s:
             out = json.dumps([_rest_issue(c) for c in open_issues])
         elif "blockedBy" in s:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         else:
             out = ""
         return subprocess.CompletedProcess(cmd, 0, out, "")

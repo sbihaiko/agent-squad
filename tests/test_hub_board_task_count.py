@@ -115,7 +115,7 @@ def _fake_gh(calls, items, fallback=()):
         elif "/fields?" in s:
             out = "PVTSSF_status\n"
         elif "blockedBy" in s:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         elif "/labels?" in s:
             out = ""
         elif "pulls?state=closed" in s:
