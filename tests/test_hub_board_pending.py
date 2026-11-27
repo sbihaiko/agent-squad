@@ -644,7 +644,7 @@ def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatc
             out = json.dumps({"n": 11, "i": "ITEM11", "t": "a card", "s": "OPEN", "st": "Todo", "l": [],
                               "si": {"total": 0, "completed": 0}}) + "\n" + json.dumps({"_page": 1}) + "\n"
         elif "blockedBy" in s:
-            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         elif "pullRequests(first:100" in s:
             out = json.dumps({"data": {"repository": {"pullRequests": {"nodes": []}}}})
         else:

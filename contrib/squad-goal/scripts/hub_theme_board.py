@@ -596,14 +596,22 @@ def open_relations(until=None):
         _check_deadline(until)
         argv = ["gh", "api", "graphql", "-f", "query=" + OPEN_RELATIONS_QUERY % (own, name, RELATIONS_PAGE)]
         if after: argv += ["-f", "cursor=" + after]
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=60).stdout   # a call that fails raises, and the pass keeps the rows it had
-        try: page = (((json.loads(out) or {}).get("data") or {}).get("repository") or {}).get("issues") or {}
-        except (TypeError, ValueError):
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=60)   # a timeout raises, and the pass keeps the rows it had
+        # #3044: `gh` prints a refusal (`{"message": "API rate limit already exceeded…"}`) on stdout and exits 1. That
+        # body has no `issues`, and an empty `{}` read as the last page made the read "complete" with no node, so every
+        # card lost its spec parent. A refused call, an answer with `errors` (a partial page whose nodes are not
+        # trusted), one with no `issues`, and one whose `pageInfo` says no last page are all an incomplete read.
+        if r.returncode != 0: return nodes, False
+        try:
+            answer = json.loads(r.stdout) or {}
+            page = ((answer.get("data") or {}).get("repository") or {}).get("issues")
+        except (TypeError, ValueError, AttributeError):
             return nodes, False
-        if not isinstance(page, dict): return nodes, False
+        if answer.get("errors") or not isinstance(page, dict): return nodes, False
         nodes += [n for n in page.get("nodes") or [] if isinstance(n, dict)]
-        info = page.get("pageInfo") or {}
-        if not info.get("hasNextPage"): return nodes, True
+        info = page.get("pageInfo")
+        if not isinstance(info, dict) or not isinstance(info.get("hasNextPage"), bool): return nodes, False
+        if not info["hasNextPage"]: return nodes, True
         after = info.get("endCursor")
         if not after: return nodes, False   # a page that asks for another and names no cursor is incomplete
     return nodes, False
@@ -640,13 +648,17 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
                     items.append({"n": i["number"], "r": REPO, "nc": True, "t": i["title"], "s": i["state"], "c": None, "st": None, "l": [x["name"] for x in i["labels"]],
                                   "si": {"total": s.get("total"), "completed": s.get("completed")}, "o": i["created_at"]})
             nodes, complete = open_relations(until)   # every page of open issues; never one REST call per card
-            if not complete: gaps.append("relations read incomplete: a page with no cursor, or past the page cap")
+            if not complete: gaps.append("relations read incomplete: a refused or partial answer, a page with no cursor, or past the page cap")
             try: apply_open_blockers(items, nodes)
             except Exception: pass
             # The spec a ticket belongs to: a ticket never moves alone (#829). A read that is not complete keeps what the
-            # last good pass recorded, and marks the cards it never reached.
+            # last good pass recorded, and marks the cards it never reached. A rule that raises leaves the same mark, so a
+            # row is never drawn in "No spec" with no word said (#3044).
             try: apply_parent_specs(items, nodes, complete, board_cache.get("items") or [])
-            except Exception: pass
+            except Exception:
+                try: apply_parent_specs(items, [], False, board_cache.get("items") or [])
+                except Exception: pass
+                gaps.append("parent specs not applied")
             if time.time() - board_cache.get("lt", 0) >= LABELS_EVERY:
                 lc = {x["name"]: x["color"].lower() for x in gh_list(f"repos/{REPO}/labels", until=until)}
                 board_cache["lt"] = time.time()
