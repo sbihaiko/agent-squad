@@ -12,9 +12,7 @@ a temporary fixture.
 import json
 import pathlib
 import subprocess
-import tempfile
 
-import pytest
 import yaml
 
 from tests import test_hub_slack_clients as C
