@@ -1083,16 +1083,28 @@ def _slack_read_refusal(seat):
 
 
 def _slack_tree_elsewhere(node, hub):
-    """A project node of another profile and its subtree (#2919, #3033): the owner edits the project's own Persona and
-    Language here, so the node keeps its two selects and names the project their edit writes (`edit`). Every other
-    control of the node and of its subtree becomes the value that project's own files hold, no add or remove target
-    stays, and every node below the project names the page that edits it. The project node itself states no 'Edited
-    on ...'s page' sentence, because its own settings are edited here (#3033)."""
+    """A project node of another profile and its subtree (#2919, #3033, #3034): the owner edits the project's own
+    Persona and Language here, and the Persona and Language of each workspace and channel below it, so those rows keep
+    their selects and the project node names the project their edit writes (`edit`). Every other control becomes the
+    value that project's own files hold, and no add or remove target stays. Neither the project node nor a workspace
+    node states an 'Edited on ...'s page' sentence, because their only rows are edited here; a channel keeps the
+    sentence for the settings the project's own page still edits (#3033, #3034)."""
     node["edit"] = {"project": node["project"]}
     node.pop("elsewhere", None)
     for n in [node] + [d for d in _slack_walk(node) if d is not node]:
         n.pop("channel_add", None); n.pop("channel_remove", None)
-        if n is not node:
+        if n is node:
+            continue
+        if n.get("kind") in ("workspace", "channel"):
+            # The workspace and the channel edit their own Persona and Language through the project-bound save; every
+            # other row becomes a value, and a channel keeps the sentence that names where its other settings live
+            # (#3034).
+            if n.get("kind") == "channel":
+                n["elsewhere"] = hub
+            for row in (n.get("settings") or {}).get("rows") or []:
+                if row.get("key") not in ("persona", "language"):
+                    row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]
+        else:
             n["elsewhere"] = hub
             for row in (n.get("settings") or {}).get("rows") or []:
                 row["controls"] = [_slack_read_control(c) for c in row.get("controls") or []]

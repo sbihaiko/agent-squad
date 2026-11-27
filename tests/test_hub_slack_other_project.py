@@ -75,8 +75,9 @@ def test_another_projects_node_offers_the_persona_and_language_controls(hub, tmp
 
 
 def test_the_project_node_names_its_target_and_keeps_other_settings_read_only(hub, tmp_path):
-    """#3033 acceptance 10 and 11: the node names the project its edit writes and shows no 'Edited on ...'s page'
-    sentence; the settings below it stay read-only and keep their link."""
+    """#3033 acceptance 10 and 11, re-anchored (#3034): the node names the project its edit writes and shows no 'Edited
+    on ...'s page' sentence; below it the Persona and Language rows are edited here, every other setting stays
+    read-only, and the channel keeps the link to the page that edits those other settings."""
     tree, _, _ = _tree(hub, tmp_path)
     beta = _project(tree, "beta")
     assert beta["edit"] == {"project": "beta"}, beta.get("edit")
@@ -84,9 +85,14 @@ def test_the_project_node_names_its_target_and_keeps_other_settings_read_only(hu
     for node in walk(beta):
         if node is beta:
             continue
-        assert {c["kind"] for c in _controls(node)} <= {"read"}, (node["name"], _controls(node))
+        controls = _controls(node)
+        live = [c for c in controls if c["kind"] != "read"]
+        assert live and {c["kind"] for c in live} == {"select"}, (node["name"], controls)
         assert not node.get("channel_add") and not node.get("channel_remove"), node["name"]
-        assert node.get("elsewhere") == "/beta/#settings", (node["name"], node.get("elsewhere"))
+        if node["kind"] == "channel":
+            assert node.get("elsewhere") == "/beta/#settings", (node["name"], node.get("elsewhere"))
+        else:
+            assert "elsewhere" not in node, (node["name"], node.get("elsewhere"))
 
 
 def test_the_page_draws_selects_and_no_edited_elsewhere_sentence_for_the_project(hub, tmp_path):
@@ -136,12 +142,15 @@ def test_the_project_node_points_each_edit_at_its_own_place(hub, tmp_path):
 
 
 def test_the_page_draws_the_read_values_and_the_link(hub, tmp_path):
+    """Re-anchored (#3034): the channel of another profile's project draws its Persona and Language selects, bound to
+    that project, names the page that edits its other settings, and offers no Remove channel."""
     tree, _, _ = _tree(hub, tmp_path)
     channel = next(n for n in walk(_project(tree, "beta")) if n["kind"] == "channel")
     out = {"tree": tree}
     body = (_slices(hub.PAGE) + f"\nslS={{}};slR={json.dumps(out)};slT={json.dumps(tree)};slTsel={json.dumps(channel['id'])};"
             + "globalThis.fetch=()=>new Promise(()=>{});slRender();console.log(JSON.stringify(STORE['#sbody'].innerHTML))")
     html = json.loads(_node(body))
+    detail = html.split("sltdetail", 1)[1]
     assert 'href="/beta/#settings"' in html, html
-    assert "<select" not in html.split("sltdetail", 1)[1], "a node of another project draws no select"
+    assert detail.count("<select") == 2 and 'data-slproj="beta"' in detail, detail
     assert "data-sltrmch" not in html
