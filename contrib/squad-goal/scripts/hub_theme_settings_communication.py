@@ -1221,9 +1221,11 @@ def _slack_clients_tree_for(P, seats, here=None, own=False):
             "counts": {"clients": len(nodes), "projects": len(seats), "channels": channels}}
 
 
-def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects=(), here=None):
+def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects=(), here=None, seat_id=None):
     """The tree of two documents already in hand, so a staged edit's answer redraws the Now block before the save
-    (#2846). The caller hands in the documents and the file names, never a rule (ADR-0137, ADR-0177)."""
+    (#2846). The caller hands in the documents and the file names, never a rule (ADR-0137, ADR-0177). `seat_id` names
+    another project's seat: its staged documents take that seat's place, while `here` keeps the page's own project
+    (#3034), and a roster that does not name it answers no tree."""
     seat = {"id": _slack_project_label(), "label": _slack_project_label(), "checkout": None,
             "committed": committed_doc, "local": local_doc, "committed_path": committed, "local_path": local,
             "read_defects": list(read_defects),
@@ -1232,6 +1234,12 @@ def _slack_tree_docs(P, committed_doc, local_doc, committed, local, read_defects
     # so its client, its node id and the owner's selection stay where they were. A roster with no such project draws the
     # project alone.
     roster, rerr = _slack_roster_checked(PREVIEW_ROSTER_SECONDS) if here else ([], "no path")
+    if seat_id is not None:
+        if rerr or not any(s["id"] == seat_id for s in roster):
+            return None
+        seats = [{**s, "committed": committed_doc, "local": local_doc, "read_defects": list(read_defects)}
+                 if s["id"] == seat_id else s for s in roster]
+        return _slack_clients_tree_for(P, seats, here)
     hit = next((s for s in roster if _slack_here(s, roster, here)), None) if not rerr else None
     if hit is not None:
         seats = [{**s, "committed": committed_doc, "local": local_doc, "read_defects": list(read_defects)} if s is hit else s
@@ -2505,7 +2513,9 @@ def slack_docs_edit(body, committed=None, local=None):
     # stages the edit over them, so the page's own documents take no part (#3033). A file that does not read is refused
     # by name; an absent file is no defect and takes the edit.
     project = _slack_text(body.get("project")).strip()
+    page_committed = None
     if project and committed is None and local is None:
+        page_committed, _page_local = slack_yaml_paths()   # the page's own project, which the redrawn tree keeps as `here`
         seat, serr = _slack_project_seat(project)
         if serr: return {"err": serr}
         if seat.get("read_defects"): return {"err": _slack_read_refusal(seat)}
@@ -2552,9 +2562,11 @@ def slack_docs_edit(body, committed=None, local=None):
                 "held_defects": [str(d) for d in held],
                 "committed": docs["committed"], "local": docs["local"]}
     # The tree of the staged documents, through the policy module, so the page redraws the Now block before the save
-    # (#2846). The files are the ones the edit was handed, so no chip moves under the owner's eyes.
+    # (#2846). The files are the ones the edit was handed, so no chip moves under the owner's eyes. An edit of another
+    # project keeps the page's own project as `here` and redraws that project's seat, so the page applies the tree it
+    # already shows (#3034).
     tree = _slack_tree_docs(P, draft["committed"], draft["local"], _slack_name(committed, "slack.yaml"), local_name,
-                            here=committed)
+                            here=(page_committed if project else committed), seat_id=project or None)
     return {"committed": draft["committed"], "local": draft["local"], "err": None, "defects": [],
             "new_defects": [], "held_defects": [],
             "documents": {"committed": draft["committed"], "local": draft["local"]}, "tree": tree}

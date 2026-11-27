@@ -2047,13 +2047,14 @@ function slPoSt(id){id=String(id);return slPo[id]||(slPo[id]={id,docs:null,saved
 const slPoDocs=id=>{const s=slPo[String(id)];return (s&&s.docs)||{committed:{},local:{}}};
 const slPoDirty=id=>{const s=slPo[String(id)];return !!s&&!!s.docs&&JSON.stringify(s.docs)!==JSON.stringify(s.saved||{})};
 function slPoSet(id,docs){const s=slPoSt(id);s.docs=slClone(docs)}
-function slPoField(id,field,el){const s=slPoSt(id),v=el&&el.type==="checkbox"?!!el.checked:(el&&el.value!==undefined?el.value:"");
- const op={kind:"field",scope:"project",field:String(field),value:v};
+function slPoField(id,field,el,target){const s=slPoSt(id);   // target: `project`, `ws:<id>` or a channel id (#2901, #3034)
+ const op=slFieldOp(target||"project",field,el);
  s.chain=s.chain.then(()=>slPoOp(s,op)).catch(()=>{s.msg="!the edit failed";slRender();slBarSync()})}
 async function slPoOp(s,op){try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
  body:JSON.stringify({project:s.id,op})})).json();
  if(d.err){s.msg="!"+d.err;s.retry=null;slRender();slBarSync();return}
  const before=JSON.stringify(s.docs||{});s.docs={committed:d.committed,local:d.local};s.msg="";
+ if(d.tree)slT=d.tree;   // the redrawn tree carries the values a row inherits, so a channel follows its workspace (#3034)
  slRender();if(JSON.stringify(s.docs)!==before)slPoSchedule(s.id);slBarSync()}
  catch(x){s.msg="!the edit failed";slRender()}}
 function slPoSchedule(id){const s=slPoSt(id);if(!s.docs)return;const j=JSON.stringify(s.docs);
@@ -2138,7 +2139,7 @@ async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().
  slRender();slChTree()}
 $("#sbody").addEventListener("change",e=>{const dt=e.target.dataset||{};
  if(dt.slf&&(slDocs||slSavedDocs)){const s=String(dt.slf),i=s.indexOf("|");
-  if(dt.slproj){slPoField(dt.slproj,s.slice(i+1),e.target);return}   // one field of another project's node, bound to that project (#3033)
+  if(dt.slproj){slPoField(dt.slproj,s.slice(i+1),e.target,s.slice(0,i));return}   // one field of another project's node, bound to that project (#3033, #3034)
   slOp(slFieldOp(s.slice(0,i),s.slice(i+1),e.target));return}   // one field of the tree's channel pane (#2844)
  const s=dt.sle;
  if(s&&(slDocs||slSavedDocs)){slDocEdit(s,e.target);return}
