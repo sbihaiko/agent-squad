@@ -67,8 +67,15 @@ def wait_up():
         except Exception: time.sleep(0.5)
     return False
 
+def models_json():
+    """GET /api/models as the panel reads it, never the file the test holds: the value a panel check compares to."""
+    return json.loads(req("/api/models")[1])
+
 print(f"artifacts: {S}")
 print("== 1. boot an isolated hub (throwaway copy of the skill, port %d)" % PORT)
+# The repository this throwaway hub reads. The fixture rows name no `r` of their own, so section 6 checks the hub fills
+# this name on a row that carries none (hub_theme_board.py:66), never a string the fixture sets and nothing reads (#3048).
+HREPO = "squad-hub-e2e/none"
 # A PR whose head's review attempt timed out and was re-queued (#1502): the hub serves it as its last good board data, so the
 # page renders the card through the real data path. A row older than the head's marker belongs to the head that moved.
 PR_SHA, PR9 = "1e38e5a7b41c0d2e9f", "1e38e5a7b"
@@ -80,9 +87,9 @@ ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
 NOW = time.time()
 (S / "hubdir/hub-board.json").write_text(json.dumps(
     {"t": NOW, "items": [], "landed": [], "lc": {}, "err": None,
-     "prs": [{"n": 1491, "r": "squad-hub-e2e/none", "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
+     "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
               "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"},
-             {"n": 1492, "r": "squad-hub-e2e/none", "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
+             {"n": 1492, "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
               "u": "2026-10-11T08:30:00Z", "h": GATE_SHA, "o": "2026-10-11T07:30:00Z"}]}))
 (ST / "revci-1492.out").write_text(f"#1492 {GATE9} clean CI=success:2 VERDICT: APPROVE\n")
 def gate(at, sha9, reason, text):
@@ -105,7 +112,7 @@ p = subprocess.Popen([sys.executable, str(S / "skill/scripts/hub.py"), str(PORT)
                      # variable under test is pinned here, and nothing of the caller but the platform is passed on.
                      env=dict({k: v for k, v in os.environ.items() if not k.startswith("SG_")},
                               SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
-                              SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO,
+                              SG_REPO=HREPO, SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO,
                               SG_CLAUDE_PROJECTS=str(S / "projects")))   # the operator source reads this fixture folder, never the owner's transcripts (#1756)
 try:
     ck(wait_up(), "hub answers /api/version")
@@ -123,7 +130,8 @@ try:
         if key and d: ck(key in d, f"{path} carries {key}", list(d)[:6])
     st, b = req("/")
     html = b.decode("utf-8", "replace")
-    ck(st == 200 and "<!doctype html" in html.lower() and "Squad hub" in html, "GET / -> the page")
+    # the header carries the project's own name, never a "Squad hub" title (2c34d1e44): the page's own title is its identity
+    ck(st == 200 and "<!doctype html" in html.lower() and "<title>Hub</title>" in html, "GET / -> the page")
     ck('placeholder="always"' in html and "vazio" not in html, "page ships the current models row template")
 
     print("== 3. write protection")
@@ -141,12 +149,21 @@ try:
     # #3048: the row this case writes is the coding chain's head, read from the file, so a change to the owner's chain
     # never turns the e2e red. Pinning one model id is the defect the header names (#393), and it reached this case last.
     code = chain_rows("coding")[0]
+    # #3048: the panel reads a row by its chain and its id (`data-row="<chain>|<id>"`), so a model two chains share is
+    # never ambiguous: section 5 reads the coding section's own row. A duplicate inside one chain would be, and it would
+    # also make the row this case writes ambiguous, so the fixture's own reading must name the head once.
+    ck(chain_rows("coding").count(code) == 1, f"the coding chain names its head {bare(code)} once", chain_rows("coding"))
+    # A window unlike the coding head's own, so a page that ignores the stored window cannot show it by accident.
+    WIN = "23-06"
     # a Save carries the version it read (#688): one GET before each POST, as the page does
     ver = lambda: json.loads(req("/api/models")[1])["version"]
-    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "23-06"}}}, origin=BASE)
-    d = json.loads(b)
-    ck(st == 200 and d.get("hours", {}).get("coding_models", {}).get(code) == "23-06", "valid window stored", f"{st} {b[:120]}")
-    ck(window_of("coding", code) == "23-06", "written to models.json")
+    st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: WIN}}}, origin=BASE)
+    ck(st == 200 and "err" not in json.loads(b), "a valid window is accepted", f"{st} {b[:120]}")
+    # #3048: the value the panel check compares to comes back from GET /api/models, never the literal this case posted.
+    # A literal passed on any page that printed it; the stored value goes red when the page ignores the store.
+    api_win = (models_json().get("hours", {}).get("coding_models") or {}).get(bare(code))
+    ck(api_win == WIN, "GET /api/models serves the window the Save stored", api_win)
+    ck(window_of("coding", code) == api_win, "models.json holds the window the API serves", window_of("coding", code))
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "25-99"}}}, origin=BASE)
     ck("err" in json.loads(b), "bad window rejected", b[:120])
     st, b = req("/api/models", {"version": ver(), "hours": {"coding_models": {code: "07-07"}}}, origin=BASE)
@@ -159,7 +176,13 @@ try:
     ck(MODELS.read_text() == before, "models.json restored byte for byte")
 
     print("== 5. the browser: the models panel a user actually sees")
-    SNAP = MODELS.read_text()
+    SNAP = MODELS.read_text()   # every write below lands on the throwaway copy; the finally restores this
+    # #3048: the panel check compares to the value GET /api/models serves, never a literal. Put the coding head's window
+    # in the copy first, read it back, and hold that value: a page that ignored the stored window shows the file's own
+    # window and the check goes red.
+    req("/api/models", {"version": ver(), "hours": {"coding_models": {code: WIN}}}, origin=BASE)
+    panel_want = (models_json().get("hours", {}).get("coding_models") or {}).get(bare(code))
+    ck(panel_want == WIN, "the coding head's window the panel must show", panel_want)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         br = pw.chromium.launch(channel="chrome")
@@ -188,33 +211,48 @@ try:
         ck(bool(card) and retry is not None and want <= int(retry.group(1)) <= want + 1, "the muted line says when the loop retries", card)
         ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
         ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
-        if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
+        # the panes are tabs and the themes are one at a time: Settings and then Models & chains, or the panel is not on
+        # screen (#3048). A test that clicked a hidden summary could never read the row it claims to check.
+        pg.click("button[data-t=set]")
+        pg.click(".snav button[data-sp=mdl]")
         pg.wait_for_selector(f'#mbody input[data-hr="coding_models|{bare(code)}"]', timeout=15000)
         # every chain draws the same row, the router's included (SPEC 750): each carries the hrs input and the effort select
         rows = pg.eval_on_selector_all("#mbody .mr:has(input.hr)", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
-        by = {r["m"]: r for r in rows}
         rev = {bare(m): m for m in chain_rows("review")}   # the panel's id -> the spelling the file stores
-        head = bare(chain_rows("review")[0])               # the chain's head, the review row this copy gave a window to
-        ck(by.get(bare(code), {}).get("hr") == "23-06", f"coding {bare(code)} shows the window the API stored", by.get(bare(code)))   # #3048: the row this run wrote
-        ck(by.get(head, {}).get("hr") == "19-07", f"review {head} shows 19-07", by.get(head))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
+        head_raw = chain_rows("review")[0]                 # the chain's head, the review row this copy gave a window to
+        head, head_hr = bare(head_raw), window_of("review", head_raw)
+        # #3048: read the row through its own `data-row` (chain|id), the key the page drew it with, so a label or a
+        # same-named row in another chain can never answer. The coding section draws exactly one row for the head.
+        ck(pg.eval_on_selector_all(f'#mbody .mr[data-row="coding_models|{bare(code)}"]', "e=>e.length") == 1, "the coding section draws one row for the head")
+        coding_hr = pg.input_value(f'#mbody .mr[data-row="coding_models|{bare(code)}"] input.hr')
+        ck(coding_hr == panel_want, f"coding {bare(code)} shows the window GET /api/models serves", coding_hr)
+        # the head's window comes from the file, never a literal: the shipped chain follows the owner's tuning
+        ck(pg.input_value(f'#mbody .mr[data-row="review_models|{head}"] input.hr') == head_hr, f"review {head} shows its stored window", head_hr)
         idle = next(b for b, m in rev.items() if b != head and not window_of("review", m))   # a chain member with no window
-        ck(by.get(idle, {}).get("hr") == "", f"{idle} has no window (all day)", by.get(idle))
+        idle_hr = pg.input_value(f'#mbody .mr[data-row="review_models|{idle}"] input.hr')
+        ck(idle_hr == "", f"{idle} has no window (all day)", idle_hr)
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
-        ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
+        # the one Save writes the theme behind its confirm dialog (#1278): `#ssave` wakes on a dirty theme, `#sdok` writes it,
+        # and the bar's `#schg` says what happened. The old `#msv`/`.msave .st` controls are gone from the page (#3048).
+        ck(pg.is_disabled("#ssave"), "Save starts disabled (nothing dirty)")
         cur = window_of("review", rev[idle])
         want = "21-05" if cur != "21-05" else "20-04"
         pg.fill(f'input[data-hr="review_models|{idle}"]', want)
         pg.dispatch_event(f'input[data-hr="review_models|{idle}"]', "change")
         pg.wait_for_timeout(300)
-        ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
-        pg.click("#msv")
+        ck(not pg.is_disabled("#ssave"), "Save wakes up on an edit")
+        pg.click("#ssave")
+        pg.wait_for_selector("#sdlg[open]", timeout=15000)
+        ck(not pg.is_disabled("#sdok"), "the confirm dialog offers the save", pg.inner_text("#sdpre")[:120])
+        pg.click("#sdok")
         pg.wait_for_timeout(900)
         saved = window_of("review", rev[idle])
         ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
-        ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
+        ck("saved" in pg.inner_text("#schg").lower(), "the bar says saved", pg.inner_text("#schg")[:60])
         pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)
-        if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
+        pg.click("button[data-t=set]")
+        pg.click(".snav button[data-sp=mdl]")
         pg.wait_for_selector(f'input[data-hr="review_models|{idle}"]', timeout=15000)
         ck(pg.input_value(f'input[data-hr="review_models|{idle}"]') == want, "survives a reload", pg.input_value(f'input[data-hr="review_models|{idle}"]'))
         pg.fill(f'input[data-hr="review_models|{idle}"]', "99-99")
@@ -229,12 +267,11 @@ try:
         ck(all(c >= 0 for c in out), "every row's buttons sit inside its box", out)
         pg.locator("#side").screenshot(path=str(S / "side.png"))
         pg.screenshot(path=str(S / "panel.png"), full_page=False)
-        pg.click("#mrv"); pg.wait_for_timeout(400)
-        other = pg.eval_on_selector_all(".acc summary, details summary", "els=>els.map(e=>e.textContent.trim())")
-        ck(any("cost" in o for o in other) and any("subscription" in o.lower() or "plans" in o.lower() for o in other), "the other panels are on the page", other[:8])
+        other = pg.eval_on_selector_all(".snav button, #side details.sp > summary", "els=>els.map(e=>e.textContent.trim())")
+        ck(any("spend" in o.lower() for o in other) and any("subscription" in o.lower() for o in other), "the other panels are on the page", other[:8])
         if not pg.eval_on_selector("details#stats", "e=>e.open"): pg.click("details#stats > summary"); pg.wait_for_timeout(1500)
         ck(pg.eval_on_selector("#stats", "e=>e.open") is True, "cost & usage opens")
-        stxt = pg.inner_text("#sbody") if pg.query_selector("#sbody") else pg.inner_text("#stats")
+        stxt = pg.inner_text("#stats")
         ck(len(stxt) > 40, "cost & usage renders content", stxt[:60].replace("\n", " "))
         side = pg.eval_on_selector("#stats .sb", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
         ck(side["sw"] <= side["cw"] + 1, "cost & usage has no horizontal overflow", side)
@@ -251,6 +288,10 @@ try:
         """The chip the hub serves for every open PR: [css class, text, tooltip], straight off /api/board."""
         st, b = req("/api/board")
         return {x["n"]: x.get("ps") or [] for x in json.loads(b)["prs"]["items"]}
+    # #3048: a fixture row that names no `r` is this hub's own repository, filled on the read (hub_theme_board.py:66). The
+    # assertion pins the absent-`r` path the fixture now takes; a string set in the fixture and read by nothing is gone.
+    served = json.loads(req("/api/board")[1])["prs"]["items"]
+    ck(served and all(x.get("r") == HREPO for x in served), "every served open-PR row carries the hub's repository", [(x.get("n"), x.get("r")) for x in served])
     now = time.time()
     stamp(now - 30)
     gate(now - 20, GATE9, "hold-threads", "unresolved review threads opened after the cache")
