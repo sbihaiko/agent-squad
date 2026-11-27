@@ -297,10 +297,11 @@ def language_proposal(P, client, projects, language, local_name="slack.local.yam
     default language. `projects` maps a project id to `{"label", "committed", "local", "read_defects"}`.
 
     A project the map names and the hub does not hold reads "unknown project". A project with a file that does not
-    read reads its defect, before any write. A project with no Slack file reads "no Slack file". A project the map
-    records as not following the language reads "kept: the project follows its own language". A follower that already
-    answers the language reads "nothing to write". A follower whose files do not validate reads "refused: <defect>".
-    Every other follower reads "writes X", and its row carries the committed document a save writes."""
+    read reads its defect, before any write, and its refusal carries `kind` "unreadable". A project with no Slack file
+    reads "no Slack file". A project the map records as not following the language reads "kept: the project follows its
+    own language". A follower that already answers the language reads "nothing to write". A follower whose files do not
+    validate reads "refused: <defect>", and its refusal carries `kind` "invalid". Every other follower reads
+    "writes X", and its row carries the committed document a save writes."""
     rows, writes = [], []
     for entry in client["projects"]:
         pid, follows = entry["id"], entry["follows_language"]
@@ -311,16 +312,18 @@ def language_proposal(P, client, projects, language, local_name="slack.local.yam
             continue
         label = seat.get("label") or pid
         committed, local = seat.get("committed") or {}, seat.get("local") or {}
-        stored = P.project_settings(committed, local).get("stored_language")
-        now = stored or "none"
         unreadable = [str(d) for d in seat.get("read_defects") or ()]
         if unreadable:
-            rows.append({"project": pid, "label": label, "now": now, "action": REFUSED,
+            rows.append({"project": pid, "label": label, "now": "none", "action": REFUSED, "kind": "unreadable",
                          "result": f"refused: {unreadable[0]}"})
             continue
         if not has_slack(committed, local):
-            rows.append({"project": pid, "label": label, "now": now, "action": NONE, "result": NO_SLACK})
+            rows.append({"project": pid, "label": label, "now": "none", "action": NONE, "result": NO_SLACK})
             continue
+        # The stored language is read only for a project that holds Slack, so a project with no Slack file reports
+        # "none" and never a language derived from a row it does not carry (#3035).
+        stored = P.project_settings(committed, local).get("stored_language")
+        now = stored or "none"
         if not follows:
             rows.append({"project": pid, "label": label, "now": now, "action": KEPT_KIND, "result": KEPT_LANGUAGE})
             continue
@@ -330,7 +333,7 @@ def language_proposal(P, client, projects, language, local_name="slack.local.yam
         after = _after_language(committed, language)
         defects = list(P.validate(committed=after, local=local, local_name=local_name))
         if defects:
-            rows.append({"project": pid, "label": label, "now": now, "action": REFUSED,
+            rows.append({"project": pid, "label": label, "now": now, "action": REFUSED, "kind": "invalid",
                          "result": f"refused: {defects[0]}"})
             continue
         rows.append({"project": pid, "label": label, "now": now, "action": WRITE, "result": f"writes {language}"})

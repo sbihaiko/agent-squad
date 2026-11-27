@@ -99,17 +99,29 @@ def wire(tmp_path, monkeypatch, hub, clients, seats):
     return prof, made
 
 
-def stub_write(hub, monkeypatch):
-    """A stub of the project save path: it writes the committed document to its own file and answers a sha."""
+def stub_write(hub, monkeypatch, fail=()):
+    """A stub of the project save path: it writes the committed document to its own file and answers a sha. A project
+    named in `fail` answers an error instead and writes nothing."""
     calls = []
 
     def fake(body, committed=None, local=None, loop=None, name=None):
-        calls.append({"committed": committed, "doc": body.get("committed")})
+        calls.append({"committed": committed, "doc": body.get("committed"), "local": body.get("local")})
+        if name in fail:
+            return {"err": "the project refused the write"}
         pathlib.Path(committed).write_text(yaml.safe_dump(body["committed"], sort_keys=False))
         return {"sha": "stub"}
 
     monkeypatch.setattr(hub, "slack_files_set", fake)
     return calls
+
+
+def stub_land(hub, monkeypatch):
+    """The landing steps of the save path, stubbed so one committed write needs no checkout or git."""
+    monkeypatch.setattr(hub, "_slack_provision", lambda wt, loop: ("", False))
+    monkeypatch.setattr(hub, "_slack_land_check", lambda wt: (None, None))
+    monkeypatch.setattr(hub, "_slack_land", lambda wt, rel, msg, base=None: ("sha", None))
+    monkeypatch.setattr(hub, "_slack_record", lambda path, sha, committed=True: None)
+    monkeypatch.setattr(hub, "slack_worktree", lambda loop=None, name=None: (None, None))   # the save reads the committed path itself
 
 
 def walk(node):
@@ -314,18 +326,65 @@ def test_a_direct_edit_of_a_following_project_language_turns_its_follow_flag_off
                       [{"id": "one", "name": "One", "default_language": "pt-BR",
                         "projects": [{"id": "alpha", "follows": False, "follows_language": True}]}],
                       {"alpha": FOLLOWER})
-    monkeypatch.setattr(hub, "_slack_provision", lambda wt, loop: ("", False))
-    monkeypatch.setattr(hub, "_slack_land_check", lambda wt: (None, None))
-    monkeypatch.setattr(hub, "_slack_land", lambda wt, rel, msg, base=None: ("sha", None))
-    monkeypatch.setattr(hub, "_slack_record", lambda path, sha, committed=True: None)
+    stub_land(hub, monkeypatch)
     new = yaml.safe_load(yaml.safe_dump(FOLLOWER))
     new["project"]["language"] = "es-ES"
-    out = hub.slack_files_set({"committed": new, "local": LOCAL, "confirm": True},
+    out = hub.slack_files_set({"committed": new, "local": LOCAL, "confirm": True, "direct_edit": True},
                               committed=str(made["alpha"][1]), local=str(made["alpha"][2]))
     assert out.get("err") is None, out
     client = read_map(prof)["clients"][0]
     assert client["projects"][0]["follows_language"] is False, client
     assert client["projects"][0]["follows"] is False, "the persona follow flag changed"
+
+
+def test_a_save_without_the_direct_edit_marker_keeps_the_follow_flag(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "pt-BR",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    stub_land(hub, monkeypatch)
+    new = yaml.safe_load(yaml.safe_dump(FOLLOWER))
+    new["project"]["language"] = "es-ES"
+    out = hub.slack_files_set({"committed": new, "local": LOCAL, "confirm": True},
+                              committed=str(made["alpha"][1]), local=str(made["alpha"][2]))
+    assert out.get("err") is None, out
+    assert read_map(prof)["clients"][0]["projects"][0]["follows_language"] is True, \
+        "a save the page did not mark as a direct edit turned the follow flag off"
+
+
+def test_a_save_that_only_normalizes_the_language_keeps_the_follow_flag(hub, tmp_path, monkeypatch):
+    doc = yaml.safe_load(yaml.safe_dump(FOLLOWER))
+    doc["project"]["language"] = "en_us"
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "pt-BR",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": doc})
+    stub_land(hub, monkeypatch)
+    new = yaml.safe_load(yaml.safe_dump(doc))
+    new["project"]["language"] = "en-US"   # the same tag, written in its normalized spelling
+    new["personas"][0]["tone"] = "Calmer."  # a persona-only edit carries the reload
+    out = hub.slack_files_set({"committed": new, "local": LOCAL, "confirm": True, "direct_edit": True},
+                              committed=str(made["alpha"][1]), local=str(made["alpha"][2]))
+    assert out.get("err") is None, out
+    assert read_map(prof)["clients"][0]["projects"][0]["follows_language"] is True, \
+        "a normalization of the same language tag turned the follow flag off"
+
+
+def test_an_unfollow_read_that_fails_refuses_the_save_before_any_write(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "pt-BR",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    stub_land(hub, monkeypatch)
+    before_c, before_l = made["alpha"][1].read_text(), made["alpha"][2].read_text()
+    monkeypatch.setattr(hub, "_slack_roster_checked", lambda cache=0.0: ([], "the roster did not read"))
+    new = yaml.safe_load(yaml.safe_dump(FOLLOWER))
+    new["project"]["language"] = "es-ES"
+    out = hub.slack_files_set({"committed": new, "local": LOCAL, "confirm": True, "direct_edit": True},
+                              committed=str(made["alpha"][1]), local=str(made["alpha"][2]))
+    assert out.get("err") and "roster" in out["err"], out
+    assert made["alpha"][1].read_text() == before_c, "the committed write ran before the unfollow read failed"
+    assert made["alpha"][2].read_text() == before_l, "the local write ran before the unfollow read failed"
 
 
 def test_no_client_name_or_id_enters_a_committed_file(hub, tmp_path, monkeypatch):
@@ -348,3 +407,143 @@ def test_a_language_the_policy_refuses_is_refused_before_any_write(hub, tmp_path
     out = hub.slack_clients_save({"client": "one", "language": "xx-XX", "confirm": True})
     assert out.get("err") and "language" in out["err"].lower(), out
     assert calls == [] and made["alpha"][1].read_text() == before
+
+
+# ---------------------------------------------------------------- the refused rows' kinds
+
+def _invalid_pair(made):
+    """Make one seat's files fail validation: two guests, so the policy refuses the second one."""
+    guests = {"version": 1, "workspaces": [
+        {"id": "T0GUEST001", "label": "g1", "class": "guest", "channels": []},
+        {"id": "T0GUEST002", "label": "g2", "class": "guest", "channels": []}]}
+    made["invalid"][2].write_text(yaml.safe_dump(guests, sort_keys=False))
+    doc = yaml.safe_load(made["invalid"][1].read_text())
+    doc["project"]["language"] = "en-US"
+    made["invalid"][1].write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_each_refused_row_names_the_kind_of_its_refusal(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "broken", "follows_language": True},
+                                     {"id": "invalid", "follows_language": True}]}],
+                      {"broken": OWN, "invalid": OWN})
+    _invalid_pair(made)
+    made["broken"][1].chmod(0o000)
+    try:
+        out = hub.slack_clients_preview({"client": "one", "language": "pt-BR"})
+    finally:
+        made["broken"][1].chmod(0o644)
+    kinds = {r["project"]: r["kind"] for r in out["refused"]}
+    assert kinds["broken"] == "unreadable", kinds
+    assert kinds["invalid"] == "invalid", kinds
+
+
+def test_a_refused_row_that_only_names_an_unreadable_file_is_not_a_partial_save(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True},
+                                     {"id": "broken", "follows_language": True}]}],
+                      {"alpha": FOLLOWER, "broken": OWN})
+    stub_write(hub, monkeypatch)
+    made["broken"][1].chmod(0o000)
+    try:
+        out = hub.slack_clients_save({"client": "one", "language": "pt-BR", "confirm": True})
+    finally:
+        made["broken"][1].chmod(0o644)
+    assert out.get("err") is None, out
+    assert out["partial"] is False, "an unreadable file was reported as a partial save"
+    assert [s["project"] for s in out["saved"]] == ["alpha"], out
+
+
+def test_a_refused_row_that_fails_validation_is_a_partial_save(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True},
+                                     {"id": "invalid", "follows_language": True}]}],
+                      {"alpha": FOLLOWER, "invalid": OWN})
+    _invalid_pair(made)
+    stub_write(hub, monkeypatch)
+    out = hub.slack_clients_save({"client": "one", "language": "pt-BR", "confirm": True})
+    assert out.get("err") is None, out
+    assert out["partial"] is True, out
+    assert out["proposal_saved"] is False, out
+
+
+# ---------------------------------------------------------------- the plan's rows and the save's answers
+
+def test_a_project_with_no_slack_file_reports_no_stored_language(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": EMPTY})
+    made["alpha"][2].write_text(yaml.safe_dump({"version": 1, "project": {"language": "pt-BR"}}, sort_keys=False))
+    row = next(r for r in hub.slack_clients_preview({"client": "one", "language": "es-ES"})["rows"]
+               if r["project"] == "alpha")
+    assert row["now"] == "none", row
+
+
+def test_a_failed_project_write_keeps_the_default_and_names_the_errors(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True},
+                                     {"id": "beta", "follows_language": True}]}],
+                      {"alpha": FOLLOWER, "beta": OWN})
+    stub_write(hub, monkeypatch, fail=("beta",))
+    out = hub.slack_clients_save({"client": "one", "language": "es-ES", "confirm": True})
+    assert out.get("err") is None, out
+    assert out["partial"] is True and out["proposal_saved"] is False, out
+    assert out["default_language"] == "es-ES", out
+    assert read_map(prof)["clients"][0]["default_language"] == "es-ES", "the default was not kept"
+    assert [s["project"] for s in out["saved"]] == ["alpha"], out
+    assert any("beta" in e for e in out.get("errors") or ()), out
+
+
+def test_a_default_language_that_does_not_write_runs_no_project_write(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    calls = stub_write(hub, monkeypatch)
+    monkeypatch.setattr(hub, "_clients_default_language_write", lambda cid, lang: "the client map is not writable")
+    before = made["alpha"][1].read_text()
+    out = hub.slack_clients_save({"client": "one", "language": "pt-BR", "confirm": True})
+    assert out.get("err") and "not writable" in out["err"], out
+    assert calls == [], "a follower was written while the default was not kept"
+    assert out["saved"] == [] and made["alpha"][1].read_text() == before
+
+
+def test_the_route_takes_an_explicit_set_language_op(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    stub_write(hub, monkeypatch)
+    preview = hub.slack_clients_post({"op": "set_language", "client": "one", "language": "pt-BR"})
+    assert preview.get("err") is None and preview["language"] == "pt-BR", preview
+    out = hub.slack_clients_post({"op": "set_language", "client": "one", "language": "pt-BR", "confirm": True})
+    assert out.get("err") is None, out
+    assert [s["project"] for s in out["saved"]] == ["alpha"], out
+
+
+def test_the_route_rejects_a_body_that_names_a_language_and_a_persona(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    calls = stub_write(hub, monkeypatch)
+    out = hub.slack_clients_post({"client": "one", "language": "pt-BR", "persona": "blue", "confirm": True})
+    assert out.get("err") and "both" in out["err"], out
+    assert calls == []
+
+
+def test_the_plan_reads_each_projects_local_file_once(hub, tmp_path, monkeypatch):
+    prof, made = wire(tmp_path, monkeypatch, hub,
+                      [{"id": "one", "name": "One", "default_language": "en-US",
+                        "projects": [{"id": "alpha", "follows_language": True}]}],
+                      {"alpha": FOLLOWER})
+    plan = hub._slack_client_language_plan({"client": "one", "language": "pt-BR"})
+    assert plan["writes"][0]["local"] == LOCAL, plan["writes"]
+    stub_write(hub, monkeypatch)
+    out = hub.slack_clients_save({"client": "one", "language": "pt-BR", "confirm": True})
+    assert out.get("err") is None, out

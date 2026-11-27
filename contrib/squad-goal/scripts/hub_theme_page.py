@@ -1824,7 +1824,7 @@ function slPropose(id,confirm){const n=slTNode(id);if(!n)return;
  const el=typeof document!=="undefined"&&document.getElementById&&document.getElementById("slclpersona");
  const pid=(el&&el.value)||n.default_persona||"";
  const opt=(n.persona_options||[]).find(o=>o.id===pid)||((el&&el.options&&el.options[el.selectedIndex])||{});
- const pname=String(opt.name||opt.text||pid),body={client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827)
+ const pname=String(opt.name||opt.text||pid),body={op:"set_persona",client:n.client||"",persona:pid,persona_name:pname};   // the pane's own label, never the raw id (#2827); the op names the change, so no body picks a route by its shape (#3035)
  if(confirm)body.confirm=true;slSaving=!!confirm;slMsg="";slBarSync();
  const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slPropose(id,true);slRender()};
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
@@ -1840,7 +1840,7 @@ function slLangPick(id,lang){const n=slTNode(id);if(!n)return;
  slSaving=true;slMsg="";slBarSync();
  const fail=m=>{slSaving=false;slMsg="!"+m;slRetryFn=()=>slLangPick(id,lang);slRender()};
  fetch("/api/slack/clients",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({client:n.client||"",language:String(lang||""),confirm:true})})
+  body:JSON.stringify({op:"set_language",client:n.client||"",language:String(lang||""),confirm:true})})   // the op names the change, so no body picks a route by its shape (#3035)
  .then(r=>{if(r.status===404||r.status>=500){fail("the client route is not available on this hub");return null}return r.json()})
  .then(o=>{if(o===null)return;if(!o||o.err){fail((o&&o.err)||"the client language could not be saved");return}
   slSaving=false;slRetryFn=null;if(o.rows)n.proposal=o.rows;
@@ -2088,7 +2088,7 @@ async function slPoSave(id){const s=slPoSt(id);if(!s.docs||!slPoDirty(id))return
  const sent=JSON.stringify(s.docs),prev=s.saved?slClone(s.saved):null,undoing=!!s.undoing;   // Undo's own save offers no second Undo
  s.undoing=false;s.saving=true;s.msg="";slBarSync();
  try{const d=await(await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({project:s.id,committed:s.docs.committed,local:s.docs.local,confirm:true})})).json();
+  body:JSON.stringify({project:s.id,committed:s.docs.committed,local:s.docs.local,confirm:true,direct_edit:true})})).json();   // the owner's own edit of another project (#3035)
   if(d.err){s.msg="!"+d.err;s.undo=null;s.retry=()=>{s.failJ="";slPoSave(id)};slRetryFn=s.retry}
   else{s.saved=JSON.parse(sent);if(JSON.stringify(s.docs)===sent)s.docs=JSON.parse(sent);s.retry=null;slRetryFn=null;
    if(d.sha&&!undoing){s.msg="saved";slUndo={project:id,docs:prev};slUndoAt=Date.now()}   // only a landed commit offers Undo
@@ -2151,7 +2151,7 @@ async function slLoad(){try{const r=await fetch("/api/slack/files");slR=await r.
  catch(e){slMsg="!load failed";slR=null;slRender()}}
 async function slPost(confirm){const sent=JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local});
  const mine=()=>JSON.stringify({committed:slDocsCur().committed,local:slDocsCur().local})===sent;   // an edit made during the save is kept (#2908)
- try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm})}),d=await r.json();
+ try{const r=await fetch("/api/slack/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...JSON.parse(sent),confirm,direct_edit:true})}),d=await r.json();   // the owner's own edit, so the hub may turn a follower's language flag off (#3035)
  slPv=null;   // a save or a reject ends the draft's reply preview: the read view answers for the files
  if(d.err){slD=null;slMsg="!"+d.err}
  else if(confirm){slSavedDocs=JSON.parse(sent);if(mine())slDocs=slClone(slSavedDocs);slD=null;slMsg="saved";   // the commit is the hub's business, not the owner's (#2908)

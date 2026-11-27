@@ -244,7 +244,7 @@ def test_an_edit_of_another_projects_node_saves_by_itself_its_own_documents(hub)
     assert got["n"] == 1 and got["ms"] == [2000], got
     op, save = got["sent"]
     assert op["keys"] == ["op", "project"] and op["project"] == "beta", op
-    assert save["keys"] == ["committed", "confirm", "local", "project"], save
+    assert save["keys"] == ["committed", "confirm", "direct_edit", "local", "project"], save
     assert save["project"] == "beta" and save["confirm"] is True and save["persona"] == "nova", save
     assert got["own"] == ALPHA_DOCS, "the page's own project keeps its documents"
     assert got["beta"]["committed"]["project"]["persona"] == "nova", got["beta"]

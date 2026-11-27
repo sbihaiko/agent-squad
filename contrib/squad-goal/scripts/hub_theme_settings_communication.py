@@ -1744,6 +1744,18 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
     if body.get("confirm") is not True:
         return {"diff": diff, "files": files, "base": _slack_base([target, committed, local] + siblings)}
     old_doc = _slack_read_doc(target)   # the language a direct edit changes, so a follower becomes an exception (#3035)
+    old_local_doc = _slack_read_doc(local)
+    # A direct edit of a following project's language makes that project an exception (#3035). Only the page marks an
+    # owner's edit `direct_edit`, and only a change of the stored language the policy normalizes counts, so a persona
+    # save that reloads the same tag in another spelling never turns the flag off. The unfollow's own reads run here,
+    # before either file is written, so a read that fails refuses the save and never leaves the flag inconsistent.
+    unfollow_id = None
+    if body.get("direct_edit") is True and not body.get("client_source") and committed:
+        old_lang = P.project_settings(old_doc, old_local_doc).get("stored_language")
+        new_lang = P.project_settings(new_c, new_l).get("stored_language")
+        if old_lang != new_lang:
+            unfollow_id, uerr = _slack_language_unfollow_target(committed)
+            if uerr: return {"err": uerr, "diff": diff, "files": files}
     out = {"diff": diff, "files": files}
     needs_commit = bool(diff["committed"])
     base, prov_note, fresh = None, None, False
@@ -1779,14 +1791,11 @@ def slack_files_set(body, committed=None, local=None, loop=None, name=None):
         # alone. The answer says so, and the registry keeps the last landed sha and its time.
         if fresh: out["committed_unchanged"] = True
         warn = _slack_record(target, None, committed=False)
-    # A direct edit of a following project's language makes that project an exception (#3035). A write the client
-    # default itself makes carries `client_source`, so it never turns the flag off.
-    if not body.get("client_source") and committed:
-        old_language = ((old_doc or {}).get("project") or {}).get("language")
-        new_language = (new_c.get("project") or {}).get("language")
-        if old_language != new_language:
-            uerr = _slack_language_unfollow(committed)
-            if uerr: warn = " ".join(x for x in (warn, f"the client map was not changed: {uerr}") if x)
+    # The unfollow itself writes the local client map after the commit landed. A map write that fails leaves the new
+    # language with its follow flag on, so its error is named as a warning rather than blamed on the save.
+    if unfollow_id:
+        uerr = _slack_language_unfollow(unfollow_id)
+        if uerr: warn = " ".join(x for x in (warn, f"the client map was not changed: {uerr}") if x)
     notes = [n for n in (prov_note, f"the save state was not recorded in the registry: {warn}" if warn else None) if n]
     if notes: out["warn"] = " ".join(notes)
     try:
@@ -1928,12 +1937,16 @@ def _slack_client_language_plan(body, cache=0.0):
         plan = CL.language_proposal(P, client, projects, language)
     except Exception as e:
         return {"err": f"the Slack rules module answered {type(e).__name__}: {e}"}
-    writes = [{**w, **{k: projects[w["project"]][k] for k in ("committed_path", "local_path", "loop", "slug")}}
+    # The local document the plan read rides on each write, so the save reuses that read and never re-reads a file
+    # another project's write could have changed under it (#3035).
+    writes = [{**w, **{k: projects[w["project"]][k] for k in ("committed_path", "local_path", "loop", "slug", "local")}}
               for w in plan["writes"] if w["project"] in projects]
-    refused = [{"project": r["project"], "label": r.get("label") or r["project"], "result": r["result"]}
+    refused = [{"project": r["project"], "label": r.get("label") or r["project"], "kind": r.get("kind"),
+                "result": r["result"]}
                for r in plan["rows"] if r["action"] == CL.REFUSED]
+    invalid = any(r["kind"] == "invalid" for r in refused)
     return {"err": None, "client": client["id"], "language": language,
-            "rows": plan["rows"], "writes": writes, "refused": refused, "partial": bool(refused),
+            "rows": plan["rows"], "writes": writes, "refused": refused, "partial": invalid,
             "default_language": client.get("default_language") or "", "proposal_saved": False}
 
 
@@ -1952,58 +1965,76 @@ def _clients_default_language_write(client_id, language):
 def slack_clients_language_save(body):
     """POST /api/slack/clients with a `language` and no `persona`: the plan without `confirm`; on confirm, the client
     default language is kept first, so it persists after a partial failure, and then each planned row writes
-    `project.language` through that project's own save path. A project the plan refused is never written."""
+    `project.language` through that project's own save path. A project the plan refused is never written. A default
+    the map does not keep stops the save before any project write, so no follower is written over a default that did
+    not persist. A project write that fails never hides a default that did: the answer keeps `err` empty, names the
+    failures in `errors`, and reads `partial`."""
     plan = _slack_client_language_plan(body)
     if plan.get("err") or body.get("confirm") is not True: return plan
-    errors, saved = [], []
     merr = _clients_default_language_write(plan["client"], plan["language"])
-    if merr: errors.append(merr)
+    if merr:
+        return {**plan, "saved": [], "partial": True, "proposal_saved": False, "err": merr}
+    errors, saved = [], []
     for w in plan["writes"]:
         local = w["local_path"]
         if not local: errors.append(f"{w['project']}: no profile file to save through"); continue
-        out = slack_files_set({"committed": w["committed"], "local": _slack_read_doc(local), "confirm": True,
+        out = slack_files_set({"committed": w["committed"], "local": w["local"], "confirm": True,
                                "client_source": True},
                               committed=w["committed_path"], local=local, loop=w["loop"], name=w["slug"])
         if out.get("err"): errors.append(f"{w['project']}: {out['err']}")
         else: saved.append({"project": w["project"], "sha": out.get("sha")})
     _slack_roster_clear()   # a write changed a project's files, so the next preview reads the roster fresh
-    partial = bool(plan.get("refused")) or bool(errors)
+    partial = bool(plan.get("partial")) or bool(errors)
     plan = {**plan, "saved": saved, "partial": partial, "proposal_saved": not partial,
             "default_language": plan["language"]}
-    if errors: plan["err"] = "; ".join(errors)
+    if errors: plan["errors"] = list(errors)
     return plan
 
 
-def _slack_language_unfollow(committed_path):
-    """The client map with the saved project's `follows_language` off: a direct edit of a following project's language
-    makes that project an exception. The project is the roster seat whose committed file is the one saved, and a project
-    no client holds changes nothing. Returns an error, or None."""
-    try: CL = slack_clients_module()
-    except Exception as e: return f"the client map module did not resolve: {type(e).__name__}: {e}"
+def _slack_language_unfollow_target(committed_path):
+    """(project id, error): the roster seat whose committed file is the one saved, when a client holds that project.
+    A project no client holds answers (None, None). Every map and roster read runs here, before the save writes
+    anything, so a read that fails refuses the save and never leaves a saved language with its follow flag still on
+    (#3035)."""
+    try: slack_clients_module()
+    except Exception as e: return None, f"the client map module did not resolve: {type(e).__name__}: {e}"
     clients, merr = _clients_map_read()
-    if merr: return merr
-    if not clients or not committed_path: return None
+    if merr: return None, merr
+    if not clients or not committed_path: return None, None
     roster, rerr = _slack_roster_checked()
-    if rerr: return rerr
+    if rerr: return None, rerr
     try: want = pathlib.Path(committed_path).resolve()
-    except OSError: return None
+    except OSError: return None, None
     seat = next((s for s in roster if s["committed_path"]
                  and pathlib.Path(s["committed_path"]).resolve() == want), None)
-    if seat is None: return None
+    if seat is None: return None, None
     held = any(p["id"] == seat["id"] for c in clients for p in c["projects"])
-    if not held: return None
-    return _clients_map_write(lambda C, doc: C.with_language_unfollow(doc, seat["id"]))
+    return (seat["id"], None) if held else (None, None)
+
+
+def _slack_language_unfollow(project_id):
+    """The client map with the project's `follows_language` off: a direct edit of a following project's language makes
+    that project an exception. Returns an error, or None."""
+    return _clients_map_write(lambda C, doc: C.with_language_unfollow(doc, project_id))
 
 
 def slack_clients_post(body):
     """POST /api/slack/clients: the client default's preview or save (#2827), a change of the client default language
-    (#3035), or one change of the client map when the body names an `op` (#2922). One route."""
+    (#3035), or one change of the client map when the body names an `op` (#2922). One route. The default's two changes
+    carry an explicit op (`set_persona` or `set_language`), so no body selects one of them by its shape alone; a body
+    that names both a persona and a language is refused."""
     if isinstance(body, dict) and body.get("op") in CLIENT_MAP_OPS: return _slack_clients_op(body)
-    if isinstance(body, dict) and "language" in body and "persona" not in body:
+    if not isinstance(body, dict): return {"err": "bad request"}
+    op = body.get("op")
+    if op is not None and op not in CLIENT_DEFAULT_OPS:
+        return {"err": f"op: {op!r} is not one of {', '.join(CLIENT_DEFAULT_OPS)}"}
+    if "language" in body and "persona" in body:
+        return {"err": "a body names one change: a language or a persona, never both"}
+    if op == "set_language" or (op is None and "language" in body):
         if body.get("confirm") is True or body.get("save") is True: return slack_clients_language_save(body)
         return _slack_client_language_plan(body, cache=PREVIEW_ROSTER_SECONDS)
-    if isinstance(body, dict) and body.get("confirm") is True: return slack_clients_save(body)
-    if isinstance(body, dict) and body.get("save") is True: return slack_clients_save(body)
+    if body.get("confirm") is True: return slack_clients_save(body)
+    if body.get("save") is True: return slack_clients_save(body)
     return slack_clients_preview(body)
 
 
@@ -2012,6 +2043,7 @@ def slack_clients_post(body):
 # file of a project is written. The rules of the map live in the client map module, and the list and the targets are the
 # hub's (ADR-0137, ADR-0177). A body without `confirm` answers the one question and writes nothing.
 CLIENT_MAP_OPS = ("add_project", "remove_project", "add_client", "delete_client", "follow_language")
+CLIENT_DEFAULT_OPS = ("set_language", "set_persona")   # the client default's two changes, each named by its own op (#3035)
 
 def _slack_project_name(roster, project_id):
     """The display name one project of the roster carries, else its id: a question names a project the way the tree does
