@@ -559,6 +559,46 @@ def test_a_parent_read_that_fails_is_incomplete(hub, monkeypatch):
     assert nodes == [] and complete is False
 
 
+RATE_LIMIT_BODY = json.dumps({"errors": [{"type": "RATE_LIMIT", "code": "graphql_rate_limit",
+                                          "message": "API rate limit already exceeded for user ID 1."}]})
+
+
+def test_a_rate_limited_parent_read_is_incomplete(hub, monkeypatch):
+    """#3044: `gh api graphql` prints the RATE_LIMIT body on stdout and exits 1. That answer is no empty last page: the
+    read is incomplete, so no card loses the parent spec the last good pass recorded."""
+    mod, _ = hub
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, RATE_LIMIT_BODY, "gh: rate limited"))
+    nodes, complete = mod.open_relations()
+    assert nodes == [] and complete is False
+    items = [{"n": 2717}, {"n": 2722}]
+    mod.apply_parent_specs(items, nodes, complete, previous=[{"n": 2717, "pa": 2682}, {"n": 2722, "pa": 2682}])
+    assert {i["n"]: i.get("pa") for i in items} == {2717: 2682, 2722: 2682}
+
+
+def test_a_page_that_carries_errors_is_incomplete_and_names_no_node(hub, monkeypatch):
+    """#3044: a page with `data` and `errors` together is a partial answer. Its nodes are not trusted (a node whose
+    parent came back null would drop a real parent), and the read is incomplete."""
+    mod, _ = hub
+    body = json.dumps({"data": {"repository": {"issues": {"nodes": [{"number": 2717, "parent": None}],
+                                                          "pageInfo": {"hasNextPage": False, "endCursor": None}}}},
+                       "errors": [{"type": "FORBIDDEN", "message": "one node could not be read"}]})
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, body, ""))
+    nodes, complete = mod.open_relations()
+    assert nodes == [] and complete is False
+    items = [{"n": 2717}]
+    mod.apply_parent_specs(items, nodes, complete, previous=[{"n": 2717, "pa": 2682}])
+    assert items[0].get("pa") == 2682
+
+
+def test_an_answer_with_no_issues_field_is_incomplete(hub, monkeypatch):
+    """#3044: an answer that exits 0 but holds no `data.repository.issues` is no empty last page."""
+    mod, _ = hub
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps({"data": {"repository": None}}), ""))
+    assert mod.open_relations() == ([], False)
+
+
 def test_an_incomplete_parent_read_keeps_the_last_good_parent(hub):
     """A card the incomplete read never reached keeps the `pa` the last good pass recorded, so it stays a ticket."""
     mod, _ = hub
