@@ -15,8 +15,13 @@
 # A case waits on the stub's readiness mark, not on a pre-pass wall-clock window: under load the pass can spend seconds in
 # its own startup calls before it reaches gh, and that time is not the deadline's. The elapsed bound is measured from the
 # reach, so only the referent moves. On a failure the suite prints the pass's own output and exit code.
+# The pass loads squad/procs.py from SG_SQUAD, else from its own folder, else from the caller's cwd and its parents. The
+# fixture copies the janitor into a temp folder, so the first two answer nothing: with no SG_SQUAD the root falls to the
+# caller's cwd, and the daily pass runs this suite from outside the repository, where the import fails before the pass
+# reaches gh. The suite names SG_SQUAD like every other janitor suite, so its result never depends on where it runs.
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+here=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$here/../../.." && pwd)   # the repository this script ships in
+src=${1:-$here/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 # Rule O reads the card of an issue whose dispatch marker a run left behind, so a pass reaches gh.
@@ -36,7 +41,7 @@ pass_ends() {   # $1 = the stub body; $2 = the call deadline (default 8 s); $3 =
     [ "${3:-}" = self ] || printf 'echo "$*" >> "%s/gh.calls"\n: > "%s/gh.reached"\n' "$T" "$T"
     printf '%s\n' "$1"; } > "$T/bin/gh"
   chmod +x "$T/bin/gh"; : > "$T/gh.calls"; rm -f "$T/gh.reached"
-  PATH="$T/bin:$PATH" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=x SG_PROJECT=1 SG_BASE=main BOARD="$T/s/board.sh" \
+  PATH="$T/bin:$PATH" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=x SG_PROJECT=1 SG_BASE=main BOARD="$T/s/board.sh" \
     SG_LAND_REMOTE="$T/origin.git" JANITOR_DRY=1 JANITOR_NOTIFY=/bin/true JANITOR_CALL_TIMEOUT="$deadline" \
     SQUAD_CAPS_DIR="$T/caps" T="$T" T_SLEEPS="$T/sleeps" T_COUNT="$T/count" T_COUNT_C="$T/count-c" \
     python3 -I "$T/s/janitor.py" > "$T/out" 2>&1 &
