@@ -3,7 +3,11 @@
 # A live but later process with a reused call pid is not the stranded run. The janitor reaps it and frees its issue marker and leases.
 # usage: bash test-janitor-pid-reuse.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-reused" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
+# The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD, SG_CHECKOUT
+# and cwd (#3094). The daily pass clears every SG_* and may run from a cwd outside the repository, so the copy gets the
+# repository's squad package beside it; the product walk-up then answers, with no SG_SQUAD to stand in for the tree.
+repo=$(cd "$(dirname "$0")/../../.." && pwd -P)
+mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-reused" "$T/caps/runs" "$T/caps/children"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 sleep 60 & reused=$!
 printf 'CHILD — GitHub issue #62 (bug; one PR):\n' > "$T/co/runs/run-reused/request.txt"
 printf '{"event": "call_start", "pid": %s, "started_at": 1}\n' "$reused" > "$T/co/runs/run-reused/record.jsonl"
