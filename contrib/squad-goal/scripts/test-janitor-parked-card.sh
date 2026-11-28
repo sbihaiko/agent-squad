@@ -13,6 +13,11 @@
 # usage: bash test-janitor-parked-card.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd)"; T=$(mktemp -d); fail=0
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, SG_CHECKOUT, else the cwd and its parents. The
+# fixture copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the
+# repository with the cleared environment, so no root answered and the pass died before rule B (#3093). The pass names the tree
+# this suite ships in, so its result never depends on where the suite runs.
+export SG_SQUAD=$(cd "$here/../../.." && pwd -P)
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
 cp "$here/issue_state.py" "$here/board_columns.py" "$here/board-definition.json" "$here/issue_ledger.py" "$here/spec_fold.py" "$here/board_facts.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"

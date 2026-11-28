@@ -6,7 +6,11 @@
 # process inside the same folder still is. A finished run leaves active-runs on its first pass (FINISHED-RUN, #2138), and no
 # later pass reads it, so rule A kills its leftovers in that same pass, before the line goes (#2406).
 # usage: bash test-janitor-own-pass.sh [janitor.py]
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+src=${1:-$(dirname "$0")/janitor.py}; sq=$(cd "$(dirname "$src")/../../.." && pwd -P); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, SG_CHECKOUT, else the cwd and its parents. The
+# fixture copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the
+# repository with no SG_SQUAD, so no root answered and the pass died before rule A (#3092). The pass names the tree this suite
+# ships in, so its result never depends on where the suite runs.
 mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-done/ws/target-route.router.1"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 f="$T/co/runs/run-done"; wt="$f/ws/target-route.router.1"
 printf 'CHILD — GitHub issue #70 (bug; one PR):\n' > "$f/request.txt"
@@ -20,7 +24,7 @@ python3 "$T/s/childcc.py" "$T/s/childreview.sh" "$wt" & own=$!
 # a stray process in the same folder: rule A still kills it
 ( cd "$wt" && exec sleep 60 ) & stray=$!
 sleep 2; cr=$(pgrep -P "$own" | head -1)   # the stub childreview.sh, the pass's child
-SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" >"$T/out" 2>&1
+SG_STATE="$T/st" SG_SQUAD="$sq" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" >"$T/out" 2>&1
 sleep 1; o=$(cat "$T/st/cycle.log" 2>/dev/null)   # the summary line on stdout names a count; the kills are in cycle.log
 echo "$o" | /usr/bin/grep -q "pid=$stray .*leftover of finished run run-done" && ok "A: a stray process inside the finished run is a leftover" || ko "A: the stray process was not killed: $o $(cat "$T/out")"
 echo "$o" | /usr/bin/grep -q "pid=$cr .*leftover" && ko "A: the loop's own child review was killed as a leftover: $o" || ok "A: the loop's own child review is never a leftover"
