@@ -12,6 +12,17 @@
 #  (D) the same, where the retry is refused for good: the refusal is named to the owner once and never retried.
 # usage: bash test-janitor-probe-retry.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# SG_SQUAD names the tree that holds squad/procs.py: the janitor copy sits in a temp folder, so its own path answers no root,
+# and the daily pass clears every SG_* and runs from a cwd outside the repository (#3096). Honour a caller's value; else take
+# the first of the suite's own tree and the scripts tree that holds squad/procs.py, and export only that proven root.
+if [ -z "$SG_SQUAD" ]; then
+  for c in "$(dirname "$0")/../../.." "$d/../../.."; do
+    t=$(cd "$c" 2>/dev/null && pwd -P) || continue
+    [ -f "$t/squad/procs.py" ] && { SG_SQUAD=$t; break; }
+  done
+  [ -n "${SG_SQUAD:-}" ] || { echo "FAIL no tree holds squad/procs.py; set SG_SQUAD to the repository that holds it" >&2; exit 1; }
+  export SG_SQUAD
+fi
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs"
 # "$d"/* copies the whole directory as a fixture for the real janitor; it checks no script, so no `# guards: every-script`.
 cp "$d"/*.py "$d"/*.sh "$d"/*.json "$T/s/" 2>/dev/null
