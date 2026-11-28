@@ -193,8 +193,9 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
             if not dry:
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
-def _root_of(rel):   # the first root that holds rel: the repository this script sits in, then SG_SQUAD, SG_CHECKOUT, then the cwd and its parents
-    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+def _root_of(rel):   # the first root that holds rel: the tree this script sits in, walking its own directory up, then SG_SQUAD, SG_CHECKOUT, then the cwd and its parents
+    here = pathlib.Path(__file__).resolve().parent
+    roots = [r for r in (*(str(d) for d in (here, *here.parents)), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
              *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
     root = next((r for r in roots if (pathlib.Path(r) / rel).is_file()), None)
     # A copy that no root answers for (a suite's temp folder, a hand run from elsewhere) stops in one line that names the file
