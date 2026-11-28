@@ -12,8 +12,14 @@
 # `gh api search/issues -f q=...` returns "Not Found", `gh api -X GET search/issues -f q=...` answers the real count.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-rule-o.sh [janitor.py]
+# (#3107) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite drops the
+# inherited names and symlinks the repository's squad package beside the janitor copy. The product walk-up then answers
+# with no SG_SQUAD and no cwd to stand in for the tree.
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
@@ -32,7 +38,7 @@ case "$a" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 801 802 803 807; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/4/items*) for n in 801 802 803 807 808; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
   *projectsV2/1/items*) for n in 801 802 803; do printf '%s\tDoing\n' "$n"; done;;
   *issues/806*) [ -e "TMPDIR/806ok" ] && echo open || exit 1;;   # F: the first state read is refused, the next answers
   *issues/80*) echo open;;
@@ -96,4 +102,13 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 touch "$T/806ok"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 [ ! -e "$T/st/auto/disp-806" ] && ok "O: the next pass releases an issue a refused read skipped (#534)" || ko "O: disp-806 held for good after one refused read: $o"
+# H (#3107): the daily pass clears every SG_* and runs from a cwd outside the repository. The suite resolves the squad
+# root from the copy's own tree, never from the cwd. A failed run whose only pass is the router's is still demoted.
+mkdir -p "$T/co/runs/run-outside"; echo run-outside >> "$T/st/active-runs.txt"
+printf 'CHILD — GitHub issue(s) 808 (bug; one PR):\n' > "$T/co/runs/run-outside/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #808 on fix/808-x"}\n{"event": "outcome", "node": "router", "entry": 1, "outcome": "pass", "routed": "continue", "reasons": ["provisional: dispatched the child"], "pos": 3}\n{"event": "verdict", "verdict": "failed", "reasons": ["no_landed_change"], "exit_code": 1}\n' > "$T/co/runs/run-outside/record.jsonl"
+echo run-outside > "$T/st/auto/disp-808"
+touch -t 202001010000 "$T/co/runs/run-outside/record.jsonl"
+o=$(cd "$T" && env -u SG_SQUAD SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
+/usr/bin/grep -q '^o 4 Todo 808$' "$T/board.calls" 2>/dev/null && ok "O: a run from a cwd outside the repository resolves the squad root from the copy's own tree (#3107)" || ko "O #808 not demoted from outside the repository: $o"
 rm -rf "$T"; exit $fail
