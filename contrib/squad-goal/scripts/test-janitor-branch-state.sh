@@ -4,6 +4,10 @@
 # the remote work branches (`fix|gui/<n>-...`) and how each stands against the landing branch (dev): a branch ahead of dev puts
 # its card in Batching; a branch in dev puts a card that reached Batching in Closed (Done). An open pull request or a
 # merged one, whatever its state, moves no card. Stubbed gh and board.sh; a temp state dir, the live board is never touched.
+# The janitor loads squad/procs.py, squad/active_runs.py and squad/handhold.py from SG_SQUAD, SG_CHECKOUT, or the tree the
+# caller runs in (#1508, #1862, #2548). The daily pass clears SG_* and starts the suite from its own directory, so the suite
+# names the repository it lives in: the result never depends on the caller's tree, and the fixture's empty checkout never
+# turns into a missing module.
 # usage: bash test-janitor-branch-state.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
@@ -53,7 +57,7 @@ case "$a" in
 esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$(cd "$here/../../.." && pwd)" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Batching 2201$' && ok "a work branch ahead of dev puts the card in Batching" || ko "#2201 not Batching: $(bc) $o"
