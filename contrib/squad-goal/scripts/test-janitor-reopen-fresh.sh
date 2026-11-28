@@ -10,7 +10,11 @@
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
 GREP=$(command -v grep) || { echo "FAIL no grep on PATH" >&2; rm -rf "$T"; exit 1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
+# The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD, SG_CHECKOUT
+# and cwd (#3094). The daily pass clears every SG_* and may run from a cwd outside the repository, so the copy gets the
+# repository's squad package beside it; the product walk-up then answers, with no SG_SQUAD to stand in for the tree.
+repo=$(cd "$(dirname "$0")/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 # subst <file>: replace the TMPDIR placeholder with this run's temp dir, in place, with no sed -i and its BSD/GNU split.
@@ -61,7 +65,9 @@ json.dump({"repo": "x/y", "synced": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmt
     "6001": {"f": ["open", "", "Issue 6001", "", ""], "at": time.time()},
     "6002": {"f": ["open", "", "Issue 6002", "", ""], "at": time.time()}}}, open(sys.argv[1], "w"))
 P
-run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
+# The daily pass clears every SG_* and may run from a cwd outside the repository (#2307), so each pass runs from the
+# fixture's own folder: a green that needs the caller's cwd to resolve the janitor's root is no green on dev.
+run() { (cd "$T" && SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1); }
 # A helper never answers "no match" for a missing file or a missing tool: both are loud, since a silent no-match made an
 # assertion pass without reading anything.
 has() { [ -f "$T/board.calls" ] && "$GREP" -q "$1" "$T/board.calls"; }
