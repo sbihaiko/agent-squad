@@ -269,6 +269,12 @@ def test_the_live_mux_starts_the_history_writer_as_a_thread():
     assert "refresh_history" in _mux_read_threads()
 
 
+def test_the_live_mux_starts_the_fast_board_read_as_a_thread():
+    """The live hub is hubmux: a read its SAMPLERS tuple does not name never runs there, so a card waited for the full
+    read's period (#3124)."""
+    assert "refresh_fast" in _mux_read_threads()
+
+
 def test_the_store_a_pass_writes_is_the_store_the_charts_and_the_monitor_read(hub, writer):
     now = time.time()
     read = lambda n, c: _payload(n, [_status(OPENED, "Todo")])   # noqa: E731

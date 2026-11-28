@@ -269,6 +269,24 @@ def test_the_fast_read_passes_on_its_own_every_fifteen_seconds(hub, monkeypatch)
     assert len(passes) == 2 and sleeps == [hub.FAST_EVERY] * 3
 
 
+def test_the_fast_read_reads_nothing_while_no_page_reads_the_profile(hub, monkeypatch):
+    """The many-repository hub parks a profile's reads while no page reads it (#1790): the fast read is one of them (#3124)."""
+    passes, pauses = [], []
+
+    class Parked:
+        def wanted(self): return False
+        def pause(self, secs):
+            pauses.append(secs)
+            if len(pauses) == 3:
+                raise StopIteration
+
+    monkeypatch.setattr(hub, "fast_board_pass", lambda: passes.append(1))
+    monkeypatch.setattr(hub, "READ_GATE", Parked())
+    with pytest.raises(StopIteration):
+        hub.refresh_fast()
+    assert passes == [] and pauses == [hub.FAST_EVERY] * 3
+
+
 def test_a_fast_pass_that_raises_does_not_end_the_fast_loop(hub, monkeypatch):
     passes, sleeps = [], []
 
