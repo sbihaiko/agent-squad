@@ -31,8 +31,13 @@
 # The suite declares its own world (#393): the loop's own shell exports SG_* (SG_BOARD_VOCAB=shipped, SG_FORK_DIR, SG_LAND_BRANCH,
 # ...), and those reached the janitor below, which then took the shipped path and its fork rules instead of the fixture's. A hand
 # run went red on the owner's machine where shell-suites.sh -- which clears every SG_* for the gate -- stayed green.
+# The pass loads squad/procs.py from its own path, then SG_SQUAD, else the caller's cwd and its parents. The fixture copies
+# the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the repository,
+# where the cwd answer is empty too and the import died before the pass reached a rule. The suite names SG_SQUAD as the tree
+# it ships in and runs the pass from the fixture folder, so its result never depends on where it runs (#3068).
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+here=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$here/../../.." && pwd)   # the repository this script ships in
+src=${1:-$here/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/issue_ledger.py" "$T/s/issue_ledger.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 cat > "$T/s/board.sh" <<'B'
 #!/bin/bash
@@ -119,7 +124,7 @@ mk frontier-live 1002
 echo frontier-live > "$T/st/auto/disp-1002"; touch -t 202001010000 "$T/st/auto/disp-1002"; led 1002 1577934000
 echo frontier-oldmark > "$T/st/auto/disp-1003"; touch -t 202001010000 "$T/st/auto/disp-1003"; led 1003 1577761200
 echo frontier-pend > "$T/st/auto/disp-1004"; touch -t 202001010000 "$T/st/auto/disp-1004"; led 1004 1577934000 pending
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { (cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1); }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
 /usr/bin/grep -q '^o 4 Blocked 901$' "$T/board.calls" 2>/dev/null && ok "R: a needs-human run with nothing landed -> card Blocked (the owner is the next actor)" || ko "R #901 not Blocked: $(cat "$T/board.calls" 2>/dev/null)"
@@ -176,4 +181,12 @@ run >/dev/null
 [ ! -e "$T/st/auto/bug-1103" ] && ok "X: a closed issue's bug marker is dropped" || ko "X bug-1103 kept: the bug board reads the issue claimed"
 [ -e "$T/st/auto/disp-1102" ] && ok "X: an open issue's marker stays" || ko "X disp-1102 dropped although the issue reads open"
 /usr/bin/grep -q 'DISP MARKER DROPPED #1101: its issue is closed' "$T/st/cycle.log" 2>/dev/null && ok "X: the drop names the issue and its cause" || ko "X line: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# Y (#3068): a copy of the janitor that no root holds squad/procs.py for must say so in one line, never die in an import
+# traceback that names `/squad/procs.py` and hides the cause. The fixture runs the copy from an empty folder with SG_SQUAD
+# naming an empty folder, so no answer exists: the pass stops at once, and the operator reads what it needs.
+mkdir -p "$T/lone"
+o=$(cd "$T/lone" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$T/lone" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1); rc=$?
+[ "$rc" != 0 ] && ok "Y: a pass with no squad/procs.py under any root stops" || ko "Y: a pass with no squad/procs.py under any root kept going"
+case "$o" in *Traceback*) ko "Y: the miss is a traceback: $(printf '%s' "$o" | head -2)";; *"squad/procs.py"*) ok "Y: the miss names squad/procs.py in one line";; *) ko "Y: the miss names no missing file: $o";; esac
+case "$o" in *"SG_SQUAD"*) ok "Y: the miss names the variable that answers it";; *) ko "Y: the miss names no variable to set: $o";; esac
 rm -rf "$T"; exit $fail

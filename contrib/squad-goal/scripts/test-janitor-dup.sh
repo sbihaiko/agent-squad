@@ -23,7 +23,11 @@ live() {
 live "$OLD" OPID; live "$NEW" NPID; sleep 0.5
 pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" "$@" python3 -I "$T/s/janitor.py" 2>&1; }
 state() { ps -o state= -p "$1" 2>/dev/null | tr -d ' '; }
-dead() { case "$(state "$1")" in Z*|"") return 0;; *) return 1;; esac; }
+# A child session hides the process table (the kernel refuses `ps` there), so an empty read is no death (ADR-0000): signal 0
+# answers within the session, and a pid it cannot signal is gone. This holds a child's own gate, where the table is hidden.
+dead() { local s; s=$(state "$1"); case "$s" in Z*) return 0;; esac
+  [ -n "$s" ] && return 1
+  kill -0 "$1" 2>/dev/null && return 1 || return 0; }
 o=$(pass env JANITOR_DRY=1)
 dead "$NPID" && ko "a dry run killed the newer run's process" || ok "a dry run kills nothing"
 echo "$o" | /usr/bin/grep -q "DUP" && ok "the pass reports the duplicate" || ko "no DUP line: $o"
