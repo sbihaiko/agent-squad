@@ -2,9 +2,18 @@
 # seconds: 1.13
 # Regression test for janitor rule I (RUN-ON-CLOSED-ISSUES: a live run whose issues are all closed; duplicates/not_planned -> stop, otherwise report once), stubbed gh. usage: bash test-janitor-i.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-# SG_SQUAD names the tree this suite sits in: the janitor copy sits in a temp folder, so its own path answers no root, and the
-# daily pass clears every SG_* and runs from a cwd outside the repository (#3085). Every pass names it, never the caller's cwd.
-sq=$(cd "$(dirname "$src")/../../.." && pwd -P); export SG_SQUAD="$sq"
+# SG_SQUAD names the tree that holds squad/procs.py: the janitor copy sits in a temp folder, so its own path answers no root,
+# and the daily pass clears every SG_* and runs from a cwd outside the repository (#3085). Honour a caller's value; else take
+# the first of the suite's own tree and the janitor's tree that holds squad/procs.py, and export only that proven root.
+if [ -z "$SG_SQUAD" ]; then
+  for d in "$(dirname "$0")/../../.." "$(dirname "$src")/../../.."; do
+    t=$(cd "$d" 2>/dev/null && pwd -P) || continue
+    [ -f "$t/squad/procs.py" ] && { SG_SQUAD=$t; break; }
+  done
+  [ -n "$SG_SQUAD" ] || { echo "FAIL no tree holds squad/procs.py; set SG_SQUAD to the repository that holds it" >&2; exit 1; }
+  export SG_SQUAD
+fi
+sq=$SG_SQUAD
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$T/board_columns.py"; cp "$(dirname "$src")/board-definition.json" "$T/board-definition.json"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
