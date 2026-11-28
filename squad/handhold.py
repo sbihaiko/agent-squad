@@ -48,7 +48,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from squad import caps as C
@@ -73,7 +73,7 @@ class HandError(Exception):
 
 
 def iso(t):
-    return datetime.fromtimestamp(t, UTC).strftime(ISO)
+    return datetime.fromtimestamp(t, timezone.utc).strftime(ISO)
 
 
 def stamp(t):
@@ -81,7 +81,7 @@ def stamp(t):
 
 
 def _epoch(s):
-    return datetime.strptime(s, ISO).replace(tzinfo=UTC).timestamp()
+    return datetime.strptime(s, ISO).replace(tzinfo=timezone.utc).timestamp()
 
 
 def _state(state):

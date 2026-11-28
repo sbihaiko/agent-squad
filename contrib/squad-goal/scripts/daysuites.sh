@@ -101,6 +101,15 @@ if [ -z "${SG_DAYSUITES_TREE:-}" ]; then
 fi
 tip=$(read_tip) || exit 1
 move_tree "$tip" || { echo "daysuites: the tree could not check out $tip" >&2; exit 1; }
+# (#3058) A suite runs the project's Python code (the janitor imports `squad/*`), so the pass hands the suites the project's
+# interpreter: sg_gate_python's answer (SG_GATE_PY, the checkout's venv, the venv beside its git dir) goes first on PATH.
+# The python3 the pass itself inherited may be an older interpreter, or one with none of the project's dependencies, and a
+# suite that runs Python then dies on an import the project's code never makes on a supported version.
+if declare -f sg_gate_python >/dev/null 2>&1; then
+  gpy=$(sg_gate_python)
+  pbin=$(cd "$(dirname "$gpy")" 2>/dev/null && pwd)
+  [ -n "$pbin" ] && [ -x "$pbin/python3" ] && export PATH="$pbin:$PATH"
+fi
 sdir=$tree/contrib/squad-goal/scripts
 shopt -s nullglob; suites=("$sdir"/test-*.sh); shopt -u nullglob
 [ ${#suites[@]} -gt 0 ] || { echo "daysuites: the dev tip carries no suite under $sdir" >&2; exit 1; }

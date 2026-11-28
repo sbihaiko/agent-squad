@@ -188,12 +188,13 @@ $G -qF "test-red.sh" "$ST/auto/daysuites-unproven" 2>/dev/null && ok "the unprov
   || ko "an unproven suite spent the day marker"
 
 # 10) a suite runs under its own HOME and keeps the caller's Python user site (#2484): pytest's own imports (pygments) may
-# live only there, and a moved HOME took them off sys.path, so every pytest-backed suite ended red on an import.
+# live only there, and a moved HOME took them off sys.path, so every pytest-backed suite ended red on an import. The pass
+# names the interpreter the suites run (#3058), so the user base it keeps is that interpreter's.
 newworld; tree=$T/w10; mktree "$tree"
 suite "$tree" test-site.sh 'echo "home=$HOME" >> "$RUNLOG"; echo "base=$(python3 -m site --user-base)" >> "$RUNLOG"; exit 0'
 commit "$tree"; : > "$T/ran.log"
 run "$tree" >/dev/null
-want=$(python3 -m site --user-base)
+want=$("$(bash -c '. "$1/caps.sh"; sg_gate_python' _ "$d")" -m site --user-base)
 $G -q '^home=' "$T/ran.log" && ! $G -qxF "home=$HOME" "$T/ran.log" && ok "the suite ran under its own HOME" || ko "the suite ran under the caller's HOME: $(cat "$T/ran.log")"
 $G -qxF "base=$want" "$T/ran.log" && ok "the suite keeps the caller's Python user site" \
   || ko "the suite lost the caller's Python user site ($want): $(cat "$T/ran.log")"
@@ -209,6 +210,24 @@ s0=$(date +%s); out=$(run "$tree" SG_TIP_LOCK_WAIT=3 SG_DAYSUITES_SUITE_HOLD=60)
 [ "$el" -lt 20 ] && ok "2798 the hold stays under the landing's lock wait, whatever the suite hold names (${el}s)" || ko "2798 the pass held the lock ${el}s"
 [ "$(filed)" = 0 ] && ok "2798 a suite stopped at its hold files no bug" || ko "2798 a held suite filed $(filed) bugs"
 [ -z "$(/bin/ls -A "$ST/auto" 2>/dev/null | $G '^daysuites-2')" ] && ok "2798 a held suite spends no day marker" || ko "2798 a held suite spent the day marker"
+
+# 12) (#3058) The pass hands the suites the project's interpreter, never the bare python3 of its own PATH: a suite runs the
+# project's Python code, and the inherited python3 may be an older interpreter with none of the project's dependencies.
+# With no interpreter answer (a bare python3), the pass moves nothing.
+newworld; tree=$T/w12; mktree "$tree"
+mkdir -p "$T/decoy" "$T/co12/.venv/bin"
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$(bash -c '. "$1/caps.sh"; sg_gate_python' _ "$d")" > "$T/decoy/python3"; chmod +x "$T/decoy/python3"
+printf '#!/bin/sh\necho venv-python\n' > "$T/co12/.venv/bin/python"; chmod +x "$T/co12/.venv/bin/python"
+printf '#!/bin/sh\necho venv-python\n' > "$T/co12/.venv/bin/python3"; chmod +x "$T/co12/.venv/bin/python3"
+suite "$tree" test-py.sh 'echo "py=$(command -v python3)" >> "$RUNLOG"; exit 0'
+commit "$tree"; : > "$T/ran.log"
+out=$(run "$tree" SG_CHECKOUT="$T/co12" PATH="$T/decoy:$PATH")
+$G -qxF "py=$T/co12/.venv/bin/python3" "$T/ran.log" && ok "3058 a suite runs the project's python3, never the caller's" \
+  || ko "3058 a suite ran $(cat "$T/ran.log"): expected $T/co12/.venv/bin/python3, pass said: $out"
+newworld; : > "$T/ran.log"
+out=$(run "$tree" SG_GATE_PY=python3 PATH="$T/decoy:$PATH")
+$G -qxF "py=$T/decoy/python3" "$T/ran.log" && ok "3058 a bare python3 answer moves no suite's interpreter" \
+  || ko "3058 the pass moved a suite's python3 with no venv answer: $(cat "$T/ran.log"), pass said: $out"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "daysuites: every case green"

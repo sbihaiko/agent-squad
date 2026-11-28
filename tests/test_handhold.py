@@ -10,6 +10,8 @@ network, no gh, no live state.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ import pytest
 from squad import handhold as H
 from squad import run_liveness as RL
 
+ROOT = Path(__file__).resolve().parents[1]
 NOW = 1_800_000_000.0   # a fixed clock, in epoch seconds
 RUN = "run-hand-a"
 PID = 4242
@@ -464,3 +467,14 @@ def test_gates_drops_a_marker_whose_start_is_not_a_number(env, text):
 def test_gates_drops_a_marker_when_the_process_has_no_start_time(env):
     (env / "auto" / "gate-7").write_text(f"pid {PID}\nstart {int(GATE_START)}\n")
     assert H.gates(state=env, procs={PID: RL.Proc(None, "bash")}) == set()
+
+
+def test_the_module_imports_where_datetime_utc_is_absent():
+    """The janitor's board pass imports this module in-process (`janitor._handhold_module`), and the daily shell-suite
+    pass can hand the janitor an interpreter older than 3.11 (#3058). `datetime.UTC` exists only from Python 3.11, so
+    the module must import with that name absent, as Python 3.9 has it; a newer stdlib name on the import path would
+    kill the whole board pass with a traceback."""
+    code = "import datetime\ndel datetime.UTC\nfrom squad import handhold\nprint('ok')\n"
+    out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "ok"
