@@ -3,8 +3,14 @@
 # Regression test for janitor rule K: a `disp-<n>` marker whose request log says `Nothing ran` (10 min old, no live run on the
 # issue) is dropped like rule E does for `verdict failed`, so autofrontier/autobug dispatch the issue again.
 # usage: bash test-janitor-k.sh [janitor.py]
+# (#3104) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite drops the
+# inherited names and places the repository's squad package beside the janitor copy. The product walk-up then answers with
+# no SG_SQUAD to stand in for the tree.
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 echo "$*" >> "${GH_LOG:-/dev/null}"
