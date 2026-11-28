@@ -5,11 +5,17 @@
 # by name, never written; a card behind the recomputed column moves forward as it always did; a revert keeps the column and adds the tag.
 # usage: bash test-reconcile.sh [path/to/reconcile.py]
 unset SG_GH_PASS   # the reconciler names its own reads; a pass name the enclosing loop exported is not this suite's
-src=${1:-$(dirname "$0")/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# Hermetic as the day pass runs every suite (#2307): a caller's SG_* and SERIAL_* never answer for this one. A leaked
+# SG_SQUAD made the copied reconciler read squad/handhold.py from the caller's tree, and the day pass, which clears them
+# all and runs outside the repository, left the hold cases with no module at all (#3087).
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done
+here=$(cd "$(dirname "$0")" && pwd); src=${1:-$here/reconcile.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+export SG_SQUAD=$(cd "$here/../../.." && pwd)   # the tree this suite ships in: the reconciler reads squad/handhold.py from SG_SQUAD, and the copied module's own folder names no tree (#3087)
 mkdir -p "$T/s" "$T/bin" "$T/st"; test -f "$(dirname "$src")/board_columns.py" || exit 1; cp "$src" "$T/s/reconcile.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/issue_state.py" "$T/s/"; cp "$(dirname "$src")/board-definition.json" "$T/s/"   # the shipped axis the flow order reads lives in the pinned definition beside the module
 cp "$(dirname "$src")/ghread.py" "$(dirname "$src")/ghthrottle.py" "$(dirname "$src")/board_archive.py" "$T/s/"   # the door reader, the quota floor reader and the archive pass reconcile imports (#847, #1931)
 cp "$(dirname "$src")/issue_ledger.py" "$T/s/"   # the one ledger a card write is recorded in before it lands (#1841)
 printf '#!/bin/bash\necho "$*" >> "%s/moves"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+cd "$T" || exit 1   # each pass runs from this suite's own folder, so the caller's cwd never supplies a module the reconciler reads
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 echo "$*" >> "TMPDIR/ghcalls"   # every gh call of a pass, for the call count (#853)

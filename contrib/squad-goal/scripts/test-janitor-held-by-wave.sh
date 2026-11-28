@@ -9,9 +9,14 @@
 #  (C) an answer that is not the open-issue list (no door beside the module) prints the line: a read that did not answer
 #      decides nothing, so a transient failure never silences a line that is still true.
 # Stubbed gh and board; a temp state dir, so the live loop state and board are never read or written.
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, else the caller's cwd and its parents. The fixture
+# copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the repository,
+# where the cwd answer is empty too and the pass dies before rule O, so no HELD-BY-WAVE line reaches cycle.log (#3084). The suite
+# names SG_SQUAD as the tree it ships in, so its result never depends on where it runs.
 # usage: bash test-janitor-held-by-wave.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd)"; T=$(mktemp -d); fail=0
+repo=$(cd "$here/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py from (#3084)
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
 cp "$here/issue_state.py" "$here/board_columns.py" "$here/board-definition.json" "$here/issue_ledger.py" "$here/spec_fold.py" "$here/board_facts.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
@@ -53,7 +58,7 @@ printf 'CHILD — GitHub issue(s) 1566:\n' > "$T/co/runs/run-old/request.txt"
 printf '{"event": "run_start", "run_id": "rid-old"}\n{"event": "verdict", "verdict": "failed", "reasons": ["a child failed"], "exit_code": 1}\n' > "$T/co/runs/run-old/record.jsonl"
 echo run-old > "$T/st/auto/disp-1566"; echo wave/run-old > "$T/st/auto/wave-run-old"; echo wave/run-old > "$T/st/auto/waved-run-old"
 touch -t 202001010000 "$T/co/runs/run-old" "$T/co/runs/run-old/record.jsonl" "$T/co/runs/run-old/request.txt" "$T/st/auto/disp-1566"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 JANITOR_NOTIFY="$T/notify" python3 -I "$1/janitor.py" 2>&1; }
+run() { SG_STATE="$T/st" SG_SQUAD="$repo" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 JANITOR_NOTIFY="$T/notify" python3 -I "$1/janitor.py" 2>&1; }
 line="HELD-BY-WAVE #1566: run run-old ended failed, its wave is open; the landing pass owns the issue"
 # A: the issue is open: the line is printed, once.
 o1=$(run "$T/s")
