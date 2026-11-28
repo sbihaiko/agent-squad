@@ -25,6 +25,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -137,6 +138,9 @@ def _run(suite, timeout=None, extra_env=None):
         env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:
         env["HOME"] = home
+        # (#3056) The suite's bare `python3` is the interpreter that runs this gate, not whatever the caller's PATH names
+        # first: under a minimal PATH the daily pass met Xcode's 3.9, and a module's `from datetime import UTC` raised.
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
         # Its own session (#1742): the suite leads a process group no other process is in, so what it leaves behind is
         # found by that group and ended below, whatever the suite's own cleanup did.
         proc = subprocess.Popen(["bash", str(suite)], cwd=Path(suite).parent, env=env, stdout=subprocess.PIPE,

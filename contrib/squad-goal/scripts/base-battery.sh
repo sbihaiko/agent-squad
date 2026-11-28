@@ -50,8 +50,15 @@ sg_battery_run() {
     all:*) if [ "$narrow" = yes ] && [ "$4" = yes ]; then
              line="selected 0 files"; scope=delta; why=${files#all: }; prefix="the delta cannot cover the change: "
            else line=$files; scope=full; fi;;
-    *) if [ -n "$needed" ]; then line="no test needed: $needed"; else line="selected $(printf '%s\n' "$files" | /usr/bin/grep -c .) files"; fi
-       scope=delta;;
+    *) if [ -n "$needed" ]; then line="no test needed: $needed"; scope=delta; else
+         n=$(printf '%s\n' "$files" | /usr/bin/grep -c .); line="selected $n files"; scope=delta
+         # (#3053) A delta that selects a wide share of a real suite costs what the full battery costs, so it names the
+         # `full` scope and gate.sh moves its clock to the full battery's measured bound. The share is measured against
+         # the suite's own file count, so a wider suite never makes the line easier to cross, and a suite too small to
+         # matter keeps its delta, so a fixture tree never widens a gate.
+         total=$(/usr/bin/find tests -name 'test_*.py' 2>/dev/null | /usr/bin/grep -c .)
+         if [ "${total:-0}" -ge "${SG_GATE_DELTA_FULL_SUITE:-50}" ] && [ "$((n * 100))" -ge "$((total * ${SG_GATE_DELTA_FULL_PCT:-25}))" ]; then scope=full; fi
+       fi;;
   esac
   echo "$line"
   [ -z "${GATE_SELECT_FILE:-}" ] || echo "$line" > "$GATE_SELECT_FILE"

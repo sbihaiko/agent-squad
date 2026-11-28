@@ -54,6 +54,9 @@ else
   start=$(date +%s); wait_s=$((start - t0))
 fi
 load0=$(load); sha=$(git rev-parse HEAD 2>/dev/null) || sha=-
+# (#3056) A suite's bare `python3` is the gate interpreter, never the one the caller's PATH names first: under a minimal
+# PATH a suite met Xcode's 3.9, where a module's `from datetime import UTC` raised. A bare answer names no directory to pin.
+py=$(sg_gate_python 2>/dev/null); case $py in /*) PATH="${py%/*}:$PATH"; export PATH;; esac
 # The suite runs under a process bound below the user's own (#2025), so a runaway suite meets a fork error before the loop does.
 per=$(sysctl -n kern.maxprocperuid 2>/dev/null || ulimit -u); case "$per" in ''|*[!0-9]*) per=;; esac
 bound=${SG_CHILD_GATE_MAXPROC:-${per:+$(( per * 3 / 4 ))}}

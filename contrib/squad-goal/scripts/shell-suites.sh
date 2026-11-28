@@ -7,9 +7,12 @@
 here="$(cd "$(dirname "$0")" && pwd)"; failed=""; n=0
 # (#2306) No suite writes a GIT_DIR its caller exported. A missing caps.sh or scrub refuses the run, never skips the scrub.
 . "$here/caps.sh" && sg_git_env_scrub || { echo "shell-suites: $here/caps.sh gave no sg_git_env_scrub; refused" >&2; exit 2; }
+# (#3056) A suite's bare `python3` is the gate interpreter, never the one the caller's PATH names first: under a minimal
+# PATH a suite met Xcode's 3.9, where a module's `from datetime import UTC` raised. A bare answer names no directory to pin.
+py=$(sg_gate_python 2>/dev/null); case $py in /*) pydir=${py%/*};; *) pydir=;; esac
 for s in "$here"/test-*.sh; do [ -f "$s" ] || continue; b=$(basename "$s"); n=$((n+1))
   echo "=== $b"
-  hm=$(mktemp -d); if env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_|PYTEST_)" | sed "s/^/-u /") HOME="$hm" bash "$s"; then echo "--- ok: $b"; else rc=$?; echo "--- FAILED: $b (exit $rc)"; failed="$failed $b"; fi; rm -rf "$hm"
+  hm=$(mktemp -d); if env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_|PYTEST_)" | sed "s/^/-u /") HOME="$hm" PATH="${pydir:+$pydir:}$PATH" bash "$s"; then echo "--- ok: $b"; else rc=$?; echo "--- FAILED: $b (exit $rc)"; failed="$failed $b"; fi; rm -rf "$hm"
 done
 if [ -n "$failed" ]; then echo "shell suites: FAILED:$failed"; exit 1; fi
 echo "shell suites: $n suites green"

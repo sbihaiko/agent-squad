@@ -3,11 +3,13 @@
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
 # Doing, Reviewing, Batching, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging or Pushing. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec
-# opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
+# opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written,
+# and SG_SQUAD names the tree this suite sits in, so the pass reads its own squad/ under any caller's cwd and environment (#3058).
 # usage: bash test-janitor-board-vocab.sh [janitor.py]
 export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed start stamps are past the takeover bound (ADR-0166)
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
+repo=$(cd "$here/../../.." && pwd)   # the tree this suite sits in: the janitor reads squad/ from SG_SQUAD, never from the caller's cwd
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 python3 - "$T/s/board-definition.json" <<'PY'
@@ -76,7 +78,9 @@ mk run-live 2101; : > "$T/co/runs/run-live/record.jsonl"; echo run-live > "$T/st
 mk run-unlanded 2104; rec run-unlanded '{"event":"run_start","run_id":"run-unlanded","ts":"2026-10-13T08:02:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
 mk run-closed 2105; rec run-closed '{"event":"run_start","run_id":"run-closed","ts":"2026-10-13T08:07:00Z"}'
-o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+# The pass runs from the fixture folder, never the caller's: the janitor resolves squad/ from SG_SQUAD and the cwd's parents,
+# so a pass that happens to start under a checkout would read that checkout's package and not this tree's (#3058).
+o=$(cd "$T" && SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Doing 2101$' && ok "a live run holds the card: Doing" || ko "#2101 not Doing: $(bc) $o"
