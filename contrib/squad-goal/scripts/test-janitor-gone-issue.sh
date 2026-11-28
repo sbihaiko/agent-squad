@@ -3,11 +3,14 @@
 # A deleted issue is a terminal board-write refusal: report it once and stop writing it.
 # Transient refusals remain defects on every pass. A finished run that names only deleted
 # issues leaves active-runs.txt, because no future pass can reconcile it.
+# The suite clears every inherited SG_* and names its own tree, so a pass works from any cwd, as the daily pass runs it (#3080).
 # usage: bash test-janitor-gone-issue.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }
 ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
+repo=$(cd "$here/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py and the sibling modules from (#3080)
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
 cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/spec_fold.py" "$T/s/"
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
@@ -43,7 +46,7 @@ mk() {
 mk run-write-gone 4660
 mk run-write-retries 4661
 mk run-finished-gone 4662
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_SQUAD="$repo" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 python3 -I "$T/s/janitor.py" 2>&1; }
 o1=$(run)
 o2=$(run)
 [ "$(/usr/bin/grep -c 'project-write/4660' "$T/gh.calls")" = 1 ] && ok "410: the board write is sent once" || ko "410 writes: $(/usr/bin/grep 'project-write/4660' "$T/gh.calls")"
@@ -53,5 +56,10 @@ o2=$(run)
 [ "$(/usr/bin/grep -c 'BOARD-WRITE-FAILED #4661' "$T/st/cycle.log")" = 2 ] && ok "502: each refusal is reported" || ko "502 reports: $(cat "$T/st/cycle.log")"
 ! /usr/bin/grep -qx 'run-finished-gone' "$T/st/active-runs.txt" && ok "a finished run whose issues are gone leaves active-runs" || ko "active runs: $(cat "$T/st/active-runs.txt")"
 /usr/bin/grep -q -- 'repos/x/y/issues/4662 -q' "$T/gh.calls" && ok "the gone-run check reads the issue response" || ko "gone-run read: $(cat "$T/gh.calls")"
+# (G) #3080: the daily pass clears every inherited SG_* and runs a suite from a cwd outside any checkout. The copied janitor
+# loads squad/procs.py and the sibling modules from the tree this script sits in; a lookup that leaned on the caller's SG_SQUAD
+# or on the cwd stopped the pass before any board write, and every case above read as `FAIL 410 writes:`.
+g=$(cd "$T" && run)
+[ "$(/usr/bin/grep -c 'project-write/4661' "$T/gh.calls")" = 3 ] && ok "G: a pass from outside a checkout reaches the board" || ko "G: no board write from outside a checkout: $(printf '%s' "$g" | head -3)"
 rm -rf "$T"
 exit $fail
