@@ -1,13 +1,16 @@
 #!/bin/bash
-# seconds: 2.05
+# seconds: 4.0
 # A finished run is cleaned before FINISHED-RUN drops its line (#2419). A run whose verdict is final leaves active-runs.txt
 # on its first pass, and no later pass reads it, so every cleanup must run in that same pass: rule A kills the leftover
 # processes, and the ccdefer markers go. Rule A already kills a leftover; its kill holds no longer, because the drop read
 # the pass-start process table, so a process the pass had just killed still named the run. The deferral cleanup sat after
 # the drop and never ran. Stubbed gh/board, a temp state dir: the live markers and cycle.log are never read or written.
+# The suite clears every inherited SG_* and names its own tree, so a pass works from any cwd, as the daily pass runs it (#3075).
 # usage: bash test-janitor-finished-cleanup.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
+repo=$(cd "$here/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py from (#3075)
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/caps"
 cp "$src" "$T/s/janitor.py"; cp "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/spec_fold.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
@@ -41,7 +44,7 @@ live() { printf '%s\n' '{"event":"run_start","run_id":"'$1'"}' > "$T/co/runs/$1/
 mk run-live; live run-live
 printf 'def5678 4 0\n' > "$T/st/auto/ccdefer-run-live-c1"
 sleep 1   # the leftover's cwd is readable
-run() { SQUAD_CAPS_DIR="$T/caps" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 JANITOR_NOTIFY=true python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SQUAD_CAPS_DIR="$T/caps" SG_SQUAD="$repo" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 JANITOR_NOTIFY=true python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run); o2=$(cat "$T/st/cycle.log" 2>/dev/null)
 kill -0 "$lp" 2>/dev/null && ko "the leftover process of the finished run survived the pass" || ok "the pass kills the leftover process of a finished run"
 echo "$o2" | /usr/bin/grep -q "pid=$lp .*leftover of finished run run-proc" && ok "the pass names the killed leftover in cycle.log" || ko "cycle.log does not name the killed leftover: $o2 $o"
@@ -51,5 +54,14 @@ echo "$o2" | /usr/bin/grep -q 'CCDEFER-DROPPED run-def' && ok "the pass names th
 ! /usr/bin/grep -qx run-def "$T/st/active-runs.txt" && ok "the finished run leaves active-runs" || ko "run-def kept its line: $(cat "$T/st/active-runs.txt")"
 [ -e "$T/st/auto/ccdefer-run-live-c1" ] && ok "a live run keeps its deferral marker" || ko "a live run lost its marker: $o"
 /usr/bin/grep -qx run-live "$T/st/active-runs.txt" && ok "a live run keeps its line" || ko "a live run lost its line: $(cat "$T/st/active-runs.txt")"
-kill "$lp" 2>/dev/null; wait 2>/dev/null
+# (G) #3075: the daily pass clears every inherited SG_* and runs a suite from a cwd outside any checkout. The copied janitor
+# loads squad/procs.py from the tree this suite's script sits in; a lookup that leaned on the caller's SG_SQUAD or on the cwd
+# crashed before rule A, and the leftover lived while the suite's first FAIL named only the survivor.
+mk run-g; ended run-g
+( cd "$T/co/runs/run-g" && exec "$T/gate.sh" ) & gp=$!
+sleep 1   # the leftover's cwd is readable
+g=$(cd "$T" && run); g2=$(cat "$T/st/cycle.log" 2>/dev/null)
+kill -0 "$gp" 2>/dev/null && ko "G: the leftover survived a pass from outside a checkout" || ok "G: a pass from outside a checkout kills the leftover"
+echo "$g2" | /usr/bin/grep -q "pid=$gp .*leftover of finished run run-g" && ok "G: the log names the leftover killed from outside a checkout" || ko "G: no kill line from outside a checkout: $g"
+kill "$lp" "$gp" 2>/dev/null; wait 2>/dev/null
 rm -rf "$T"; exit $fail
