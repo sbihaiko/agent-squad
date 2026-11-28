@@ -1,5 +1,5 @@
 #!/bin/bash
-# seconds: 0.97
+# seconds: 2.63
 # A card in Done over a branch the base never took is a false delivery (#97).
 #
 # A run's own `land` pass is the run saying it finished, not the base taking the merge: the close pass merges gui/<n> and
@@ -11,9 +11,15 @@
 # A run's own landing, whatever the fork base holds, keeps the card at Batching: only a merged pull request naming
 # the issue on the base, or a closed issue, makes it Done (#239). Stubbed gh and board.sh, a temp fork repository, a temp
 # state dir.
+# (#3115) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite drops the
+# inherited names and symlinks the repository's squad package beside the janitor copy. The product walk-up then answers
+# with no SG_SQUAD and no cwd to stand in for the tree.
 # usage: bash test-janitor-unlanded-branch.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/home"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$(dirname "$src")/spec_fold.py" "$T/s/"
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # (#3115) a caller's SG_SQUAD, SG_CHECKOUT or SG_BOARD_VOCAB never answers for this suite: the daily pass clears them
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/home"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$(dirname "$src")/spec_fold.py" "$T/s/"
 here="$(cd "$(dirname "$0")" && pwd)"   # this suite's own directory: the stubs it copies live beside it
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
@@ -89,6 +95,13 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
   && ok "a landing that was taken back leaves the card at Batching" || ko "#2103 not Batching: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2103$' "$T/board.calls" 2>/dev/null \
   && ko "#2103 moved to Done over a landing the base took back" || ok "and a card already in Done is moved out of it"
+# (#3115) The daily pass clears every SG_* and runs from a cwd outside the repository. The copy resolves squad/ from its
+# own tree, never from the caller's cwd, so a pass from $T still settles every card.
+: > "$T/board.calls"
+o=$(cd "$T" && HOME="$T/home" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_FORK_DIR="$T/fork" SG_FORK_BASE=main SG_FORK_BRANCH='gui/%n' \
+    SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+/usr/bin/grep -q '^STATUS o 4 Batching 2103$' "$T/board.calls" 2>/dev/null \
+  && ok "a pass from a cwd outside the repository settles the cards (#3115)" || ko "#3115 no card settled from outside the repository: $(bc) $o"
 rm -rf "$T"
 [ "$fail" = 0 ] && echo "test-janitor-unlanded-branch: PASS" || echo "test-janitor-unlanded-branch: FAIL"
 exit "$fail"

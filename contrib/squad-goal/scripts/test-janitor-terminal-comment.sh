@@ -5,9 +5,19 @@
 # who decided and why. A terminal write whose condition cannot be read is not made (the guard). A card that settled in a
 # terminal column with no such comment gets one, once. Stubbed gh and board.sh; a temp state dir, never the live board.
 # usage: bash test-janitor-terminal-comment.sh [janitor.py]
+# (#3114) The janitor loads squad/procs.py from the tree it runs in: it resolves its own path and walks up from there, then
+# SG_SQUAD, SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite
+# drops the inherited names and symlinks the janitor into its sandbox. The symlink resolves to the repository's own
+# janitor, so the walk-up that answers in the daily pass is the walk-up this suite exercises; a janitor that cannot find
+# its tree goes red here instead of borrowing a package the fixture placed beside it.
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
-cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
+src=$(cd "$(dirname "$src")" && pwd -P)/$(basename "$src")   # a relative invocation resolves before the repo is derived from it
+[ -f "$src" ] || { echo "FAIL suite: no janitor at $src"; exit 1; }
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+[ -d "$repo/squad" ] || { echo "FAIL suite: $repo/squad is absent"; exit 1; }
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(dirname "$src")"
+ln -s "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 cp "$here/specstall.py" "$here/issue_ledger.py" "$here/gate_attempts.py" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
@@ -86,7 +96,9 @@ git -C "$T/co" log --format=%s origin/dev | /usr/bin/grep -q '(#2212)$' || { ech
 gh api repos/x/y/branches | /usr/bin/grep -q '^gui/2211-' && gh api repos/x/y/branches | /usr/bin/grep -q '^gui/2212-' \
   && [ "$(gh api repos/x/y/compare/dev...1111111bbbbbbbb -q .status)" = behind ] && [ "$(gh api repos/x/y/compare/dev...1212121cccccccc -q .status)" = behind ] \
   || { echo "FAIL fixture: #2211/#2212 have no work branch in dev"; exit 1; }
-run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
+# The daily pass clears every SG_* and may run from a cwd outside the repository (#2307), so each pass runs from the
+# fixture's own folder: a green that needs the caller's cwd to resolve the janitor's root is no green on dev.
+run() { (cd "$T" && SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1); }
 o=$(run); r1=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null); : > "$T/gh.calls"; o2=$(run); r2=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 note() { cat "$T"/st/cq/x__y#"$1"-terminal-*.md 2>/dev/null; }

@@ -26,10 +26,14 @@
 #  (P) #798, #799: a fresh seen record removed at rule Q's first stat reads as none, and rule Q releases its card;
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
-for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
+# (#3113) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite drops the
+# inherited SG_* and SERIAL_* names and runs every pass from the fixture's own folder, never the caller's cwd.
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
 export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed record stamps are past the takeover bound (ADR-0166)
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
@@ -78,7 +82,7 @@ mark disp-1012 run-gone
 mark disp-1010 run-gone; touch "$T/refuse"
 # L: a dangling marker (its target is gone): rule Q's stat raises unless the pass treats it as no live marker (#794)
 ln -s "$T/st/auto/gone" "$T/st/auto/disp-1013"
-pass() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+pass() { (cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1); }
 old "$T/co/runs/run-zombie" "$T/co/runs/run-landed"; touch -t 202001010000 "$T/co/runs/run-zombie/request.txt" "$T/co/runs/run-landed/request.txt"
 o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^o 4 Todo 1001$' "$T/board.calls" 2>/dev/null && ok "A: a zombie run's card goes back to Todo" || ko "A #1001 not released: $(bc) $o"
@@ -142,7 +146,7 @@ sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.
 J
 echo run-missing > "$S2/active-runs.txt"; echo run-missing > "$S2/auto/disp-1020"; echo run-gone > "$S2/auto/bug-1020"; echo run-gone > "$S2/auto/disp-1021"
 git -C "$T/fork" init -q && GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_DATE=2020-01-01T00:00:00Z git -C "$T/fork" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "fix: an old change (#1030)"
-o2=$(RACE_LOG="$T/race-m.log" RACE_MARKER=disp-1021 PATH="$T/bin2:$PATH" SG_STATE="$S2" SG_CHECKOUT="$C2" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S2" SG_FORK_DIR="$T/fork" SG_FORK_BASE=HEAD JANITOR_NOTIFY="$T/notify" python3 -I "$T/race.py" "$T/s/janitor.py" 2>&1)
+o2=$(cd "$T" && RACE_LOG="$T/race-m.log" RACE_MARKER=disp-1021 PATH="$T/bin2:$PATH" SG_STATE="$S2" SG_CHECKOUT="$C2" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S2" SG_FORK_DIR="$T/fork" SG_FORK_BASE=HEAD JANITOR_NOTIFY="$T/notify" python3 -I "$T/race.py" "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^removed$' "$T/race-m.log" 2>/dev/null && ok "M: the race removed disp-1021 at its stat ($(/usr/bin/grep -c '^hit' "$T/race-m.log") hits)" || ko "M: the removal never fired: $(cat "$T/race-m.log" 2>/dev/null)"
 ! grep -q Traceback <<< "$o2" && ok "M: rule O and rule K meet one pass, a marker removed mid-pass: no Traceback" || ko "M traceback: $o2"
 /usr/bin/grep -q 'DISPATCH-MISSING #1020' "$S2/cycle.log" 2>/dev/null && [ ! -e "$S2/auto/disp-1020" ] && ok "M: rule O drops the marker of the missing run" || ko "M: rule O did not run: $(cat "$S2/cycle.log" 2>/dev/null)"
@@ -171,7 +175,7 @@ def racing(p, *a, **k):
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
 J
-o3=$(RACE_LOG="$T/race-n.log" RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S3" SG_CHECKOUT="$C3" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S3" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_unheld.py" "$T/s/janitor.py" 2>&1)
+o3=$(cd "$T" && RACE_LOG="$T/race-n.log" RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S3" SG_CHECKOUT="$C3" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S3" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_unheld.py" "$T/s/janitor.py" 2>&1)
 [ "$(/usr/bin/grep -c '^hit$' "$T/race-n.log" 2>/dev/null)" = 1 ] && ok "N: unheld reads the marker once (1 hit)" || ko "N: hits $(cat "$T/race-n.log" 2>/dev/null)"
 ! grep -q Traceback <<< "$o3" && ok "N: no Traceback" || ko "N traceback: $o3"
 /usr/bin/grep -q 'UNHELD #1014' "$S3/cycle.log" 2>/dev/null && [ ! -e "$S3/auto/disp-1014" ] && ok "N: unheld ran for #1014: UNHELD printed, the marker dropped" || ko "N: unheld did not run for #1014: $(cat "$S3/cycle.log" 2>/dev/null) $o3"
@@ -199,7 +203,7 @@ def racing(p, *a, **k):
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
 J
-o5=$(RACE_LOG="$T/race-n2.log" RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S5" SG_CHECKOUT="$C5" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S5" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_first_unheld.py" "$T/s/janitor.py" 2>&1)
+o5=$(cd "$T" && RACE_LOG="$T/race-n2.log" RACE_MARKER=disp-1014 PATH="$T/bin2:$PATH" SG_STATE="$S5" SG_CHECKOUT="$C5" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S5" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_first_unheld.py" "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^removed$' "$T/race-n2.log" 2>/dev/null && ok "N2: the race removed disp-1014 at unheld's first read" || ko "N2: the removal never fired: $(cat "$T/race-n2.log" 2>/dev/null)"
 ! grep -q Traceback <<< "$o5" && ! /usr/bin/grep -q 'UNHELD #1014' "$S5/cycle.log" 2>/dev/null && ok "N2: a marker gone at unheld's first read is no UNHELD, no Traceback" || ko "N2: $(cat "$S5/cycle.log" 2>/dev/null) $o5"
 # P: #798: rule Q's seen-record read. janitor-q-seen-<n> is removed between its exists() and its stat() (the second stat of
@@ -231,7 +235,7 @@ def racing(p, *a, **k):
 os.stat = racing
 sys.argv = sys.argv[1:]; sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[0]))); runpy.run_path(sys.argv[0], run_name="__main__")
 J
-o4=$(RACE_LOG="$T/race-p.log" RACE_MARKER=janitor-q-seen-1031 RACE_NTH=1 PATH="$T/bin4:$PATH" SG_STATE="$S4" SG_CHECKOUT="$C4" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S4" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_nth.py" "$T/s/janitor.py" 2>&1)
+o4=$(cd "$T" && RACE_LOG="$T/race-p.log" RACE_MARKER=janitor-q-seen-1031 RACE_NTH=1 PATH="$T/bin4:$PATH" SG_STATE="$S4" SG_CHECKOUT="$C4" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$S4" JANITOR_NOTIFY="$T/notify" python3 -I "$T/race_nth.py" "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^removed$' "$T/race-p.log" 2>/dev/null && ok "P: the race removed the seen record at stat $(/usr/bin/grep -c '^hit' "$T/race-p.log")" || ko "P: the removal never fired: $(cat "$T/race-p.log" 2>/dev/null)"
 ! grep -q Traceback <<< "$o4" && ok "P: a seen record removed at rule Q's stat: no Traceback" || ko "P traceback: $o4"
 /usr/bin/grep -q '^o 4 Todo 1031$' "$T/board.calls" 2>/dev/null && [ ! -e "$S4/auto/disp-1031" ] && ok "P: rule Q reads the gone record as none and releases #1031" || ko "P #1031 not released: $(cat "$T/board.calls" 2>/dev/null) $o4"
