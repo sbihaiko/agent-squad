@@ -3,9 +3,15 @@
 # Regression test for janitor rule O (#1513): a run that ended with a failed verdict and landed nothing releases its issues --
 # rule R writes the loop-board card (Todo), rule O moves the bug card (To triage) and drops the dispatch marker, so the next cycle
 # re-dispatches it. A run that landed work stops at Batching and keeps its marker (#239: a local landing is not a
-# merge into the base, so it is not Done); a live run writes Run fields. Stubbed gh/board. usage: bash test-janitor-failed-dispatch.sh [janitor.py]
+# merge into the base, so it is not Done); a live run writes Run fields. Stubbed gh/board.
+# The pass loads squad/procs.py from its own folder, then SG_SQUAD, then the caller's cwd and its parents. The fixture copies
+# the janitor into a temp folder, so the first answer is empty; with no SG_SQUAD the root falls to the caller's cwd, and the
+# daily pass runs this suite from outside the repository with every SG_* cleared, where the import fails before the first
+# gh call. The suite names SG_SQUAD and runs the pass from the fixture folder, so its result never depends on where it runs (#3071).
+# usage: bash test-janitor-failed-dispatch.sh [janitor.py]
 unset SG_BOARD_VOCAB   # this suite reads the legacy option names, so the caller's vocabulary never decides it
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+here="$(cd "$(dirname "$src")" && pwd)"; repo=$(cd "$here/../../.." && pwd)   # the tree this suite sits in: the janitor reads squad/ from SG_SQUAD, never from the caller's cwd
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/issue_ledger.py" "$T/s/"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$(dirname "$src")/board_facts.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
@@ -104,7 +110,7 @@ mk run-nr; printf 'CHILD — GitHub issue #720 (one PR):\n' > "$T/co/runs/run-nr
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #720"}\n{"event": "verdict", "verdict": "no-repro", "reasons": ["the defect does not reproduce at the tip"], "exit_code": 40, "end_class": "does-not-reproduce"}\n' > "$T/co/runs/run-nr/record.jsonl"
 echo run-nr > "$T/st/auto/disp-720"
 touch -t 202001010000 "$T/co/runs/run-nr/record.jsonl"
-o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
+o=$(cd "$T" && SG_SQUAD="$repo" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "O: failed run -> card back to Todo" || ko "O #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
 [ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #701' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"

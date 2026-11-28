@@ -5,8 +5,12 @@
 # review of its tip kept in the state dir, the check runs of the dev tip, and the review of a work branch -- and writes the
 # column the table names. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-facts.sh [janitor.py]
+# (#3065) SG_SQUAD names the tree this suite sits in, and the pass runs from the fixture folder: the janitor reads squad/ from
+# SG_SQUAD first and from the caller's cwd only as a fallback. The daily pass clears every SG_* setting and runs from a cwd
+# that holds no squad/, so the fallback reached /squad/procs.py and the pass died at import with a traceback.
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
+repo=$(cd "$here/../../.." && pwd)   # the tree this suite sits in: the janitor reads squad/ from SG_SQUAD, never from the caller's cwd
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 # the gating fact's journal (#1257, ADR-0170) is a sibling module the janitor imports under -I
 cp "$here/gate_attempts.py" "$here/board_flow_history.py" "$T/s/"
@@ -60,7 +64,9 @@ mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'C
 mk run-wl 2301; mk run-wc 2302; mk run-wt 2303
 printf 'VERDICT: APPROVE\n' > "$T/st/review-wave_run-wl.md"; printf 'shaWL\n' > "$T/st/review-wave_run-wl.sha"
 printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T/st/review-fix_2305-x.sha"
-o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" "$py" -I "$T/s/janitor.py" 2>&1)
+# The pass runs from the fixture folder with SG_SQUAD naming this tree, never the caller's cwd: a pass that starts under a
+# checkout would read that checkout's package, and the daily pass starts under no tree at all (#3065).
+o=$(cd "$T" && SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" "$py" -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Batching 2301$' && ok "an approved wave ahead of dev: its child's card is Batching" || ko "#2301 not Batching: $(bc) $o"
