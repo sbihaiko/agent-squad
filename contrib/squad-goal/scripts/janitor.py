@@ -193,14 +193,20 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
             if not dry:
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
+def _root_of(rel):   # the first root that holds rel: the repository this script sits in, then SG_SQUAD, SG_CHECKOUT, then the cwd and its parents
+    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
+             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
+    root = next((r for r in roots if (pathlib.Path(r) / rel).is_file()), None)
+    # A copy that no root answers for (a suite's temp folder, a hand run from elsewhere) stops in one line that names the file
+    # and the variable that answers it; a miss is never an import traceback on a path such as /squad/procs.py (#3068).
+    if root is None: raise SystemExit(f"janitor: {rel} is under no root ({', '.join(roots[:4])}); set SG_SQUAD to the repository that holds it")
+    return root
 def _procs_module():
     """squad/procs.py, the one process reader, loaded by path: the repository this script sits in first, as caps.sh reads it,
     then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. That file imports nothing from squad, so it loads alone under any python3 (#1508)."""
     name = "squad_procs"
     if hasattr(sys.modules.get(name), "snapshot"): return sys.modules[name]   # never a foreign stub another loader left
-    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
-             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]   # a copy outside the repo: the tree it runs in
-    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "procs.py").is_file()), roots[-1])
+    root = _root_of("squad/procs.py")
     spec = importlib.util.spec_from_file_location(name, pathlib.Path(root) / "squad" / "procs.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod   # a dataclass in the module reads its own module by name while it loads
@@ -213,9 +219,7 @@ def _active_runs_module():
     module, so it loads alone under any python3. It is loaded at the write, so a pass that rewrites nothing needs it not."""
     name = "squad_active_runs"
     if hasattr(sys.modules.get(name), "rewrite"): return sys.modules[name]
-    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
-             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
-    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "active_runs.py").is_file()), roots[-1])
+    root = _root_of("squad/active_runs.py")
     spec = importlib.util.spec_from_file_location(name, pathlib.Path(root) / "squad" / "active_runs.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
@@ -224,9 +228,7 @@ def _active_runs_module():
 def _handhold_module():
     """squad/handhold.py, the one reader and writer of a hand hold (loop-bug #1664), imported from the repository this script sits in
     first, then SG_SQUAD, SG_CHECKOUT, else the tree it runs in. The janitor carries no second copy of the hold's format."""
-    roots = [r for r in (str(pathlib.Path(__file__).resolve().parents[3]), os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"),
-             *map(str, (pathlib.Path.cwd(), *pathlib.Path.cwd().parents))) if r]
-    root = next((r for r in roots if (pathlib.Path(r) / "squad" / "handhold.py").is_file()), roots[-1])
+    root = _root_of("squad/handhold.py")
     if root not in sys.path: sys.path.insert(0, root)
     from squad import handhold
     return handhold
