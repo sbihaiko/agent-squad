@@ -11,6 +11,10 @@ cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" 
 # the gating fact's journal (#1257, ADR-0170) is a sibling module the janitor imports under -I
 cp "$here/gate_attempts.py" "$here/board_flow_history.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+# (#3056) The suite names its interpreter, never the `python3` the caller's PATH happens to hold first: under a minimal PATH
+# that was Xcode's 3.9, and board_flow_history.py's `from datetime import UTC` raised an ImportError. caps.sh's
+# sg_gate_python answers the gate's interpreter; a tree without caps.sh keeps the plain name.
+py=python3; [ -f "$here/caps.sh" ] && { . "$here/caps.sh"; py=$(sg_gate_python 2>/dev/null) || py=python3; }; [ -n "$py" ] || py=python3
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in
@@ -43,7 +47,7 @@ case "$a" in
   *issues/23*) echo $'open\t\tIssue';;
 esac
 J
-python3 - "$T/bin/gh" <<'PY'
+"$py" - "$T/bin/gh" <<'PY'
 import sys
 p = sys.argv[1]; t = open(p).read()
 # compare answers: the wave of run-wt is in dev, every other branch is ahead of it
@@ -56,7 +60,7 @@ mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'C
 mk run-wl 2301; mk run-wc 2302; mk run-wt 2303
 printf 'VERDICT: APPROVE\n' > "$T/st/review-wave_run-wl.md"; printf 'shaWL\n' > "$T/st/review-wave_run-wl.sha"
 printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T/st/review-fix_2305-x.sha"
-o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" "$py" -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Batching 2301$' && ok "an approved wave ahead of dev: its child's card is Batching" || ko "#2301 not Batching: $(bc) $o"

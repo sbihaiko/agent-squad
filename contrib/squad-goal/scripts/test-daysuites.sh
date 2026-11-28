@@ -198,6 +198,19 @@ $G -q '^home=' "$T/ran.log" && ! $G -qxF "home=$HOME" "$T/ran.log" && ok "the su
 $G -qxF "base=$want" "$T/ran.log" && ok "the suite keeps the caller's Python user site" \
   || ko "the suite lost the caller's Python user site ($want): $(cat "$T/ran.log")"
 
+# 12) (#3056) A day suite names the gate interpreter on `python3`, whatever PATH the caller handed the pass: the pass found
+# test-janitor-board-facts.sh red under a minimal PATH, where bare `python3` was Xcode's 3.9 and one module's
+# `from datetime import UTC` raised an ImportError.
+newworld; tree=$T/w12; mktree "$tree"
+mkdir -p "$T/gp"; printf '#!/bin/bash\n[ "$1" = pin ] && { echo GATEPY; exit 0; }\nexec %s "$@"\n' "$(command -v python3)" > "$T/gp/python3"; chmod +x "$T/gp/python3"
+suite "$tree" test-py.sh 'echo "which=$(command -v python3)" >> "$RUNLOG"; echo "pin=$(python3 pin)" >> "$RUNLOG"; exit 0'
+commit "$tree"; : > "$T/ran.log"
+run "$tree" SG_GATE_PY="$T/gp/python3" >/dev/null
+$G -qxF "which=$T/gp/python3" "$T/ran.log" && ok "3056 a suite names the gate interpreter on python3" \
+  || ko "3056 a suite took python3 from PATH: $(cat "$T/ran.log")"
+$G -qxF "pin=GATEPY" "$T/ran.log" && ok "3056 the suite's python3 is the gate interpreter, not another on PATH" \
+  || ko "3056 the suite's python3 was another interpreter: $(cat "$T/ran.log")"
+
 # 11) (#2798) A day suite holds the gate lock for less than a landing waits for it: the hold is derived from the landing's lock
 # wait (SG_TIP_LOCK_WAIT) and stays under it, even when SG_DAYSUITES_SUITE_HOLD names more. A suite stopped at that hold is held,
 # never a red: the pass files no bug and spends no day marker.

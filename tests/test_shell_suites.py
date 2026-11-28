@@ -5,6 +5,9 @@ is 0.5 s or more carries `heavy`, so the fast battery leaves it out and the full
 One over the slow line also carries a `slow` reason, since neither the 20 s cap nor the call deadline guards a unit test's
 work, and a real script suite's own wall time is the machine's.
 """
+import sys
+from pathlib import Path
+
 import pytest
 
 from tests import shell_suites
@@ -64,3 +67,14 @@ def _param(suite):
 def test_shell_suite(suite):
     message = shell_suites.problem(suite)
     assert message is None, message
+
+
+def test_a_suite_names_the_runner_interpreter_on_python3(tmp_path):
+    """#3056: the daily pass found test-janitor-board-facts.sh red under a minimal PATH, where bare `python3` was Xcode's 3.9
+    and a module's `from datetime import UTC` raised. A suite must get the interpreter that runs the gate, whatever PATH the
+    caller handed the runner."""
+    suite = tmp_path / "test-pinned.sh"
+    suite.write_text("#!/bin/bash\ncommand -v python3\n")
+    done = shell_suites.run(suite)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == str(Path(sys.executable).parent / "python3")

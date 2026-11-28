@@ -53,13 +53,17 @@ if [ "${1:-}" = --suite ]; then
   cores() { sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1; }
   echo "daysuites: load-at-start ${SG_DAYSUITES_LOAD:-$(load1)} cores ${SG_DAYSUITES_CORES:-$(cores)}"
   hm=$(mktemp -d) 2>/dev/null || hm=
+  # (#3056) A suite's bare `python3` is the gate interpreter, never the one the caller's PATH names first: under a minimal
+  # PATH the pass met Xcode's 3.9, where a module's `from datetime import UTC` raised. sg_gate_python answers an absolute
+  # path in the loop; a bare answer names no directory to pin and leaves PATH as it stands.
+  py=$(sg_gate_python 2>/dev/null); case $py in /*) pydir=${py%/*};; *) pydir=;; esac
   # (#2484) The Python user site follows HOME, and the tree holds no .venv, so a suite's python3 lost the packages that live
   # only there (pytest's pygments). The caller's user base is read before HOME moves and kept: it is an interpreter fact,
   # never loop state.
-  ub=${PYTHONUSERBASE:-$(python3 -m site --user-base 2>/dev/null)}
+  ub=${PYTHONUSERBASE:-$("${pydir:+$pydir/}python3" -m site --user-base 2>/dev/null)}
   # Hermetic like shell-suites.sh: every inherited SG_* and SERIAL_* is cleared and HOME sits in its own temp dir, so the
   # live loop's state and profile never reach an assertion. The pass's own state is read before this line, never after.
-  env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="${hm:-/tmp}" ${ub:+PYTHONUSERBASE="$ub"} bash "$suite"; rc=$?
+  env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") HOME="${hm:-/tmp}" PATH="${pydir:+$pydir:}$PATH" ${ub:+PYTHONUSERBASE="$ub"} bash "$suite"; rc=$?
   [ -z "$hm" ] || rm -rf "$hm"
   exit "$rc"
 fi
