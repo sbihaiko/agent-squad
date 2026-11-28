@@ -6,8 +6,13 @@
 # is written on. The whole stack runs (janitor, board.sh, board.py, issue_state.py) against a stubbed gh that counts every call.
 # Stubbed gh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-run-fields-unchanged.sh [janitor.py]
+# (#3112) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and may run from a cwd outside the repository, so the suite drops the
+# inherited names and places the repository's squad package beside the janitor copy; the product walk-up then answers.
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
+here="$(cd "$(dirname "$src")" && pwd)"; repo=$(cd "$here/../../.." && pwd -P)
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$here/board.sh" "$here/board.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 cat > "$T/bin/gh" <<'J'
