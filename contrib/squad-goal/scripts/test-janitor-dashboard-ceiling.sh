@@ -6,8 +6,12 @@
 # ceiling beside them (JANITOR_DASHBOARD_MAX): the oldest dashboards no live run owns go down to the ceiling, the dashboard of a
 # live run is never a victim even when it is the oldest, JANITOR_DRY=1 reports without killing, and a pass under the ceiling
 # touches nothing. The killed dashboards' runs are NOT in active-runs.txt, so no per-run rule reaches them: the ceiling does.
-# Stubbed gh/board, a temp SG_STATE/SG_CHECKOUT; the live loop is never read or written. usage: bash test-janitor-dashboard-ceiling.sh [janitor.py]
+# Stubbed gh/board, a temp SG_STATE/SG_CHECKOUT; the live loop is never read or written. The suite clears every inherited SG_*
+# and names its own tree, so a pass works from any cwd, as the daily pass runs it (#3067).
+# usage: bash test-janitor-dashboard-ceiling.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); T=$(cd "$T" && pwd -P); fail=0
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py and squad/handhold.py from (#3067)
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
@@ -38,7 +42,7 @@ for n in 1 2 3; do
   printf '{"event": "verdict", "verdict": "pass", "reasons": []}\n' > "$T/co/runs/run-$n/record.jsonl"
 done
 pass() {   # $1 = JANITOR_DASHBOARD_MAX, $2 = DRY, rest = extra env
-  SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY="$T/notify" \
+  SG_SQUAD="$repo" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY="$T/notify" \
     JANITOR_DASHBOARD_MAX="$1" JANITOR_DRY="$2" JANITOR_CALL_TIMEOUT=20 python3 -I "$T/s/janitor.py" 2>&1
 }
 # oldest first: the live run's dashboard is the oldest process of the five, so a ceiling that killed by age alone would take it
@@ -95,6 +99,12 @@ done
 /usr/bin/grep -qE "kill pid=$po .*dashboard of finished run run-old" "$T/st/cycle.log" && ok "F: the log names the finished run" || ko "F: no kill line for $po: $(tail -3 "$T/st/cycle.log")"
 po2=$(dash "$T/co/runs/run-old"); sleep 0.3; pass 0 "" >/dev/null
 died "$po2" && ok "F: the bound holds with the ceiling turned off" || ko "F: pid $po2 survived with JANITOR_DASHBOARD_MAX=0"
+# (G) #3067: the daily pass clears every inherited SG_* and runs a suite from a cwd outside any checkout. The copied janitor
+# loads squad/procs.py from the tree this suite's script sits in; a lookup that leaned on the caller's SG_SQUAD or on the cwd
+# crashed before the ceiling rule and left the suite red with a bare Traceback.
+g=$(cd "$T" && pass 2 1 2>&1)
+case "$g" in *Traceback*) ko "G: a pass with no SG_SQUAD, from outside a checkout, prints a traceback: $(printf '%s' "$g" | head -3)";; *) ok "G: a pass with no SG_SQUAD, from outside a checkout, runs";; esac
+echo "$g" | /usr/bin/grep -q 'DASHBOARD-CEILING' && ok "G: the pass from outside a checkout names the ceiling" || ko "G: no ceiling line from outside a checkout: $g"
 kill "$py" "$pn" "$px" 2>/dev/null
 kill "$p_live" "$p_fin" "$pw1" "$pw2" "$pw3" 2>/dev/null
 rm -rf "$T"; exit $fail
