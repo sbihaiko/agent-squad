@@ -1,7 +1,13 @@
 #!/bin/bash
 # seconds: 0.59
 # Regression test for janitor rule H (RED-LOOP, STATE-REGRESSION from the issue's loop comments), stubbed gh. usage: bash test-janitor-h.sh [path/to/janitor.py]
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The fixture copies the janitor into a temp folder, so that copy's own path names no repository. The daily pass runs this suite
+# from outside any checkout with every SG_* cleared, so the janitor found no root for squad/procs.py and stopped before rule H;
+# a developer shell stayed green only because SG_SQUAD leaked in. The suite drops the inherited SG_* names and names SG_SQUAD as
+# the tree it ships in, as the sibling janitor suites do (#3083).
+src=${1:-$(dirname "$0")/janitor.py}; here=$(cd "$(dirname "$src")" && pwd -P); repo=$(cd "$here/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py from (#3083)
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
+T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs/.hub"; cp "$src" "$T/janitor.py"; for f in "$(dirname "$src")"/*.py "$(dirname "$src")"/*.sh; do [ "$f" -ef "$src" ] || cp "$f" "$T/"; done   # the modules janitor imports sit beside it, as in the live copy
 cat > "$T/co/runs/.hub/hub-board.json" <<J
 {"items":[{"n":1201,"st":"In Progress","s":"open"},{"n":1202,"st":"Blocked","s":"open"},{"n":1203,"st":"Done","s":"open"},{"n":1204,"st":"In Progress","s":"open"},{"n":1205,"st":"Code Complete","s":"open"}]}
@@ -18,7 +24,7 @@ case "$*" in
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_DRY=1 python3 -I "$T/janitor.py" 2>&1; }
+run() { SG_SQUAD="$repo" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_DRY=1 python3 -I "$T/janitor.py" 2>&1; }
 r=$(run)
 case "$r" in *"RED-LOOP #1201: 3"*) ok "3 REDs with no green: RED-LOOP";; *) ko "no RED-LOOP for #1201: '$r'";; esac
 case "$r" in *"RED-LOOP #1204"*) ko "a green close resets the count, #1204 reported";; *) ok "a green fork close resets the count";; esac
