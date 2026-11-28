@@ -9,12 +9,17 @@
 # dispatch column, and one that carries needs-owner or needs-ratification is added Blocked. The open issues are ONE read
 # through the door (gh_aggregate, the throttle), never one call per issue.
 # Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
+# The pass loads squad/procs.py from its own path, then SG_SQUAD, then the caller's cwd and its parents. The fixture copies
+# the janitor into a temp folder, so the first answer is empty; with no SG_SQUAD the root falls to the caller's cwd, and the
+# daily pass runs this suite from outside the repository with every SG_* cleared, where the import fails before the first
+# gh call. The suite names SG_SQUAD and runs the pass from the fixture folder, so its result never depends on where it runs (#3057).
 # usage: bash test-janitor-board-reconcile.sh [janitor.py]
 unset SG_BOARD_VOCAB   # this suite reads the legacy option names; the loop exports the shipped vocabulary
 export SG_TAKEOVER_SECONDS=1000000000000   # these runs test other rules; their fixed start stamps are past the takeover bound (ADR-0166)
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
-here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
+here="$(cd "$(dirname "$src")" && pwd)"; repo=$(cd "$here/../../.." && pwd)   # the tree this suite sits in: the janitor reads squad/ from SG_SQUAD, never from the caller's cwd
+cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
 cp "$here/board_columns.py" "$here/board_facts.py" "$here/issue_ledger.py" "$here/board-definition.json" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/spec_fold.py" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
@@ -280,7 +285,7 @@ rec run-human '{"event":"run_start","run_id":"run-human","ts":"2026-10-13T08:17:
 sed -i '' "s/REPL1/$retry1/g; s/REPL2/$retry2/g" "$T/co/runs/run-human/record.jsonl"
 printf '1\trun-x\t2062\twave/run-x\n' > "$T/st/wave-outside.tsv"   # a landing named #2062 outside its run's dispatch set (#775)
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
-o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+o=$(cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
 /usr/bin/grep -q '^RUN o 4 2001 run-dispatch ' "$T/board.calls" 2>/dev/null && ok "dispatch marker: Run fields are written" || ko "#2001 Run fields missing: $(bc)"
@@ -460,7 +465,7 @@ done
 ! /usr/bin/grep -q ' 2076$' "$T/board.calls" 2>/dev/null && ok "a non-spec parent whose children are all closed is not written" || ko "#2076 written: $(/usr/bin/grep ' 2076$' "$T/board.calls")"
 ! /usr/bin/grep -q 'issues/2076\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a non-spec parent is never closed" || ko "#2076 closed: $(/usr/bin/grep 'issues/2076' "$T/gh.calls")"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
-o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+o=$(cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
 ! /usr/bin/grep -q 'BOARD-WRITE-FAILED' "$T/st/cycle.log" 2>/dev/null && ok "board down: nothing is reported as a defect" || ko "board down, reported: $(cat "$T/st/cycle.log")"
 # The reconciler names its refusal through the closed set (#142): BOARD-WRITE-FAILED is a member of the one set the
