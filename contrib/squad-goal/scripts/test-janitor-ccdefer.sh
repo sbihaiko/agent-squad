@@ -10,7 +10,7 @@
 # usage: bash test-janitor-ccdefer.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-here="$(cd "$(dirname "$src")" && pwd)"
+here="$(cd "$(dirname "$src")" && pwd)"; repo="$(cd "$here/../../.." && pwd)"
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
 cp "$src" "$T/s/janitor.py"; cp "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
@@ -47,7 +47,11 @@ printf 'fed9876 1 0\n' > "$T/st/auto/ccdefer-run-ended-long-c1"
 mk run-resumed; ended run-resumed
 printf '%s\n' '{"event":"run_start","run_id":"run-resumed"}' >> "$T/co/runs/run-resumed/record.jsonl"
 printf 'aaa1111 3 0\n' > "$T/st/auto/ccdefer-run-resumed-c1"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 JANITOR_NOTIFY=true python3 -I "$T/s/janitor.py" 2>&1; }
+# The janitor loads squad/procs.py, squad/active_runs.py and squad/handhold.py from the repository it sits in, named by
+# SG_SQUAD, never from the caller's cwd. The copy sits in a temp dir, so the run names the repository and stands in that dir:
+# the day pass clears SG_* and keeps its own cwd, and without SG_SQUAD the janitor died at import before this branch, leaving
+# every marker (#3060).
+run() { (cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 JANITOR_NOTIFY=true python3 -I "$T/s/janitor.py" 2>&1); }
 o=$(run)
 [ ! -e "$T/st/auto/ccdefer-run-ended-c1" ] && ok "a finished run's deferral marker is dropped" || ko "ccdefer-run-ended-c1 survived the pass: $o"
 [ ! -e "$T/st/auto/ccdefer-run-ended-c2" ] && ok "every deferral marker of the finished run is dropped, not just the first" || ko "ccdefer-run-ended-c2 survived the pass: $o"
