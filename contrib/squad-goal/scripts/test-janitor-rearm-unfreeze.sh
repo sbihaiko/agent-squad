@@ -20,13 +20,19 @@
 unset SG_BOARD_VOCAB
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export SG_TAKEOVER_SECONDS=1000000000000   # the runs here carry fixed stamps and test the fold, not the takeover bound (ADR-0166)
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/state" "$T/co/runs" "$T/live"
-here="$(cd "$(dirname "$src")" && pwd)"
-cp "$src" "$T/s/janitor.py"
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, SG_CHECKOUT, else the caller's cwd and its
+# parents. The fixture copies the janitor into a repo-shaped temp tree (<root>/contrib/squad-goal/scripts), so the first
+# answer is the tree the copy sits in, as it is for the real script; <root>/squad links the tree the script ships in. Every
+# run starts from a temp cwd outside any repository with no SG_SQUAD, the shape of the daily pass (#3098), so a pass that
+# resolves its root from the caller's cwd or a variable fails here first.
+here="$(cd "$(dirname "$src")" && pwd -P)"; squad_root=$(cd "$here/../../.." && pwd -P)
+S="$T/repo/contrib/squad-goal/scripts"
+mkdir -p "$T/bin" "$S" "$T/cwd" "$T/st/auto" "$T/st/cq" "$T/st/state" "$T/co/runs" "$T/live"; ln -s "$squad_root/squad" "$T/repo/squad"
+cp "$src" "$S/janitor.py"
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/board_columns.py" "$here/board-definition.json" \
-   "$here/board_facts.py" "$here/spec_fold.py" "$here/gate_attempts.py" "$T/s/"
-cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
-cat > "$T/s/board.sh" <<'J'
+   "$here/board_facts.py" "$here/spec_fold.py" "$here/gate_attempts.py" "$S/"
+cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$S/"
+cat > "$S/board.sh" <<'J'
 #!/bin/bash
 case "$1" in
   --run-fields) echo "RUN $2 $3 $4 $5 $6" >> "TMPDIR/board.calls";;
@@ -35,7 +41,7 @@ case "$1" in
   *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls";;
 esac
 J
-sed -i '' "s|TMPDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+sed -i '' "s|TMPDIR|$T|" "$S/board.sh"; chmod +x "$S/board.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
@@ -72,7 +78,7 @@ nh() { printf '{"event":"verdict","verdict":"needs-human","reasons":["landing ca
 # runs, written by the ledger's own writer
 led() {
   if [ "$2" = corrupt ]; then printf '{"key": "x/y#%s", this is not a ledger\n' "$1" > "$T/st/state/x__y__$1.json"; return; fi
-  SG_STATE="$T/st" python3 -I - "$T/s" "x/y#$1" "$2" "${@:3}" <<'PY'
+  SG_STATE="$T/st" python3 -I - "$S" "x/y#$1" "$2" "${@:3}" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 import issue_ledger as L
@@ -122,8 +128,8 @@ mk run-d9 3009; rec run-d9 "{\"event\":\"run_start\",\"run_id\":\"run-d9\",\"ts\
 {\"event\":\"spawn_accepted\",\"child\":\"c1\",\"definition\":\"GitHub issue #3009\"}
 {\"event\":\"land\",\"node\":\"c1\",\"outcome\":\"pass\",\"effect\":{\"name\":\"merge_land\",\"head\":\"0a1b2c\"}}
 $(nh $T0)"; led 3009 1060
-pass() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main \
-    SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/live" SG_LAND_BRANCH=dev python3 -I "$T/s/janitor.py" 2>&1; }
+pass() ( cd "$T/cwd" && SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main \
+    SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/live" SG_LAND_BRANCH=dev python3 -I "$S/janitor.py" 2>&1 )
 o=$(pass)
 pass > /dev/null 2>&1   # a second pass over the same state: the once-marker holds (D10)
 lbl() { /usr/bin/grep -q "repos/x/y/issues/$1/labels.*frozen:owner" "$T/gh.calls" 2>/dev/null; }
