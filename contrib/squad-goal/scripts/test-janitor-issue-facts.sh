@@ -4,7 +4,13 @@
 # $SG_STATE/issue-facts.json. It read every issue of every run folder one by one on every pass: 155 reads and 96 s of a
 # 181 s pass, for a repository with 11 open issues. The stub counts the reads.
 # usage: bash test-janitor-issue-facts.sh [janitor.py]
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, else the caller's cwd and its parents. The fixture
+# copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the repository,
+# where the cwd answer is empty too and the pass dies before any rule, so every read and the facts file are missing (#3089). The
+# suite clears every inherited SG_* and names SG_SQUAD as the tree it ships in, so its result never depends on where it runs.
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py from (#3089)
 ok() { echo "ok   $1"; }
 ko() { echo "FAIL $1"; fail=1; }
 here="$(cd "$(dirname "$src")" && pwd)"
@@ -34,7 +40,7 @@ mk() {
   printf '%s\n' '{"event":"verdict","verdict":"failed","reasons":["red gate"],"exit_code":1}' > "$T/co/runs/$1/record.jsonl"
 }
 mk run-a 5001
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 "$@" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_STATE="$T/st" SG_SQUAD="$repo" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_BOARD_VOCAB= SG_FORK_DIR= SG_FORK_BASE= SG_HUB_DIR="$T/hub" JANITOR_DASHBOARD_MAX=0 "$@" python3 -I "$T/s/janitor.py" 2>&1; }
 reads() { /usr/bin/grep -c "repos/x/y/issues/$1 -q" "$T/gh.calls" 2>/dev/null; }
 lists() { /usr/bin/grep -c 'issues?state=all&since=' "$T/gh.calls" 2>/dev/null; }
 fact() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["issues"].get(sys.argv[2]) or {}).get("f", ["none"])[0])' "$T/st/issue-facts.json" "$1" 2>/dev/null; }
