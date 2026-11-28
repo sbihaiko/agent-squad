@@ -2,6 +2,9 @@
 # seconds: 1.13
 # Regression test for janitor rule I (RUN-ON-CLOSED-ISSUES: a live run whose issues are all closed; duplicates/not_planned -> stop, otherwise report once), stubbed gh. usage: bash test-janitor-i.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# SG_SQUAD names the tree this suite sits in: the janitor copy sits in a temp folder, so its own path answers no root, and the
+# daily pass clears every SG_* and runs from a cwd outside the repository (#3085). Every pass names it, never the caller's cwd.
+sq=$(cd "$(dirname "$src")/../../.." && pwd -P); export SG_SQUAD="$sq"
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$T/board_columns.py"; cp "$(dirname "$src")/board-definition.json" "$T/board-definition.json"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -28,7 +31,6 @@ echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-c' && ko "run with an ope
 # closed, the run's record moved after the close, its record shows no landing for the issue and no branch of its own
 # names it, the run is ended with a verdict that says why. A landing of the run, or a branch of the run that names the
 # issue, keeps it: the work may still be landing.
-sq=$(cd "$(dirname "$src")/../../.." && pwd -P)
 ago() { date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1 minutes" +%Y-%m-%dT%H:%M:%SZ; }
 export CLOSE505=$(ago 25); t30=$(ago 30); t20=$(ago 20); t27=$(ago 27)
 mkr() { name=$1; shift; mkdir -p "$T/co/runs/$name"; : > "$T/co/runs/$name/record.jsonl"; p=1; for l in "$@"; do printf '%s\n' "${l%\}},\"pos\":$p}" >> "$T/co/runs/$name/record.jsonl"; p=$((p+1)); done; echo "$name" >> "$T/st/active-runs.txt"; }
