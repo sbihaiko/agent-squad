@@ -220,6 +220,13 @@ pl=$(/usr/bin/grep -- '-m pytest' "$T/pytest-env.log" 2>/dev/null | /usr/bin/sed
   && ok "2787 a battery clears the caller's pytest settings from every pytest leg" || ko "2787 pytest settings: rc $rc, '$pl' '$(cat "$T/pytest-env.log" 2>&1)' $out"
 IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res $sel $scope" = "fast pass selected 2 files delta" ] && ok "the status line states the selected file count and the delta scope" || ko "selection status: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# (#3053) A delta that selects a wide share of a real suite names the full scope, so the gate takes the full battery's
+# measured clock. The share is measured against the suite's own file count: here the suite is the two files this tree holds.
+mkdir -p "$R/tests"; : > "$R/tests/test_a.py"; : > "$R/tests/test_b.py"   # the suite's own file count: two files
+out=$(SG_GATE_DELTA_FULL_SUITE=2 selrun); rc=$?
+rm -rf "$R/tests"
+IFS=$'\t' read -r _ kind res _ sel scope < "$SG_STATE/gate-status" 2>/dev/null
+[ $rc = 0 ] && [ "$kind $res $sel $scope" = "fast pass selected 2 files full" ] && ok "3053 a wide delta names the full scope" || ko "3053 wide delta: rc $rc '$(cat "$SG_STATE/gate-status" 2>&1)' $out"
 # (#2085, ADR-0169 rule 4) A child's gate is bounded (ADR-0163) and waits behind its siblings' gates, so it never widens to
 # the full battery: a change the delta cannot place runs no pytest, and the gate records `selected 0 files` with the `delta`
 # scope and ends unproven with the selector's reason. The landing gate runs the full battery over the branch.
