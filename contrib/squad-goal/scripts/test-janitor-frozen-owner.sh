@@ -8,8 +8,14 @@
 # and says why in cycle.log. A stopped run's work branch is stale in the same way: it never lifts the Todo or Blocked its
 # own verdict set. An issue with no such freeze or stop still follows its branch to Batching.
 # Stubbed gh and board.sh; a temp state dir. usage: bash test-janitor-frozen-owner.sh [janitor.py]
-unset SG_BOARD_VOCAB   # this suite reads the legacy option names
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, else the caller's cwd and its parents. The fixture
+# copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from outside the repository,
+# where the cwd answer is empty too and the pass dies before rule R, so every card case reads a janitor that wrote no line (#3079).
+# The suite names SG_SQUAD as the tree it ships in and runs the pass from the fixture folder, so its result never depends on where
+# it runs. It also clears every inherited SG_*, so a caller's SG_SQUAD never answers for it (#3068).
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done
+src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); T=$(cd "$T" && pwd -P); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)   # the tree the copied janitor loads squad/procs.py from (#3079)
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/home"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/spec_fold.py" "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 here="$(cd "$(dirname "$0")" && pwd)"; cp "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
@@ -66,7 +72,7 @@ rec run-needs-human-land '{"event":"run_start","run_id":"run-needs-human-land","
 mk run-no-repro 3007
 rec run-no-repro '{"event":"run_start","run_id":"run-no-repro","ts":"2026-10-19T18:03:00Z"}
 {"event":"verdict","verdict":"no-repro","reasons":["the defect does not reproduce at the tip"],"exit_code":40,"end_class":"does-not-reproduce"}'
-o=$(HOME="$T/home" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/none" \
+o=$(cd "$T" && HOME="$T/home" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" SG_LIVE_DIR="$T/none" \
     python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 # 3001 carries frozen:owner and a branch ahead of dev: R writes nothing and says why.
