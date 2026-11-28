@@ -4,8 +4,14 @@
 # does (the LIVE predicate of squad/reap.py), and `python3 -m squad.dashboard_server` is not a run's process: a dashboard
 # that stayed inside an idle run kept the run "alive" for ever, so the zombie verdict never came (14:53-15:01, #1270).
 # usage: bash test-janitor-zombie-dashboard.sh [janitor.py]
+# (#3121) The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD,
+# SG_CHECKOUT and cwd. The daily pass clears every SG_* and runs from a cwd outside the repository, so the suite drops the
+# inherited names and symlinks the repository's squad package beside the janitor copy. The product walk-up then answers
+# with no SG_SQUAD and no cwd to stand in for the tree.
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-zombie" "$T/bin"
+for v in $(compgen -e | /usr/bin/grep -E '^(SG_|SERIAL_)'); do unset "$v"; done   # a caller's SG_SQUAD or SG_CHECKOUT never answers for this suite
+repo=$(cd "$(dirname "$src")/../../.." && pwd -P)
+mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-zombie" "$T/bin"; ln -s "$repo/squad" "$T/s/squad"
 cp "$src" "$T/s/janitor.py"; here=$(dirname "$src")
 cp "$here/issue_state.py" "$here/issue_ledger.py" "$here/board_columns.py" "$here/board-definition.json" "$T/s/"
 f="$T/co/runs/run-zombie"; now=$(date +%s)
@@ -18,7 +24,8 @@ echo run-zombie > "$T/st/active-runs.txt"; echo run-zombie > "$T/st/auto/disp-71
 rp=$(cd "$f" && pwd -P)   # the janitor resolves its checkout, so the loop names the folder by its resolved path (/private/var on macOS)
 ( cd "$f" && exec python3 -c 'import time; time.sleep(120)' -m squad.dashboard_server "$rp" --idle 7200 ) & dash=$!
 sleep 2
-SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" >"$T/out" 2>&1
+# The pass runs from the fixture's own folder, never the caller's cwd, so the product walk-up answers for $T/s alone.
+(cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py") >"$T/out" 2>&1
 sleep 1; o=$(cat "$T/st/cycle.log" 2>/dev/null)
 echo "$o" | /usr/bin/grep -q "zombie run run-zombie" && ok "C: a dashboard server alone does not keep an idle pid-less run alive" || ko "C: no zombie verdict for the run: $o $(cat "$T/out")"
 echo "$o" | /usr/bin/grep -q "dashboard of zombie run run-zombie" && ok "C: the run's dashboard is ended with it" || ko "C: the dashboard was not ended: $o"
