@@ -9,9 +9,13 @@
 #      for it (#239: a landed-branch marker is not a merged pull request naming the issue on the base, so it is not Done);
 #  (C) a rebased head: the marked commit is not in the base but the base holds its content -> rule P leaves it (no false positive), no card written;
 #  (D) a fix is coming: the branch is still ahead of the base -> untouched by both, the close retries on the new head.
+#  (E) the daily pass clears every SG_* and runs a suite from a folder outside any checkout -> the suite still passes.
 # Stubbed gh/board; a throwaway fork repo and state dir, so the live fork, markers and board are never read or written.
 # usage: bash test-janitor-rule-p.sh [janitor.py]
-src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+src=$(cd "$(dirname "${1:-$(dirname "$0")/janitor.py}")" && pwd)/$(basename "${1:-janitor.py}")
+suite=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+repo=$(cd "$(dirname "$src")/../../.." && pwd)   # the tree this suite sits in: SG_SQUAD names it, so the pass never leans on the caller's cwd
+T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
@@ -47,7 +51,7 @@ $G checkout -q -b gui/904 local/next; sha904=$(ci f904.txt four "work 904"); $G 
 for p in 901:"$sha901" 902:"$sha902" 903:"$sha903" 904:"$sha904"; do echo marker > "$T/st/auto/fork-${p%%:*}-$(printf '%s' "${p#*:}" | cut -c1-9)"; done
 for n in 901 902 903 904; do echo run-$n > "$T/st/auto/disp-$n"; done
 echo run-901 > "$T/st/auto/bug-901"
-o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing \
+o=$(cd "$T" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$repo" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing \
   SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR="$F" SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%n \
   JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 901$' "$T/board.calls" 2>/dev/null && ok "P: unwound landing -> card back to Todo" || ko "P #901 not released: $(cat "$T/board.calls" 2>/dev/null) $o"
@@ -63,4 +67,15 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
   && ok "P: a rebased head whose change is in the base writes no card, so it is never Done" || ko "P #903 released by mistake: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-904" ] && ! /usr/bin/grep -q ' 904$' "$T/board.calls" 2>/dev/null \
   && ok "P: a branch still ahead of the base is left to the close pass" || ko "P #904 released by mistake: $(cat "$T/board.calls" 2>/dev/null)"
+# (E) The daily pass runs a suite from a folder outside any checkout, with every SG_* cleared (#3099). The fixture copies
+# the janitor into a temp folder, so its own tree answer is empty; with no SG_SQUAD the root falls to the caller's cwd. Run
+# this suite again that way: it names the tree it ships in, so it never leans on where the pass stands. A guard keeps it one
+# level deep.
+if [ -z "${JANITOR_RULE_P_OUTSIDE:-}" ]; then
+  u=$(mktemp -d)
+  o2=$(cd "$u" && env $(compgen -e | /usr/bin/grep -E "^(SG_|SERIAL_)" | sed "s/^/-u /") JANITOR_RULE_P_OUTSIDE=1 bash "$suite" "$src" 2>&1); rc2=$?
+  rm -rf "$u"
+  [ "$rc2" = 0 ] && ok "P: the suite passes from outside any checkout with every SG_* cleared" \
+    || ko "P: outside any checkout: $(printf '%s' "$o2" | /usr/bin/grep '^FAIL' | head -1)"
+fi
 rm -rf "$T"; exit $fail
