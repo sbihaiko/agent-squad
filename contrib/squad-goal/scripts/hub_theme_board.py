@@ -928,9 +928,11 @@ def fast_board_pass():
         set_part("status", err=None)
         save_board()
 def refresh_fast():
-    """fast_board_pass() every FAST_EVERY seconds, on its own thread, so a full read never holds it."""
+    """fast_board_pass() every FAST_EVERY seconds, on its own thread, so a full read never holds it. While no page reads
+    the profile, the pass reads nothing (#1790, #3124)."""
     while True:
-        time.sleep(FAST_EVERY)
+        read_pause(FAST_EVERY)
+        if not read_wanted(): continue
         try: fast_board_pass()
         except Exception as e:
             with _board_lock: set_part("status", err=str(e)[:80])   # one failed fast pass never ends the loop

@@ -352,7 +352,7 @@ def server(port, apps, on_new=None):
     return ThreadingHTTPServer(("127.0.0.1", port), Mux)
 
 
-SAMPLERS =("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
+SAMPLERS =("refresh_prs", "refresh_quota", "refresh_board", "refresh_fast", "refresh_history", "load_sampler")   # a read not named here never runs on the live hub (#3124)
 
 
 def start_profile(a):

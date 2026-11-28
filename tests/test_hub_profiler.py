@@ -2483,7 +2483,7 @@ def test_each_profile_s_tab_keeps_its_own_switch_and_window_over_one_shared_scan
 # ---------------------------------------------------------------- the background reads (#1790)
 # A page read is what keeps a profile's background reads running. With no page, a reader does no work: the many-repository
 # hub reads six of them per profile, and one of those reads the process table every five seconds.
-SAMPLERS = ("refresh_prs", "refresh_quota", "refresh_board", "refresh_history", "load_sampler")
+SAMPLERS = ("refresh_prs", "refresh_quota", "refresh_board", "refresh_fast", "refresh_history", "load_sampler")
 
 
 class StopSampling(Exception):
