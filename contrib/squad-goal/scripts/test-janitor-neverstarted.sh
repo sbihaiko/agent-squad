@@ -9,12 +9,17 @@
 # only a marker that names this run.
 # Stubbed gh/notifier. usage: bash test-janitor-neverstarted.sh [janitor.py]
 # The pass loads squad/procs.py from the tree the script sits in, then SG_SQUAD, SG_CHECKOUT, else the caller's cwd and its
-# parents. The fixture copies the janitor into a temp folder, so the first answer is empty; the daily pass runs this suite from
-# outside the repository, where the cwd answer is empty too and the pass dies before any rule (#3084, #3091). The suite names
-# SG_SQUAD as the tree it ships in, so its result never depends on where it runs.
-src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd)"; repo=$(cd "$here/../../.." && pwd -P); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"
-cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/board_columns.py" "$(dirname "$src")/board-definition.json" "$T/s/"
+# parents. The fixture copies the janitor into a repo-shaped temp tree (<root>/contrib/squad-goal/scripts), so the first
+# answer is the tree the copy sits in, as it is for the real script; <root>/squad links the tree the script ships in. Every
+# run starts from a temp cwd outside any repository with no SG_SQUAD, the shape of the daily pass (#3091), so a pass that
+# resolves its root from the caller's cwd or a variable fails here first.
+src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd -P)"; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+squad_root=$(cd "$here/../../.." && pwd -P)
+[ -f "$squad_root/squad/procs.py" ] || squad_root=${SG_SQUAD:-}
+[ -f "$squad_root/squad/procs.py" ] || { echo "FAIL no tree holds squad/procs.py beside $src; set SG_SQUAD" >&2; exit 2; }
+scripts="$T/repo/contrib/squad-goal/scripts"; mkdir -p "$T/bin" "$scripts" "$T/cwd" "$T/st/auto" "$T/st/cq" "$T/co/runs"
+ln -s "$squad_root/squad" "$T/repo/squad"
+cp "$src" "$scripts/janitor.py"; cp "$here/issue_state.py" "$scripts/issue_state.py"; cp "$here/board_columns.py" "$here/board-definition.json" "$scripts/"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -34,7 +39,7 @@ mkrun() { # <run> <issue> <request name>: the request mkreq.sh wrote, copied int
   touch -t 202001010000 "$T/co/runs/$1/request.txt"
   echo "$1" > "$T/st/active-runs.txt"
 }
-runj() { SG_STATE="$T/st" SG_SQUAD="$repo" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+runj() ( cd "$T/cwd" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY="$T/notify" python3 -I "$scripts/janitor.py" 2>&1 )
 
 # 1. first never-started autobug run: drop auto/bug-N, queue attempt 1 of 2
 mkrun run-never-a 1492 autobug-x
