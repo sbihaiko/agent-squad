@@ -16,11 +16,15 @@
 #      recovery); it carries no wave label, so the label is no proof of the loop's ownership;
 #  (K) a card #928 in Doing with no recorded dispatch is a hand placement and stays in Doing.
 # Stubbed gh and board; a temp state dir, so the live loop state and board are never read or written.
+# The janitor loads squad/procs.py from the tree it runs in: it walks up from its own directory, then SG_SQUAD, SG_CHECKOUT
+# and cwd. The fixture links the repository's squad package beside the janitor copy, and each pass runs from $T, so the
+# product walk-up answers with no SG_SQUAD and never with the caller's cwd (#3105).
 # usage: bash test-janitor-reoffer.sh [janitor.py]
 for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; here="$(cd "$(dirname "$src")" && pwd)"; T=$(mktemp -d); fail=0
+repo=$(cd "$here/../../.." && pwd -P)
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; ln -s "$repo/squad" "$T/s/squad"; cp "$src" "$T/s/janitor.py"
 cp "$here/issue_state.py" "$here/board_columns.py" "$here/board-definition.json" "$here/issue_ledger.py" "$here/spec_fold.py" "$here/board_facts.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/ghcall.sh" "$here/drainpolicy.py" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"
 printf '911\tDoing\n912\tTodo\n913\tDoing\n914\tDoing\n915\tDoing\n920\tBacklog\n921\tDoing\n922\tDoing\n923\tDoing\n924\tTodo\n925\tCode Complete\n926\tDoing\n927\tDoing\n928\tDoing\n' > "$T/cards.tsv"
 cat > "$T/s/board.sh" <<'B'
@@ -83,7 +87,7 @@ mk run-child 921; echo run-child > "$T/st/auto/disp-921"
 mk run-child2 926; echo run-child2 > "$T/st/auto/disp-926"
 # J: a run recorded that it dispatched #927 (its entered fact in the issue's ledger), and it is gone; the card carries no wave label
 SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" wave 'x/y#927' run-old entered 'the child entered the wave' >/dev/null
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_BOARD_VOCAB=shipped JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { ( cd "$T" || exit 1; SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_BOARD_VOCAB=shipped JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1 ); }
 bc() { cat "$T/board.calls" 2>/dev/null; }
 o=$(run)
 /usr/bin/grep -q '^o 4 Todo 911$' "$T/board.calls" 2>/dev/null && ok "A: a zombie run with no marker returns its card to Todo" || ko "A #911 card not back in Todo: $o $(bc)"
